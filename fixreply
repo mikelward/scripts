@@ -6,7 +6,7 @@
 # using the mail client Reply command sends a reply to the list by default.
 #
 # Michael Wardle <michael@endbracket.net>
-# $Id: fixreply,v 1.2 2005/08/24 12:30:32 michael Exp michael $
+# $Id$
 
 use Mail::Internet;
 
@@ -28,7 +28,12 @@ for $field ("Mail-Followup-To", "List-Post")
         {
             chomp($replyto);
         }
-        $replyto =~ s/<mailto:(.*?)>/<$1>/; # List-Post uses URI syntax
+
+        # List-Post uses a URI rather than a mail address
+        if ($replyto =~ /<mailto:(.*?)>/)
+        {
+            $replyto =~ s/<mailto:(.*?)>/<$1>/;
+        }
         last;
     }
 }
