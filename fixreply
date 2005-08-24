@@ -1,0 +1,61 @@
+#!/usr/bin/env perl
+#
+# fixreply
+#
+# Rewrite a mail message's Reply-To header to the mailing list address so that
+# using the mail client Reply command sends a reply to the list by default.
+#
+# Michael Wardle <michael@endbracket.net>
+# $Id: fixreply,v 1.2 2005/08/24 12:30:32 michael Exp michael $
+
+use Mail::Internet;
+
+$verbose = 1;
+
+# read the original message
+$original = new Mail::Internet(\*STDIN);
+$header = $original->head();
+$body = $original->body();
+
+# find the first preferred address to use as the new value of Reply-To
+$replyto = undef;
+for $field ("Mail-Followup-To", "List-Post")
+{
+    if ($header->count($field))
+    {
+        $replyto = $header->get($field);
+        if (defined($replyto))
+        {
+            chomp($replyto);
+        }
+        $replyto =~ s/<mailto:(.*?)>/<$1>/; # List-Post uses URI syntax
+        last;
+    }
+}
+
+# set the new Reply-To address if a better one was found
+if ($replyto)
+{
+    # print details of the message if a new Reply-To address was set
+    if ($verbose)
+    {
+        for my $field ("Message-Id", "Reply-To")
+        {
+            my $value = $header->get($field);
+            if (defined($value))
+            {
+                chomp($value);
+            }
+            print STDERR "$field: $value\n";
+        }
+        print STDERR "New Reply-To: $replyto\n";
+        print STDERR "\n";
+    }
+    $header->replace("Reply-To", $replyto);
+}
+
+# print the new (possibly modified) message
+$modified = new Mail::Internet(undef, "Header"=>$header, "Body"=>$body);
+$modified->print(\*STDOUT);
+
+# vi: set sw=4:
