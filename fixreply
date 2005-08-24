@@ -5,6 +5,10 @@
 # Rewrite a mail message's Reply-To header to the mailing list address so that
 # using the mail client Reply command sends a reply to the list by default.
 #
+# The headers that override Reply-To, in order of preference, are:
+# Mail-Followup-To	<http://cr.yp.to/proto/replyto.html>
+# List-Post	<http://www.ietf.org/rfc/rfc2369.txt>
+#
 # Michael Wardle <michael@endbracket.net>
 # $Id$
 
@@ -63,4 +67,4 @@ if ($replyto)
 $modified = new Mail::Internet(undef, "Header"=>$header, "Body"=>$body);
 $modified->print(\*STDOUT);
 
-# vi: set sw=4:
+# vi: set sw=4 ts=33:
