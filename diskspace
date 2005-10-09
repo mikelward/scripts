@@ -3,10 +3,17 @@
 
 use warnings;
 
+use Getopt::Long;
+
 my $threshold = 95;	# report file systems over this percent used
+my $help;
 
-my $full = 0;	# number of file systems at or above threshold
+GetOptions ("help|h" => \$help,
+            "threshold|t:s" => \$threshold)
+            or usage();
+if ($help) { usage(); }
 
+# symbols for multiples of 1024 bytes
 my @suffixes = ("KB", "MB", "GB", "TB", "PB", "EB");
 
 # output format for file systems at or above threshold
@@ -14,6 +21,8 @@ format STDOUT =
 @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< @>>>> @<
 $mount,                                 $free,$suffixes[$power]
 .
+
+my $full = 0;	# number of file systems at or above threshold
 
 @output = `df -Pk`;	# retrieve disk space information
 shift @output;	# strip header
@@ -30,7 +39,7 @@ foreach my $line (@output)
         $free /= 1024;
         $power++;
     }
-    $free = int($free + 0.5);	# round up to next whole number
+    $free = int ($free + 0.5);	# round up to next whole number
     if ($percent >= $threshold)
     {
         $full++;
@@ -38,5 +47,19 @@ foreach my $line (@output)
     }
 }
 exit $full;
+
+# print a usage message
+sub usage
+{
+    print "
+Usage:
+    diskspace [options]
+
+Options:
+    -h                 Print a message describing how to run this program
+    -t percent         Show file systems that are at least percent full
+";
+    exit 2;
+}
 
 # vi: set sw=4 ts=33:
