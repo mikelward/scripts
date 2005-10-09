@@ -14,57 +14,76 @@
 
 use Mail::Internet;
 
+# whether to print informational messages
 $verbose = 1;
+
+# fields to replace and which fields to replace them with
+$replacements{"Reply-To"} = [ "Mail-Followup-To", "List-Post" ];
 
 # read the original message
 $original = new Mail::Internet(\*STDIN);
 $header = $original->head();
 $body = $original->body();
 
-# find the first preferred address to use as the new value of Reply-To
-$replyto = undef;
-for $field ("Mail-Followup-To", "List-Post")
+# log the message id
+if ($verbose)
 {
-    if ($header->count($field))
+    $value = $header->get("Message-Id");
+    if (defined($value))
     {
-        $replyto = $header->get($field);
-        if (defined($replyto))
-        {
-            chomp($replyto);
-        }
-
-        # List-Post uses a URI rather than a mail address
-        if ($replyto =~ /<mailto:(.*?)>/)
-        {
-            $replyto =~ s/<mailto:(.*?)>/<$1>/;
-        }
-        last;
+        chomp($value);
     }
+    print STDERR "Message-Id: " . $value . "\n";
 }
 
-# set the new Reply-To address if a better one was found
-if ($replyto)
+# attempt to perform replacements for every key in replacements
+for $key (keys(%replacements))
 {
-    # print details of the message if a new Reply-To address was set
-    if ($verbose)
+    $old = $header->get($key);
+    if (defined($old))
     {
-        for my $field ("Message-Id", "Reply-To")
-        {
-            my $value = $header->get($field);
-            if (defined($value))
-            {
-                chomp($value);
-            }
-            print STDERR "$field: $value\n";
-        }
-        print STDERR "New Reply-To: $replyto\n";
-        print STDERR "\n";
+        chomp($old);
     }
-    $header->replace("Reply-To", $replyto);
+
+    # find the first preferred replacement header
+    $new = undef;
+    for $replacement (@{$replacements{$key}})
+    {
+        if ($header->count($replacement))
+        {
+            # retrieve the replacement value
+            $new = $header->get($replacement);
+            if (defined($new))
+            {
+                chomp($new);
+            }
+
+            # List-Post uses a URI rather than a mail address
+            if ($new =~ /<mailto:(.*?)>/)
+            {
+                $new =~ s/<mailto:(.*?)>/<$1>/;
+            }
+
+            # print the old and new values
+            if ($verbose)
+            {
+                print STDERR "Old $key: " . $old . "\n";
+                print STDERR "New $key: " . $new . "\n";
+            }
+
+            last;
+        }
+    }
+
+    # set the new header if a better one was found
+    if ($new)
+    {
+        $header->replace("X-Original-" . $key, "X-Original-" . $key . ": " . $old);
+    }
 }
 
 # print the new (possibly modified) message
-$modified = new Mail::Internet(undef, "Header"=>$header, "Body"=>$body);
+$modified = new Mail::Internet(undef, Header=>$header, Body=>$body);
 $modified->print(\*STDOUT);
 
 # vi: set sw=4 ts=33:
