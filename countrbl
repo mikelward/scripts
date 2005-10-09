@@ -1,0 +1,21 @@
+#!/usr/bin/perl
+# count number of matches from each spam blacklist
+
+my %hits;
+
+while (<>)
+{
+    chomp;
+    if (m<postfix/smtpd.*554 Service unavailable;.*Client host \[[^]]*\] blocked using ([^;]+);>)
+    {
+        $list = $1;
+        $hits{$list}++;
+    }
+}
+
+foreach (keys %hits)
+{
+    print "$_: $hits{$_}\n";
+}
+
+# vi: set sw=4 ts=33:
