@@ -30,16 +30,28 @@ foreach my $line (@output)
 {
     $\ = "\n";
     $, = "\t";
+
+    # parse this output line
     our ($fs, $blocks, $used, $avail, $percent, $mount) = split (/\s+/, $line);
-    $percent =~ s/%$//;	# strip percent sign
+
+    # strip percent sign
+    $percent =~ s/%$//;
+
+    # convert to three figures plus binary suffix
     $free = $avail;
     $power = 0;
-    while ($free >= 1000)	# convert to three figures plus binary suffix
+    while ($free >= 1000)
     {
         $free /= 1024;
         $power++;
     }
-    $free = int ($free + 0.5);	# round the displayed size to a whole number
+    $free = sprintf ("%.1f", $free);
+    if (length ($free) > 3)
+    {
+        $free =~ s/\..*//;
+    }
+
+    # print the file system information
     if ($percent >= $threshold)
     {
         $full++;
