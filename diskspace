@@ -39,7 +39,7 @@ foreach my $line (@output)
         $free /= 1024;
         $power++;
     }
-    $free = int ($free + 0.5);	# round up to next whole number
+    $free = int ($free + 0.5);	# round to next whole number
     if ($percent >= $threshold)
     {
         $full++;
