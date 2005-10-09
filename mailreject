@@ -1,0 +1,14 @@
+#!/usr/bin/perl
+# script to print mail rejection logs
+
+#Jun 20 17:27:36 eagle postfix/smtpd[14566]: NOQUEUE: reject: RCPT from unknown[67.15.6.82]: 450 Client host rejected: cannot find your hostname, [67.15.6.8>
+
+while (<>) {
+    chomp;
+    if (m#eagle postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from [\w-_.]+\[(\d+\.\d+\.\d+\.\d+)\]: (450|554)#) {
+        $addr = $1;
+        print `host $addr`;
+    }
+}
+
+# vi: set sw=4 ts=33:
