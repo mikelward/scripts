@@ -1,0 +1,40 @@
+#!/usr/bin/env perl
+# print file systems over a certain percentage full
+
+use warnings;
+
+my $threshold = 95;	# report file systems over this percent used
+
+my $full = 0;	# number of file systems at or above threshold
+
+my @suffixes = ("KB", "MB", "GB", "TB", "PB", "EB");
+
+# output format for file systems at or above threshold
+format STDOUT = 
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< @>>>> @<
+$mount,                                 $free,$suffixes[$power]
+.
+
+@output = `df -Pk`;	# retrieve disk space information
+shift @output;	# strip header
+foreach my $line (@output)
+{
+    $\ = "\n";
+    $, = "\t";
+    our ($fs, $blocks, $used, $avail, $percent, $mount) = split (/\s+/, $line);
+    $percent =~ s/%$//;	# strip percent sign
+    $free = $avail;
+    $power = 0;
+    while ($free > 1000)	# determine nearest multiple of 1000
+    {
+        $free /= 1000;
+        $power++;
+    }
+    $free = int($free + 1);	# round to nearest whole number
+    if ($percent >= $threshold)
+    {
+        $full++;
+        write;
+    }
+}
+exit $full;
