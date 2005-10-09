@@ -3,7 +3,7 @@
 
 use warnings;
 
-my $threshold = 95;	# report file systems over this percent used
+my $threshold = 0;	# report file systems over this percent used
 
 my $full = 0;	# number of file systems at or above threshold
 
@@ -27,10 +27,10 @@ foreach my $line (@output)
     $power = 0;
     while ($free > 1000)	# determine nearest multiple of 1000
     {
-        $free /= 1000;
+        $free /= 1024;
         $power++;
     }
-    $free = int($free + 1);	# round to nearest whole number
+    $free = int($free);	# round down to next whole number
     if ($percent >= $threshold)
     {
         $full++;
