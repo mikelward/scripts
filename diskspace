@@ -25,7 +25,7 @@ foreach my $line (@output)
     $percent =~ s/%$//;	# strip percent sign
     $free = $avail;
     $power = 0;
-    while ($free > 1000)	# determine nearest multiple of 1000
+    while ($free >= 1000)	# convert to three figures plus binary suffix
     {
         $free /= 1024;
         $power++;
