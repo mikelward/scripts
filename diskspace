@@ -38,3 +38,5 @@ foreach my $line (@output)
     }
 }
 exit $full;
+
+# vi: set sw=4 ts=33:
