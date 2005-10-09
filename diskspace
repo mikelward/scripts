@@ -3,7 +3,7 @@
 
 use warnings;
 
-my $threshold = 0;	# report file systems over this percent used
+my $threshold = 95;	# report file systems over this percent used
 
 my $full = 0;	# number of file systems at or above threshold
 
