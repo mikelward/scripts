@@ -1,6 +1,9 @@
 #!/bin/sh
+#
 # findlines - find lines from one file in another file
 # Michael Ward <michael@endbracket.net>
+#
+# $Id$
 
 . licslib
 
