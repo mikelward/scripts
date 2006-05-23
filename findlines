@@ -7,11 +7,13 @@
 
 . licslib
 
+invert=
 while getopts "v" flag
 do
     case $flag in
     v)
-        flags="-v"
+        # print lines NOT in the compare file
+        invert=1
         ;;
     esac
 done
@@ -28,6 +30,11 @@ cmp="$2"
 
 while read line
 do
-    fgrep -x $flags "$line" "$cmp"
+    if test -n "$invert"
+    then
+        fgrep -q -x $flags "$line" "$cmp" || echo "$line"
+    else
+        fgrep -x $flags "$line" "$cmp"
+    fi
 done < "$src"
 
