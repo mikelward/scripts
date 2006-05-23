@@ -1,0 +1,30 @@
+#!/bin/sh
+# findlines - find lines from one file in another file
+# Michael Ward <michael@endbracket.net>
+
+. licslib
+
+while getopts "v" flag
+do
+    case $flag in
+    v)
+        flags="-v"
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if test $# -ne 2
+then
+    error "Usage: findlines [-v] <source file> <compare file>"
+    exit 2
+fi
+
+src="$1"
+cmp="$2"
+
+while read line
+do
+    fgrep -x $flags "$line" "$cmp"
+done < "$src"
+
