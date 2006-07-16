@@ -1,0 +1,28 @@
+#!/usr/bin/perl
+# print a file from the line matching the first pattern until the line matching the second pattern
+# usage: fromto <from> <to> <file>
+
+my $from = shift @ARGV;
+my $to = shift @ARGV;
+
+my $started = 0;
+
+LINE:
+while (<>) {
+    if ($started) {
+        if ($to && /$to/) {
+            print;
+            exit 0;
+        }
+        else {
+            print;
+            next LINE;
+        }
+    }
+    if (!$from || /$from/) {
+        $started = 1;
+        print;
+        next LINE;
+    }
+}
+
