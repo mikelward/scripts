@@ -1,0 +1,207 @@
+#!/bin/bash
+# back up a Subversion repository
+# $Id$
+
+OIFS="$IFS"
+IFS=" 	
+"
+
+trap 'cleanup' EXIT
+
+#
+# default configuration
+#
+debug=
+quiet=
+src=/home/michael/svn
+tmpdir="${TMPDIR:-$HOME/tmp}"
+dst=voot:/home/kadmos/svn
+
+#
+# helper functions
+#
+cleanup()
+{
+    info "Cleaning up"
+
+    if test -f "$dfout"
+    then
+        rm -rf -- "$dfout"
+    fi
+
+    if test -d "$snapshot"
+    then
+        rm -rf -- "$snapshot"
+    fi
+}
+
+debug()
+{
+    if test "$debug"
+    then
+        echo "$*" 1>&2
+    fi
+}
+
+error()
+{
+    echo "$*" 1>&2
+}
+
+info()
+{
+    if test ! "$quiet"
+    then
+        echo "$*" 1>&2
+    fi
+}
+
+notice()
+{
+    echo "$*" 1>&2
+}
+
+silent()
+{
+    "$@" >/dev/null 2>/dev/null
+}
+
+
+# return the directory part of a path
+get_directory_part()
+{
+    typeset path
+    typeset dir
+
+    path=$(get_location_part "$1")
+    dir="${path%/*}"
+
+    echo "$dir"
+}
+
+
+# return the hostname from a remote path
+# get_hostname_part hostname:/path/to/file -> hostname
+get_hostname_part()
+{
+    echo "$1" | cut -f 1 -d :
+}
+
+# return the local part of a path
+# get_location_part hostname:/path/to/file -> /path/to/file
+get_location_part()
+{
+    echo "$1" | cut -f 2 -d :
+}
+
+# whether a path is on a locally mounted file system or a remote SSH server
+is_remote()
+{
+    echo "$1" | grep -q ":"
+}
+
+
+#
+# ensure required programs are available
+#
+if ! silent type svnadmin
+then
+    error "Cannot find svnadmin in PATH"
+    exit 1
+fi
+
+#
+# check available disk space
+#
+size=$(du -ks $src | cut -f 1)
+if test $? -ne 0
+then
+    error "Cannot determine disk usage"
+    exit 1
+fi
+
+if test ! -d "$tmpdir"
+then
+    mkdir "$tmpdir"
+    if test $? -ne 0
+    then
+        error "Cannot make temporary directory $tmpdir"
+        exit 1
+    fi
+fi
+
+dfout="$tmpdir"/df.$$
+df -Pk "$tmpdir" > "$dfout"
+if test $? -ne 0
+then
+    error "Cannot determine free disk space"
+    exit 1
+fi
+
+i=0
+while read filesystem blocks used available capacity mountpoint
+do
+    # skip header line
+    if test $i -ne 0
+    then
+        debug "$available kilobytes free on temporary file system $filesystem"
+
+        if test $available -lt $size
+        then
+            error "Need at least $size kilobytes free on $filesystem"
+            exit 1
+        fi
+    fi
+
+    i=$((i + 1))
+done < "$dfout"
+
+#
+# take a snapshot of the repository
+#
+snapshot="$tmpdir"/svn.$$
+if test -d "$snapshot"
+then
+    error "Snapshot directory $snapshot already exists"
+    exit 1
+fi
+
+info "Creating a hot copy of the repository"
+svnadmin hotcopy "$src" "$snapshot"
+if test $? -ne 0
+then
+    error "Cannot create hotcopy of $src"
+    exit 1
+fi
+
+#
+# copy the hot copy to the backup directory
+#
+if is_remote "$dst"
+then
+    debug "Remote destination"
+
+    dsthost=$(get_hostname_part "$dst")
+    dstdir=$(get_location_part "$dst")
+
+    notice "Removing $dstdir on $dsthost"
+    ssh "$dsthost" "test -d \"$dstdir\" && rm -rf -- \"$dstdir\""
+
+    info "Copying $snapshot to $dst"
+    flags=
+    if test "$debug"
+    then
+        flags="$flags -v"
+    fi
+    if test "$quiet"
+    then
+        flags="$flags -q"
+    fi
+    scp -C -r $flags "$snapshot" "$dst"
+else
+    debug "Local destination, using cp"
+    error "Local files are currently unsupported"
+    exit 1
+fi
+
+info "Done"
