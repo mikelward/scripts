@@ -11,11 +11,12 @@ trap 'cleanup' EXIT
 #
 # default configuration
 #
-debug=true
-quiet=
+debug=
+quiet=true
 src=/home/michael/svn
 tmpdir="${TMPDIR:-$HOME/tmp}"
 dst=voot:/home/kadmos/svn
+logfile=/home/michael/log/svnbackup.log
 
 #
 # helper functions
@@ -26,12 +27,12 @@ cleanup()
 
     if test -f "$dfout"
     then
-        rm -rf -- "$dfout"
+        run rm -rf -- "$dfout"
     fi
 
     if test -d "$snapshot"
     then
-        rm -rf -- "$snapshot"
+        run rm -rf -- "$snapshot"
     fi
 }
 
@@ -40,12 +41,20 @@ debug()
     if test "$debug"
     then
         echo "$*" 1>&2
+        if test "$logfile"
+        then
+            echo "$*" >> "$logfile"
+        fi
     fi
 }
 
 error()
 {
     echo "$*" 1>&2
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
 }
 
 info()
@@ -54,11 +63,35 @@ info()
     then
         echo "$*" 1>&2
     fi
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
 }
 
 notice()
 {
     echo "$*" 1>&2
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
+}
+
+run()
+{
+    if test "$simulate"
+    then
+        info "Would run $@"
+    else
+        debug "Running $@"
+        if test "$logfile"
+        then
+            "$@" | tee -a "$logfile"
+        else
+            "$@"
+        fi
+    fi
 }
 
 silent()
@@ -100,6 +133,10 @@ is_remote()
     echo "$1" | grep -q ":"
 }
 
+#
+# start
+#
+info "Starting backup of $src at $(date)"
 
 #
 # ensure required programs are available
@@ -167,7 +204,7 @@ then
 fi
 
 info "Creating a hot copy of the repository"
-svnadmin hotcopy "$src" "$snapshot"
+run svnadmin hotcopy "$src" "$snapshot"
 if test $? -ne 0
 then
     error "Cannot create hotcopy of $src"
@@ -203,11 +240,10 @@ then
     # (local:~/svn.12345/ -> remote:~/svn rather than
     #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
     snapshot=${snapshot%/}/
-    rsync -r -p -t --delete $flags "$snapshot" "$dst"
+    run rsync -r -p -t --delete $flags "$snapshot" "$dst"
 else
     debug "Local destination, using cp"
     error "Local files are currently unsupported"
     exit 1
 fi
-
-info "Done"
+info "Finished backup"
