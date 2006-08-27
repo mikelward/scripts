@@ -11,7 +11,7 @@ trap 'cleanup' EXIT
 #
 # default configuration
 #
-debug=
+debug=true
 quiet=
 src=/home/michael/svn
 tmpdir="${TMPDIR:-$HOME/tmp}"
@@ -181,13 +181,14 @@ if is_remote "$dst"
 then
     debug "Remote destination"
 
-    dsthost=$(get_hostname_part "$dst")
-    dstdir=$(get_location_part "$dst")
+    #dsthost=$(get_hostname_part "$dst")
+    #dstdir=$(get_location_part "$dst")
 
-    notice "Removing $dstdir on $dsthost"
-    ssh "$dsthost" "test -d \"$dstdir\" && rm -rf -- \"$dstdir\""
+    #notice "Removing $dstdir on $dsthost"
+    #ssh "$dsthost" "test -d \"$dstdir\" && rm -rf -- \"$dstdir\""
 
-    info "Copying $snapshot to $dst"
+    #info "Copying $snapshot to $dst"
+    info "Synchronizing $snapshot to $dst"
     flags=
     if test "$debug"
     then
@@ -197,7 +198,12 @@ then
     then
         flags="$flags -q"
     fi
-    scp -C -r $flags "$snapshot" "$dst"
+    #scp -C -r $flags "$snapshot" "$dst"
+    # ensure source has a trailing slash so we only copy the directory contents
+    # (local:~/svn.12345/ -> remote:~/svn rather than
+    #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
+    snapshot=${snapshot%/}/
+    rsync -r -p -t --delete $flags "$snapshot" "$dst"
 else
     debug "Local destination, using cp"
     error "Local files are currently unsupported"
