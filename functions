@@ -1,0 +1,240 @@
+#
+# helper functions
+#
+debug()
+{
+    if test "$debug"
+    then
+        echo "$*" 1>&2
+        if test "$logfile"
+        then
+            echo "$*" >> "$logfile"
+        fi
+    fi
+}
+
+error()
+{
+    echo "$*" 1>&2
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
+}
+
+info()
+{
+    if test ! "$quiet"
+    then
+        echo "$*" 1>&2
+    fi
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
+}
+
+notice()
+{
+    echo "$*" 1>&2
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
+}
+
+run()
+{
+    if test "$simulate"
+    then
+        info "Would run $@"
+    else
+        debug "Running $@"
+        if test "$logfile"
+        then
+            "$@" 2>&1 | tee -a "$logfile"
+        else
+            "$@"
+        fi
+    fi
+}
+
+silent()
+{
+    "$@" >/dev/null 2>/dev/null
+}
+
+
+# Return the directory part of a path.
+get_directory_part()
+{
+    typeset location
+    typeset dir
+
+    location=$(get_location_part "$1")
+    dir="${location%/*}"
+
+    echo "$dir"
+    return 0
+}
+
+# Get the amount of disk space used by a file or directory.
+#
+# Usage: get_size_of_file_or_directory <mount point or file>
+# Returns: disk usage in kilobytes
+get_size_of_file_or_directory()
+{
+    typeset size
+    typeset file
+    file="$1"
+    size=$(du -ks "$file" | cut -f 1)
+    if test $? -ne 0
+    then
+        error "Cannot determine disk usage of $file"
+        return 1
+    fi
+    debug "$file uses $size kilobytes of disk space"
+    echo "$size"
+    return 0
+}
+
+# Get the free space in kilobytes of a file system.
+#
+# Usage: get_free_space_on_filesystem <mount point or file>
+# Returns: free space in kilobytes
+get_free_space_on_filesystem()
+{
+    typeset tmpdir
+    typeset dfout
+    tmpdir=$(get_temporary_directory)
+
+    dfout="$tmpdir"/df.$$
+    df -Pk "$tmpdir" > "$dfout"
+    if test $? -ne 0
+    then
+        error "Cannot determine free disk space"
+        exit 1
+    fi
+
+    i=0
+    while read filesystem blocks used available capacity mountpoint
+    do
+        # skip header line, process the second line
+        if test $i -ne 0
+        then
+            debug "$filesystem has $available kilobytes free"
+            echo "$available"
+            return 0
+        fi
+
+        i=$((i + 1))
+    done < "$dfout"
+    error "Cannot determine free space on $filesystem"
+    return 1
+}
+
+# Return the filename part of a path.
+get_filename_part()
+{
+    typeset location
+    location=$(get_location_part "$1")
+    echo "${location##/*/}"
+    return 0
+}
+
+# Return the hostname from a remote path.
+#
+# Usage: get_hostname_part <hostname:/path/to/file>
+# Returns: hostname
+get_hostname_part()
+{
+    echo "$1" | cut -f 1 -d :
+}
+
+# return the local part of a path
+# get_location_part hostname:/path/to/file -> /path/to/file
+get_location_part()
+{
+    echo "$1" | cut -f 2 -d :
+}
+
+# Return the path to the user's temporary directory.
+get_temporary_directory()
+{
+    if test "$TMPDIR"
+    then
+        if test -d "$TMPDIR"
+        then
+            echo "$TMPDIR"
+            return 0
+        else
+            debug "$TMPDIR does not exist, creating"
+            mkdir "$TMPDIR"
+            if test $? -eq 0
+            then
+                echo "$TMPDIR"
+                return 0
+            else
+                error "Cannot create $TMPDIR, falling back to /tmp"
+                if test -d /tmp
+                then
+                    if test -w /tmp
+                    then
+                        TMPDIR=
+                        echo "/tmp"
+                        return 0
+                    else
+                        error "/tmp is not writeable"
+                        return 1
+                    fi
+                else
+                    error "/tmp does not exist"
+                    return 1
+                fi
+            fi
+        fi
+    elif test -d "$HOME/tmp"
+    then
+        if test -w "$HOME/tmp"
+        then
+            echo "$HOME/tmp"
+            return 0
+        else
+            debug "$HOME/tmp is not writeable, falling back to /tmp"
+            if test -d /tmp
+            then
+                if test -w /tmp
+                then
+                    echo "/tmp"
+                    return 0
+                else
+                    error "/tmp is not writeable"
+                    return 1
+                fi
+            else
+                error "/tmp does not exist"
+                return 1
+            fi
+        fi
+    elif test -d /tmp
+    then
+        if test -w /tmp
+        then
+            echo "/tmp"
+            return 0
+        else
+            error "/tmp is not writeable"
+            return 1
+        fi
+    else
+        error "/tmp does not exist"
+        return 1
+    fi
+}
+
+# whether a path is on a locally mounted file system or a remote SSH server
+is_remote()
+{
+    echo "$1" | grep -q ":"
+}
+

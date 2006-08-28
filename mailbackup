@@ -1,5 +1,5 @@
 #!/bin/bash
-# back up a Subversion repository
+# back up an IMAP mail tree
 # $Id$
 
 OIFS="$IFS"
@@ -33,11 +33,11 @@ cleanup()
 # default configuration
 #
 debug=
-quiet=true
-src=/home/michael/svn
-tmpdir="${TMPDIR:-$HOME/tmp}"
-dst=voot:/home/kadmos/svn
-logfile=/home/michael/log/svnbackup.log
+quiet=
+simulate=
+src=/home/michael/mail
+dst=voot:/home/kadmos/mail
+logfile=/home/michael/log/mailbackup.log
 
 #
 # start
@@ -49,9 +49,9 @@ info "Starting backup of $src at $(date)"
 #
 # ensure required programs are available
 #
-if ! silent type svnadmin
+if ! silent type rsync
 then
-    error "Cannot find svnadmin in PATH"
+    error "Cannot find rsync in PATH"
     exit 1
 fi
 
@@ -102,10 +102,10 @@ then
 fi
 
 info "Creating a hot copy of $src"
-run svnadmin hotcopy "$src" "$snapshot"
+run cp -a "$src" "$snapshot"
 if test $? -ne 0
 then
-    error "Cannot create hotcopy of $src"
+    error "Cannot create hot copy of $src"
     exit 1
 fi
 
