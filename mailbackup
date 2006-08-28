@@ -33,7 +33,7 @@ cleanup()
 # default configuration
 #
 debug=
-quiet=
+quiet=true
 simulate=
 src=/home/michael/mail
 dst=voot:/home/kadmos/mail
