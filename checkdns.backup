@@ -2,18 +2,37 @@
 # Set up voot as the main server for endbracket.net if eagle goes down
 # $Id: checkdns.backup,v 1.7 2006/09/30 04:13:12 kadmos Exp $
 
-# Host name of the primary server.
-#
-# We don't change the DNS address of this server,
-# we only change the address of the common host names such as mail and www.
-#
-primary=eagle.endbracket.net
+###
+# FUNCTIONS
 
-# Domain name of the domain we're backing up.
-domain=endbracket.net
+# Import the common shell functions.
+if test -f "$HOME/bin/functions"
+then
+    . "$HOME/bin/functions"
+else
+    echo "${0##/*/}: Cannot find function library, exiting"
+    exit 1
+fi
 
+
+###
+# CONFIGURATION
+
+# DEFAULTS
 # Device name of the internet interface.
 interface=ppp0
+
+# Whether to print debug messages to stderr.
+debug=
+
+# Read local configuration.
+if test -f "$HOME/.checkdns"
+then
+    . "$HOME/.checkdns"
+else
+    error "Cannot find configuration file $HOME/.checkdns, exiting"
+    exit 1
+fi
 
 # Configuration file for ddclient.
 conf=$HOME/ddclient.$domain.conf
@@ -21,52 +40,7 @@ conf=$HOME/ddclient.$domain.conf
 # Cache file for ddclient.
 cache=$HOME/ddclient.$domain.cache
 
-# Whether to print debug messages to stderr.
-debug=
-
-#
-# Helper functions
-#
-debug()
-{
-    logger -t checkdns -p daemon.debug "$@"
-    test -n "$debug" && echo "$@" 1>&2
-    return 0
-}
-
-error()
-{
-    logger -t checkdns -p daemon.error "$@"
-    echo "$@" 1>&2
-    test -x /usr/bin/sendsms && echo "$@" | sendsms
-    return 0
-}
-
-info()
-{
-    logger -t checkdns -p daemon.info "$@"
-    echo "$@" 1>&2
-    return 0
-}
-
-notice()
-{
-    logger -t checkdns -p daemon.notice "$@"
-    echo "$@" 1>&2
-    test -x /usr/bin/sendsms && echo "$@" | sendsms
-    return 0
-}
-
-run()
-{
-    "$@"
-}
-
-silent()
-{
-    "$@" >/dev/null 2>/dev/null
-}
-
+# XXX This doesn't test if the interface is up, only if it's configured
 network_up()
 {
     silent ifconfig $interface
