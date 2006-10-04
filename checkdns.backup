@@ -1,6 +1,17 @@
 #!/bin/bash
-# Set up voot as the main server for endbracket.net if eagle goes down
+#
 # $Id: checkdns.backup,v 1.7 2006/09/30 04:13:12 kadmos Exp $
+#
+# Point the DNS for a domain to the backup server if the primary
+# server goes down.
+#
+# We determine whether the primary server is down by looking at
+# the DNS A record for the domain (e.g. example.com, not
+# www.example.com) and seeing if we can ping it.
+#
+# Which DNS records are updated is determined by the ddclient
+# configuration file (e.g. $HOME/.ddclient.<domain>.conf).
+#
 
 ###
 # FUNCTIONS
@@ -35,10 +46,10 @@ else
 fi
 
 # Configuration file for ddclient.
-conf=$HOME/ddclient.$domain.conf
+conf=$HOME/.ddclient.$domain.conf
 
 # Cache file for ddclient.
-cache=$HOME/ddclient.$domain.cache
+cache=$HOME/.ddclient.$domain.cache
 
 primary_down()
 {
