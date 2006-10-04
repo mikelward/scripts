@@ -1,0 +1,37 @@
+#!/usr/bin/env perl
+# send mail to the specified address if standard input contains lines of input
+# $Id$
+
+if (@ARGV < 1)
+{
+    print STDERR "Usage: mailifnotempty <address> [<subject>]\n";
+    exit 2;
+}
+
+my $address = shift @ARGV;
+my $subject = shift @ARGV;
+
+@input = <STDIN>;
+
+if (@input > 0)
+{
+    my $command = '/usr/bin/mail';
+    if (defined($subject))
+    {
+        $command .= sprintf ' -s "%s"', $subject;
+    }
+    if (defined($address))
+    {
+        $command .= sprintf ' "%s"', $address;
+    }
+    open(PIPE, "|$command")
+        or die "Cannot invoke $command";
+
+    foreach my $line (@input)
+    {
+        print PIPE $line;
+    }
+
+    close PIPE;
+}
+
