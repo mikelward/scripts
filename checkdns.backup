@@ -40,17 +40,6 @@ conf=$HOME/ddclient.$domain.conf
 # Cache file for ddclient.
 cache=$HOME/ddclient.$domain.cache
 
-# XXX This doesn't test if the interface is up, only if it's configured
-network_up()
-{
-    silent ifconfig $interface
-}
-
-internet_reachable()
-{
-    silent ping -c 3 google.com
-}
-
 primary_down()
 {
     ! silent ping -c 3 $primary >/dev/null
