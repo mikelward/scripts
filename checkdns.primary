@@ -1,0 +1,108 @@
+#!/bin/sh
+#
+# checkdns.primary
+#
+# Set the address for a domain to the primary IP address
+# if it is currently set to the backup IP address
+#
+# This script should be run on the primary host.
+
+###
+# FUNCTIONS
+error()
+{
+    echo "$@" 1>&2
+    logger -t checkdns -p daemon.error "$@"
+    test -x /usr/bin/sendsms && echo "$@" | sendsms
+}
+
+notice()
+{
+    echo "$@" 1>&2
+    logger -t checkdns -p daemon.notice "$@"
+    test -x /usr/bin/sendsms && echo "$@" | sendsms
+}
+
+info()
+{
+    echo "$@" 1>&2
+    logger -t checkdns -p daemon.info "$@"
+}
+
+debug()
+{
+    test -n "${debug}" && echo "$@" 1>&2
+    logger -t checkdns -p daemon.debug "$@"
+}
+
+###
+# CONFIGURATION
+primary=eagle.endbracket.net
+domain=endbracket.net
+nameserver=dns.iinet.net.au     # needs to be external because we have split horizon DNS
+debug=
+
+###
+# INITIALIZATION
+tmpdir="${TMPDIR:-/tmp}"
+if test ! -d "${tmpdir}"
+then
+    error "Temporary directory ${tmpdir} does not exist"
+    exit 1
+fi
+if test ! -w "${tmpdir}"
+then
+    error "Temporary directory ${tmpdir} is not writeable"
+    exit 1
+fi
+
+tmpfile="${tmpdir}/checkdns$$"
+trap "rm -f ${tmpfile}" EXIT
+
+###
+# MAIN
+
+#
+#> host endbracket.net dns.iinet.net.au
+#endbracket.net          A       203.214.81.131
+
+host "${primary}" "${nameserver}" > "${tmpfile}"
+if test $? -eq 0
+then
+    while read host type address
+    do
+        primaryaddress="${address}"
+    done < "${tmpfile}"
+else
+    error "Cannot get host information for ${primary}"
+    exit 1
+fi
+
+
+host "${domain}" "${nameserver}" > "${tmpfile}"
+if test $? -eq 0
+then
+    while read host type address
+    do
+        domainaddress="${address}"
+    done < "${tmpfile}"
+else
+    error "Cannot get host information for ${domain}"
+    exit 1
+fi
+
+if test "${domainaddress}" != "${primaryaddress}"
+then
+    debug "Address for ${domain} is not the primary, updating"
+    ddclient -cache /dev/null -force -host "${domainaddress}"
+    if test $? -eq 0
+    then
+        info "Successfully updated ${domain} to ${primaryaddress}"
+    else
+        error "Error updating address for ${domain}"
+        exit 1
+    fi
+else
+    debug "Address for ${domain} is the primary, not updating"
+fi
+

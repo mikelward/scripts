@@ -1,0 +1,102 @@
+#!/bin/bash
+# Set up voot as the main server for endbracket.net if eagle goes down
+# $Id: checkdns.backup,v 1.7 2006/09/30 04:13:12 kadmos Exp $
+
+# Host name of the primary server.
+#
+# We don't change the DNS address of this server,
+# we only change the address of the common host names such as mail and www.
+#
+primary=eagle.endbracket.net
+
+# Domain name of the domain we're backing up.
+domain=endbracket.net
+
+# Device name of the internet interface.
+interface=ppp0
+
+# Configuration file for ddclient.
+conf=$HOME/ddclient.$domain.conf
+
+# Cache file for ddclient.
+cache=$HOME/ddclient.$domain.cache
+
+# Whether to print debug messages to stderr.
+debug=
+
+#
+# Helper functions
+#
+debug()
+{
+    logger -t checkdns -p daemon.debug "$@"
+    test -n "$debug" && echo "$@" 1>&2
+    return 0
+}
+
+error()
+{
+    logger -t checkdns -p daemon.error "$@"
+    echo "$@" 1>&2
+    test -x /usr/bin/sendsms && echo "$@" | sendsms
+    return 0
+}
+
+info()
+{
+    logger -t checkdns -p daemon.info "$@"
+    echo "$@" 1>&2
+    return 0
+}
+
+notice()
+{
+    logger -t checkdns -p daemon.notice "$@"
+    echo "$@" 1>&2
+    test -x /usr/bin/sendsms && echo "$@" | sendsms
+    return 0
+}
+
+run()
+{
+    "$@"
+}
+
+silent()
+{
+    "$@" >/dev/null 2>/dev/null
+}
+
+network_up()
+{
+    silent ifconfig $interface
+}
+
+internet_reachable()
+{
+    silent ping -c 3 google.com
+}
+
+primary_down()
+{
+    ! silent ping -c 3 $primary >/dev/null
+}
+
+if internet_reachable
+then
+    if primary_down
+    then
+        notice "Cannot reach primary server $primary, redirecting DNS for $domain to this host"
+        run /usr/sbin/ddclient -file "$conf" -cache "$cache"
+    else
+        debug "Successfully contacted $primary, not changing DNS for $domain"
+        # make sure that the first time we notice the primary host is down that
+        # ddclient at least checks the ip address
+        # if we enter this block multiple times after the primary host goes down,
+        # the cache file will tell ddclient not to perform any subsequent update
+        if test -f "$cache"
+        then
+            run rm "$cache"
+        fi
+    fi
+fi
