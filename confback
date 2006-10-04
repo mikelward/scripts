@@ -1,0 +1,34 @@
+#!/bin/sh
+# $Id: confback,v 1.5 2005/07/09 14:54:58 michael Exp $
+# Create an archive of important Unix user configuration files
+
+# directory to look for configuration files
+confdir="$HOME"/etc
+# space-separated list of configuration files
+conffiles="*"
+# directory to store archive files in
+archivedir="$HOME"/www/conf
+# name of archive file
+archivefile="$archivedir"/conf.tar.gz
+
+cd "$confdir"
+
+# create list of files to archive
+archivefiles=
+for f in $conffiles
+do
+    if test -f "$f"
+    then
+        archivefiles="$archivefiles $f"
+    fi
+done
+
+# create archive file
+#tar -cf - $archivefiles | gzip > "$archivefile"
+pax -w -z -f "$archivefile" $archivefiles
+cd "$OLDPWD" 
+
+# update symbolic link to latest configuration
+#archivelink="${archivefile%/*}"/conf.tar.gz
+#ln -sf "$archivefile" "$archivelink"
+
