@@ -11,6 +11,10 @@ debug()
             echo "$*" >> "$logfile"
         fi
     fi
+    if test "$syslog"
+    then
+        logger -t $(get_script_name) -p user.debug "$*"
+    fi
 }
 
 error()
@@ -19,6 +23,14 @@ error()
     if test "$logfile"
     then
         echo "$*" >> "$logfile"
+    fi
+    if test "$syslog"
+    then
+        logger -t $(get_script_name) -p user.err "$*"
+    fi
+    if test "$sms"
+    then
+        echo "$*" | sendsms ${phone}
     fi
 }
 
@@ -32,6 +44,10 @@ info()
     then
         echo "$*" >> "$logfile"
     fi
+    if test "$syslog"
+    then
+        logger -t $(get_script_name) -p user.info "$*"
+    fi
 }
 
 notice()
@@ -40,6 +56,23 @@ notice()
     if test "$logfile"
     then
         echo "$*" >> "$logfile"
+    fi
+    if test "$syslog"
+    then
+        logger -t $(get_script_name) -p user.notice "$*"
+    fi
+}
+
+warn()
+{
+    echo "$*" 1>&2
+    if test "$logfile"
+    then
+        echo "$*" >> "$logfile"
+    fi
+    if test "$syslog"
+    then
+        logger -t $(get_script_name) -p user.warning "$*"
     fi
 }
 
@@ -52,7 +85,8 @@ run()
         debug "Running $@"
         if test "$logfile"
         then
-            "$@" 2>&1 | tee -a "$logfile"
+            #"$@" 2>&1 | tee -a "$logfile"
+            2>&1 "$@" 2>&1 | tee -a "$logfile"
         else
             "$@"
         fi
@@ -151,11 +185,18 @@ get_hostname_part()
     echo "$1" | cut -f 1 -d :
 }
 
-# return the local part of a path
+# Return the local part of a path
 # get_location_part hostname:/path/to/file -> /path/to/file
 get_location_part()
 {
     echo "$1" | cut -f 2 -d :
+}
+
+# Return the name of the script that called this function.
+# get_script_name
+get_script_name()
+{
+    echo "${0##/*/}"
 }
 
 # Return the path to the user's temporary directory.
