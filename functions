@@ -1,6 +1,6 @@
-#
-# helper functions
-#
+###
+# LOGGING
+
 debug()
 {
     if test "$debug"
@@ -80,6 +80,9 @@ warn()
     fi
 }
 
+###
+# RUNNING PROGRAMS
+
 run()
 {
     if test "$simulate"
@@ -102,6 +105,8 @@ silent()
     "$@" >/dev/null 2>/dev/null
 }
 
+###
+# FILE MANIPULATION
 
 # Return the directory part of a path.
 get_directory_part()
@@ -196,13 +201,6 @@ get_location_part()
     echo "$1" | cut -f 2 -d :
 }
 
-# Return the name of the script that called this function.
-# get_script_name
-get_script_name()
-{
-    echo "${0##/*/}"
-}
-
 # Return the path to the user's temporary directory.
 get_temporary_directory()
 {
@@ -281,5 +279,93 @@ get_temporary_directory()
 is_remote()
 {
     echo "$1" | grep -q ":"
+}
+
+###
+# NETWORKING
+
+# XXX This doesn't test if the interface is up, only if it's configured
+interface_up()
+{
+    local _temp
+    local _status
+    local _interface
+    local _i
+    _status=
+    _interface="$1"
+    _temp="$(get_temporary_directory)/network_up.$$"
+    i=0
+
+    netstat -i > "$_temp"
+    cat $_temp
+    if test $? -eq 0
+    then
+        i=0
+        while read Iface MTU Met RXOK RXERR RXDRP RXOVR TXOK TXERR TXDRP TXOVR Flg
+        do
+            i=$(($i + 1))
+
+            if test $i -eq 1
+            then
+                continue 
+            fi
+
+            if test -z "$Flg"
+            then
+                echo "Iface is $Iface"
+                info "netstat output does not contain Flg field, assuming unsupported operating system"
+                break
+            fi
+            if test "$Iface" = "$_interface"
+            then
+                if test "${Flg/U/}" != "${Flg}"
+                then
+                    _status=up
+                else
+                    _status=down
+                fi
+                debug "$_interface is $_status"
+                break
+            fi
+        done < "$_temp"
+    else
+        warning "Cannot run netstat -i, falling back to less reliable ifconfig test"
+    fi
+    rm "$_temp"
+
+    if test -z "$_status"
+    then
+        ifconfig $interface >/dev/null  # discard stdout, keep stderr
+        if test $? -eq 0
+        then
+            info "$_interface is configured, assuming this means it's up"
+            _status=up
+        else
+            info "Cannot get status of $_interface, assuming this means it's down"
+            _status=down
+        fi
+    fi
+
+    if test "$_status" = "up"
+    then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# whether we can get to the internet at the moment
+internet_reachable()
+{
+    silent ping -c 3 google.com
+}
+
+###
+# MISCELLANEOUS
+# Return the name of the script that called this function.
+# get_script_name
+get_script_name()
+{
+    echo "${0##/*/}"
 }
 
