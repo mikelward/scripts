@@ -9,50 +9,36 @@
 
 ###
 # FUNCTIONS
-error()
-{
-    echo "$@" 1>&2
-    logger -t checkdns -p daemon.error "$@"
-    test -x /usr/bin/sendsms && echo "$@" | sendsms
-}
-
-notice()
-{
-    echo "$@" 1>&2
-    logger -t checkdns -p daemon.notice "$@"
-    test -x /usr/bin/sendsms && echo "$@" | sendsms
-}
-
-info()
-{
-    echo "$@" 1>&2
-    logger -t checkdns -p daemon.info "$@"
-}
-
-debug()
-{
-    test -n "${debug}" && echo "$@" 1>&2
-    logger -t checkdns -p daemon.debug "$@"
-}
+if test -f "${HOME}/bin/functions"
+then
+    . "${HOME}/bin/functions"
+else
+    echo "${0##/*/}: Cannot find function library, exiting"
+    exit 1
+fi
 
 ###
 # CONFIGURATION
-primary=eagle.endbracket.net
-domain=endbracket.net
-nameserver=dns.iinet.net.au     # needs to be external because we have split horizon DNS
+# defaults
 debug=
+sms=true
+syslog=true
+
+# local settings
+if test -f "${HOME}/.checkdns"
+then
+    . "${HOME}/.checkdns"
+else
+    error "Cannot find configuration file ${HOME}/.checkdns"
+    exit 1
+fi
 
 ###
 # INITIALIZATION
-tmpdir="${TMPDIR:-/tmp}"
-if test ! -d "${tmpdir}"
+tmpdir="$(get_temporary_directory)"
+if test $? -ne 0
 then
-    error "Temporary directory ${tmpdir} does not exist"
-    exit 1
-fi
-if test ! -w "${tmpdir}"
-then
-    error "Temporary directory ${tmpdir} is not writeable"
+    error "Cannot use temporary directory"
     exit 1
 fi
 
@@ -63,12 +49,12 @@ trap "rm -f ${tmpfile}" EXIT
 # MAIN
 
 #
-#> host endbracket.net dns.iinet.net.au
-#endbracket.net          A       203.214.81.131
 
-host "${primary}" "${nameserver}" > "${tmpfile}"
+host "${primary}" ${nameserver} > "${tmpfile}"
 if test $? -eq 0
 then
+    # read lines of the form
+    # endbracket.net          A       203.214.81.131
     while read host type address
     do
         primaryaddress="${address}"
@@ -79,7 +65,7 @@ else
 fi
 
 
-host "${domain}" "${nameserver}" > "${tmpfile}"
+host "${domain}" ${nameserver} > "${tmpfile}"
 if test $? -eq 0
 then
     while read host type address

@@ -61,6 +61,10 @@ notice()
     then
         logger -t $(get_script_name) -p user.notice "$*"
     fi
+    if test "$sms"
+    then
+        echo "$*" | sendsms ${phone}
+    fi
 }
 
 warn()
