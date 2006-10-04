@@ -139,6 +139,11 @@ then
     #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
     snapshot=${snapshot%/}/
     run rsync -a --delete $flags "$snapshot" "$dst"
+    if test $? -ne 0
+    then
+        error "Error synchronizing $snapshot to $dst"
+        exit 1
+    fi
 else
     debug "Local destination, using cp"
     error "Local files are currently unsupported"
