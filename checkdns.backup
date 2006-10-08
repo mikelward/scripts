@@ -70,7 +70,7 @@ then
             exit 1
         fi
     else
-        info "Successfully contacted $primary, not changing DNS for $domain"
+        debug "Successfully contacted $primary, not changing DNS for $domain"
         # make sure that the first time we notice the primary host is down that
         # ddclient at least checks the ip address
         # if we enter this block multiple times after the primary host goes down,

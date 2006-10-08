@@ -79,6 +79,6 @@ then
         exit 1
     fi
 else
-    info "Address for ${domain} is the primary server, not updating"
+    debug "Address for ${domain} is the primary server, not updating"
 fi
 
