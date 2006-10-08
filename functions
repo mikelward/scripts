@@ -284,6 +284,36 @@ is_remote()
 ###
 # NETWORKING
 
+# get_address_of <hostname>
+# Determine's the current IP address of a host.
+get_address_of()
+{
+    typeset tmpfile
+    typeset host
+    typeset return
+
+    tmpfile="${tmpdir:-/tmp}/get_address_of$$"
+    host="$1"
+
+    host "${host}" ${nameserver} > "${tmpfile}"
+    if test $? -eq 0
+    then
+        # read lines of the form
+        # endbracket.net          A       203.214.81.131
+        while read host type address
+        do
+            echo "${address}"
+            return=0
+            break
+        done < "${tmpfile}"
+    else
+        error "Cannot get host information for ${host}"
+        return=1
+    fi
+    rm -f "${tmpfile}"
+    return $return
+}
+
 # XXX This doesn't test if the interface is up, only if it's configured
 interface_up()
 {

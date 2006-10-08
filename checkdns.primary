@@ -42,45 +42,35 @@ then
     exit 1
 fi
 
-tmpfile="${tmpdir}/checkdns$$"
-trap "rm -f ${tmpfile}" EXIT
+trap 'test -f "${tmpfile}" && rm -f ${tmpfile}' EXIT
+
 
 ###
 # MAIN
 
-#
-
-host "${primary}" ${nameserver} > "${tmpfile}"
+primaryaddress="$(get_address_of ${primary})"
 if test $? -eq 0
 then
-    # read lines of the form
-    # endbracket.net          A       203.214.81.131
-    while read host type address
-    do
-        primaryaddress="${address}"
-    done < "${tmpfile}"
+    debug "Address of primary server for ${domain} is ${primaryaddress}"
 else
-    error "Cannot get host information for ${primary}"
+    error "Cannot get address of primary host ${primary}"
     exit 1
 fi
 
-
-host "${domain}" ${nameserver} > "${tmpfile}"
+domainaddress="$(get_address_of ${domain})"
 if test $? -eq 0
 then
-    while read host type address
-    do
-        domainaddress="${address}"
-    done < "${tmpfile}"
+    debug "Address of ${domain} is ${domainaddress}"
 else
-    error "Cannot get host information for ${domain}"
+    error "Cannot get address of domain ${domain}"
     exit 1
+
 fi
 
 if test "${domainaddress}" != "${primaryaddress}"
 then
-    debug "Address for ${domain} is not the primary, updating"
-    ddclient -cache /dev/null -force -host "${domainaddress}"
+    notice "Address of ${domain} is not the primary server, updating"
+    run /usr/sbin/ddclient -cache /dev/null -force -host "${domainaddress}"
     if test $? -eq 0
     then
         info "Successfully updated ${domain} to ${primaryaddress}"
@@ -89,6 +79,6 @@ then
         exit 1
     fi
 else
-    debug "Address for ${domain} is the primary, not updating"
+    info "Address for ${domain} is the primary server, not updating"
 fi
 
