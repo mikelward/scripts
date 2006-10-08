@@ -291,24 +291,33 @@ get_address_of()
     typeset tmpfile
     typeset host
     typeset return
+    typeset tries=3
 
     tmpfile="${tmpdir:-/tmp}/get_address_of$$"
     host="$1"
 
-    host "${host}" ${nameserver} > "${tmpfile}"
-    if test $? -eq 0
+    while test $tries -gt 0
+    do
+        host "${host}" ${nameserver} > "${tmpfile}"
+        if test $? -eq 0
+        then
+            # read lines of the form
+            # endbracket.net          A       203.214.81.131
+            while read host type address
+            do
+                echo "${address}"
+                return=0
+                break
+            done < "${tmpfile}"
+        else
+            return=1
+            error "Cannot get host information for ${host}"
+        fi
+        tries=$(($tries - 1))
+    done
+    if test $return -eq 1
     then
-        # read lines of the form
-        # endbracket.net          A       203.214.81.131
-        while read host type address
-        do
-            echo "${address}"
-            return=0
-            break
-        done < "${tmpfile}"
-    else
         error "Cannot get host information for ${host}"
-        return=1
     fi
     rm -f "${tmpfile}"
     return $return
