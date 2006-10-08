@@ -53,17 +53,24 @@ cache=$HOME/.ddclient.$domain.cache
 
 primary_down()
 {
-    ! silent ping -c 3 $primary >/dev/null
+    ! host_up ${primary}
 }
 
 if internet_reachable
 then
     if primary_down
     then
-        notice "Cannot reach primary server $primary, redirecting DNS for $domain to this host"
+        notice "Cannot reach primary server for ${domain}, redirecting DNS to this host"
         run /usr/sbin/ddclient -file "$conf" -cache "$cache"
+        if test ?$ -eq 0
+        then
+            info "Successfully updated ${domain}"
+        else
+            error "Error updating address for ${domain}"
+            exit 1
+        fi
     else
-        debug "Successfully contacted $primary, not changing DNS for $domain"
+        info "Successfully contacted $primary, not changing DNS for $domain"
         # make sure that the first time we notice the primary host is down that
         # ddclient at least checks the ip address
         # if we enter this block multiple times after the primary host goes down,

@@ -314,6 +314,15 @@ get_address_of()
     return $return
 }
 
+# Determine whether a host is up
+host_up()
+{
+    typeset host
+    host="$1"
+
+    ping -c 3 $host >/dev/null
+}
+
 # XXX This doesn't test if the interface is up, only if it's configured
 interface_up()
 {
