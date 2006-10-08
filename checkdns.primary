@@ -21,8 +21,26 @@ fi
 # CONFIGURATION
 # defaults
 debug=
+quiet=
 sms=true
 syslog=true
+
+while getopts "c:dq" flag
+do
+    case $flag in
+    d)
+        debug=true
+        quiet=
+        ;;
+    q)
+        quiet=true
+        debug=
+        ;;
+    *)
+        error "Invalid option -$flag"
+        exit 2
+    esac
+done
 
 # local settings
 if test -f "${HOME}/.checkdns"
@@ -79,6 +97,6 @@ then
         exit 1
     fi
 else
-    debug "Address for ${domain} is the primary server, not updating"
+    info "Address for ${domain} is the primary server, not updating"
 fi
 
