@@ -88,7 +88,7 @@ fi
 if test "${domainaddress}" != "${primaryaddress}"
 then
     notice "Address of ${domain} is not the primary server, updating"
-    run /usr/sbin/ddclient -cache /dev/null -force -host "${domainaddress}"
+    run /usr/sbin/ddclient -cache /dev/null -force -host "${domain}"
     if test $? -eq 0
     then
         info "Successfully updated ${domain} to ${primaryaddress}"
