@@ -5,10 +5,12 @@ use warnings;
 
 use Getopt::Long;
 
-my $threshold = 95;	# report file systems over this percent used
+my $threshold;	# report file systems over this percent used
+my $minimum;                     # report file systems with less than this many bytes free
 my $help;
 
 GetOptions ("help|h" => \$help,
+            "minimum|m:s" => \$minimum,
             "threshold|t:s" => \$threshold)
             or usage();
 if ($help) { usage(); }
@@ -21,6 +23,12 @@ format STDOUT =
 @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< @>>>> @<
 $mount,                                 $free,$suffixes[$power]
 .
+
+# default to reporting all file systems over 95% full if no options were given
+if (!defined($minimum) && !defined($threshold))
+{
+    $threshold = 95;
+}
 
 my $full = 0;	# number of file systems at or above threshold
 
@@ -51,14 +59,25 @@ foreach my $line (@output)
         $free =~ s/\..*//;
     }
 
-    # print the file system information
     if ($percent >= $threshold)
     {
-        $full++;
-        write;
+        if (defined($minimum))
+        {
+            if ($avail < $minimum)
+            {
+                $full++;
+                write;
+            }
+        }
+        else
+        {
+            $full++;
+            write;
+        }
     }
 }
 exit $full;
+
 
 # print a usage message
 sub usage
@@ -69,6 +88,7 @@ Usage:
 
 Options:
     -h                 Print a message describing how to run this program
+    -m bytes           Show file systems that have less than bytes bytes free
     -t percent         Show file systems that are at least percent full
 ";
     exit 2;
