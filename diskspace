@@ -24,10 +24,21 @@ format STDOUT =
 $mount,                                 $free,$suffixes[$power]
 .
 
+# only -t was given, show all file systems that are at least the specified percentage full
+if (defined($threshold) && !defined($minimum))
+{
+    $minimum = 0;
+}
+# only -m was given, show all file systems with less than the specified number of bytes free
+if (defined($minimum) && !defined($threshold))
+{
+    $threshold = 0;
+}
 # default to reporting all file systems over 95% full if no options were given
 if (!defined($minimum) && !defined($threshold))
 {
     $threshold = 95;
+    $minimum = 0;
 }
 
 my $full = 0;	# number of file systems at or above threshold
@@ -59,21 +70,11 @@ foreach my $line (@output)
         $free =~ s/\..*//;
     }
 
-    if ($percent >= $threshold)
+    if (($percent >= $threshold) &&
+        ($avail < $minimum))
     {
-        if (defined($minimum))
-        {
-            if ($avail < $minimum)
-            {
-                $full++;
-                write;
-            }
-        }
-        else
-        {
-            $full++;
-            write;
-        }
+        $full++;
+        write;
     }
 }
 exit $full;
