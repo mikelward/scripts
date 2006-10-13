@@ -291,11 +291,13 @@ get_address_of()
     typeset tmpfile
     typeset host
     typeset return
+    typeset found
     typeset tries=3
 
     tmpfile="${tmpdir:-/tmp}/get_address_of$$"
     host="$1"
 
+    found=0
     while test $tries -gt 0
     do
         host "${host}" ${nameserver} > "${tmpfile}"
@@ -306,9 +308,14 @@ get_address_of()
             while read host type address
             do
                 echo "${address}"
+                found=1
                 return=0
                 break
             done < "${tmpfile}"
+            if test $found -eq 1
+            then
+                break
+            fi
         else
             return=1
             error "Cannot get host information for ${host}"
