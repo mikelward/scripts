@@ -85,7 +85,7 @@ if (dbmopen(%ALLOW, "$database", 0600))
             {
                 # Host not seen before, make it wait $delay seconds before it can send mail
                 $ALLOW{$addr} = $now + $delay;
-                my $time = strftime("%H:%M", localtime($ALLOW{$addr}));
+                my $time = strftime("%H:%M:%S", localtime($ALLOW{$addr}));
                 syslog "mail|debug", "%s %s %s %s", "$addr", "must wait until", "$time", "to send mail";
 
                 # Deliberately keep this message easy to read for a human
