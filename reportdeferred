@@ -1,0 +1,7 @@
+#!/bin/sh
+#
+# $Id$
+#
+# report which mail clients were rejected or deferred during connection in the most recent mail log file
+
+grep 'NOQUEUE: reject: CONNECT from [^ ]*: ...' /var/log/mail | sed -e 's/^.*CONNECT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*/\1 (\2) [\3]/'
