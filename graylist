@@ -72,7 +72,7 @@ if (dbmopen(%ALLOW, "$database", 0600))
                 else
                 {
                     # Already seen this host, but it hasn't yet waited long enuff
-                    my $time = strftime("%H:%M", localtime($ALLOW{$addr}));
+                    my $time = strftime("%H:%M:%S", localtime($ALLOW{$addr}));
                     syslog "mail|debug", "%s %s %s %s", "$addr", "must wait until", "$time", "to send mail";
 
                     # Deliberately keep this message easy to read for a human
