@@ -23,13 +23,21 @@ foreach my $message ($folder->messages)
     if (open(BOGO, "|/usr/bin/bogofilter -s"))
     {
         $message->print(\*BOGO);
-        $message->delete();
-        $count++;
     }
     else
     {
         warn "Cannot connect to bogofilter";
     }
+    if (open(SPAMCOP, "|/home/michael/bin/reporter.pl"))
+    {
+        $message->print(\*SPAMCOP);
+    }
+    else
+    {
+        warn "Cannot connect to SpamCop";
+    }
+    $message->delete();
+    $count++;
 }
 
 $folder->close()
