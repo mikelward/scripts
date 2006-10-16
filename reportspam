@@ -18,7 +18,7 @@ foreach my $message ($folder->messages)
     # skip dummy message created by IMAP server
     next if $subject =~ /FOLDER INTERNAL DATA/;
 
-    print $message->subject . "\n";
+    print $subject . "\n";
 
     if (open(BOGO, "|/usr/bin/bogofilter -s"))
     {
