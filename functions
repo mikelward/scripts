@@ -318,7 +318,7 @@ get_address_of()
             fi
         else
             return=1
-            error "Cannot get host information for ${host}"
+            debug "Cannot get host information for ${host}"
         fi
         tries=$(($tries - 1))
     done
