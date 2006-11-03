@@ -82,7 +82,7 @@ then
     then
         notice "Cannot reach primary server for ${domain}, redirecting DNS to this host"
         run /usr/sbin/ddclient -file "$conf" -cache "$cache"
-        if test ?$ -eq 0
+        if test $? -eq 0
         then
             info "Successfully updated ${domain}"
         else
