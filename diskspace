@@ -6,7 +6,7 @@ use warnings;
 use Getopt::Long;
 
 my $threshold;	# report file systems over this percent used
-my $minimum;                     # report file systems with less than this many bytes free
+my $minimum;	# report file systems with less than this many bytes free
 my $help;
 
 GetOptions ("help|h" => \$help,
@@ -24,7 +24,7 @@ format STDOUT =
 $mount,                                 $free,$suffixes[$power]
 .
 
-my $default = 95;                # default threshold if no options specified
+my $default = 95;	# default threshold if no options specified
 my $full = 0;	# number of file systems at or above threshold
 
 @output = `df -Pk`;	# retrieve disk space information
