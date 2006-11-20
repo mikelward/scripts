@@ -24,23 +24,7 @@ format STDOUT =
 $mount,                                 $free,$suffixes[$power]
 .
 
-# only -t was given, show all file systems that are at least the specified percentage full
-if (defined($threshold) && !defined($minimum))
-{
-    $minimum = 0;
-}
-# only -m was given, show all file systems with less than the specified number of bytes free
-if (defined($minimum) && !defined($threshold))
-{
-    $threshold = 0;
-}
-# default to reporting all file systems over 95% full if no options were given
-if (!defined($minimum) && !defined($threshold))
-{
-    $threshold = 95;
-    $minimum = 0;
-}
-
+my $default = 95;                # default threshold if no options specified
 my $full = 0;	# number of file systems at or above threshold
 
 @output = `df -Pk`;	# retrieve disk space information
@@ -70,11 +54,42 @@ foreach my $line (@output)
         $free =~ s/\..*//;
     }
 
-    if (($percent >= $threshold) &&
-        ($avail < $minimum))
+    # both -t and -m specified
+    if (defined($threshold) && defined($minimum))
     {
-        $full++;
-        write;
+        if ($percent >= $threshold &&
+            $avail < $minimum)
+        {
+            $full++;
+            write;
+        }
+    }
+    # only -t specified
+    elsif (defined($threshold))
+    {
+        if ($percent >= $threshold)
+        {
+            $full++;
+            write;
+        }
+    }
+    # only -m specified
+    elsif (defined($minimum))
+    {
+        if ($avail < $minimum)
+        {
+            $full++;
+            write;
+        }
+    }
+    # neither -t nor -m specified
+    else
+    {
+        if ($percent >= $default)
+        {
+            $full++;
+            write;
+        }
     }
 }
 exit $full;
