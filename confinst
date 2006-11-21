@@ -1,0 +1,36 @@
+#!/bin/sh
+# installs UNIX configuration files
+
+confdir="$HOME"/etc
+conftar="$HOME"/conf.tar.gz
+hostname="`hostname | sed -e 's/\..*//'`"
+
+if test ! -e "$confdir"
+then
+    mkdir "$confdir"
+fi
+if test ! -d "$confdir"
+then
+    printf "$confdir is not a directory, exiting...\n" 1>&2
+    exit 1
+fi
+
+gzip -c -d "$conftar" | tar -x -C "$confdir" -f -
+if test $? -ne 0
+then
+    printf "Error extracting configuration archive\n" 1>&2
+    exit 1
+fi
+
+for conffile in $confdir/*
+do
+    dest="$HOME"/.${conffile##*/}
+    if test $dest -nt $conffile
+    then
+        ext=`date +%Y%m%d%H%M%S`
+        printf "$dest is newer than $conffile, backing up\n" 1>&2
+        mv $dest $dest.$ext
+    fi
+    ln -sf $conffile $dest
+done
+
