@@ -1,16 +1,18 @@
 #!/usr/bin/env perl
-# print file systems over a certain percentage full
+# print information about file systems over a certain percentage full
 
 use warnings;
 
 use Getopt::Long;
 
-my $threshold;	# report file systems over this percent used
+my $all;                         # report all file systems
 my $minimum;	# report file systems with less than this many bytes free
+my $threshold;	# report file systems over this percent used
 my $help;
 my $default = 95;	# default threshold if no options specified
 
 GetOptions ("help|h" => \$help,
+            "all|a" => \$all,
             "minimum|m:s" => \$minimum,
             "threshold|t:s" => \$threshold)
             or usage();
@@ -54,6 +56,12 @@ foreach my $line (@output)
         $free =~ s/\..*//;
     }
 
+    # -a specified
+    if (defined($all))
+    {
+        $full++;
+        write;
+    }
     # both -t and -m specified
     if (defined($threshold) && defined($minimum))
     {
