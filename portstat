@@ -1,0 +1,6 @@
+#!/bin/sh
+# show information about a TCP/IP or UDP/IP port
+# netstat has a different syntax on Linux, so we use grep instead
+# of the arguments we'd like to use
+
+netstat -a -n | egrep "^(tcp|udp).*\<$1\>"
