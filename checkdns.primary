@@ -1,11 +1,15 @@
 #!/bin/sh
 #
-# checkdns.primary
+# $Id$
 #
 # Set the address for a domain to the primary IP address
 # if it is currently set to the backup IP address
 #
 # This script should be run on the primary host.
+#
+# You must set the following variables in ~/.checkdns
+# domain    name of A record to redirect
+# primary   public host name of server that should serve domain whenever possible
 
 ###
 # FUNCTIONS

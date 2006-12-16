@@ -12,6 +12,10 @@
 # Which DNS records are updated is determined by the ddclient
 # configuration file (e.g. $HOME/.ddclient.<domain>.conf).
 #
+# You must set the following variables in ~/.checkdns
+# domain    name of A record to redirect
+# primary   public host name of server that should serve domain by default
+# backup    public host name of server that should serve domain if primary is down
 
 ###
 # FUNCTIONS
