@@ -46,7 +46,7 @@ do
     esac
 done
 
-# local settings
+# Read local configuration.
 if test -f "${HOME}/.checkdns"
 then
     . "${HOME}/.checkdns"
@@ -54,6 +54,9 @@ else
     error "Cannot find configuration file ${HOME}/.checkdns"
     exit 1
 fi
+
+# Configuration file for ddclient.
+conf=$HOME/.ddclient.$domain.conf
 
 ###
 # INITIALIZATION
@@ -91,16 +94,16 @@ fi
 
 if test "${domainaddress}" != "${primaryaddress}"
 then
-    notice "Address of ${domain} is not the primary server, updating"
-    run /usr/sbin/ddclient -cache /dev/null -force -host "${domain}"
+    notice "Primary server for ${domain} is up, redirecting to ${primary}"
+    run /usr/sbin/ddclient -file "${conf}" -cache /dev/null
     if test $? -eq 0
     then
-        info "Successfully updated ${domain} to ${primaryaddress}"
+        info "Redirected ${domain} to ${primary}"
     else
-        error "Error updating address for ${domain}"
+        error "Error redirecting ${domain} to ${primary}"
         exit 1
     fi
 else
-    info "Address for ${domain} is the primary server, not updating"
+    info "Primary server for ${domain} is already in charge, not redirecting"
 fi
 

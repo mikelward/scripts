@@ -85,7 +85,7 @@ redirected()
     domainaddress=$(get_address_of ${domain})
     backupaddress=$(get_address_of ${backup})
 
-    if test "$domainaddress" = "$backupaddress"
+    if test "${domainaddress}" = "${backupaddress}"
     then
         return 0
     else
@@ -98,29 +98,21 @@ then
     if primary_down
     then
         info "Cannot reach ${primary}"
-        if redirected
+        if ! redirected
         then
-            debug "Already redirected ${domain} to ${backup}"
-        else
-            notice "Cannot reach primary server for ${domain}, redirecting to ${backup}"
-            run /usr/sbin/ddclient -file "$conf" -cache "$cache"
+            notice "Primary server for ${domain} is down, redirecting to ${backup}"
+            run /usr/sbin/ddclient -file "${conf}" -cache /dev/null
             if test $? -eq 0
             then
-                info "Successfully updated ${domain}"
+                info "Redirected ${domain} to ${backup}"
             else
-                error "Error updating address for ${domain}"
+                error "Error redirecting ${domain} to ${backup}"
                 exit 1
             fi
+        else
+            info "Backup server for ${domain} is already in charge, not redirecting"
         fi
     else
-        info "Successfully contacted ${primary}, not redirecting ${domain}"
-        # make sure that the first time we notice the primary host is down that
-        # ddclient at least checks the ip address
-        # if we enter this block multiple times after the primary host goes down,
-        # the cache file will tell ddclient not to perform any subsequent update
-        if test -f "$cache"
-        then
-            run rm "$cache"
-        fi
+        info "Primary server for ${domain} is up, not redirecting"
     fi
 fi
