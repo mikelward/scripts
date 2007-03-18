@@ -1,3 +1,4 @@
+
 ###
 # LOGGING
 
@@ -280,6 +281,62 @@ is_remote()
 {
     echo "$1" | grep -q ":"
 }
+
+# add a line of text to the start of a file
+prepend()
+{
+    line=$1
+
+    file=$2
+    if test ! -f "$file"
+    then
+        error "Cannot access $file"
+        return 1
+    fi
+
+    tempfile="$file.$$.temp"
+    if test -f "$tempfile"
+    then
+        error "$tempfile already exists"
+        return 1
+    fi
+
+    echo "$line" > "$tempfile"
+
+    if test $status -ne 0
+    then
+        error "Cannot store line in $tempfile"
+        rm "$tempfile"
+        return 1
+    fi
+
+    mergefile="$file.$$.merge"
+    if test -f "$mergefile"
+    then
+        error "$mergefile already exists"
+        return 1
+    fi
+
+    cat "$tempfile" "$file" > "$mergefile"
+    mv "$file" "$file.bak"
+    mv "$mergefile" "$file"
+}
+
+# add a line of text to the end of a file
+append()
+{
+    line=$1
+
+    file=$2
+    if test ! -f "$file"
+    then
+        error "Cannot access $file"
+        return 1
+    fi
+
+    echo "$line" >> "$file"
+}
+
 
 ###
 # NETWORKING
