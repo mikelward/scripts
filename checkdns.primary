@@ -2,14 +2,13 @@
 #
 # $Id$
 #
-# Change a dynamic DNS configuration so that it points to this
-# server if this server can access the internet.
+# Point the DNS for a domain to this server (the primary server)
+# if this server can access the internet.
 #
 # This script should be run periodically on the primary host.
 #
-# A similar script called checkdns.backup runs on a secondary host
-# that redirects the dynamic DNS configuration to it if it cannot
-# access the primary host.
+# Which DNS records are updated is determined by the ddclient
+# configuration file (e.g. $HOME/.ddclient.<domain>.conf).
 #
 # You must set the following variables in ~/.checkdns
 # domain    name of A record to redirect

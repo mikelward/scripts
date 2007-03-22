@@ -1,13 +1,11 @@
-#!/bin/bash
+#!/bin/sh
 #
 # $Id: checkdns.backup,v 1.7 2006/09/30 04:13:12 kadmos Exp $
 #
-# Point the DNS for a domain to the backup server if the primary
-# server goes down.
+# Point the DNS for a domain to this server (the backup server)
+# if this server can't access the primary server.
 #
-# We determine whether the primary server is down by looking at
-# the DNS A record for the domain (e.g. example.com, not
-# www.example.com) and seeing if we can ping it.
+# This script should be run periodically on the backup host.
 #
 # Which DNS records are updated is determined by the ddclient
 # configuration file (e.g. $HOME/.ddclient.<domain>.conf).
