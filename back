@@ -1,0 +1,22 @@
+#!/usr/bin/perl
+# $Id: back,v 1.1 2005/05/02 07:04:36 michael Exp michael $
+# Create a backup of a file
+
+use POSIX;
+
+# get name of file to back up
+my $filename = shift;
+die "Must supply file name" if (!$filename);
+
+# move the file to filename.YYYYmmdd
+# (or filename.YYYYmmdd"T"HHMMSS if that exists)
+$mtime = (stat($filename))[9];
+$suffix = strftime("%Y%m%d", localtime($mtime));
+$dest = "${filename}.${suffix}";
+$suffix = strftime("%Y%m%dT%H%M%S", localtime($mtime)) if (-e $dest);
+$dest = "${filename}.${suffix}";
+die "Backup file $dest already exists" if (-e $dest);
+
+# do the move
+rename($filename, $dest);
+
