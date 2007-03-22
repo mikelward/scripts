@@ -2,10 +2,14 @@
 #
 # $Id$
 #
-# Set the address for a domain to the primary IP address
-# if it is currently set to the backup IP address
+# Change a dynamic DNS configuration so that it points to this
+# server if this server can access the internet.
 #
-# This script should be run on the primary host.
+# This script should be run periodically on the primary host.
+#
+# A similar script called checkdns.backup runs on a secondary host
+# that redirects the dynamic DNS configuration to it if it cannot
+# access the primary host.
 #
 # You must set the following variables in ~/.checkdns
 # domain    name of A record to redirect
