@@ -11,10 +11,9 @@ if (@ARGV < 1)
 my $address = shift @ARGV;
 my $subject = shift @ARGV;
 
-@input = <STDIN>;
-
-if (@input > 0)
+if (!eof(STDIN))
 {
+
     my $command = '/usr/bin/mail';
     if (defined($subject))
     {
@@ -27,7 +26,7 @@ if (@input > 0)
     open(PIPE, "|$command")
         or die "Cannot invoke $command";
 
-    foreach my $line (@input)
+    while ($line = <STDIN>)
     {
         print PIPE $line;
     }
