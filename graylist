@@ -29,7 +29,7 @@ use POSIX;
 # might use this and retry as soon as possible, thus defeating the purpose of the
 # graylist!
 
-my $delay = 60;
+my $delay = 300;
 
 # Where to keep the graylist database
 #
@@ -77,7 +77,7 @@ if (dbmopen(%ALLOW, "$database", 0600))
 
                     # Deliberately keep this message easy to read for a human
                     # but don't include the exact delay as a number in case a spammer tries parsing it
-                    print STDOUT "action=421 4.7.1 Your mail server must wait before sending mail.  Try again in a minute.\n\n";
+                    print STDOUT "action=421 4.7.1 Your mail server must wait before sending mail.  Try again in a few minutes.\n\n";
                     exit 0;
                 }
             }
@@ -90,7 +90,7 @@ if (dbmopen(%ALLOW, "$database", 0600))
 
                 # Deliberately keep this message easy to read for a human
                 # but don't include the exact delay as a number in case a spammer tries parsing it
-                print STDOUT "action=421 4.7.1 Your mail server is not known to this system.  Try again in a minute.\n\n";
+                print STDOUT "action=421 4.7.1 Your mail server is not known to this system.  Try again in a few minutes.\n\n";
                 exit 0;
             }
         }
