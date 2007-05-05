@@ -24,6 +24,8 @@ while (<LOGFILE>)
     $address = $request;
     $address =~ s/^([A-Z]*) //;
     $address =~ s/ HTTP[^ ]*$//;
+    $address =~ s/\?.*//;
+    $address =~ s/^\/michael//;
 
     if (/Opera/)
     {
@@ -35,7 +37,7 @@ while (<LOGFILE>)
     }
     elsif ($agent =~ /(Firefox|BonEcho)/)
     {
-        $agent =~ s/.*(?:Firefox|BonEcho)\/(.*?)$/Firefox $1/;
+        $agent =~ s/.*(?:Firefox|BonEcho)\/(.*?)( .*|$)/Firefox $1/;
     }
     elsif ($agent =~ /SeaMonkey/)
     {
@@ -86,13 +88,14 @@ while (<LOGFILE>)
     next if $address =~ /\.(css|inc|htc|js|bmp|gif|ico|png|jpg|jpeg)/i;
     next if $address =~ /\/mail/;
     next if $address =~ /!svn/;
-    next if $agent =~ /(Ask Jeeves|Baiduspider|BlogPulse|BlogSearch|bot|Browsershots|Exabot|Feedfetcher-Google|findlinks|Googlebot|larbin|Moreoverbot|msnbot|MSRBOT|Netcraft Web Server Survey|PHP version tracker|psbot|relevantnoise\.com|Rome Client|SBIder|Snapbot|Sogou web spider|Speedy Spider|SurveyBot|Technoratibot|T-H-U-N-D-E-R-S-T-O-N-E|Twiceler|Twingly Recon|VoilaBot|Yahoo! Slurp|Yeti)/;
+    next if $agent =~ /(Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|Netcraft Web Server Survey|PHP version tracker|psbot|relevantnoise\.com|Rome Client|SBIder|Snapbot|Sogou web spider|Speedy Spider|SurveyBot|Technoratibot|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|Yahoo! Slurp|Yeti)/;
 
     next if $status != 200;
 
     if ($host)
     {
-        print $host . "\t" . $address . "\t" . $agent . "\n";
+        #print $date . "\t" . $host . "\t" . $address . "\t" . $agent . "\n";
+        printf "%-26s\t%-48s\t%-46s\t%-20s\n", $date, $host, $address, $agent;
         #print $agent . "\n";
         #print $address . "\n";
     }
