@@ -364,10 +364,13 @@ get_address_of()
             # endbracket.net          A       203.214.81.131
             while read host type address
             do
-                echo "${address}"
-                found=1
-                return=0
-                break
+                if test "${type}" = "A"
+                then
+                    echo "${address}"
+                    found=1
+                    return=0
+                    break
+                fi
             done < "${tmpfile}"
             if test $found -eq 1
             then
