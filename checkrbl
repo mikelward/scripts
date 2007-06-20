@@ -1,0 +1,21 @@
+#!/bin/sh
+
+. functions
+
+nameserver=208.67.222.222
+rbls="dhcp.tqmcube.com spam.tqmcube.com no-more-funn.moensted.dk dnsbl-1.uceprotect.net dnsbl.sorbs.net zen.spamhaus.org bl.spamcop.net list.dsbl.org psbl.surriel.com virbl.dnsbl.bit.nl"
+
+# get external IP address of this host
+# (assumes nameserver is set to something that resolves our external address)
+hostname=$(hostname)
+address=$(get_address_of ${hostname})
+prefix=$(echo ${address} | sed -e 's/\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)\.\([0-9]*\)/\4.\3.\2.\1/')
+
+for rbl in $rbls
+do
+    result=$(get_address_of ${prefix}.${rbl} 2>/dev/null)
+    if test $? -eq 0
+    then
+        echo ${address} is listed by ${rbl}
+    fi
+done
