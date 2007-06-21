@@ -341,20 +341,21 @@ append()
 ###
 # NETWORKING
 
-# get_address_of <hostname>
-# Determine's the current IP address of a host.
-get_address_of()
+get_address_helper()
 {
-    typeset tmpfile
     typeset host
-    typeset return
-    typeset found
-    typeset tries=3
+    typeset type
+    typeset address
+    typeset nameserver
+    typeset tmpfile
+    typeset tries
 
-    tmpfile="${tmpdir:-/tmp}/get_address_of$$"
     host="$1"
+    nameserver="$2"
+    tmpfile="${tmpdir:-/tmp}/get_address_of$$"
+    tries=3
 
-    found=0
+    debug "Resolving $host using ${nameserver:-default nameservers}"
     while test $tries -gt 0
     do
         host "${host}" ${nameserver} > "${tmpfile}"
@@ -367,27 +368,54 @@ get_address_of()
                 if test "${type}" = "A"
                 then
                     echo "${address}"
-                    found=1
-                    return=0
-                    break
+                    return 0
                 fi
             done < "${tmpfile}"
-            if test $found -eq 1
-            then
-                break
-            fi
-        else
-            return=1
-            debug "Cannot get host information for ${host}"
         fi
         tries=$(($tries - 1))
     done
-    if test $return -eq 1
+    error "Cannot resolve $host using $nameserver"
+    return 1
+}
+
+
+# get_address_of <hostname>
+# Determine's the current IP address of a host.
+get_address_of()
+{
+    typeset host
+    typeset address
+    typeset nameserver
+
+    host="$1"
+
+    # nameservers should be set elsewhere, e.g. in ~/.checkdns
+    if test -n "${nameservers}"
     then
-        error "Cannot get host information for ${host}"
+        debug "Getting address of ${host} using ${nameservers}"
+        for nameserver in $nameservers
+        do
+            address=$(get_address_helper "${host}" ${nameserver})
+            if test $? -eq 0
+            then
+                debug "Address of $host is $address"
+                echo "${address}"
+                return 0
+            fi
+        done
+    else
+        debug "Getting address of ${host} using default nameservers"
+        address=$(get_address_helper "${host}")
+        if test $? -eq 0
+        then
+            debug "Address of $host is $address"
+            echo "${address}"
+            return 0
+        fi
     fi
-    rm -f "${tmpfile}"
-    return $return
+
+    error "Cannot get address of ${host}"
+    return 1
 }
 
 # Determine whether a host is up
