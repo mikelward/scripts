@@ -108,9 +108,9 @@ then
                 exit 1
             fi
         else
-            info "Backup server for ${domain} is already in charge, not redirecting"
+            debug "Backup server for ${domain} is already in charge, not redirecting"
         fi
     else
-        info "Primary server for ${domain} is up, not redirecting"
+        debug "Primary server for ${domain} is up, not redirecting"
     fi
 fi
