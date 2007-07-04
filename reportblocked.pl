@@ -33,7 +33,7 @@ for my $address (@addresses)
 	print SENDMAIL "<body>\n";
 	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
 	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
-	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it and ask them to re-send their message.</p>\n";
+	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it.  They will need to ask their system administrator to fix the problem mentioned in the Reason column and then re-send the message.</p>\n";
 	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:postmaster\@endbracket.net\">contact the post master.</a></p>\n";
 	print SENDMAIL "<table>\n";
 	print SENDMAIL "<tr align=\"left\">\n";
