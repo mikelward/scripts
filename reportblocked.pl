@@ -5,12 +5,25 @@
 # Jul  4 09:02:37 eagle postfix/smtpd[10848]: NOQUEUE: reject: RCPT from mailhost.terra.es[213.4.149.12]: 450 4.7.1 <csmtpout1.frontal.correo>: Helo command rejected: Host not found; from=<leticia_info3@terra.es> to=<michael@endbracket.net> proto=ESMTP helo=<csmtpout1.frontal.correo>
 #grep 'NOQUEUE: reject: RCPT from [^ ]*: 5..' /var/log/mail | sed -e 's/^.*RCPT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*from=<\([^ ]*\)>.*/\4 (\1)/'
 
-my @addresses = ("michael\@endbracket.net", "mikel\@mikelward.com");
+my @users = ("michael", "mikel");
+my $domain = "endbracket.net";
 my $postmaster = undef;
 my $maillog = "/var/log/mail";
 my $sendmail = "/usr/lib/sendmail";
 
-for my $address (@addresses)
+sub print_header
+{
+	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
+	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
+	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it.  They will need to ask their system administrator to fix the problem mentioned in the Reason column and then re-send the message.</p>\n";
+	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:$postmaster\">contact the post master.</a></p>\n";
+	print SENDMAIL "<table>\n";
+	print SENDMAIL "<tr align=\"left\">\n";
+	print SENDMAIL "<th>Time</th><th>From</th><th>Country</th><th>Reason</th>\n";
+	print SENDMAIL "</tr>\n";
+}
+
+for my $user (@users)
 {
 	open(MAILLOG, "<$maillog")
 		or die "Cannot open mail log";
@@ -18,36 +31,32 @@ for my $address (@addresses)
 	open(SENDMAIL, "|$sendmail -t")
 		or die "Cannot open sendmail pipe";
 
-	#print "To: postmaster\@endbracket.net\n";
-	print SENDMAIL "To: $address\n";
+	print SENDMAIL "To: $user\@$domain\n";
 	if (defined $postmaster)
 	{
 		print SENDMAIL "Bcc: $postmaster\n";
 	}
-	print SENDMAIL "Subject: Blocked Messages Report for $address\n";
+	print SENDMAIL "Subject: Blocked Messages Report for $user\n";
 	print SENDMAIL "MIME-Version: 1.0\n";
 	print SENDMAIL "Content-Type: text/html\n";
 	print SENDMAIL "\n";
 
 	print SENDMAIL "<html>\n";
 	print SENDMAIL "<body>\n";
-	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
-	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
-	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it.  They will need to ask their system administrator to fix the problem mentioned in the Reason column and then re-send the message.</p>\n";
-	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:postmaster\@endbracket.net\">contact the post master.</a></p>\n";
-	print SENDMAIL "<table>\n";
-	print SENDMAIL "<tr align=\"left\">\n";
-	print SENDMAIL "<th>Time</th><th>From</th><th>Country</th><th>Reason</th>\n";
-	print SENDMAIL "</tr>\n";
 
 	my $count;
 	my $received;
 	while (<MAILLOG>)
 	{
 		#if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<([^>]*)> proto=[^ ]* helo=#)
-		if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<$address> proto=[^ ]* helo=#)
+		if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<$user(\+[^@]*)?@.*> proto=[^ ]* helo=<.*>#i)
 		{
 			$count++;
+
+			if ($count == 1)
+			{
+				&print_header;
+			}
 
 			my $month = $1;
 			my $day = $2;
@@ -164,7 +173,10 @@ for my $address (@addresses)
 			$received++;
 		}
 	}
-	print SENDMAIL "</table>\n";
+	if ($count > 0)
+	{
+		print SENDMAIL "</table>\n";
+	}
 
 	if ($count == 0)
 	{
