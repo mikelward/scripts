@@ -1,8 +1,6 @@
 #!/usr/bin/perl
-#
-# $Id$
-
 # report which mail messages were rejected during sending in the most recent mail log file
+# $Id$
 
 # Jul  4 09:02:37 eagle postfix/smtpd[10848]: NOQUEUE: reject: RCPT from mailhost.terra.es[213.4.149.12]: 450 4.7.1 <csmtpout1.frontal.correo>: Helo command rejected: Host not found; from=<leticia_info3@terra.es> to=<michael@endbracket.net> proto=ESMTP helo=<csmtpout1.frontal.correo>
 #grep 'NOQUEUE: reject: RCPT from [^ ]*: 5..' /var/log/mail | sed -e 's/^.*RCPT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*from=<\([^ ]*\)>.*/\4 (\1)/'
@@ -31,6 +29,10 @@ for my $address (@addresses)
 
 	print SENDMAIL "<html>\n";
 	print SENDMAIL "<body>\n";
+	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
+	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
+	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it and ask them to re-send their message.</p>\n";
+	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:postmaster\@endbracket.net\">contact the post master.</a></p>\n";
 	print SENDMAIL "<table>\n";
 	print SENDMAIL "<tr align=\"left\">\n";
 	print SENDMAIL "<th>Time</th><th>From</th><th>Country</th><th>Reason</th>\n";
@@ -142,7 +144,7 @@ for my $address (@addresses)
 
 			print SENDMAIL "<tr>\n";
 			print SENDMAIL "<td>$time</td>\n";
-			print SENDMAIL "<td><a href=\"\">$from</a></td>\n";
+			print SENDMAIL "<td><a href=\"mailto:$from\">$from</a></td>\n";
 			print SENDMAIL "<td>$country</td>\n";
 			#print SENDMAIL "<td>$host</td>\n";
 			print SENDMAIL "<td>$reason</td>\n";
