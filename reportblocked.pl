@@ -142,7 +142,7 @@ for my $address (@addresses)
 
 			print SENDMAIL "<tr>\n";
 			print SENDMAIL "<td>$time</td>\n";
-			print SENDMAIL "<td>$from</td>\n";
+			print SENDMAIL "<td><a href=\"\">$from</a></td>\n";
 			print SENDMAIL "<td>$country</td>\n";
 			#print SENDMAIL "<td>$host</td>\n";
 			print SENDMAIL "<td>$reason</td>\n";
