@@ -53,7 +53,12 @@ while (<MAILLOG>)
 
 		# convert to 12-hour time
 		my $timesuffix;
-		if ($hours == 12)
+		if ($hours == 0)
+		{
+			$hours = 12;
+			$timesuffix = "am";
+		}
+		elsif ($hours == 12)
 		{
 			$timesuffix = "pm";
 		}
