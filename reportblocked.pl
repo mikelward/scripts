@@ -39,11 +39,16 @@ for my $address (@addresses)
 	print SENDMAIL "<tr align=\"left\">\n";
 	print SENDMAIL "<th>Time</th><th>From</th><th>Country</th><th>Reason</th>\n";
 	print SENDMAIL "</tr>\n";
+
+	my $count;
+	my $received;
 	while (<MAILLOG>)
 	{
 		#if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<([^>]*)> proto=[^ ]* helo=#)
 		if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<$address> proto=[^ ]* helo=#)
 		{
+			$count++;
+
 			my $month = $1;
 			my $day = $2;
 			my $time = $3;
@@ -154,8 +159,26 @@ for my $address (@addresses)
 			print SENDMAIL "</tr>\n";
 
 		}
+		elsif (m#^(...) (..) (........) ([^ ]*) postfix/local\[\d+\]:.*to=<$address>.*status=sent#)
+		{
+			$received++;
+		}
 	}
 	print SENDMAIL "</table>\n";
+
+	if ($count == 0)
+	{
+		print SENDMAIL "<p>No messages blocked</p>\n";
+	}
+	elsif ($count == 1)
+	{
+		print SENDMAIL "<p>One message blocked</p>\n";
+	}
+	else
+	{
+		print SENDMAIL "<p>$count messages blocked</p>\n";
+	}
+
 	print SENDMAIL "</body>\n";
 	print SENDMAIL "</html>\n";
 
