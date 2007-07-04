@@ -7,13 +7,15 @@
 
 my @addresses = ("michael\@endbracket.net", "mikel\@mikelward.com");
 my $postmaster = undef;
+my $maillog = "/var/log/mail";
+my $sendmail = "/usr/lib/sendmail";
 
 for my $address (@addresses)
 {
-	open(MAILLOG, "</home/michael/mail.log")
+	open(MAILLOG, "<$maillog")
 		or die "Cannot open mail log";
 
-	open(SENDMAIL, "|/usr/lib/sendmail -t")
+	open(SENDMAIL, "|$sendmail -t")
 		or die "Cannot open sendmail pipe";
 
 	#print "To: postmaster\@endbracket.net\n";
