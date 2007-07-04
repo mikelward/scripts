@@ -7,7 +7,7 @@
 # Jul  4 09:02:37 eagle postfix/smtpd[10848]: NOQUEUE: reject: RCPT from mailhost.terra.es[213.4.149.12]: 450 4.7.1 <csmtpout1.frontal.correo>: Helo command rejected: Host not found; from=<leticia_info3@terra.es> to=<michael@endbracket.net> proto=ESMTP helo=<csmtpout1.frontal.correo>
 #grep 'NOQUEUE: reject: RCPT from [^ ]*: 5..' /var/log/mail | sed -e 's/^.*RCPT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*from=<\([^ ]*\)>.*/\4 (\1)/'
 
-open(MAILLOG, "</var/log/mail")
+open(MAILLOG, "</home/michael/mail.log")
   or die "Cannot open mail log";
 
 print "To: postmaster\@endbracket.net\n";
@@ -41,7 +41,6 @@ while (<MAILLOG>)
 		my $to = $11;
 		my $helo = $12;
 
-
 		my $hours;
 		my $minutes;
 		my $seconds;
@@ -52,26 +51,22 @@ while (<MAILLOG>)
 			$seconds = $3;
 		}
 
-		$time = "$hours:$minutes";
-
-#		my $timesuffix;
-#		if ($hours == 12)
-#		{
-#			$timesuffix = "pm";
-#		}
-#		elsif ($hours > 12)
-#		{
-#			$hours -= 12;
-#			$timesuffix = "pm";
-#		}
-#		else
-#		{
-#			$timesuffix = "am";
-#		}
-#		$time = "$hours:$minutes $timesuffix";
-
-		#$time =~ s/^0//;		# strip leading zero
-		#$time =~ s/...$//;		# strip seconds
+		# convert to 12-hour time
+		my $timesuffix;
+		if ($hours == 12)
+		{
+			$timesuffix = "pm";
+		}
+		elsif ($hours > 12)
+		{
+			$hours -= 12;
+			$timesuffix = "pm";
+		}
+		else
+		{
+			$timesuffix = "am";
+		}
+		$time = "$hours:$minutes$timesuffix";
 
 		my $country = `geoiplookup $addr`;
 		$country =~ s/^GeoIP Country Edition: //;
@@ -105,17 +100,20 @@ while (<MAILLOG>)
 			$reason = "Blacklisted by $blacklist";
 			$details = $addr;
 		}
-		elsif ($reason = /cannot find your hostname/)
+		elsif ($reason =~ /cannot find your hostname/)
 		{
 			$reason = "Missing reverse DNS";
 			$details = $addr;
 		}
-		elsif ($reason = "User unknown in local recipient table")
+		elsif ($reason =~ /User unknown in local recipient table/)
 		{
 			$reason = "Bad To address";
 			$details = $to;
 		}
-
+		elsif ($reason =~ m#Recipient address rejected: Please see http://www.openspf.org#)
+		{
+			$reason = "Forged From address";
+		}
 
 		print "<tr>\n";
 		print "<td>$time</td>\n";
