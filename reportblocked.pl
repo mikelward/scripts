@@ -2,13 +2,17 @@
 # report which mail messages were rejected during sending in the most recent mail log file
 # $Id$
 
+use strict;
+use warnings;
+
 # Jul  4 09:02:37 eagle postfix/smtpd[10848]: NOQUEUE: reject: RCPT from mailhost.terra.es[213.4.149.12]: 450 4.7.1 <csmtpout1.frontal.correo>: Helo command rejected: Host not found; from=<leticia_info3@terra.es> to=<michael@endbracket.net> proto=ESMTP helo=<csmtpout1.frontal.correo>
 #grep 'NOQUEUE: reject: RCPT from [^ ]*: 5..' /var/log/mail | sed -e 's/^.*RCPT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*from=<\([^ ]*\)>.*/\4 (\1)/'
 
 my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
-my $maillog = "/var/log/mail";
+#my $maillog = "/var/log/mail";
+my $maillog = "/home/michael/mail.log";
 my $sendmail = "/usr/lib/sendmail";
 
 sub print_header
@@ -168,7 +172,8 @@ for my $user (@users)
 			print SENDMAIL "</tr>\n";
 
 		}
-		elsif (m#^(...) (..) (........) ([^ ]*) postfix/local\[\d+\]:.*to=<$address>.*status=sent#)
+		# Jul  6 06:33:21 eagle postfix/local[11666]: 5030B3746C: to=<michael@endbracket.net>, relay=local, delay=6.6, delays=3.1/0.04/0/3.5, dsn=2.0.0, status=sent (delivered to command: /usr/local/bin/procmail -p -a "$EXTENSION")
+		elsif (m#^(...) (..) (........) ([^ ]*) postfix/local\[\d+\]:.*to=<$user(\+[^@]*)?@.*>.*status=sent#)
 		{
 			$received++;
 		}
@@ -189,6 +194,19 @@ for my $user (@users)
 	else
 	{
 		print SENDMAIL "<p>$count messages blocked</p>\n";
+	}
+
+	if ($received == 0)
+	{
+		print SENDMAIL "<p>No messages delivered</p>\n";
+	}
+	elsif ($received == 1)
+	{
+		print SENDMAIL "<p>One message delivered</p>\n";
+	}
+	else
+	{
+		print SENDMAIL "<p>$received messages delivered</p>\n";
 	}
 
 	print SENDMAIL "</body>\n";
