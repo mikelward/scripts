@@ -11,8 +11,7 @@ use warnings;
 my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
-#my $maillog = "/var/log/mail";
-my $maillog = "/home/michael/mail.log";
+my $maillog = "/var/log/mail";
 my $sendmail = "/usr/lib/sendmail";
 
 sub print_header
