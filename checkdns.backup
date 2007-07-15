@@ -73,6 +73,30 @@ conf=$HOME/.ddclient.$domain.conf
 # Cache file for ddclient.
 cache=$HOME/.ddclient.$domain.cache
 
+# must always call this function at the start of the script
+get_addresses()
+{
+	primaryaddress=$(get_address_of ${primary})
+	if test $? -eq 0
+	then
+		backupaddress=$(get_address_of ${backup})
+		if test $? -eq 0
+		then
+			domainaddress=$(get_address_of ${domain})
+			if test $? -eq 0
+			then
+				return 0
+			else
+				return 1
+			fi
+		else
+			return 1
+		fi
+	else
+		return 1
+	fi
+}
+
 primary_down()
 {
     ! host_up ${primary}
@@ -80,9 +104,6 @@ primary_down()
 
 redirected()
 {
-    domainaddress=$(get_address_of ${domain})
-    backupaddress=$(get_address_of ${backup})
-
     if test "${domainaddress}" = "${backupaddress}"
     then
         return 0
@@ -91,6 +112,22 @@ redirected()
     fi
 }
 
+redirect_to_backup()
+{
+	notice "Primary server for ${domain} is down, redirecting to ${backup} (${backupaddress})"
+	run /usr/sbin/ddclient -file "${conf}" -cache /dev/null -use=ip -ip "${backupaddress}"
+	if test $? -eq 0
+	then
+		info "Redirected ${domain} to ${backup}"
+		return 0
+	else
+		error "Error redirecting ${domain} to ${backup}"
+		return 1
+	fi
+}
+
+get_addresses
+
 if internet_reachable
 then
     if primary_down
@@ -98,19 +135,23 @@ then
         info "Cannot reach ${primary}"
         if ! redirected
         then
-            notice "Primary server for ${domain} is down, redirecting to ${backup}"
-            run /usr/sbin/ddclient -file "${conf}" -cache /dev/null
-            if test $? -eq 0
-            then
-                info "Redirected ${domain} to ${backup}"
-            else
-                error "Error redirecting ${domain} to ${backup}"
-                exit 1
-            fi
+			if redirect_to_backup
+			then
+				info "Redirection complete"
+				exit 0
+			else
+				error "Cannot redirect ${domain}"
+				exit 1
+			fi
         else
             debug "Backup server for ${domain} is already in charge, not redirecting"
+			exit 0
         fi
     else
         debug "Primary server for ${domain} is up, not redirecting"
+		exit 0
     fi
+else
+	error "Cannot reach the internet"
+	exit 1
 fi
