@@ -97,8 +97,8 @@ fi
 
 if test "${domainaddress}" != "${primaryaddress}"
 then
-    notice "Primary server for ${domain} is up, redirecting to ${primary}"
-    run /usr/sbin/ddclient -file "${conf}" -cache /dev/null
+    notice "Primary server for ${domain} is up, redirecting to ${primary} (${primaryaddress})"
+    run /usr/sbin/ddclient -file "${conf}" -cache /dev/null -use=ip -ip "${primaryaddress}"
     if test $? -eq 0
     then
         info "Redirected ${domain} to ${primary}"
