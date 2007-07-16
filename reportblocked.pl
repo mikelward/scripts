@@ -47,8 +47,8 @@ for my $user (@users)
 	print SENDMAIL "<html>\n";
 	print SENDMAIL "<body>\n";
 
-	my $count;
-	my $received;
+	my $count = 0;
+	my $received = 0;
 	while (<MAILLOG>)
 	{
 		#if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<([^>]*)> proto=[^ ]* helo=#)
