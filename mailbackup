@@ -14,6 +14,11 @@ else
     exit 1
 fi
 
+abort()
+{
+	notice "Aborted"
+}
+
 cleanup()
 {
     info "Cleaning up"
@@ -36,15 +41,20 @@ debug=
 quiet=true
 simulate=
 src=/home/michael/mail
-dst=voot:/home/kadmos/mail
+#dst=voot:/home/kadmos/mail
+dst=dreamhost:/home/mikelward/mail
 logfile=/home/michael/log/mailbackup.log
+dateformat='%-e %B %Y'
+timeformat='%H:%M:%S'
 
 #
 # start
 #
 trap 'cleanup' EXIT
+trap 'abort' INT TERM
 
-info "Starting backup of $src at $(date)"
+info "Starting backup of $src on "$(date +"$dateformat")" at "$(date +"$timeformat")
+
 
 #
 # ensure required programs are available
@@ -144,4 +154,5 @@ else
     error "Local files are currently unsupported"
     exit 1
 fi
-info "Finished backup"
+
+info "Finished backup of $src on "$(date +"$dateformat")" at "$(date +"$timeformat")
