@@ -144,6 +144,11 @@ for my $user (@users)
 				$reason = "Missing reverse DNS";
 				$details = $addr;
 			}
+			elsif ($reason =~ /Helo command rejected/)
+			{
+				$reason = "Invalid HELO name";
+				$details = $addr;
+			}
 			elsif ($reason =~ /User unknown in local recipient table/)
 			{
 				$reason = "Bad To address";
@@ -152,6 +157,10 @@ for my $user (@users)
 			elsif ($reason =~ m#Recipient address rejected: Please see http://www.openspf.org#)
 			{
 				$reason = "Forged From address";
+			}
+			elsif ($reason =~ m#Character set prohibited#)
+			{
+				$reason = "Foreign character set";
 			}
 
 			# give bounce messages a more meaningful name
