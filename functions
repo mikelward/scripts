@@ -368,6 +368,7 @@ get_address_helper()
                 if test "${type}" = "A"
                 then
                     echo "${address}"
+					rm "${tmpfile}"
                     return 0
                 fi
             done < "${tmpfile}"
@@ -375,6 +376,7 @@ get_address_helper()
         tries=$(($tries - 1))
     done
     error "Cannot resolve $host using $nameserver"
+	rm "${tmpfile}"
     return 1
 }
 
