@@ -352,7 +352,7 @@ get_address_helper()
 
     host="$1"
     nameserver="$2"
-    tmpfile="${tmpdir:-/tmp}/get_address_of$$"
+    tmpfile="${tmpdir:-/tmp}/get_address_helper$$"
     tries=3
 
     debug "Resolving $host using ${nameserver:-default nameservers}"
