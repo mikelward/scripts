@@ -1,0 +1,156 @@
+#!/bin/bash
+# back up a MySQL database
+# $Id$
+
+OIFS="$IFS"
+IFS=" 	
+"
+
+if test -f "$HOME/bin/functions"
+then
+    . "$HOME/bin/functions"
+else
+    echo "Cannot open functions library $HOME/bin/functions" 1>&2
+    exit 1
+fi
+
+abort()
+{
+	notice "Aborted"
+}
+
+cleanup()
+{
+    info "Cleaning up"
+
+    if test -f "$dfout"
+    then
+        run rm -rf -- "$dfout"
+    fi
+}
+
+#
+# default configuration
+#
+debug=
+quiet=true
+src=/home/michael/library
+tmpdir="${TMPDIR:-$HOME/tmp}"
+#dst=voot:/home/kadmos/svn
+dst=dreamhost:/home/mikelward/library
+logfile=/home/michael/log/librarybackup.log
+dateformat='%-e %B %Y'
+timeformat='%H:%M:%S'
+#databases="books movies music"
+
+#
+# start
+#
+trap 'abort' INT TERM
+trap 'cleanup' EXIT
+
+src=${src%/}
+
+info "Starting backup of $src on "$(date +"$dateformat")" at "$(date +"$timeformat")
+
+#
+# ensure required programs are available
+#
+if ! silent type mysqldump
+then
+    error "Cannot find mysqldump in PATH"
+    exit 1
+fi
+
+#
+# create a dump of the desired MySQL databases
+#
+set -- $databases
+if test $# -ge 1
+then
+	for database in $databases
+	do
+		info "Dumping $database"
+		mysqldump $database > $src/$database.sql
+		if test $? -eq 0
+		then
+			debug "OK"
+		else
+			error "Error dumping $database"
+		fi
+	done
+else
+	info "Dumping all databases"
+	mysqldump --all-databases > $src/library.sql
+	if test $? -eq 0
+	then 
+		debug "OK"
+	else
+		error "Error dumping databases"
+	fi
+fi
+
+#
+# check disk space requirements
+#
+size=$(get_size_of_file_or_directory "$src")
+if test $? -ne 0
+then
+    error "Cannot determine disk usage of $src"
+    exit 1
+fi
+
+tmpdir=$(get_temporary_directory)
+if test $? -ne 0
+then
+    error "Cannot determine temporary directory"
+    exit 1
+fi
+
+available=$(get_free_space_on_filesystem "$tmpdir")
+if test $? -ne 0
+then
+    error "Cannot determine free space on $tmpdir"
+    exit 1
+fi
+
+if test $available -lt $size
+then
+    error "Need at least $size kilobytes free on $tmpdir"
+    exit 1
+fi
+
+#
+# copy the hot copy to the backup directory
+#
+if is_remote "$dst"
+then
+    debug "Remote destination"
+
+    info "Synchronizing $src to $dst"
+    flags=
+    if test "$debug"
+    then
+        flags="$flags -v"
+    fi
+    if test "$quiet"
+    then
+        flags="$flags -q"
+    fi
+    #scp -C -r $flags "$src" "$dst"
+    # ensure source has a trailing slash so we only copy the directory contents
+    # (local:~/svn.12345/ -> remote:~/svn rather than
+    #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
+    run rsync -a --delete $flags "$src"/ "$dst"
+    if test $? -ne 0
+    then
+        error "Error synchronizing $src to $dst"
+        exit 1
+    fi
+else
+    debug "Local destination, using cp"
+    error "Local files are currently unsupported"
+    exit 1
+fi
+
+info "Finished backup of $src on "$(date +"$dateformat")" at "$(date +"$timeformat")
