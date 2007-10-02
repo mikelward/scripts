@@ -4,11 +4,18 @@
 use strict;
 use warnings;
 
+use Mail::Box::Manager;
 use Mail::Box::Mbox;
 
-my $folder = Mail::Box::Mbox->new(access => "rw",
-                                  create => 0,
-                                  folder => "/home/michael/mail/Junk");
+my $manager = new Mail::Box::Manager;
+
+my $folder = $manager->open(access => "rw",
+                            create => 0,
+                            folder => "/home/michael/mail/Junk");
+
+my $corpus = $manager->open(access => "rw",
+                            create => 1,
+                            folder => "/home/michael/back/Junk");
 
 my $count = 0;
 foreach my $message ($folder->messages)
@@ -17,6 +24,10 @@ foreach my $message ($folder->messages)
 
     # skip dummy message created by IMAP server
     next if $subject =~ /FOLDER INTERNAL DATA/;
+
+    # skip message that's already deleted
+    # (typically a clean message that got moved but the folder wasn't yet expunged)
+    next if $message->isDeleted;
 
     print $subject . "\n";
 
@@ -28,14 +39,15 @@ foreach my $message ($folder->messages)
     {
         warn "Cannot connect to bogofilter";
     }
-    if (open(SPAMCOP, "|/home/michael/bin/reporter.pl"))
-    {
-        $message->print(\*SPAMCOP);
-    }
-    else
-    {
-        warn "Cannot connect to SpamCop";
-    }
+#if (open(SPAMCOP, "|/home/michael/bin/reporter.pl"))
+#    {
+#        $message->print(\*SPAMCOP);
+#    }
+#    else
+#    {
+#        warn "Cannot connect to SpamCop";
+#    }
+	$manager->copyMessage($corpus, $message);
     $message->delete();
     $count++;
 }
@@ -43,5 +55,15 @@ foreach my $message ($folder->messages)
 $folder->close()
     or die "Cannot close mail box";
 
-print STDERR "Reported $count messages\n";
+$corpus->close()
+	or warn "Cannot close junk mail corpus";
+
+if ($count == 1)
+{
+    print STDERR "Reported 1 message\n";
+}
+else
+{
+    print STDERR "Reported $count messages\n";
+}
 exit 0;
