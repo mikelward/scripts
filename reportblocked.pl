@@ -11,8 +11,7 @@ use warnings;
 my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
-#my $maillog = "/var/log/mail";
-my $maillog = "/home/michael/maillog.old";
+my $maillog = "/var/log/mail";
 my $sendmail = "/usr/lib/sendmail";
 
 sub print_html_header
@@ -224,7 +223,8 @@ foreach my $user (@users)
 				{
 					$blacklist = "SORBS";
 				}
-				$reason = "Blacklisted by $blacklist";
+				#$reason = "Blacklisted by $blacklist";
+				$reason = "Listed by $blacklist";
 				$details = $addr;
 			}
 			elsif ($reason =~ /cannot find your hostname/)
