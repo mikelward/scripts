@@ -223,6 +223,10 @@ foreach my $user (@users)
 				{
 					$blacklist = "SORBS";
 				}
+				elsif ($blacklist =~ /spam\.tqmcube\.com$/)
+				{
+					$blacklist = "TQMcube";
+				}
 				#$reason = "Blacklisted by $blacklist";
 				$reason = "Listed by $blacklist";
 				$details = $addr;
