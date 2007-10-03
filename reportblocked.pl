@@ -11,10 +11,9 @@ use warnings;
 my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
-my $maillog = "/var/log/mail";
+#my $maillog = "/var/log/mail";
+my $maillog = "/home/michael/maillog.old";
 my $sendmail = "/usr/lib/sendmail";
-
-my @records;
 
 sub print_html_header
 {
@@ -133,8 +132,10 @@ sub print_text_footer
 	}
 }
 
-for my $user (@users)
+foreach my $user (@users)
 {
+	my @records;
+
 	open(MAILLOG, "<$maillog")
 		or die "Cannot open mail log";
 
@@ -198,8 +199,6 @@ for my $user (@users)
 			$country =~ s/^GeoIP Country Edition: //;
 			$country =~ s/^.*?, //;	# strip country code
 			$country =~ s/,.*$//;	# strip things like "Republic of"
-
-			print "country is x${country}x\n";
 
 			my $details;
 			if ($reason =~ /Your mail server is blacklisted by ([^ ]*)\. /)
