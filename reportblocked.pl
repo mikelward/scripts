@@ -12,6 +12,7 @@ my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
 my $maillog = "/var/log/mail";
+#my $maillog = "/home/michael/maillog";
 my $sendmail = "/usr/lib/sendmail";
 
 sub print_html_header
@@ -250,13 +251,23 @@ foreach my $user (@users)
 			{
 				$reason = "Suspected spam";
 			}
+			# SPF version 1
 			elsif ($reason =~ m#Recipient address rejected: Please see http://www.openspf.org#)
+			{
+				$reason = "Forged From address";
+			}
+			# SPF version 2 (my message from /usr/lib/postfix/postfix-policyd-spf-perl)
+			elsif ($reason =~ m#Forged from address: Please see http://www.openspf.org#)
 			{
 				$reason = "Forged From address";
 			}
 			elsif ($reason =~ m#Character set prohibited#)
 			{
 				$reason = "Foreign character set";
+			}
+			elsif ($reason =~ /Recipient address rejected: /)
+			{
+				$reason =~ s/^.*Recipient address rejected: //;
 			}
 
 			# give bounce messages a more meaningful name
