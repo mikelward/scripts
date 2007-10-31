@@ -1,0 +1,50 @@
+#!/bin/sh
+# vim: set sw=4 ts=4 tw=0:
+
+. $HOME/bin/functions
+
+# location of production mail folders
+conf=$HOME/.procmailrc
+inbox=${MAIL:-$HOME/mail/inbox}
+maildir=${MAILDIR:-$HOME/mail}
+
+# location of test mail folders
+testdir=$HOME/proctest
+testconf=$HOME/proctest/.procmailrc
+
+# where to put test files
+DEFAULT=$testdir/inbox
+MAILDIR=$testdir
+
+# where to keep log of test results
+date=`date +"%Y%m%d%H%M%S"`
+LOGFILE=$HOME/proctest-$date.log
+
+if test ! -d $testdir
+then
+    mkdir -p $testdir
+    if test $? -ne 0
+    then
+        error "Cannot make $testdir"
+        exit 1
+    fi
+else
+    error "$testdir already exists"
+    exit 1
+fi
+
+sed -e 's#^DEFAULT.*#'"DEFAULT=$DEFAULT"'#' -e 's#^MAILDIR.*#'"MAILDIR=$MAILDIR"'#' -e 's#^LOGFILE.*#LOGFILE='"$LOGFILE"'#' < $conf > $testconf
+
+grep -q '^DEFAULT=' $testconf || append "^DEFAULT=$DEFAULT" $testconf
+grep -q '^MAILDIR=' $testconf || append "^MAILDIR=$MAILDIR" $testconf
+grep -q '^LOGFILE=' $testconf || append "^LOGFILE=$LOGFILE" $testconf
+
+if test -f $inbox
+then
+    formail -s env HOME=$testdir procmail -p $testconf < $inbox
+    less $LOGFILE
+else
+    error "Cannot access $inbox"
+    exit 1
+fi
+
