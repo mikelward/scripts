@@ -7,7 +7,7 @@ confdir="$HOME"/etc
 # space-separated list of configuration files
 conffiles="*"
 # directory to store archive files in
-archivedir="$HOME"/www/conf
+archivedir="$HOME"/web/conf
 # name of archive file
 archivefile="$archivedir"/conf.tar.gz
 
