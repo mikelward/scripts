@@ -11,13 +11,26 @@ use warnings;
 my @users = ("michael", "mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
-my $maillog = "/var/log/mail";
+my $maillog;
+if (@ARGV >= 1)
+{
+	$maillog = $ARGV[0];
+}
+else
+{
+	$maillog = "/var/log/mail";
+}
 #my $maillog = "/home/michael/maillog";
 my $sendmail = "/usr/lib/sendmail";
 
 sub print_html_header
 {
 	print SENDMAIL "<html>\n";
+	print SENDMAIL "<head>\n";
+	print SENDMAIL "<style type=\"text/css\">\n";
+	print SENDMAIL "body { font-family: sans-serif }\n";
+	print SENDMAIL "td { white-space: nowrap }\n";
+	print SENDMAIL "</style>\n";
 	print SENDMAIL "<body>\n";
 	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
 	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
@@ -132,12 +145,13 @@ sub print_text_footer
 	}
 }
 
+USER:
 foreach my $user (@users)
 {
 	my @records;
 
 	open(MAILLOG, "<$maillog")
-		or die "Cannot open mail log";
+		or die "Cannot open $maillog";
 
 	my($blocked) = 0;
 	my($delivered) = 0;
@@ -257,7 +271,7 @@ foreach my $user (@users)
 				$reason = "Forged From address";
 			}
 			# SPF version 2 (my message from /usr/lib/postfix/postfix-policyd-spf-perl)
-			elsif ($reason =~ m#Forged from address: Please see http://www.openspf.org#)
+			elsif ($reason =~ m#Forged From address: Please see http://www.openspf.org#)
 			{
 				$reason = "Forged From address";
 			}
@@ -295,6 +309,11 @@ foreach my $user (@users)
 		{
 			$delivered++;
 		}
+	}
+
+	if ($delivered == 0 && $blocked == 0)
+	{
+		next USER;
 	}
 
 	my $statsref = { blocked => $blocked, delivered => $delivered };
