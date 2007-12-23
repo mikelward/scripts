@@ -8,7 +8,8 @@ use warnings;
 # Jul  4 09:02:37 eagle postfix/smtpd[10848]: NOQUEUE: reject: RCPT from mailhost.terra.es[213.4.149.12]: 450 4.7.1 <csmtpout1.frontal.correo>: Helo command rejected: Host not found; from=<leticia_info3@terra.es> to=<michael@endbracket.net> proto=ESMTP helo=<csmtpout1.frontal.correo>
 #grep 'NOQUEUE: reject: RCPT from [^ ]*: 5..' /var/log/mail | sed -e 's/^.*RCPT from \([^\[]*\)\[\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)\]: \([0-9][0-9][0-9]\).*from=<\([^ ]*\)>.*/\4 (\1)/'
 
-my @users = ("michael", "mikel");
+#my @users = ("michael", "mikel");
+my @users = ("mikel");
 my $domain = "endbracket.net";
 my $postmaster = undef;
 my $maillog;
@@ -113,6 +114,7 @@ sub print_html_footer
 		chomp $timezone;
 
 		my ($continent, $city) = split('/', $timezone);
+		$city =~ s/_/ /g;
 		my $offset = `env TZ=$timezone date '+%z'`;
 		chomp $offset;
 
@@ -162,6 +164,7 @@ sub print_text_footer
 		chomp $timezone;
 
 		my ($continent, $city) = split('/', $timezone);
+		$city =~ s/_/ /g;
 		my $offset = `env TZ=$timezone date +%z`;
 		chomp $offset;
 
