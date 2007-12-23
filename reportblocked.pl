@@ -107,6 +107,18 @@ sub print_html_footer
 		print SENDMAIL "<p>$stats{delivered} messages delivered</p>\n";
 	}
 
+	if (open(TIMEZONE, "/etc/timezone"))
+	{
+		my $timezone = <TIMEZONE>;
+		chomp $timezone;
+
+		my ($continent, $city) = split('/', $timezone);
+		my $offset = `env TZ=$timezone date '+%z'`;
+		chomp $offset;
+
+		print SENDMAIL "<p>Times given are in $city time (UTC$offset)</p>\n";
+	}
+
 	print SENDMAIL "</body>\n";
 	print SENDMAIL "</html>\n";
 }
@@ -142,6 +154,18 @@ sub print_text_footer
 	else
 	{
 		print SENDMAIL "$stats{delivered} messages delivered\n\n";
+	}
+
+	if (open(TIMEZONE, "/etc/timezone"))
+	{
+		my $timezone = <TIMEZONE>;
+		chomp $timezone;
+
+		my ($continent, $city) = split('/', $timezone);
+		my $offset = `env TZ=$timezone date +%z`;
+		chomp $offset;
+
+		print SENDMAIL "Times given are in $city time (UTC$offset)\n\n";
 	}
 }
 
