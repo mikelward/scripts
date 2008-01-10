@@ -1,18 +1,52 @@
 #!/usr/bin/perl
-# print a file from the line matching the first pattern until the line matching the second pattern
+# print lines in a file between the <from> pattern and the <to> pattern
 # usage: fromto <from> <to> <file>
+
+use strict;
+use warnings;
+use Getopt::Long;
+
+my $skip;
+my $help;
+my $result = GetOptions("skip|s" => \$skip,
+						"help|h" =>);
+
+sub usage
+{
+	print STDERR "Usage: fromto [options] <from pattern> <to pattern> [<file>]\n";
+	print STDERR "Options:\n";
+	print STDERR "    -s    Skip the lines matching the patterns\n";
+	print STDERR "Notes:\n";
+	print STDERR "          Reads from stdin if no file name is supplied\n";
+	print STDERR "          Patterns are in Perl compatible regex syntax\n";
+}
+
+if (!$result)
+{
+	usage;
+	exit 2;
+}
+if ($help)
+{
+	usage;
+	exit 0;
+}
 
 my $from = shift @ARGV;
 my $to = shift @ARGV;
 
 my $started = 0;
+my $skipmarker = 0;
 
 LINE:
 while (<>) {
     if ($started) {
         if ($to && /$to/) {
-            print;
-            exit 0;
+			if (!$skipmarker) {
+				print;
+			}
+			$started = 0;
+			next LINE;
         }
         else {
             print;
@@ -21,7 +55,9 @@ while (<>) {
     }
     if (!$from || /$from/) {
         $started = 1;
-        print;
+		if (!$skipmarker) {
+			print;
+		}
         next LINE;
     }
 }
