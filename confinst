@@ -1,8 +1,10 @@
 #!/bin/sh
 # installs UNIX configuration files
 
-confdir="$HOME"/etc
+basedir="$HOME"
+confdir="$basedir"/etc
 conftar="$HOME"/conf.tar.gz
+destdir="$HOME"
 hostname="`hostname | sed -e 's/\..*//'`"
 
 if test ! -e "$confdir"
@@ -22,15 +24,46 @@ then
     exit 1
 fi
 
-for conffile in $confdir/*
-do
-    dest="$HOME"/.${conffile##*/}
-    if test $dest -nt $conffile
-    then
-        ext=`date +%Y%m%d%H%M%S`
-        printf "$dest is newer than $conffile, backing up\n" 1>&2
-        mv $dest $dest.$ext
-    fi
-    ln -sf $conffile $dest
-done
+make_links()
+{
+	typeset sourcedir
+	typeset destdir
+	typeset prefix
+
+	sourcedir="$1"
+	destdir="$2"
+	prefix="$3"
+
+	#echo "Making links from $sourcedir to $destdir" 1>&2
+
+	for sourcefile in "$sourcedir"/*
+	do
+		filename=${sourcefile##*/}
+		destfile="$destdir"/"$prefix""$filename"
+		if test -f "$sourcefile"
+		then
+			if test $destfile -nt $sourcefile
+			then
+				ext=`date +%Y%m%d%H%M%S`
+				printf "$destfile is newer than $conffile, backing up\n" 1>&2
+				mv $destfile $destfile.$ext
+			fi
+			ln -sf $sourcefile $destfile
+		elif test -d "$sourcefile"
+		then
+			if test ! -d "$destfile"
+			then
+				mkdir -p "$destfile"
+				if test $? -ne 0
+				then
+					printf "Error creating $destfile, skipping $sourcefile\n" 1>&2
+					continue
+				fi
+			fi
+			make_links "$sourcefile" "$destfile" ""
+		fi
+	done
+}
+
+make_links "$confdir" "$destdir" "."
 
