@@ -34,14 +34,15 @@ cleanup()
 #
 debug=
 quiet=true
-src=/home/michael/library
+src=/home/mikel/library
 tmpdir="${TMPDIR:-$HOME/tmp}"
 #dst=voot:/home/kadmos/svn
 dst=dreamhost:/home/mikelward/library
-logfile=/home/michael/log/librarybackup.log
+logfile=/home/mikel/log/librarybackup.log
 dateformat='%-e %B %Y'
 timeformat='%H:%M:%S'
 #databases="books movies music"
+databases="library"
 
 #
 # start
@@ -52,6 +53,11 @@ trap 'cleanup' EXIT
 src=${src%/}
 
 info "Starting backup of $src on "$(date +"$dateformat")" at "$(date +"$timeformat")
+
+if test ! -d "$src"
+then
+	mkdir "$src"
+fi
 
 #
 # ensure required programs are available
