@@ -11,11 +11,11 @@ my $manager = new Mail::Box::Manager;
 
 my $folder = $manager->open(access => "rw",
                             create => 0,
-                            folder => "/home/michael/mail/Junk");
+                            folder => "/home/mikel/mail/Junk");
 
 my $corpus = $manager->open(access => "rw",
                             create => 1,
-                            folder => "/home/michael/back/Junk");
+                            folder => "/home/mikel/back/Junk");
 
 my $count = 0;
 foreach my $message ($folder->messages)
