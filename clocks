@@ -1,0 +1,24 @@
+#!/bin/sh
+
+format="%a %H:%M"
+#format="%a %I:%M %p"
+when="$1"
+localzone="${2:-$(date '+%z')}"
+
+IFS='|'
+while read timezone description
+do
+	if test -n "$timezone"
+	then
+		continent=${timezone%/*}
+		city=${timezone#*/}
+		city=${city/_/ }
+		if test -z "$description"
+		then
+			description=$city
+		fi
+		time=$(TZ="$timezone" date ${when:+-d "$when $localzone"} +"$format")
+		printf "%-15s %9s\n" "$description" "$time"
+	fi
+done < $HOME/.timezones
+
