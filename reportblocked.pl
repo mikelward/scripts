@@ -184,24 +184,25 @@ foreach my $user (@users)
 	my($delivered) = 0;
 	while (<MAILLOG>)
 	{
-		#if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<([^>]*)> proto=[^ ]* helo=#)
-		if (m#^(...) (..) (........) ([^ ]*) postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5..) ([^ ]*) (.*); from=<([^>]*)> to=<$user(\+[^@]*)?@.*> proto=[^ ]* helo=<.*>#i)
-		{
-			$blocked++;
+		my $line = $_;
+		chomp $line;
 
+		if ($line =~ m#^(...) (..) (........) \S+ postfix/(smtpd|cleanup).*reject.*to=<($user(?:\+[^@]*)?@.*)>#)
+		{
 			my $month = $1;
 			my $day = $2;
 			my $time = $3;
 			my $server = $4;
 
-			my $host = $5;
-			my $addr = $6;
-			my $error = $7;
-			my $exterror = $8;
-			my $reason = $9;
-			my $from = $10;
-			my $to = $11;
-			my $helo = $12;
+			my $host;
+			my $addr;
+			my $exterror;
+			my $reason;
+			my $from;
+			my $to;
+			my $helo;
+			my $error;
+			my $details;
 
 			my $hours;
 			my $minutes;
@@ -235,90 +236,127 @@ foreach my $user (@users)
 			}
 			$time = "$hours:$minutes$timesuffix";
 
+			# Jan 16 04:28:20 falcon postfix/smtpd[27385]: NOQUEUE: reject: RCPT from unknown[88.233.24.124]: 550 5.7.1 Client host rejected: cannot find your hostname, [88.233.24.124]; from=<info_1@spor-haberleri.com> to=<michael@endbracket.net> proto=SMTP helo=<spor-haberleri1470.com>
+			if ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
+			{
+				$blocked++;
+
+				$host = $1;
+				$addr = $2;
+				$error = $3;
+				$exterror = $4;
+				$reason = $5;
+				$from = $6;
+				$to = $7;
+				$helo = $8;
+
+				if ($reason =~ /Your mail server is blacklisted by ([^ ]*)\. /)
+				{
+					my $blacklist = $1;
+					if ($blacklist =~ /spamhaus\.org$/)
+					{
+						$blacklist = "Spamhaus";
+					}
+					elsif ($blacklist =~ /spamcop\.net$/)
+					{
+						$blacklist = "Spamcop";
+					}
+					elsif ($blacklist =~ /psbl\.surriel\.com$/)
+					{
+						$blacklist = "PSBL";
+					}
+					elsif ($blacklist =~ /list\.dsbl\.org$/)
+					{
+						$blacklist = "DSBL";
+					}
+					elsif ($blacklist =~ /dnsbl\.sorbs\.net$/)
+					{
+						$blacklist = "SORBS";
+					}
+					elsif ($blacklist =~ /spam\.tqmcube\.com$/)
+					{
+						$blacklist = "TQMcube";
+					}
+					#$reason = "Blacklisted by $blacklist";
+					$reason = "Listed by $blacklist";
+					$details = $addr;
+				}
+				elsif ($reason =~ /cannot find your hostname/)
+				{
+					$reason = "Missing reverse DNS";
+					$details = $addr;
+				}
+				elsif ($reason =~ /Helo command rejected/)
+				{
+					$reason = "Invalid HELO name";
+					$details = $addr;
+				}
+				elsif ($reason =~ /User unknown in local recipient table/)
+				{
+					$reason = "Bad To address";
+					$details = $to;
+				}
+				elsif ($reason =~ /Suspected spam/)
+				{
+					$reason = "Suspected spam";
+				}
+				# SPF version 1
+				elsif ($reason =~ m#Recipient address rejected: Please see http://www.openspf.org#)
+				{
+					$reason = "Forged From address";
+				}
+				# SPF version 2 (my message from /usr/lib/postfix/postfix-policyd-spf-perl)
+				elsif ($reason =~ m#Forged From address: Please see http://www.openspf.org#)
+				{
+					$reason = "Forged From address";
+				}
+				elsif ($reason =~ m#Character set prohibited#)
+				{
+					$reason = "Foreign character set";
+				}
+				elsif ($reason =~ /Recipient address rejected: /)
+				{
+					$reason =~ s/^.*Recipient address rejected: //;
+				}
+
+				# give bounce messages a more meaningful name
+				# (however the address isn't technically the same)
+				if ($from =~ /^$/)
+				{
+					$from = "postmaster\@$host";
+				}
+			}
+			# Jan 16 16:09:37 falcon postfix/cleanup[29790]: A6E4F22800B: reject: header Content-Type: text/plain;??charset="gb2312" from poplet2.per.eftel.com[203.24.100.45]; from=<cplwest@cpl.net.au> to=<mikel@mikelward.com> proto=ESMTP helo=<poplet2.per.eftel.com>: 5.7.1 554 Character set prohibited.  You have sent a message in a language I don't understand.  Please see http://endbracket.net/help/spam/foreign for more information.
+			elsif ($line =~ m#^.*postfix/cleanup\[\d+\]: \w+: reject: header Content-Type: .*charset="([^"]*)" from ([^[]*)\[([^]]*)\]; from=<([^>]*)> to=<$user(?:\+[^@]*)?@.*> proto=[^ ]* helo=<.*>: 5\.\d+\.\d+ (5\d\d) Character set prohibited#i)
+			{
+				$blocked++;
+
+				$host = $2;
+				$addr = $3;
+				$from = $4;
+				$error = $5;
+				$details = $1;
+
+				$reason = "Foreign language";
+			}
+			elsif ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (4\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
+			{
+				# Temporary rejection, don't report on this one
+				next;
+			}
+			else
+			{
+				print STDERR "No rule for $line\n";
+				# Not a known rejection message
+			}
+
 			my $country = `geoiplookup $addr`;
 			chomp($country);
 			$country =~ s/^GeoIP Country Edition: //;
 			$country =~ s/^.*?, //;	# strip country code
 			$country =~ s/,.*$//;	# strip things like "Republic of"
 
-			my $details;
-			if ($reason =~ /Your mail server is blacklisted by ([^ ]*)\. /)
-			{
-				my $blacklist = $1;
-				if ($blacklist =~ /spamhaus\.org$/)
-				{
-					$blacklist = "Spamhaus";
-				}
-				elsif ($blacklist =~ /spamcop\.net$/)
-				{
-					$blacklist = "Spamcop";
-				}
-				elsif ($blacklist =~ /psbl\.surriel\.com$/)
-				{
-					$blacklist = "PSBL";
-				}
-				elsif ($blacklist =~ /list\.dsbl\.org$/)
-				{
-					$blacklist = "DSBL";
-				}
-				elsif ($blacklist =~ /dnsbl\.sorbs\.net$/)
-				{
-					$blacklist = "SORBS";
-				}
-				elsif ($blacklist =~ /spam\.tqmcube\.com$/)
-				{
-					$blacklist = "TQMcube";
-				}
-				#$reason = "Blacklisted by $blacklist";
-				$reason = "Listed by $blacklist";
-				$details = $addr;
-			}
-			elsif ($reason =~ /cannot find your hostname/)
-			{
-				$reason = "Missing reverse DNS";
-				$details = $addr;
-			}
-			elsif ($reason =~ /Helo command rejected/)
-			{
-				$reason = "Invalid HELO name";
-				$details = $addr;
-			}
-			elsif ($reason =~ /User unknown in local recipient table/)
-			{
-				$reason = "Bad To address";
-				$details = $to;
-			}
-			elsif ($reason =~ /Suspected spam/)
-			{
-				$reason = "Suspected spam";
-			}
-			# SPF version 1
-			elsif ($reason =~ m#Recipient address rejected: Please see http://www.openspf.org#)
-			{
-				$reason = "Forged From address";
-			}
-			# SPF version 2 (my message from /usr/lib/postfix/postfix-policyd-spf-perl)
-			elsif ($reason =~ m#Forged From address: Please see http://www.openspf.org#)
-			{
-				$reason = "Forged From address";
-			}
-			elsif ($reason =~ m#Character set prohibited#)
-			{
-				$reason = "Foreign character set";
-			}
-			elsif ($reason =~ /Recipient address rejected: /)
-			{
-				$reason =~ s/^.*Recipient address rejected: //;
-			}
-
-			# give bounce messages a more meaningful name
-			# (however the address isn't technically the same)
-			if ($from =~ /^$/)
-			{
-				$from = "postmaster\@$host";
-			}
-
-			#my %record;
+				#my %record;
 			my $recordref = { time => $time, from => $from, country => $country, host => $host, reason => $reason, details => $details };
 			#$record{time} = $time;
 			#$record{from} = $from;
@@ -332,7 +370,7 @@ foreach my $user (@users)
 
 		}
 		# Jul  6 06:33:21 eagle postfix/local[11666]: 5030B3746C: to=<michael@endbracket.net>, relay=local, delay=6.6, delays=3.1/0.04/0/3.5, dsn=2.0.0, status=sent (delivered to command: /usr/local/bin/procmail -p -a "$EXTENSION")
-		elsif (m#^(...) (..) (........) ([^ ]*) postfix/local\[\d+\]:.*to=<$user(\+[^@]*)?@.*>.*status=sent#)
+		elsif (m#^(...) (..) (........) ([^ ]*) postfix/local\[\d+\]:.*to=<($user(?:\+[^@]*)?@.*)>.*status=sent#)
 		{
 			$delivered++;
 		}
