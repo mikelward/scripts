@@ -17,7 +17,7 @@ cd "$confdir"
 archivefiles=
 for f in $conffiles
 do
-    if test -f "$f"
+    if test -e "$f"
     then
         archivefiles="$archivefiles $f"
     fi
