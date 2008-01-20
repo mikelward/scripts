@@ -339,6 +339,11 @@ foreach my $user (@users)
 
 				$reason = "Foreign language";
 			}
+			elsif ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject_warning: RCPT from ([^[]*)\[([^]]*)\]: (\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
+			{
+				# This message wasn't rejected
+				next;
+			}
 			elsif ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (4\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
 			{
 				# Temporary rejection, don't report on this one
