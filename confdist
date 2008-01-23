@@ -21,9 +21,9 @@ scp()
 {
 	if test "$verbose" -gt 0
 	then
-		ascp -Bq "$@"
+		scp -Bq "$@"
 	else
-		ascp -Bq "$@" 2>/dev/null
+		scp -Bq "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -32,9 +32,9 @@ ssh()
 {
 	if test "$verbose" -gt 0
 	then
-		assh "$@"
+		ssh "$@"
 	else
-		assh "$@" 2>/dev/null
+		ssh "$@" 2>/dev/null
 	fi
 	return $?
 }
