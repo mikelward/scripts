@@ -339,6 +339,19 @@ foreach my $user (@users)
 
 				$reason = "Foreign language";
 			}
+			# Jan 24 12:33:44 falcon postfix/cleanup[25080]: 615E5228012: reject: header Subject: =?euc-kr?q?Subscription_Update_-_January_23=2C_2008?= from sjl-smtp5.sjl.youtube.com[64.15.123.233]; from=<service@youtube.com> to=<mikel@mikelward.com> proto=ESMTP helo=<sjl-smtp5.sjl.youtube.com>: 5.7.1 554 Character set prohibited.  You have sent a message in a language I don't understand.  Please see http://endbracket.net/help/spam/foreign for more information.
+			elsif ($line =~ m#^.*postfix/cleanup\[\d+\]: \w+: reject: header Subject: .*?=\?(.*?)\?.*? from ([^[]*)\[([^]]*)\]; from=<([^>]*)> to=<$user(?:\+[^@]*)?@.*> proto=[^ ]* helo=<.*>: 5\.\d+\.\d+ (5\d\d) Character set prohibited#i)
+			{
+				$blocked++;
+
+				$host = $2;
+				$addr = $3;
+				$from = $4;
+				$error = $5;
+				$details = $1;
+
+				$reason = "Foreign language";
+			}
 			elsif ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject_warning: RCPT from ([^[]*)\[([^]]*)\]: (\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
 			{
 				# This message wasn't rejected
