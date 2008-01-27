@@ -1,9 +1,17 @@
 #!/bin/sh
 # copies UNIX configuration files to other hosts
 
+info()
+{
+	if test ${verbose:-0} -gt 0
+	then
+		echo "$*" 1>&2
+	fi
+}
+
 error()
 {
-	echo "$@" 1>&2
+	echo "$*" 1>&2
 }
 
 run()
@@ -19,11 +27,12 @@ run()
 
 scp()
 {
+	local scpflags=-Bq
 	if test "$verbose" -gt 0
 	then
-		scp -Bq "$@"
+		command scp $scpflags "$@"
 	else
-		scp -Bq "$@" 2>/dev/null
+		command scp $scpflags "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -32,9 +41,9 @@ ssh()
 {
 	if test "$verbose" -gt 0
 	then
-		ssh "$@"
+		command ssh "$@"
 	else
-		ssh "$@" 2>/dev/null
+		command ssh "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -56,13 +65,14 @@ read_options()
 			conffile="$OPTARG"
 			;;
 		v)
-			verbose=1
+			verbose=$(($verbose + 1))
 			;;
 		*)
 			error "$0: Unknown option $flag"
 			exit 2
 		esac
 	done
+	[ $verbose -gt 1 ] && set -x
 
 	shift `expr $OPTIND - 1`
 
@@ -71,7 +81,8 @@ read_options()
 
 copy_to()
 {
-	typeset host=$1
+	local host=$1
+	info "Copying to $host"
 	printf "Copying to $host... "
 	scp $conffile $host:~
 	if test $? -ne 0
@@ -84,7 +95,7 @@ copy_to()
 
 install_on()
 {
-	typeset host=$1
+	local host=$1
 	printf "Installing on $host... "
 	ssh $host "mkdir bin"
 	scp $HOME/bin/confinst $host:bin
@@ -105,7 +116,7 @@ install_on()
 
 distribute_from()
 {
-	typeset host=$1
+	local host=$1
 	ssh $host confdist
 }
 
