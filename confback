@@ -24,8 +24,8 @@ do
 done
 
 # create archive file
-#tar -cf - $archivefiles | gzip > "$archivefile"
-pax -w -z -f "$archivefile" $archivefiles
+tar --exclude "*.svn" -czf $archivefile $archivefiles
+#pax -w -z -f "$archivefile" $archivefiles
 cd "$OLDPWD" 
 
 # update symbolic link to latest configuration
