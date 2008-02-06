@@ -1,0 +1,85 @@
+#!/bin/sh
+# update a version controlled directory, but only if the local
+# copy doesn't have problems (locally modified, wrong type, etc.)
+
+if [ $# -ge 1 ]; then
+	# update the specified files and/or directories
+	dirs="$*"
+else
+	# update the current directory
+	dirs="$PWD"
+fi
+
+error()
+{
+	echo "$*" 1>&2
+}
+
+is_dir()
+{
+	test -d "$1"
+}
+
+have_svn()
+{
+	type svn >/dev/null 2>&1
+}
+
+under_svn()
+{
+	svn info "$1" >/dev/null 2>&1
+}
+
+modified()
+{
+	typeset dir
+	path="$1"
+
+	lines=$(svn stat "$path" | wc -l)
+	if [ $? -eq 0 ]; then
+		if [ -n "$lines" ]; then
+			if [ $lines -ne 0 ]; then
+				svn stat "$path"
+				return 1
+			else
+				return 0
+			fi
+		else
+			error "Unknown number of lines in output"
+			return 1
+		fi
+	else
+		error "Error getting svn status for $path"
+		return 1
+	fi
+}
+
+for path in $paths; do
+	if have_svn; then
+		if under_svn "$path"; then
+			if ! modified "$path"; then
+				svn up "$path"
+				if [ $? -eq 0 ]; then
+					# success
+					continue
+				else
+					error "Error updating $path"
+					continue
+				fi
+			else
+				if [ -f "$path" ]; then
+					error "$path is modified (or a similar problem)"
+				else
+					error "$path has modified files (or a similar problem)"
+				fi
+				exit 1
+			fi
+		else
+			error "$path is not under Subversion"
+			exit 1
+		fi
+	else
+		error "svn is not installed"
+		exit 1
+	fi
+done
