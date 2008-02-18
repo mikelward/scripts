@@ -1,0 +1,55 @@
+#!/usr/bin/perl
+# check whether a tar file is safe to extract into the current directory
+
+use strict;
+use warnings;
+
+my $filename = shift @ARGV
+	or die "No file name specified\n";
+
+my $flags = "-t";
+
+if ($filename =~ m/\.tar\.bz2$/ or $filename =~ m/\.tbz$/) {
+	$flags .= "j";
+}
+elsif ($filename =~ m/\.tar.gz$/ or $filename =~ m/\.tgz$/) {
+	$flags .= "z";
+}
+elsif ($filename =~ m/\.tar$/) {
+	# plain old tar
+}
+else {
+	die "Unknown file extension";
+}
+
+$flags .= " -f $filename";
+
+my %dirs;
+print "Warnings:\n";
+foreach (`tar $flags`) {
+	chomp;
+
+	# flags for -v mode
+	#my ($mode, $owner, $size, $date, $time, $path) = split(/\s+/);
+
+	if (m#^/#) {
+		print "Absolute path: $_\n";
+	}
+	if (m#\.\.#) {
+		print "Path tricks: $_\n";
+	}
+
+	my @parts = split(m#/#);
+
+	$dirs{$parts[0]} = 1;
+}
+
+# print only the top-level ones,
+# for open source packages, this is usually a single directory name called <program>-<version>
+# for other ones, we'll see a longer list of files
+print "Files and directories:\n";
+foreach (sort keys %dirs) {
+	print $_ . "\n";
+}
+
+
