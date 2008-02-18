@@ -1,0 +1,28 @@
+#!/usr/bin/perl
+# check whether a tar file is safe to extract into the current directory
+
+use strict;
+use warnings;
+
+my $filename = shift @ARGV
+	or die "No file name specified\n";
+
+my $flags = "-x";
+
+if ($filename =~ m/\.tar\.bz2$/ or $filename =~ m/\.tbz$/) {
+	$flags .= "j";
+}
+elsif ($filename =~ m/\.tar.gz$/ or $filename =~ m/\.tgz$/) {
+	$flags .= "z";
+}
+elsif ($filename =~ m/\.tar$/) {
+	# plain old tar
+}
+else {
+	die "Unknown file extension";
+}
+
+$flags .= " -f $filename";
+
+`tar $flags`;
+
