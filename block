@@ -1,0 +1,240 @@
+#!/usr/bin/perl
+# block - maintain firewall block rules for specified hosts based on specific events
+# vi: set sw=4 ts=4 tw=0:
+
+use strict;
+use warnings;
+
+use Sys::Syslog;
+use Getopt::Long;
+use File::Tail;
+
+our @patterns = ('pam_unix\(sshd:auth\): authentication failure; logname=\S* uid=\d* euid=\d* tty=\S* ruser=\S* rhost=(\S*)');
+our $maxhits = 3;
+our $keeptime = 1;
+our $chain = "BLOCK";
+our %hits;
+our $phone = "0415439838";
+
+openlog "block", "ndelay,pid", "user"
+	or die "Cannot open connection to log server\n";
+
+# modes
+#my $clean;		# unblock all IP addresses not seen in last $keeptime minutes
+my $block;		# block specified IP address
+my $daemon;		# fork and continue running in the background as a daemon
+my $unblock;	# unblock specified IP address
+my $monitor;	# read from the specified file, taking action on lines matching @patterns
+my $simulate;	# simulation only, no blocking is done
+my $list;		# list blocked addresses
+my $help;		# show a brief usage message
+
+our $verbose;	# print debugging messages to STDERR
+
+sub sendsms
+{
+	system('smssend "' . $phone . '" "' . "@_" . '"');
+}
+
+sub notice
+{
+	syslog("notice", @_);
+	sendsms(@_);
+}
+
+sub error
+{
+	syslog("err", @_);
+	sendsms(@_);
+}
+
+sub debug
+{
+	syslog("debug", @_);
+}
+
+sub usage
+{
+	print STDERR "Block:    block -b <host>\n";
+	print STDERR "Unblock:  block -u <host>\n";
+	print STDERR "List:     block -l\n";
+	print STDERR "Monitor:  block -m <file>\n";
+	print STDERR "Simulate: block -n [other options]\n";
+	print STDERR "Daemon:   block -d [other options]\n";
+	print STDERR "Verbose:  block -v [other options]\n";
+}
+
+GetOptions('add|block|a|b=s' => \$block,
+		   'daemon|d' => \$daemon,
+		   'monitor|m=s' => \$monitor,
+		   'remove|unblock|r|u=s' => \$unblock,
+		   'list|l' => \$list,
+		   'help|h' => \$help,
+		   'test|simulate|t|s|n' => \$simulate,
+		   'verbose|v' => \$verbose)
+	or print STDERR "Error reading options\n", usage(), exit(2);
+
+if (defined($block)) {
+	block($block);
+}
+if (defined($unblock)) {
+	unblock($unblock);
+}
+if (defined($list)) {
+	list();
+}
+if (defined($daemon)) {
+	daemonize();
+}
+if (defined($monitor)) {
+	monitor($monitor);
+}
+if (defined($help)) {
+	usage();
+}
+
+exit(0);
+
+# get the iptables rule for the given address
+# this must be the same for block and unblock, so we generalize it here
+sub rule
+{
+	my $host = shift @_;
+
+	return "-s $host -j REJECT";
+}
+
+sub block
+{
+	my $host = shift @_;
+
+	my $rule = rule($host);
+	if ($host =~ /^(0|127|172|192)\./) {
+		notice("Not blocking special network address $host");
+	}
+	else {
+		if (defined($simulate)) {
+			notice("Would block $host");
+		}
+		else {
+			if (system("/sbin/iptables -A $chain $rule") == 0) {
+				notice("Blocked $host");
+			}
+			else {
+				error("Error blocking $host");
+			}
+		}
+	}
+}
+
+sub unblock
+{
+	my $host = shift @_;
+
+	my $rule = rule($host);
+	if (defined($simulate)) {
+		notice("Would unblock $host");
+	}
+	else {
+		if (system("/sbin/iptables -D $chain $rule") == 0) {
+			notice("Unblocked $host");
+		}
+		else {
+			error("Error unblocking $host");
+		}
+	}
+}
+
+sub daemonize
+{
+	my $pid = fork();
+	if (!defined($pid)) {
+		error("Fork failed, cannot daemonize");
+		exit(1);
+	}
+	if ($pid == 0) {
+		debug("FORKED");
+		# child, continue
+		close(STDERR);
+		close(STDOUT);
+		close(STDIN);
+	}
+	else {
+		debug("PARENT EXITING (CHILD IS $pid)");
+		exit(0);
+	}
+}
+
+# Watch a file and block a host if it matches more than $maxhits times
+sub monitor
+{
+	my $filename = shift @_;
+
+	my @files;
+	push(@files, File::Tail->new($filename));
+	while (1) {
+		debug("READING");
+		my $timeout = 10;	# this must be > 0
+		my ($nfound, $timeleft, @pending) = File::Tail::select(undef, undef, undef, $timeout, @files);
+		if (!$nfound) {
+			debug("TIMED OUT");
+		}
+		elsif (@pending) {
+			debug("PENDING INPUT");
+			foreach my $file (@pending) {
+				my $line = $file->read();
+				chomp $line;
+				debug("LINE IS $line");
+
+				foreach my $pattern (@patterns) {
+					if ($line =~ /$pattern/) {
+						my $host = $1;
+						push @{$hits{$host}}, time();
+						debug("$host");
+
+						my $nhits = @{$hits{$host}};
+						if ($nhits > $maxhits) {
+							debug("BLOCK $host");
+							block($host);
+						}
+						else {
+							debug("HIT $nhits for $host");
+						}
+					}
+				}
+			}
+		}
+		cleanup();
+	}
+}
+
+# Delete and unblock entries older than $keeptime minutes
+sub cleanup
+{
+	my $time = time();
+	my $expirytime = $time - $keeptime * 60;
+
+	foreach my $host (keys %hits) {
+		my @hits = @{$hits{$host}};
+		foreach my $i (0..scalar(@hits)-1) {
+			my $hit = $hits[$i];
+			if ($hit < $expirytime) {
+				debug("Deleting old entry for $host");
+				debug("OLD @{$hits{$host}}");
+				delete ${$hits{$host}}[$i];
+				debug("NEW @{$hits{$host}}");
+			}
+		}
+		if (@{$hits{$host}} < $maxhits) {
+			notice("Unblocking $host after $keeptime minutes");
+			unblock($host);
+		}
+	}
+}
+
+# Show the list of hosts currently blocked
+sub list
+{
+	debug("LISTING");
+	system("/sbin/iptables -L $chain -n");
+}
