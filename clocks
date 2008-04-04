@@ -3,7 +3,7 @@
 format="%a %H:%M"
 #format="%a %I:%M %p"
 when="$1"
-localzone="${2:-$(date '+%z')}"
+localzone=${2:-$(date -d "$when" '+%z')}
 
 IFS='|'
 while read timezone description
