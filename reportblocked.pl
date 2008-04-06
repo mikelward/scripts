@@ -33,10 +33,8 @@ sub print_html_header
 	print SENDMAIL "td { white-space: nowrap }\n";
 	print SENDMAIL "</style>\n";
 	print SENDMAIL "<body>\n";
-	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked because they looked suspicious.</p>\n";
-	print SENDMAIL "<p>In each case, the person who sent the message will have received an error message informing them the message was not delivered.</p>\n";
-	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it.  They will need to ask their system administrator to fix the problem mentioned in the Reason column and then re-send the message.</p>\n";
-	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:$postmaster\">contact the post master.</a></p>\n";
+	print SENDMAIL "<p>Somebody tried to send you the following messages, but they were blocked<br>";
+	print SENDMAIL "because they looked suspicious.</p>\n";
 	print SENDMAIL "<table>\n";
 	print SENDMAIL "<tr align=\"left\">\n";
 	print SENDMAIL "<th>Time</th><th>From</th><th>Country</th><th>Reason</th>\n";
@@ -45,10 +43,9 @@ sub print_html_header
 
 sub print_text_header
 {
-	print SENDMAIL "Somebody tried to send you the following messages, but they were blocked because they looked suspicious.\n\n";
-	print SENDMAIL "In each case, the person who sent the message will have received an error message informing them the message was not delivered.\n\n";
-	print SENDMAIL "If you wanted one of these messages, please contact the person who sent it.  They will need to ask their system administrator to fix the problem mentioned in the Reason column and then re-send the message.\n\n";
-	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:$postmaster\">contact the post master.</a></p>\n";
+	print SENDMAIL "Somebody tried to send you the following messages, but they were blocked\n";
+	print SENDMAIL "because they looked suspicious.\n\n";
+	#print SENDMAIL "In each case, the person who sent the message will have received an error message informing them the message was not delivered.\n\n";
 	printf SENDMAIL "%-7s  %-33s  %-14s  %-19s\n", "TIME", "FROM", "COUNTRY", "REASON";
 }
 
@@ -82,31 +79,31 @@ sub print_html_footer
 
 	print SENDMAIL "</table>\n";
 
-	if ($stats{blocked} == 0)
-	{
-		print SENDMAIL "<p>No messages blocked</p>\n";
-	}
-	elsif ($stats{blocked} == 1)
-	{
-		print SENDMAIL "<p>One message blocked</p>\n";
-	}
-	else
-	{
-		print SENDMAIL "<p>$stats{blocked} messages blocked</p>\n";
-	}
+	#if ($stats{blocked} == 0)
+	#{
+	#	print SENDMAIL "<p>No messages blocked</p>\n";
+	#}
+	#elsif ($stats{blocked} == 1)
+	#{
+	#	print SENDMAIL "<p>One message blocked</p>\n";
+	#}
+	#else
+	#{
+	#	print SENDMAIL "<p>$stats{blocked} messages blocked</p>\n";
+	#}
 
-	if ($stats{delivered} == 0)
-	{
-		print SENDMAIL "<p>No messages delivered</p>\n";
-	}
-	elsif ($stats{delivered} == 1)
-	{
-		print SENDMAIL "<p>One message delivered</p>\n";
-	}
-	else
-	{
-		print SENDMAIL "<p>$stats{delivered} messages delivered</p>\n";
-	}
+	#if ($stats{delivered} == 0)
+	#{
+	#	print SENDMAIL "<p>No messages delivered</p>\n";
+	#}
+	#elsif ($stats{delivered} == 1)
+	#{
+	#	print SENDMAIL "<p>One message delivered</p>\n";
+	#}
+	#else
+	#{
+	#	print SENDMAIL "<p>$stats{delivered} messages delivered</p>\n";
+	#}
 
 	if (open(TIMEZONE, "/etc/timezone"))
 	{
@@ -121,6 +118,11 @@ sub print_html_footer
 		print SENDMAIL "<p>Times given are in $city time (UTC$offset)</p>\n";
 	}
 
+	print SENDMAIL "<p>If you wanted one of these messages, please contact the person who sent it.</p>";
+	print SENDMAIL "<p>They will need to ask their system administrator to fix the problem in the<br>";
+	print SENDMAIL "Reason column and then re-send the message.</p>\n";
+	#print SENDMAIL "<p>If you have any questions, please <a href=\"mailto:$postmaster\">contact the post master.</a></p>\n";
+
 	print SENDMAIL "</body>\n";
 	print SENDMAIL "</html>\n";
 }
@@ -132,31 +134,31 @@ sub print_text_footer
 
 	print SENDMAIL "\n";
 
-	if ($stats{blocked} == 0)
-	{
-		print SENDMAIL "No messages blocked\n\n";
-	}
-	elsif ($stats{blocked} == 1)
-	{
-		print SENDMAIL "One message blocked\n\n";
-	}
-	else
-	{
-		print SENDMAIL "$stats{blocked} messages blocked\n\n";
-	}
+	#if ($stats{blocked} == 0)
+	#{
+	#	print SENDMAIL "No messages blocked\n\n";
+	#}
+	#elsif ($stats{blocked} == 1)
+	#{
+	#	print SENDMAIL "One message blocked\n\n";
+	#}
+	#else
+	#{
+	#	print SENDMAIL "$stats{blocked} messages blocked\n\n";
+	#}
 
-	if ($stats{delivered} == 0)
-	{
-		print SENDMAIL "No messages delivered\n\n";
-	}
-	elsif ($stats{delivered} == 1)
-	{
-		print SENDMAIL "One message delivered\n\n";
-	}
-	else
-	{
-		print SENDMAIL "$stats{delivered} messages delivered\n\n";
-	}
+	#if ($stats{delivered} == 0)
+	#{
+	#	print SENDMAIL "No messages delivered\n\n";
+	#}
+	#elsif ($stats{delivered} == 1)
+	#{
+	#	print SENDMAIL "One message delivered\n\n";
+	#}
+	#else
+	#{
+	#	print SENDMAIL "$stats{delivered} messages delivered\n\n";
+	#}
 
 	if (open(TIMEZONE, "/etc/timezone"))
 	{
@@ -170,6 +172,11 @@ sub print_text_footer
 
 		print SENDMAIL "Times given are in $city time (UTC$offset)\n\n";
 	}
+
+	print SENDMAIL "If you wanted one of these messages, please contact the person who sent it.\n\n";
+	print SENDMAIL "They will need to ask their system administrator to fix the problem in the\n";
+	print SENDMAIL "Reason column and then re-send the message.\n\n";
+	#print SENDMAIL "If you have any questions, please contact the post master, $postmaster.\n";
 }
 
 USER:
@@ -234,7 +241,7 @@ foreach my $user (@users)
 			{
 				$timesuffix = "am";
 			}
-			$time = "$hours:$minutes$timesuffix";
+			$time = "$hours.$minutes$timesuffix";
 
 			# Jan 16 04:28:20 falcon postfix/smtpd[27385]: NOQUEUE: reject: RCPT from unknown[88.233.24.124]: 550 5.7.1 Client host rejected: cannot find your hostname, [88.233.24.124]; from=<info_1@spor-haberleri.com> to=<michael@endbracket.net> proto=SMTP helo=<spor-haberleri1470.com>
 			if ($line =~ m#^.*postfix/smtpd\[\d+\]: NOQUEUE: reject: RCPT from ([^[]*)\[([^]]*)\]: (5\d+) (\S+) (.*); from=<([^>]*)> to=<($user(?:\+[^@]*)?@.*)> proto=[^ ]* helo=<(.*)>#i)
