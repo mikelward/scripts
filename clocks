@@ -12,7 +12,7 @@ do
 	then
 		continent=${timezone%/*}
 		city=${timezone#*/}
-		city=${city/_/ }
+		city=$(echo "$city" | tr '_' ' ')
 		if test -z "$description"
 		then
 			description=$city
