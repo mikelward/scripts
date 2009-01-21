@@ -39,13 +39,17 @@ cleanup()
 #
 debug=
 quiet=true
-src=/home/mikel/svn
-tmpdir="${TMPDIR:-/home/mikel/tmp}"
-#dst=voot:/home/kadmos/svn
-dst=dreamhost:/home/mikelward/svn
-logfile=/home/mikel/log/svnbackup.log
+#src=/home/mikel/svn
+#tmpdir="${TMPDIR:-/home/mikel/tmp}"
+#dst=dreamhost:/home/mikelward/svn
+#logfile=/home/mikel/log/svnbackup.log
 dateformat='%-e %B %Y'
 timeformat='%H:%M:%S'
+src=/home/mikelward/svn
+tmpdir="${TMPDIR:-$HOME/tmp}"
+dst=mikelward.homedns.org:/home/mikel/svn
+logfile=/home/mikelward/log/svnbackup.log
+
 
 #
 # start
