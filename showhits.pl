@@ -1,8 +1,11 @@
 #!/usr/bin/perl
 # vim: set tw=0:
 
+#my $logfile = "/var/log/apache2/combined.log";
+#my $logfile = "/home/mikelward/logs/mikelward.com/http/access.log.0";
+my $logfile = "/home/mikelward/logs/mikelward.com/http/access.log";
 
-open(LOGFILE, "</var/log/apache2/combined.log")
+open(LOGFILE, "<$logfile")
     or die "Cannot open log file";
 
 while (<LOGFILE>)
@@ -29,19 +32,27 @@ while (<LOGFILE>)
 
     if (/Opera/)
     {
-        $agent =~ s/.*Opera\/(.*?)$/Opera $1/;
+        $agent =~ s/.*Opera\/(.*?) .*$/Opera $1/;
     }
     elsif ($agent =~ /Safari/)
     {
         $agent =~ s/.*Safari\/(.*?)$/Safari $1/;
     }
-    elsif ($agent =~ /(Firefox|BonEcho)/)
+    elsif ($agent =~ /(Firefox|BonEcho|Shiretoko|Minefield)/)
     {
-        $agent =~ s/.*(?:Firefox|BonEcho)\/(.*?)( .*|$)/Firefox $1/;
+        $agent =~ s/.*(?:Firefox|BonEcho|Shiretoko|Minefield)\/(.*?)( .*|$)/Firefox $1/;
+    }
+    elsif ($agent =~ /Camino/)
+    {
+        $agent =~ s/.*Camino\/(.*?)$/Camino $1/;
     }
     elsif ($agent =~ /SeaMonkey/)
     {
         $agent =~ s/.*SeaMonkey\/(.*?)$/SeaMonkey $1/;
+    }
+    elsif ($agent =~ /Netscape/)
+    {
+        $agent =~ s/.*Netscape\/(.*?)$/Netscape $1/;
     }
     elsif ($agent =~ /Java/)
     {
@@ -88,16 +99,28 @@ while (<LOGFILE>)
     next if $address =~ /\.(css|inc|htc|js|bmp|gif|ico|png|jpg|jpeg)/i;
     next if $address =~ /\/mail/;
     next if $address =~ /!svn/;
-    next if $agent =~ /(Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|Netcraft Web Server Survey|PHP version tracker|psbot|relevantnoise\.com|Rome Client|SBIder|Snapbot|Sogou web spider|Speedy Spider|SurveyBot|Technoratibot|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|Yahoo! Slurp|Yeti)/;
+    next if $agent =~ /(Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Charlotte|[Cc]rawler|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ia_archiver|Kalooga|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|NaverBot|NetSeer|Netcraft Web Server Survey|PHP version tracker|psbot|R6_FeedFetcher|relevantnoise\.com|Rome Client|SBIder|Scout|Shelob|Snapbot|Sogou web spider|Speedy Spider|Sphere Scout|Spider|SurveyBot|Technoratibot|TestSpider|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|WebAlta Crawler|Yahoo! Slurp|Yanga|Yeti|YoudaoBot)/;
 
     next if $status != 200;
 
     if ($host)
     {
+		my @addressbits = split /\//, $address;
+		my $shortaddress = '/' . $addressbits[1];
+		if (@addressbits > 2) {
+			$shortaddress .= '/' . $addressbits[-1];
+		}
+
+		my $referrerdomain = $referrer,
+		$referrerdomain =~ s,^[^/]*//,,;
+		$referrerdomain =~ s,/.*,,;
+
         #print $date . "\t" . $host . "\t" . $address . "\t" . $agent . "\n";
-        printf "%-26s\t%-48s\t%-46s\t%-20s\n", $date, $host, $address, $agent;
+		#printf "%-26s\t%-48s\t%-46s\t%-20s\n", $date, $host, $address, $agent;
+		printf "%-20s\t%-20s\t%-40s\n", $host, $agent, $shortaddress;
         #print $agent . "\n";
-        #print $address . "\n";
+		#print $address . "\n";
+		#print $shortaddress . "\n";
     }
     else
     {
