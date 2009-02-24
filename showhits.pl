@@ -38,6 +38,10 @@ while (<LOGFILE>)
     {
         $agent =~ s/.*Safari\/(.*?)$/Safari $1/;
     }
+    elsif ($agent =~ /AppleWebKit/)
+    {
+        $agent =~ s/.*AppleWebKit\/(.*?) .*$/AppleWebKit $1/;
+    }
     elsif ($agent =~ /(Firefox|BonEcho|Shiretoko|Minefield)/)
     {
         $agent =~ s/.*(?:Firefox|BonEcho|Shiretoko|Minefield)\/(.*?)( .*|$)/Firefox $1/;
