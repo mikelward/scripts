@@ -44,9 +44,9 @@ Options:\
 Advanced options:
     -b               Print sizes based on file size (like ls), not blocks used (like du)
     -d               Print debugging information
-    -D <levels>      Only report on directories up to <levels> deep (use with -S)
     -g               Group by directory (best if directories might contain lots of small files)
     -p <pattern>     Skip directories matching <pattern> (default $pathskip)
+    -P               Disable pathskip
     -q               Don't print error messages about non-readable directories (not recommended)
     -S               Include size of sub-directories in directory size (like du)
     -T               Show only directory totals (like du)
@@ -71,6 +71,7 @@ GetOptions(
 	"filesonly|f" => sub { $showdirtotals = 0 },
 	"group|g" => \$groupbydir,
 	"pathskip|skip|skippattern|p=s" => \$pathskip,
+	"nopathskip|noskip|P" => sub { $pathskip = undef },
 	"quiet|q" => \$quiet,
 	"singledevice|x!" => \$singledevice,
 	"multidevice|X" => sub { $singledevice = 0; },
@@ -105,7 +106,7 @@ sub process_dir
 	#next if $path eq "/dev/.static/dev/fd";
 	#next if ($path =~ m{/fd/\d});
 
-	if ($pathskip && ($dir =~ m{$pathskip})) {
+	if (defined($pathskip) && $pathskip && ($dir =~ m{$pathskip})) {
 		print STDERR "Skipping $dir (matches the -p option pattern)\n" if $debug;
 		return;
 	}
