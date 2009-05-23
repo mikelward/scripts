@@ -224,7 +224,7 @@ sub convert_size
 my $pathwidth;	# defined in main below
 sub print_file
 {
-	my ($path,$size) = @_;
+	my ($path, $size) = @_;
 
 	$size = convert_size($size, $sizeunits);
 
