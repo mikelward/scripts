@@ -29,4 +29,4 @@ name=$(sed -ne '/<em:name>/ s/.*<em:name>\(.*\)<\/em:name>.*/\1/p' "$rdf")
 #echo "$name $version"
 xpi=$(echo "$name $version".xpi | sed -e 's/\([A-Z]\)/\l\1/g; s/ /-/g')
 echo "Creating $xpi"
-prunesvn "$dir" | zip -@ "$xpi"
+prunesvn "$dir" \( -name "content" -prune \) -o \( -name "locale" -prune \) -o | zip -@ "$xpi"

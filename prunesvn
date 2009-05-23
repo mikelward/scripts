@@ -1,2 +1,2 @@
 #!/bin/sh
-find . \( -name ".svn" -type d -prune \) -o -print
+find "$@" \( -name ".svn" -type d -prune \) -o -type f -print

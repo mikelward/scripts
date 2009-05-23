@@ -1,0 +1,69 @@
+#!/bin/sh
+# make a Firefox extension JAR file
+
+dir=$1
+
+add_jar()
+{
+	# XXX assuming only one jar
+
+	field=${1#jar:}
+	if test "$field" = "$1"; then
+		error "Not a JAR field: $1"
+		return 1
+	fi
+
+	jar="${field%!*}"
+	jar_dirs="${jar_dirs:+$jar_dirs }.${field#*!}"
+}
+
+error()
+{
+	echo "$*" 1>&2
+}
+
+run()
+{
+	echo "$*" 1>&2
+	"$@"
+}
+
+usage()
+{
+	error "Usage: makejar [<directory>]"
+}
+
+if test -z "$dir"; then
+	dir=.
+fi
+
+cd "$dir"
+
+manifest="chrome.manifest"
+if ! test -f "$manifest"; then
+	error "$manifest not found"
+	exit 1
+fi
+
+while read field1 field2 field3 field4; do
+	case $field1 in
+	content)
+		# content tabsmenu jar:chrome/tabsmenu.jar!/content/
+		add_jar "$field3"
+		;;
+	overlay)
+		;;
+	locale)
+		# locale tabsmenu ca-AD jar:chrome/tabsmenu.jar!/locale/ca-AD/
+		add_jar "$field4"
+		;;
+	esac
+done < "$manifest"
+
+# XXX why doesn't jar support reading a list of files from stdin?
+echo "Creating $jar"
+run jar -cf "$jar" $(prunesvn "${jar_dirs%% *}")
+for jar_dir in $jar_dirs; do
+	run jar -uf "$jar" $(prunesvn "$jar_dir")
+done
+#prunesvn "$dir" | zip -@ "$xpi"
