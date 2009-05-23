@@ -1,0 +1,404 @@
+#!/usr/bin/perl
+# find out what's filling up a partition
+# Mikel Ward <mikel@mikelward.com>
+
+require 5.6.0;
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+my @fileinfo; # [path, size]
+my @dirinfo;
+our %dirsize; # path => total size of files at that level
+our %dirfileinfo;
+our %seen;	  # $seen{$dev . $inode} = 1 if seen, else undef
+              # tracks which files were already seen to avoid counting twice or going into a loop
+
+our $apparentsize = 0;
+our $debug = 0;
+our $groupbydir = 0;
+our $minsize = 0;
+our $quiet = 0;
+# it's a string, so remember that \\ becomes \
+our $pathskip = "^/proc\\b|^/dev\\b|^/sys\\b|^/lib/udev\\b|^/net\\b|\\bfd/\\d+\\b|\\bdosdevices\\b|\\b\\.gvfs\\b";
+our $maxage;
+our $dirsonly = 0;
+our $singledevice = 1;
+our $sizeunits = "MB";
+our $subdirsize = 0;
+our $showdirtotals = 1;
+# TODO try to get the terminal width (can't use $ENV{'TERM'} because $TERM is not exported)
+our $verbose = 0;
+our $width;
+
+sub usage
+{
+	print STDERR "
+Usage: diskuse <directory or mount point>
+Options:\
+    -a <time>        Only look at files and directories modified in the last <time> seconds
+    -A               Look at all files and directories, irrespective of age (like du)
+    -f               Don't include directory totals in the list (report on files only)
+    -h               Print this help message
+    -s <size>        Don't print anything smaller than <size> bytes (default $minsize)
+    -t               Include directory totals in the list (default)
+    -u <size unit>   Print sizes in <size unit>, one of B/K/M/G/T
+Advanced options:
+    -b               Print sizes based on file size (like ls), not blocks used (like du)
+    -d               Print debugging information
+    -D <levels>      Only report on directories up to <levels> deep (use with -S)
+    -g               Group by directory (best if directories might contain lots of small files)
+    -p <pattern>     Skip directories matching <pattern> (default $pathskip)
+    -q               Don't print error messages about non-readable directories (not recommended)
+    -S               Include size of sub-directories in directory size (like du)
+    -T               Show only directory totals (like du)
+    -v               Print more information about what is being done
+    -w <characters>  Set the screen width to <characters> characters (instead of automatic)
+    -x               Skip directories on different devices (default)
+    -X               Don't skip directories on different devices
+Notes:
+    Times can be specified with a s (seconds), m (minutes), h (hours), d (days), or w (weeks) suffix
+    Sizes can be specified with a B (byte), K (kilobyte), M (megabyte), G (gigabyte), or T (terabyte) suffix
+Example:
+    diskuse -s 100M ~          (list the biggest files under your home directory)
+    diskuse -a 1h -s 10M /var  (find out what's changed in the last hour on /var)
+";
+}
+GetOptions(
+	"apparent-size|bytes|filesize|b" => \$apparentsize,
+	"debug|d" => \$debug,
+	"help|h" => sub { usage; exit 0 },
+	"age|maxage|a=s" => \$maxage,
+	"nomaxage|all|A" => sub { $maxage = undef },
+	"filesonly|f" => sub { $showdirtotals = 0 },
+	"group|g" => \$groupbydir,
+	"pathskip|skip|skippattern|p=s" => \$pathskip,
+	"quiet|q" => \$quiet,
+	"singledevice|x!" => \$singledevice,
+	"multidevice|X" => sub { $singledevice = 0; },
+	"size|minsize|s=s" => \$minsize,
+	"subdirsize|S" => \$subdirsize,
+	"units|u=s" => \$sizeunits,
+	"dirtotals|totals|t" => \$showdirtotals,
+	"dirsonly|onlydirs|dirtotalsonly|totalsonly|T" => \$dirsonly,
+	"verbose|v" => \$verbose,
+	"width|w=i" => \$width)
+	or usage, exit 2;
+
+if (@ARGV < 1) {
+	print STDERR "Directory name or mount point is required\n";
+	usage;
+	exit(2);
+}
+
+my $root = $ARGV[0];
+
+print STDERR "Reporting on $root\n";
+
+sub process_dir
+{
+	my ($dir, $fileinforef) = @_;
+	my $dirhandle;
+	my $now = time;
+
+	# avoid recursing into $root via /dev/fd/n
+	# now handled via pathskip
+	#next if $path eq "/dev/fd";
+	#next if $path eq "/dev/.static/dev/fd";
+	#next if ($path =~ m{/fd/\d});
+
+	if ($pathskip && ($dir =~ m{$pathskip})) {
+		print STDERR "Skipping $dir (matches the -p option pattern)\n" if $debug;
+		return;
+	}
+
+#	if ($showspecial) {
+#		next if $path eq "/proc";
+#		next if $path eq "/dev";
+#		next if $path eq "/sys";
+#	}
+
+	my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($dir);
+	my $dirdev = $dev;
+	if (!$apparentsize) {
+		# perldoc -f stat is wrong, it's 512 byte multiples according to Linux stat(2)
+		$size = $blocks * 512;
+	}
+
+	print STDERR "Examining $dir\n" if $verbose;
+
+	if (! -r $dir) {
+		print STDERR "Can't read $dir\n" if ! $quiet;
+		return 0;
+	}
+
+	$dirsize{$dir} += $size;
+
+	if (opendir($dirhandle, "$dir")) {
+		while (my $dirent = readdir($dirhandle)) {
+			next if $dirent eq ".";
+			next if $dirent eq "..";
+
+			my $path = ($dir eq "/" ? "/" : $dir . "/") . $dirent;
+			if (-l $path) {
+				print STDERR "Skipping $path (symbolic link)\n" if $debug;
+				next;
+			}
+			my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($path);
+			if (!$apparentsize) {
+				# perldoc -f stat is wrong, it's 512 byte multiples according to Linux stat(2)
+				$size = $blocks * 512;
+			}
+
+			if (!$dev || !$ino) {
+				print STDERR "Skipping $path (not found)\n" if ! $quiet;
+				next;
+			}
+			if (my $alias = $seen{$dev . $ino}) {
+				print STDERR "Skipping $path (same as $alias - dev=$dev ino=$ino)\n" if $debug;
+				next;
+			}
+			$seen{$dev . $ino} = $path;
+
+			if (-d $path) {
+				if ($singledevice && $dev != $dirdev) {
+					print STDERR "Skipping $path (different device)\n" if $debug;
+					next;
+				}
+				process_dir ($path, \@fileinfo);
+				if ($subdirsize) {
+					$dirsize{$dir} += $dirsize{$path};
+				}
+			}
+			else {
+				# we usually care more about mtime, but when copying an old file where the mtime is preserved,
+				# the ctime might tell us that the file was recently created
+				# (I assume this is only the case when copying from a CD or DOS FAT file system,
+				#  but it's still proven useful)
+				my $age = $now - ($mtime > $ctime ? $mtime : $ctime);
+				if (!defined($maxage) || $age < $maxage) {
+					print STDERR $path . "\n" if $debug;
+					# add the files to the file list if they're above the minimum required size
+					if ($size > $minsize) {
+						push @$fileinforef, [$path, $size];
+						push @{$dirfileinfo{$dir}}, [$path, $size];
+					}
+					# ...but always add them to the directory total (we filter the directories at the end of the loop)
+					$dirsize{$dir} += $size;
+				}
+				else {
+					print STDERR "Skipping $path ($age seconds < $maxage seconds)\n" if $debug;
+				}
+			}
+		}
+	}
+	else {
+		print STDERR "Can't open $dir: $!\n";
+	}
+
+	closedir($dirhandle);
+}
+
+sub convert_size
+{
+	my ($size, $units) = @_;
+
+	my $divider;
+	if ($units eq "B") {
+		$divider = 1;
+	}
+	elsif ($units eq "K" || $units eq "KB") {
+		$divider = 1024;
+	}
+	elsif ($units eq "M" || $units eq "MB") {
+		$divider = (1024 * 1024);
+	}
+	elsif ($units eq "G" || $units eq "GB") {
+		$divider = (1024 * 1024 * 1024);
+	}
+	elsif ($units eq "T" || $units eq "TB") {
+		$divider = (1024 * 1024 * 1024 * 1024);
+	}
+
+	return $size / $divider;
+}
+
+my $pathwidth;	# defined in main below
+sub print_file
+{
+	my ($path,$size) = @_;
+
+	$size = convert_size($size, $sizeunits);
+
+	# printf is no good for $size here because it doesn't support integers > 4 GB on Intel 32
+	if (defined($pathwidth)) {
+		printf "%-${pathwidth}s ", $path;
+	}
+	else {
+		print "$path\t";
+	}
+	# ditto, so use int to avoid lots of decimal places
+	print int($size);
+	if ($sizeunits ne "B") {
+		print " " . $sizeunits;
+	}
+	print "\n";
+}
+
+if (defined($maxage)) {
+	print STDERR "Reporting on files and directories no more than $maxage old\n";
+}
+else {
+	print STDERR "Reporting on all files and directories, irrespective of last modified time\n";
+}
+print STDERR "Reporting on files and directories at least $minsize in size\n";
+
+if ($quiet) {
+	# -q is not recommended, use sudo or look at a directory you're allowed to look at
+	print STDERR "Warning: -q option used, results may be incomplete\n";
+}
+
+if (defined($maxage) && $maxage =~ /([A-Za-z]+)$/) {
+	my $timeunit = $1;
+	$maxage =~ s/$timeunit$//;
+	if ($timeunit eq "s") {
+	}
+	elsif ($timeunit eq "m") {
+		$maxage *= 60;
+	}
+	elsif ($timeunit eq "h") {
+		$maxage *= (60 * 60);
+	}
+	elsif ($timeunit eq "d") {
+		$maxage *= (60 * 60 * 24);
+	}
+	elsif ($timeunit eq "w") {
+		$maxage *= (60 * 60 * 24 * 7);
+	}
+	elsif ($timeunit eq "l") {
+		$maxage *= (60 * 60 * 24 * 30);
+	}
+	elsif ($timeunit eq "q") {
+		$maxage *= (60 * 60 * 24 * 90);
+	}
+	elsif ($timeunit eq "y") {
+		$maxage *= (60 * 60 * 24 * 365);
+	}
+	else {
+		print STDERR "Unrecognised time unit $timeunit\n";
+		exit 2;
+	}
+}
+
+if ($minsize =~ /([A-Za-z]+)$/) {
+	my $sizeunit = $1;
+	$minsize =~ s/$sizeunit$//;
+	if ($minsize eq "") {
+		$minsize = 1;
+	}
+	if ($sizeunit eq "B") {
+	}
+	elsif ($sizeunit eq "K") {
+		$minsize *= 1024;
+	}
+	elsif ($sizeunit eq "M") {
+		$minsize *= (1024 * 1024);
+	}
+	elsif ($sizeunit eq "G") {
+		$minsize *= (1024 * 1024 * 1024);
+	}
+	elsif ($sizeunit eq "T") {
+		$minsize *= (1024 * 1024 * 1024 * 1024);
+	}
+	else {
+		print STDERR "Unrecognised size unit $sizeunit\n";
+		exit 2;
+	}
+}
+
+# TODO get file system device id, skip files on other devices
+process_dir($root, \@fileinfo);
+
+# create a list of directories and their sizes analagous to @fileinfo
+if ($dirsonly || $groupbydir) {
+	foreach my $dir (keys %dirsize) {
+		if ($dirsize{$dir} > $minsize) {
+			push @dirinfo, [$dir, $dirsize{$dir}];
+		}
+	}
+}
+# include the directory totals in the file list
+if ($showdirtotals) {
+	foreach my $dir (keys %dirsize) {
+		if ($dirsize{$dir} > $minsize) {
+			push @fileinfo, [$dir, $dirsize{$dir}];
+		}
+	}
+}
+
+# XXX free up some memory
+%dirsize = {};
+
+# $width means total width and we have to leave some for non-pathname fields (i.e. size)
+if (defined($width)) {
+	$pathwidth = $width - 16;
+}
+# determine the maximum size required to display all paths
+# (no need to allow space for non-pathname fields in this branch since we're using as much space as we need)
+else {
+	# consider file names if we're printing them
+	if (! $dirsonly) {
+		foreach my $fileinfo (@fileinfo) {
+			my $path = ${$fileinfo}[0];
+			my $pathlength = length($path);
+			if ($pathlength > $pathwidth) {
+				$pathwidth = $pathlength;
+			}
+		}
+	}
+	# consider directory names if we're printing them
+	if ($showdirtotals || $dirsonly || $groupbydir) {
+		foreach my $dirinfo (@dirinfo) {
+			my $path = ${$dirinfo}[0];
+			my $pathlength = length($path);
+			if ($pathlength > $pathwidth) {
+				$pathwidth = $pathlength;
+			}
+		}
+	}
+}
+
+# print biggest directory first, followed by a sorted list of the biggest recent files in it...
+if ($groupbydir || $dirsonly) {
+	my @sorteddirinfo = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] cmp ${$b}[0] } @dirinfo;
+	foreach my $dirinfo (@sorteddirinfo) {
+		my $dir = ${$dirinfo}[0];
+		my $size = ${$dirinfo}[1];
+		print_file($dir, $size);
+
+		# only if we're printing the names of the big files in the directory as well
+		# (i.e. $groupbydir mode)
+		if (! $dirsonly) {
+			my @dirfileinfo = @{$dirfileinfo{$dir}};
+			my @sorteddirfileinfo = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] cmp ${$b}[0] } @dirfileinfo;
+
+			foreach my $fileinfo (@sorteddirfileinfo) {
+				my $file = ${$fileinfo}[0];
+				my $size = ${$fileinfo}[1];
+				print_file($file, $size);
+			}
+		}
+	}
+}
+# print a flat list of all files below $root, sorted from largest to smallest...
+else {
+	# sort on size, descending, sort by alphabetical if the size is the same
+	# (the alpha sort should ensure that directories are listed before files within them)
+	my @sortedfileinfo = sort { ${$b}[1] <=> ${$a}[1] || ${$a}[0] cmp ${$b}[0] } @fileinfo;
+
+	foreach my $fileinfo (@sortedfileinfo) {
+		my $file = ${$fileinfo}[0];
+		my $size = ${$fileinfo}[1];
+		print_file($file, $size);
+	}
+}
+
+# vi: set sw=4 ts=4 noet tw=0:
