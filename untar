@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-# check whether a tar file is safe to extract into the current directory
+# extract a tarball without having to care what it was compressed with
 
 use strict;
 use warnings;
