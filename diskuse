@@ -11,6 +11,7 @@ our %dirsize; # path => total size of files at that level
 our %dirfileinfo;
 our %seen;	  # $seen{$dev . $inode} = 1 if seen, else undef
               # tracks which files were already seen to avoid counting twice or going into a loop
+our $pathwidth;	# maximum width to use for printing a file name
 
 our $apparentsize = 0;
 our $debug = 0;
@@ -198,9 +199,19 @@ sub process_dir
 	closedir($dirhandle);
 }
 
-sub convert_size
+# given a size in bytes and a unit, return a string describing that size in those units
+# numbers are rounded down to int on conversion, so ensure you're using an appropriate unit
+# (1048576, "M") -> "1 M"
+# (1048576, "B") -> "1048576 B";
+# (1048576, undef) -> "1048576"
+# (1000000, "M") -> "0 M" # (caller should have used "K" :-))
+sub bytes_to_units
 {
 	my ($size, $units) = @_;
+
+	if (!$units) {
+		return $size;
+	}
 
 	my $divider;
 	if ($units eq "B") {
@@ -219,28 +230,107 @@ sub convert_size
 		$divider = (1024 * 1024 * 1024 * 1024);
 	}
 
-	return $size / $divider;
+	return int($size / $divider) . " " . $units;
 }
 
-my $pathwidth;	# defined in main below
+# given a size and the units that size is in, return that size in bytes
+# (1, "MB") => 1048576
+# (1, "M") => 1048576
+# (1048576) => 1048576
+sub units_to_bytes
+{
+	my ($size, $units) = @_;
+
+	if (!$units) {
+		return $size;
+	}
+
+	if (!defined($size)) {
+		$size = 1;
+	}
+
+	# KB==K, MB=M, etc.
+	$units =~ s/B$//;
+
+	if ($units eq "") {
+	}
+	elsif ($units eq "K") {
+		$size *= 1024;
+	}
+	elsif ($units eq "M") {
+		$size *= (1024 * 1024);
+	}
+	elsif ($units eq "G") {
+		$size *= (1024 * 1024 * 1024);
+	}
+	elsif ($units eq "T") {
+		$size *= (1024 * 1024 * 1024 * 1024);
+	}
+	else {
+		print STDERR "Unrecognised size unit $sizeunit\n";
+		return undef;
+	}
+
+	return $size;
+}
+
+# given a time and the units the time is in, return the number of seconds it equals
+# (1, "s") -> 1
+# (1, "h") -> 3600
+# (2, "h") -> 7200
+# (undef, "h") -> 3600
+sub units_to_seconds
+{
+	my ($time, $units) = @_;
+	
+	if (!defined($time)) {
+		$time = 1;
+	}
+
+	if ($units eq "s") {
+		# no need to multiply by one
+	}
+	elsif ($units eq "m") {
+		$time *= 60;
+	}
+	elsif ($units eq "h") {
+		$time *= (60 * 60);
+	}
+	elsif ($units eq "d") {
+		$time *= (60 * 60 * 24);
+	}
+	elsif ($units eq "w") {
+		$time *= (60 * 60 * 24 * 7);
+	}
+	elsif ($units eq "l") {
+		$time *= (60 * 60 * 24 * 30);
+	}
+	elsif ($units eq "q") {
+		$time *= (60 * 60 * 24 * 90);
+	}
+	elsif ($units eq "y") {
+		$time *= (60 * 60 * 24 * 365);
+	}
+	else {
+		print STDERR "Unrecognised time unit $units\n";
+		return undef;
+	}
+
+	return $time;
+}
+
 sub print_file
 {
 	my ($path, $size) = @_;
 
-	$size = convert_size($size, $sizeunits);
-
-	# printf is no good for $size here because it doesn't support integers > 4 GB on Intel 32
 	if (defined($pathwidth)) {
 		printf "%-${pathwidth}s ", $path;
 	}
 	else {
 		print "$path\t";
 	}
-	# ditto, so use int to avoid lots of decimal places
-	print int($size);
-	if ($sizeunits ne "B") {
-		print " " . $sizeunits;
-	}
+	$size = bytes_to_units($size, $sizeunits);
+	print $size;
 	print "\n";
 }
 
@@ -257,62 +347,12 @@ if ($quiet) {
 	print STDERR "Warning: -q option used, results may be incomplete\n";
 }
 
-if (defined($maxage) && $maxage =~ /([A-Za-z]+)$/) {
-	my $timeunit = $1;
-	$maxage =~ s/$timeunit$//;
-	if ($timeunit eq "s") {
-	}
-	elsif ($timeunit eq "m") {
-		$maxage *= 60;
-	}
-	elsif ($timeunit eq "h") {
-		$maxage *= (60 * 60);
-	}
-	elsif ($timeunit eq "d") {
-		$maxage *= (60 * 60 * 24);
-	}
-	elsif ($timeunit eq "w") {
-		$maxage *= (60 * 60 * 24 * 7);
-	}
-	elsif ($timeunit eq "l") {
-		$maxage *= (60 * 60 * 24 * 30);
-	}
-	elsif ($timeunit eq "q") {
-		$maxage *= (60 * 60 * 24 * 90);
-	}
-	elsif ($timeunit eq "y") {
-		$maxage *= (60 * 60 * 24 * 365);
-	}
-	else {
-		print STDERR "Unrecognised time unit $timeunit\n";
-		exit 2;
-	}
+if ($maxage =~ /(\d*)(\D+)/) {
+	$maxage = units_to_seconds($1, $2);
 }
 
-if ($minsize =~ /([A-Za-z]+)$/) {
-	my $sizeunit = $1;
-	$minsize =~ s/$sizeunit$//;
-	if ($minsize eq "") {
-		$minsize = 1;
-	}
-	if ($sizeunit eq "B") {
-	}
-	elsif ($sizeunit eq "K") {
-		$minsize *= 1024;
-	}
-	elsif ($sizeunit eq "M") {
-		$minsize *= (1024 * 1024);
-	}
-	elsif ($sizeunit eq "G") {
-		$minsize *= (1024 * 1024 * 1024);
-	}
-	elsif ($sizeunit eq "T") {
-		$minsize *= (1024 * 1024 * 1024 * 1024);
-	}
-	else {
-		print STDERR "Unrecognised size unit $sizeunit\n";
-		exit 2;
-	}
+if ($minsize =~ /(\d*)([A-Za-z]+)$/) {
+	$minsize = units_to_bytes($1, $2);
 }
 
 # TODO get file system device id, skip files on other devices
