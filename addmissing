@@ -1,0 +1,7 @@
+#!/bin/sh
+
+svn stat | grep '^\?' | while read stat file
+do
+	svn add "$file"
+done
+
