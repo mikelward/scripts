@@ -125,6 +125,6 @@ read_options "$@"
 
 for host in $hosts
 do
-	copy_to $host && install_on $host && distribute_from $host
+	copy_to $host && install_on $host && distribute_from $host || true
 done
 
