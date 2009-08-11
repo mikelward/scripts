@@ -1,0 +1,68 @@
+#!/bin/sh
+# remove files from a Subversion working copy that are not in the repository
+# $Id$
+
+debug()
+{
+	$verbose && echo "$@" 1>&2
+}
+
+error()
+{
+	echo "$@" 1>&2
+}
+
+info()
+{
+	$quiet || echo "$@" 1>&2
+}
+
+get_changed_files()
+{
+	svn stat | grep '^[?AMC]' | sed -e 's/^[^ 	]*[ 	]*//'
+}
+
+run()
+{
+	if $simulate; then
+		echo "Would run $@" 1>&2
+	else
+		"$@"
+	fi
+}
+
+# defaults
+quiet=false
+simulate=false
+verbose=false
+
+# command line options
+while getopts ":nv" opt; do
+	case "$opt" in
+	n)
+		simulate=true
+		;;
+	v)
+		verbose=true
+		;;
+	*)
+		error "Invalid option $OPTARG" 1>&2
+		;;
+	esac
+done
+shift $((OPTIND - 1))
+
+# command line parameters
+dir=$1
+test -z "$dir" && dir=.			# default to current directory
+
+# main
+IFS='
+'
+for file in $(get_changed_files); do
+	info "Removing $file"
+	run rm -rf "$file"
+	if test $? -ne 0; then
+		error "Error removing $file"
+	fi
+done
