@@ -15,6 +15,9 @@ if ($filename =~ m/\.tar\.bz2$/ or $filename =~ m/\.tbz$/) {
 elsif ($filename =~ m/\.tar.gz$/ or $filename =~ m/\.tgz$/) {
 	$flags .= "z";
 }
+elsif ($filename =~ m/\.tar.xz$/ or $filename =~ m/\.txz$/ or $filename =~ m/\.tar.lzma$/ or $filename =~ m/\.tlzma$/) {
+	$flags .= " --use-compress-program xz";
+}
 elsif ($filename =~ m/\.tar$/) {
 	# plain old tar
 }
