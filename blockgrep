@@ -81,6 +81,7 @@ while (<>) {
 	chomp;
 	if (/$keypattern/) {
 		$key = $_;
+		$keywasprinted = 0;
 		if (!defined($keyprintpattern) || /$keyprintpattern/) {
 			$keymatched = 1;
 		}
@@ -92,7 +93,10 @@ while (<>) {
 		$value = $_;
 		if (!defined($valueprintpattern) || /$valueprintpattern/) {
 			if ($keymatched) {
-				print $key . "\n";
+				if (!$keywasprinted) {
+					print $key . "\n";
+					$keywasprinted = 1;
+				}
 				print $value . "\n";
 			}
 		}
