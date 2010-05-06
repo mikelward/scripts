@@ -4,28 +4,62 @@
 use strict;
 use warnings;
 
+use Getopt::Long qw(:config no_ignore_case bundling);
+
+sub usage()
+{
+	print STDERR <<EOF 
+Usage: untar [-n] <tar file>
+EOF
+}
+
+my $simulate = 0;
+
+GetOptions(
+	"simulate|dry-run|n" => \$simulate
+) or usage, exit 2;
+
 my $filename = shift @ARGV
 	or die "No file name specified\n";
 
 my $flags = "-x";
 
-if ($filename =~ m/\.tar\.bz2$/ or $filename =~ m/\.tbz$/) {
-	$flags .= "j";
+my %flags_for_extension = (
+	'tar.bz2' => '-j',
+	'tbz' => '-j',
+	'tar.gz' => '-z',
+	'tgz' => '-z',
+	'tar.xz' => '--use-compress-program xz',
+	'txz' => '--use-compress-program xz',
+	'tar.lzma' => '--use-compress-program xz',
+	'tlzma' => '--use-compress-program xz',
+	'tar' => undef
+);
+
+my @extensions = keys %flags_for_extension;
+
+my $known_extension = 0;
+foreach my $extension (keys %flags_for_extension) {
+	if ($filename =~ m/\.\Q$extension\E$/) {
+		$known_extension = 1;
+		my $flags_for_this_extension = $flags_for_extension{$extension};
+		if (defined($flags_for_this_extension)) {
+			$flags .= ' ' . $flags_for_this_extension;
+		}
+		last;
+	}
 }
-elsif ($filename =~ m/\.tar.gz$/ or $filename =~ m/\.tgz$/) {
-	$flags .= "z";
-}
-elsif ($filename =~ m/\.tar.xz$/ or $filename =~ m/\.txz$/ or $filename =~ m/\.tar.lzma$/ or $filename =~ m/\.tlzma$/) {
-	$flags .= " --use-compress-program xz";
-}
-elsif ($filename =~ m/\.tar$/) {
-	# plain old tar
-}
-else {
-	die "Unknown file extension";
+
+if (!$known_extension) {
+	die "untar: Cannot untar $filename: unknown file extension\n";
 }
 
 $flags .= " -f $filename";
 
-`tar $flags`;
+if ($simulate) {
+	print STDERR "tar $flags\n";
+}
+else {
+	`tar $flags`;
+}
 
