@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # copies UNIX configuration files to other hosts
 
 info()
