@@ -19,7 +19,8 @@ our $groupbydir = 0;
 our $minsize = 0;
 our $quiet = 0;
 # it's a string, so remember that \\ becomes \
-our $pathskip = "^/proc\\b|^/dev\\b|^/sys\\b|^/lib/udev\\b|^/net\\b|\\bfd/\\d+\\b|\\bdosdevices\\b|\\b\\.gvfs\\b";
+#our $pathskip = "^/proc\\b|^/dev\\b|^/sys\\b|^/lib/udev\\b|^/net\\b|\\bfd/\\d+\\b|\\bdosdevices\\b|\\b\\.gvfs\\b";
+our $pathskip;
 our $maxage;
 our $dirsonly = 0;
 our $singledevice = 1;
@@ -29,6 +30,8 @@ our $showdirtotals = 1;
 # TODO try to get the terminal width (can't use $ENV{'TERM'} because $TERM is not exported)
 our $verbose = 0;
 our $width;
+
+use constant BLKSIZE => 512;
 
 sub usage
 {
@@ -46,7 +49,7 @@ Advanced options:
     -b               Print sizes based on file size (like ls), not blocks used (like du)
     -d               Print debugging information
     -g               Group by directory (best if directories might contain lots of small files)
-    -p <pattern>     Skip directories matching <pattern> (default $pathskip)
+    -p <pattern>     Skip directories matching <pattern>
     -P               Disable pathskip
     -q               Don't print error messages about non-readable directories (not recommended)
     -S               Include size of sub-directories in directory size (like du)
@@ -121,13 +124,14 @@ sub process_dir
 	my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($dir);
 	my $dirdev = $dev;
 	if (!$apparentsize) {
-		# perldoc -f stat is wrong, it's 512 byte multiples according to Linux stat(2)
-		$size = $blocks * 512;
+		# have to multiply by BLKSIZE, which is not necessarily $blksize
+		# (BLKSIZE is 512 on Linux and BSD, irrespective of $blksize)
+		$size = $blocks * BLKSIZE;
 	}
 
 	print STDERR "Examining $dir\n" if $verbose;
 
-	if (! -r $dir) {
+	if (! -r _) {
 		print STDERR "Can't read $dir\n" if ! $quiet;
 		return 0;
 	}
@@ -140,14 +144,17 @@ sub process_dir
 			next if $dirent eq "..";
 
 			my $path = ($dir eq "/" ? "/" : $dir . "/") . $dirent;
-			if (-l $path) {
+			my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = lstat($path);
+
+			if (-l _) {
 				print STDERR "Skipping $path (symbolic link)\n" if $debug;
 				next;
 			}
-			my ($dev,$ino,$mode,$nlink,$uid,$gid,$rdev,$size,$atime,$mtime,$ctime,$blksize,$blocks) = stat($path);
+
 			if (!$apparentsize) {
-				# perldoc -f stat is wrong, it's 512 byte multiples according to Linux stat(2)
-				$size = $blocks * 512;
+				# have to multiply by BLKSIZE, which is not necessarily $blksize
+				# (BLKSIZE is 512 on Linux and BSD, irrespective of $blksize)
+				$size = $blocks * BLKSIZE;
 			}
 
 			if (!$dev || !$ino) {
@@ -160,7 +167,7 @@ sub process_dir
 			}
 			$seen{$dev . $ino} = $path;
 
-			if (-d $path) {
+			if (-d _) {
 				if ($singledevice && $dev != $dirdev) {
 					print STDERR "Skipping $path (different device)\n" if $debug;
 					next;
