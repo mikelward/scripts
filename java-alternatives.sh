@@ -45,7 +45,11 @@ notice()
 run()
 {
 	if $simulate || $debug; then
-		echo "$*" >&2
+		# IFS is used to preserve newlines in --slaves output
+		OIFS=$IFS
+		IFS=
+		echo "$@" >&2
+		IFS=$OIFS
 	fi
 	if ! $simulate; then
 		"$@"
@@ -111,6 +115,10 @@ debug "basedir is $basedir"
 
 names=
 
+###
+# common array handling functions
+#
+
 # add_to_array <array name> <value>
 # this is not very efficient for large arrays
 # uses newlines to separate entries to allow for storing file names containing spaces
@@ -154,6 +162,10 @@ in_array()
 		return 1
 	fi
 }
+
+###
+# functions for this program
+#
 
 # determine where the symlink should be,
 # e.g. for /usr/jdk1.5.0_22/bin/java return /usr/bin/java
@@ -251,14 +263,24 @@ get_mapped_directory()
 	fi
 }
 
+
+###
+# main
+#
+
+# determine where each file (program, man page, etc.)
+# should be installed to and build the command line args to
+# update-alternatives --install...
 files=$(for subdir in $subdirs; do find $basedir/$subdir -type f -print; done)
 for file in $files; do
   
-	# skip main java program, that is handled separately
-	case $file in */bin/java)
-		continue ;;
-	esac
-
+	# We might get /usr/java/share/man/man1/java.1 and
+	# /usr/java/share/man/ja_JP.eucJP/man1/java.1.
+	# We can only have one or the other, because both would
+	# be called /etc/alternatives/java.1.
+	# There's no guarantee these are passed to us in any given order,
+	# so naively skip anything that doesn't look like a default
+	# man page.
 	case $file in */man/*)
 		case $file in */man/man*)
 			# keep default locale man pages
@@ -286,14 +308,30 @@ for file in $files; do
 
 
 	if ! in_array names $name; then
-		# weird spacing is to make it line up with --install line in output
 		add_to_array names $name
-		slaves="$slaves
+
+		case $file in */bin/java)
+			# the main java program should be specified via --install
+			install="    --install $dest $name $file"
+			;;
+		*)
+			# the other files are specified via --slave
+			# weird spacing is to make it line up with --install line in output
+			slaves="$slaves
     --slave   $dest $name $file"
+			;;
+		esac
 	else	
 		notice "Skipping $file: already in use"
 	fi
 done
 
-echo "sudo /usr/sbin/update-alternatives
-    --install $bindir/java java $javadir/bin/java $priority $slaves"
+# TODO: bin/java should honor $dirmap too
+# $slaves already has a newline before it, so don't add one here too
+if $simulate; then
+	echo "/usr/sbin/update-alternatives 
+$install $priority $slaves"
+else
+	run sudo /usr/sbin/update-alternatives \
+$install $priority $slaves
+fi
