@@ -1,0 +1,1 @@
+find . .. ../.. /usr/include -name "*.h" | ctags -f - -L - | grep "^$1	"
