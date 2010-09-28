@@ -1,0 +1,168 @@
+#!/bin/sh
+#
+# gitinitremote
+# turns a local directory into a new remote git repository,
+# with the local directory being a clone of the remote
+#
+# e.g. gitinitremote ssh://mikelward.com/home/mikelward/git/uni/520/nimsys.git
+#
+# Mikel Ward <mikel@mikelward.com>
+
+scriptname=gitinitremote
+
+die()
+{
+	error "$*"
+	exit 1
+}
+
+error()
+{
+	echo "$scriptname: $*" 1>&2
+}
+
+notice()
+{
+	echo "$scriptname: $*" 1>&2
+}
+
+warn()
+{
+	echo "$scriptname: $*" 1>&2
+}
+
+run()
+{
+	if $simulate; then
+		echo "Would run $*" 1>&2
+	else
+		"$@"
+	fi
+}
+
+usage()
+{
+	cat <<EOF 1>&2
+Usage: $scriptname [-hn] [-r <remote name>] <new remote URL>
+EOF
+}
+
+# defaults
+remotename=origin	# what to call the remote
+refspec=master		# refspec ("branch") to push - can't be changed yet
+local=$PWD			# local directory to create the repository out of
+simulate=false
+
+while getopts ":hnr:" option
+do
+	case $option in
+	h)
+		usage
+		exit 0
+		;;
+	n)
+		simulate=true
+		;;
+	r)
+		remotename=$OPTARG
+		;;
+	':')
+		error "Missing argument to -$option"
+		usage
+		exit 2
+		;;
+	'?')
+		error "Invalid option -$OPTARG"
+		usage
+		exit 2
+		;;
+	*)
+		error "Program does not support -$option yet"
+		usage
+		exit 2
+		;;
+	esac
+done
+shift $((OPTIND - 1))
+
+remote=$1
+
+if test -z "$remote"; then
+	error "Remote URL is required"
+	usage
+	exit 2
+fi
+
+case $remote in
+ssh:*)
+	remoteproto=ssh
+
+	case $remote in
+	*.git)
+		:
+		;;
+	*)
+		warn "Adding .git to end of remote URL"
+		remote="$remote".git
+		;;
+	esac
+
+	badformatmessage="SSH remote is not in the expected ssh://hostname/dir format"
+
+	remotenoproto=${remote#ssh://}
+	test "$remotenoproto" = "$remote" && die "$badformatmessage"
+
+	remotehost=${remotenoproto%%/*}
+	test "$remotehost" = "$remotenoproto" && die "$badformatmessage"
+
+	remotedir=${remotenoproto#*/}
+	test "$remotedir" = "$remotenoproto" && die "$badformatmessage"
+	remotedir=/"$remotedir"		# re-add the leading slash that was stripped above
+	;;
+*)
+	die "only ssh remotes are supported at the moment"
+	;;
+esac
+
+test "$local" == "$PWD" || die "must currently be run from the local git directory"
+
+run git init --quiet
+
+case $remoteproto in
+ssh)
+	ssh $remotehost true \
+		|| die "Cannot connect to $remotehost via ssh"
+
+	ssh $remotehost test -d "'$remotedir'" \
+		&& die "$remotedir already exists on $remotehost"
+
+	ssh $remotehost git --help >/dev/null 2>&1 \
+		|| die "git is not installed on $remotehost"
+
+	run ssh $remotehost git init --quiet --bare "'$remotedir'" \
+		|| die "Cannot initialize remote repository"
+
+	# git remote does not accept --quiet option
+	run git remote add "$remotename" "$remote" \
+		|| die "git remote add failed"
+
+	;;
+*)
+	die "only ssh remotes are supported at the moment"
+	;;
+esac
+
+# git add does not accept --quiet option
+run git add "$local" \
+	|| die "git add failed"
+
+run git commit --quiet --message "Initial commit" "$local" \
+	|| die "git commit failed"
+
+# git push does not accept --quiet option
+run git push "$remotename" "$refspec" \
+	|| die "git push failed"
+
+notice "Successfully created remote $remote as $remotename"
+
+exit 0
