@@ -117,6 +117,7 @@ ssh:*)
 
 	remotedir=${remotenoproto#*/}
 	test "$remotedir" = "$remotenoproto" && die "$badformatmessage"
+	test -z "$remotedir" || test "$remotedir" = ".git" && die "$badformatmessage"	# don't allow root directory
 	remotedir=/"$remotedir"		# re-add the leading slash that was stripped above
 	;;
 *)
