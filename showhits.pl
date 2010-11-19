@@ -8,6 +8,9 @@
 #open(LOGFILE, "<$logfile")
 #    or die "Cannot open log file";
 
+use strict;
+use warnings;
+
 my %country;
 while (<>)
 {
@@ -15,6 +18,7 @@ while (<>)
     #remotehost rfc931 authuser [date] "request" status bytes "referer" "user_agent"
     /([^ ]*) ([^ ]*) ([^ ]*) \[([^]]*)\] "([^"]*)" (\d+) ([^ ]*) "([^"]*)" "([^"]*)"/;
 
+	my ($host, $ident, $user, $date, $request, $status, $bytes, $referer, $agent);
     $host = $1;
     $ident = $2;
     $user = $3;
@@ -25,16 +29,23 @@ while (<>)
     $referer = $8;
     $agent = $9;
 
+	my $address;
     $address = $request;
     $address =~ s/^([A-Z]*) //;
     $address =~ s/ HTTP[^ ]*$//;
     $address =~ s/\?.*//;
     $address =~ s/^\/michael//;
 
-	if (!defined($country{$host})) {
+	my $country;
+	if (!defined($country{$host}))
+	{
 		$country = `geoip-lookup $host`;
 		chomp $country;
 		$country{$host} = $country;
+	}
+	else
+	{
+		$country = $country{$host};
 	}
 
     if (/Opera/)
@@ -116,13 +127,22 @@ while (<>)
 
     if ($host)
     {
+		if (length($address) == 0)
+		{
+			print STDERR "No address for $host\n";
+		}
 		my @addressbits = split /\//, $address;
-		my $shortaddress = '/' . $addressbits[1];
-		if (@addressbits > 2) {
+		my $shortaddress = '/';
+		if (@addressbits > 0)
+		{
+			$shortaddress .= $addressbits[1];
+		}
+		if (@addressbits > 2)
+		{
 			$shortaddress .= '/' . $addressbits[-1];
 		}
 
-		my $referrerdomain = $referrer,
+		my $referrerdomain = $referer;
 		$referrerdomain =~ s,^[^/]*//,,;
 		$referrerdomain =~ s,/.*,,;
 
