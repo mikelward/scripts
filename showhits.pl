@@ -3,12 +3,12 @@
 
 #my $logfile = "/var/log/apache2/combined.log";
 #my $logfile = "/home/mikelward/logs/mikelward.com/http/access.log.0";
-my $logfile = "/home/mikelward/logs/mikelward.com/http/access.log";
+#my $logfile = "/home/mikelward/logs/mikelward.com/http/access.log";
 
-open(LOGFILE, "<$logfile")
-    or die "Cannot open log file";
+#open(LOGFILE, "<$logfile")
+#    or die "Cannot open log file";
 
-while (<LOGFILE>)
+while (<>)
 {
     chomp;
     #remotehost rfc931 authuser [date] "request" status bytes "referer" "user_agent"
@@ -29,6 +29,9 @@ while (<LOGFILE>)
     $address =~ s/ HTTP[^ ]*$//;
     $address =~ s/\?.*//;
     $address =~ s/^\/michael//;
+
+	$country = `geoip-lookup $host`;
+	chomp $country;
 
     if (/Opera/)
     {
@@ -103,7 +106,7 @@ while (<LOGFILE>)
     next if $address =~ /\.(css|inc|htc|js|bmp|gif|ico|png|jpg|jpeg)/i;
     next if $address =~ /\/mail/;
     next if $address =~ /!svn/;
-    next if $agent =~ /(Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Charlotte|[Cc]rawler|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ia_archiver|Kalooga|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|NaverBot|NetSeer|Netcraft Web Server Survey|PHP version tracker|psbot|R6_FeedFetcher|relevantnoise\.com|Rome Client|SBIder|Scout|Shelob|Snapbot|Sogou web spider|Speedy Spider|Sphere Scout|Spider|SurveyBot|Technoratibot|TestSpider|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|WebAlta Crawler|Yahoo! Slurp|Yanga|Yeti|YoudaoBot)/;
+    next if $agent =~ /(Apache \(internal dummy connection\)|Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Charlotte|[Cc]rawler|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ia_archiver|Kalooga|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|NaverBot|NetSeer|Netcraft Web Server Survey|PHP version tracker|psbot|R6_FeedFetcher|relevantnoise\.com|Rome Client|SBIder|Scout|Shelob|Snapbot|Sogou web spider|Speedy Spider|Sphere Scout|Spider|SurveyBot|Technoratibot|TestSpider|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|WebAlta Crawler|Yahoo! Slurp|Yanga|Yeti|YoudaoBot)/;
 
     next if $status != 200;
 
@@ -121,8 +124,8 @@ while (<LOGFILE>)
 
         #print $date . "\t" . $host . "\t" . $address . "\t" . $agent . "\n";
 		#printf "%-26s\t%-48s\t%-46s\t%-20s\n", $date, $host, $address, $agent;
-		printf "%-20s\t%-20s\t%-40s\n", $host, $agent, $shortaddress;
-        #print $agent . "\n";
+		printf "%-26s\t%-18s\t%-2s\t%-18s\t%-40s\n", $date, $host, $country, $agent, $shortaddress;
+		#print $agent . "\n";
 		#print $address . "\n";
 		#print $shortaddress . "\n";
     }
