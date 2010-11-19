@@ -8,6 +8,7 @@
 #open(LOGFILE, "<$logfile")
 #    or die "Cannot open log file";
 
+my %country;
 while (<>)
 {
     chomp;
@@ -30,8 +31,11 @@ while (<>)
     $address =~ s/\?.*//;
     $address =~ s/^\/michael//;
 
-	$country = `geoip-lookup $host`;
-	chomp $country;
+	if (!defined($country{$host})) {
+		$country = `geoip-lookup $host`;
+		chomp $country;
+		$country{$host} = $country;
+	}
 
     if (/Opera/)
     {
