@@ -4,25 +4,30 @@
 use strict;
 use warnings;
 
+use File::Temp qw(tempdir);
+use File::Path qw(remove_tree);
 use Getopt::Long qw(:config no_ignore_case bundling);
 
 sub usage()
 {
 	print STDERR <<EOF 
-Usage: untar [-n] <tar file>
+Usage: untar [-U] <tar file>
 EOF
 }
 
+my $safe = 1;
 my $simulate = 0;
+my $tar = "tar";
 
 GetOptions(
-	"simulate|dry-run|n" => \$simulate
+	"simulate|dry-run|n" => sub { die "-n not supported at the moment\n" }, #\$simulate,
+	"unsafe|U" => sub { $safe = 0; }
 ) or usage, exit 2;
 
-my $filename = shift @ARGV
+my $tarfile = shift @ARGV
 	or die "No file name specified\n";
 
-my $flags = "-x";
+my @flags = ("-x");
 
 my %flags_for_extension = (
 	'tar.bz2' => '-j',
@@ -39,27 +44,122 @@ my %flags_for_extension = (
 my @extensions = keys %flags_for_extension;
 
 my $known_extension = 0;
+my $tarfile_without_extension = $tarfile;
 foreach my $extension (keys %flags_for_extension) {
-	if ($filename =~ m/\.\Q$extension\E$/) {
+	if ($tarfile =~ m/^(.*)\Q.$extension\E$/) {
 		$known_extension = 1;
+		$tarfile_without_extension = $1;
 		my $flags_for_this_extension = $flags_for_extension{$extension};
 		if (defined($flags_for_this_extension)) {
-			$flags .= ' ' . $flags_for_this_extension;
+			push @flags, $flags_for_this_extension;
 		}
 		last;
 	}
 }
 
-if (!$known_extension) {
-	die "untar: Cannot untar $filename: unknown file extension\n";
-}
+my $tempdir;
+if ($safe) {
+	$tempdir = tempdir $tarfile_without_extension . ".XXXX", DIR => "."
+		or die "untar: Cannot create temporary directory: $!\n";
 
-$flags .= " -f $filename";
-
-if ($simulate) {
-	print STDERR "tar $flags\n";
+	#print STDERR "untar: Safe mode, expanding into " . $tempdir . "\n";
+	print STDERR "untar: Safe mode, expanding into temporary directory\n";
+	push @flags, "-C", $tempdir;
 }
 else {
-	`tar $flags`;
+	print STDERR "untar: Unsafe mode, expanding into current directory\n";
+}
+
+if (!$known_extension) {
+	die "untar: Cannot untar $tarfile: unknown file extension\n";
+}
+
+push @flags, "-f", $tarfile;
+
+my $status = system $tar, @flags;
+if ($status != 0) {
+	print STDERR "untar: Cannot untar $tar: $?\n";
+	if (defined $tempdir) {
+		print STDERR "untar: Removing temporary directory $tempdir\n";
+		remove_tree($tempdir);
+	}
+}
+
+sub file_description {
+	my $file = shift @_;
+	my $type;
+	if (-d $file) {
+		$type = "directory";
+	}
+	elsif (-f $file) {
+		$type = "file";
+	}
+	else {
+		$type = "special file";
+	}
+	$type;
+}
+
+if ($safe) {
+	if (opendir TEMPDIR, $tempdir) {
+		my @files = grep { $_ ne "." and $_ ne ".." } readdir TEMPDIR;
+		if (scalar @files == 1) {
+			my $src = $tempdir . "/" . $files[0];
+			my $dst = $files[0];
+			my $srctype = file_description($src);
+			#print STDERR "untar: Trying to move extracted $srctype to $dst\n";
+			if (-e $dst) {
+				my $dsttype = file_description($dst);
+				#print STDERR "untar: $dsttype already exists\n";
+				print STDERR "untar: Original name was $dst, but there is already a $dsttype called that\n";
+				if (-d $src) {
+					print STDERR "untar: Extracted files are in $src\n";
+				}
+				else {
+					print STDERR "untar: Extracted file is $src\n";
+				}
+			}
+			else {
+				if (rename $src, $dst and ! -e $src) {
+					#print STDERR "untar: Extracted $srctype is $dst\n";
+					if (-d $dst) {
+						print STDERR "untar: Extracted files are in $dst\n";
+					}
+					else {
+						print STDERR "untar: Extracted $dst\n";
+					}
+				}
+				else {
+					print STDERR "untar: Move failed: $!\n";
+					print STDERR "untar: Extracted files are in $dst\n";
+				}
+			}
+		}
+		else {
+			my $src = $tempdir;
+			my $dst = $tarfile_without_extension;
+			#print STDERR "untar: tarbomb\n";
+			#print STDERR "untar: Trying to move extracted files into $dst\n";
+			if (-e $dst) {
+				my $dsttype = file_description($dst);
+				#print STDERR "untar: $dsttype already exists\n";
+				#print STDERR "untar: $dst already exists\n";
+				print STDERR "untar: Desired name is $dst, but there is already a $dsttype called that\n";
+				print STDERR "untar: Extracted files are in $src\n";
+			}
+			else {
+				if (rename $src, $dst and ! -e $src) {
+					print STDERR "untar: Extracted files are in $dst\n";
+				}
+				else {
+					print STDERR "untar: Move failed: $!\n";
+					print STDERR "untar: Extracted files are in $dst\n";
+				}
+			}
+		}
+	}
+	else {
+		print STDERR "untar: Temporary directory disappeared\n";
+	}
 }
 
