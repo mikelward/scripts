@@ -1,0 +1,15 @@
+#!/bin/bash
+
+templatedir=$HOME/templates
+filename=$1
+extension=${filename##*.}
+if test "$extension" = "$filename"; then
+	echo "File must have an extension" 1>&2
+	exit 1
+fi
+template=$templatedir/template.$extension
+if test -f "$template"; then
+	cp "$template" "$filename"
+else
+	echo "There is no template for .$extension files, creating empty file"
+fi
