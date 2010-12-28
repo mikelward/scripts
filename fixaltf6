@@ -1,0 +1,3 @@
+#!/bin/bash
+
+gconftool-2 --set '/apps/metacity/global_keybindings/cycle_group' --type 'string' 'disabled'
