@@ -1,0 +1,1 @@
+cat $HOME/logs/mikelward.com/http/access.log.0 | grep 'GET [^ ]*\.php' | grep -v "\" 404" | grep -vE '(715826399b626969937|/melbourne\.php|link-tooltip\.php)'

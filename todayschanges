@@ -1,0 +1,2 @@
+dir=${1:-.}
+find $dir -mtime -1 -type f \! \( -name "*.ics" -o -name "*.swp" -o -name "entries" -o -name "*.svn-base" \)
