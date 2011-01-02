@@ -48,13 +48,58 @@ while (<>)
 		$country = $country{$host};
 	}
 
-    if (/Opera/)
+	my $platform;
+	if ($agent =~ /^Mozilla\/\S*\s*\((.*?)\)/)
+	{
+		my @platformbits = split /\s*;\s*/, $1;
+		# e.g. grab Linux i686 out of (X11; U; Linux i686; en-US)
+		if (@platformbits >= 3)
+		{
+			$platform = $platformbits[2];
+			if ($platform =~ /^Windows/) {
+				if ($platform eq "Windows NT 6.0") { $platform = "Windows Vista"; }
+				elsif ($platform eq "Windows NT 6.1") { $platform = "Windows 7"; }
+				elsif ($platform eq "Windows NT 5.2") { $platform = "Windows 2003"; }
+				elsif ($platform eq "Windows NT 5.1") { $platform = "Windows XP"; }
+			}
+			#elsif ($platform =~ /Intel Mac OS X (\d+)_(\d+)_?.*/) {
+			#$platform = "Mac OS $1.$2";
+			#}
+			elsif ($platform =~ /^(Intel|PPC) Mac OS X/) {
+				$platform = "Mac OS X";
+			}
+			elsif ($platform =~ /^Linux/) {
+				$platform = "Linux";
+			}
+			elsif ($platform =~ /^Android/) {
+				$platform = "Android";
+			}
+			elsif ($platform =~ /^CPU iPhone OS/) {
+				$platform = "iPhone";
+			}
+		}
+		else
+		{
+			#print STDERR scalar(@platformbits) . " bits: " . (join "; ", @platformbits) . "\n";
+			$platform = "";
+		}
+	}
+	else
+	{
+		$platform = "";
+	}
+
+    if ($agent =~ /Opera/)
     {
         $agent =~ s/.*Opera\/(.*?) .*$/Opera $1/;
     }
+	#elsif ($agent =~ /Epiphany/)
+	#{
+	#$agent =~ s/Epiphany[\/ ](.*?)/Epiphany $1/;
+	#}
     elsif ($agent =~ /Safari/)
     {
-        $agent =~ s/.*Safari\/(.*?)$/Safari $1/;
+        $agent =~ s/.*Safari[\/ ]([^ ]*).*/Safari $1/;
     }
     elsif ($agent =~ /AppleWebKit/)
     {
@@ -112,6 +157,10 @@ while (<>)
     {
         $agent =~ s/.*Konqueror\/(.*?);.*/Konqueror $1/;
     }
+	elsif ($agent =~ /^BlackBerry/)
+	{
+		$agent =~ s/^BlackBerry(\d+).*/BlackBerry $1/;
+	}
     elsif ($agent =~ /MSIE/)
     {
         $agent =~ s/.*(MSIE .*?);.*/$1/;
@@ -121,7 +170,7 @@ while (<>)
     next if $address =~ /\.(css|inc|htc|js|bmp|gif|ico|png|jpg|jpeg)/i;
     next if $address =~ /\/mail/;
     next if $address =~ /!svn/;
-    next if $agent =~ /(Apache \(internal dummy connection\)|Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|Charlotte|[Cc]rawler|Exabot|Feedfetcher-Google|findlinks|Googlebot|heritrix|HouxouCrawler|ia_archiver|Kalooga|ICC-Crawler|larbin|Moreoverbot|msnbot|MSRBOT|NaverBot|NetSeer|Netcraft Web Server Survey|PHP version tracker|psbot|R6_FeedFetcher|relevantnoise\.com|Rome Client|SBIder|Scout|Shelob|Snapbot|Sogou web spider|Speedy Spider|Sphere Scout|Spider|SurveyBot|Technoratibot|TestSpider|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|WebAlta Crawler|Yahoo! Slurp|Yanga|Yeti|YoudaoBot)/;
+    next if $agent =~ /(Apache \(internal dummy connection\)|Ask Jeeves|Baiduspider|BecomeBot|BlogPulse|BlogSearch|bot|Browsershots|butterfly|Charlotte|[Cc]rawler|Exabot|facebookexternalhit|Feedfetcher-Google|findlinks|Googlebot|heritrix|hs-HTTP|HouxouCrawler|ia_archiver|ICC-Crawler|Java|Jakarta Commons-HttpClient|justsignal|Kalooga|larbin|Mediapartners-Google|Moreoverbot|msnbot|MSRBOT|NaverBot|NetSeer|Netcraft Web Server Survey|PHP version tracker|psbot|R6_FeedFetcher|relevantnoise\.com|Rome Client|SBIder|Scout|Shelob|Snapbot|Sogou web spider|Sosospider|Speedy Spider|Sphere Scout|Spider|SurveyBot|Technoratibot|TestSpider|T-H-U-N-D-E-R-S-T-O-N-E|TMCrawler|Twiceler|Twingly Recon|VoilaBot|W3C_Validator|WebAlta Crawler|WordPress|Yahoo! Slurp|Yanga|Yeti|YoudaoBot)/;
 
     next if $status != 200;
 
@@ -148,7 +197,8 @@ while (<>)
 
         #print $date . "\t" . $host . "\t" . $address . "\t" . $agent . "\n";
 		#printf "%-26s\t%-48s\t%-46s\t%-20s\n", $date, $host, $address, $agent;
-		printf "%-26s\t%-18s\t%-2s\t%-18s\t%-40s\n", $date, $host, $country, $agent, $shortaddress;
+		#printf "%-26s\t%-18s\t%-2s\t%-18s\t%-40s\n", $date, $host, $country, $agent, $shortaddress;
+		printf "%-26s\t%-18s\t%-2s\t%-18s\t%-18s\t%-40s\n", $date, $host, $country, $agent, $platform, $shortaddress;
 		#print $agent . "\n";
 		#print $address . "\n";
 		#print $shortaddress . "\n";
