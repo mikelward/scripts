@@ -34,11 +34,10 @@ cleanup()
 #
 debug=
 quiet=true
-src=/home/mikel/library
+src=/home/mikelward/library
 tmpdir="${TMPDIR:-$HOME/tmp}"
-#dst=voot:/home/kadmos/svn
-dst=dreamhost:/home/mikelward/library
-logfile=/home/mikel/log/librarybackup.log
+dst=home:/home/mikel/library
+logfile="$HOME"/log/librarybackup.log
 dateformat='%-e %B %Y'
 timeformat='%H:%M:%S'
 #databases="books movies music"
