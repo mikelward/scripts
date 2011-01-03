@@ -125,7 +125,7 @@ ssh:*)
 	;;
 esac
 
-test "$local" == "$PWD" || die "must currently be run from the local git directory"
+test "$local" = "$PWD" || die "must currently be run from the local git directory"
 
 run git init --quiet
 
@@ -152,6 +152,13 @@ ssh)
 	die "only ssh remotes are supported at the moment"
 	;;
 esac
+
+# git <= 1.7 requires we have a non-empty directory for commit to work
+# (avoid "error: pathspec '' did not match any file(s) known to git.")
+dummyfile="$local/.gitignore"
+if ! test -f "$dummyfile"; then
+	run touch "$dummyfile"
+fi
 
 # git add does not accept --quiet option
 run git add "$local" \
