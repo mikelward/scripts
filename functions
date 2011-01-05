@@ -148,11 +148,14 @@ get_size_of_file_or_directory()
 # Returns: free space in kilobytes
 get_free_space_on_filesystem()
 {
+	(
     typeset tmpdir
     typeset dfout
-    tmpdir=$(get_temporary_directory)
 
+    tmpdir=$(get_temporary_directory)
     dfout="$tmpdir"/df.$$
+	trap 'test -n "$dfout" && rm "$dfout"' EXIT
+
     df -Pk "$tmpdir" > "$dfout"
     if test $? -ne 0
     then
@@ -168,13 +171,15 @@ get_free_space_on_filesystem()
         then
             debug "$filesystem has $available kilobytes free"
             echo "$available"
-            return 0
+            exit 0
         fi
 
         i=$((i + 1))
     done < "$dfout"
     error "Cannot determine free space on $filesystem"
-    return 1
+    exit 1
+	)
+	return $?
 }
 
 # Return the filename part of a path.
