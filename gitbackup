@@ -178,7 +178,8 @@ do
     #
     # take a snapshot of the repository
     #
-    srcdir=${srcdir%/}
+
+    # turn the path into a single directory so we don't have to mess around with mkdirs
     dirname=$reponame
     dirname=${dirname//\//.}
     if test -z "$dirname"
@@ -207,7 +208,7 @@ do
     dsturl=$dsthost:$dstdir
     debug "dstdir=$dstdir, dsturl=$dsturl"
 
-    # create the distination directory if it doesn't exist
+    # create the destination directory if it doesn't exist
     # (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
     debug "Creating $dstdir on $dsthost"
     run ssh $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
