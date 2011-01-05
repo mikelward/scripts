@@ -16,21 +16,21 @@ fi
 
 abort()
 {
-	notice "Aborted"
-	exit 1
+    notice "Aborted"
+    exit 1
 }
 
 cleanup()
 {
     if test -f "$dfout"
     then
-		info "Cleaning up '$dfout'"
+        info "Cleaning up '$dfout'"
         run rm -rf -- "$dfout"
     fi
 
     if test -d "$snapdir"
     then
-		info "Cleaning up '$snapdir'"
+        info "Cleaning up '$snapdir'"
         run rm -rf -- "$snapdir"
     fi
 }
@@ -64,37 +64,37 @@ fi
 
 usage()
 {
-	cat <<EOF 1>&2
-Usage: gitbackup [-h]
-EOF
+    cat <<EOF 1>&2
+    Usage: gitbackup [-h]
+    EOF
 }
 
 while getopts ":hn" option
 do
-	case $option in
-	h)
-		usage
-		exit 0
-		;;
-	n)
-		simulate=true
-		;;
-	':')
-		echo "Missing argument to -$option" 1>&2
-		usage
-		exit 2
-		;;
-	'?')
-		echo "Invalid option -$OPTARG" 1>&2
-		usage
-		exit 2
-		;;
-	*)
-		echo "Program does not support -$option yet" 1>&2
-		usage
-		exit 2
-		;;
-	esac
+    case $option in
+        h)
+            usage
+            exit 0
+            ;;
+        n)
+            simulate=true
+            ;;
+        ':')
+            echo "Missing argument to -$option" 1>&2
+            usage
+            exit 2
+            ;;
+        '?')
+            echo "Invalid option -$OPTARG" 1>&2
+            usage
+            exit 2
+            ;;
+        *)
+            echo "Program does not support -$option yet" 1>&2
+            usage
+            exit 2
+            ;;
+    esac
 done
 shift $((OPTIND - 1))
 
@@ -108,14 +108,14 @@ info "Starting gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
 
 if is_remote "$dstroot"
 then
-	debug "Remote destination"
+    debug "Remote destination"
     dsthost=$(get_hostname_part "$dstroot")
     dstbase=$(get_location_part "$dstroot")
-	dstbase=${dstbase%/}/
-	debug "dsthost=$dsthost, dstbase=$dstbase"
+    dstbase=${dstbase%/}/
+    debug "dsthost=$dsthost, dstbase=$dstbase"
 else
-	error "Local destinations are currently unsupported"
-	exit 1
+    error "Local destinations are currently unsupported"
+    exit 1
 fi
 
 # assumption: $srcroot contains subdirectiories which are git bare repos
@@ -127,116 +127,116 @@ fi
 #   /srv/git/proj2/proj2b.git
 for srcdir in $(find "$srcroot" -type d -name "*.git")
 do
-	info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+    info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
 
-	# do each repo in a new subshell so we can call cleanup on error and success via trap
-	(
+    # do each repo in a new subshell so we can call cleanup on error and success via trap
+    (
 
-	trap cleanup EXIT
+    trap cleanup EXIT
 
-	tmpdir=$(get_temporary_directory)
-	if test $? -ne 0
-	then
-		error "Cannot determine temporary directory"
-		exit 1
-	fi
+    tmpdir=$(get_temporary_directory)
+    if test $? -ne 0
+    then
+        error "Cannot determine temporary directory"
+        exit 1
+    fi
 
-	# case 1: srcdir is subdir of srcroot - OK
-	# case 2: srcdir is / - CAN'T HAPPEN
-	# case 3: srcdir = srcroot - NOT SUPPORTED
-	reponame=${srcdir#$srcroot}
-	reponame=${reponame%/}
-	if test "$reponame" = ""
-	then
-		error "Cannot determine repository name: invalid srcdir?"
-		exit 1
-	fi
+    # case 1: srcdir is subdir of srcroot - OK
+    # case 2: srcdir is / - CAN'T HAPPEN
+    # case 3: srcdir = srcroot - NOT SUPPORTED
+    reponame=${srcdir#$srcroot}
+    reponame=${reponame%/}
+    if test "$reponame" = ""
+    then
+        error "Cannot determine repository name: invalid srcdir?"
+        exit 1
+    fi
 
-	#
-	# check disk space requirements
-	#
-	size=$(get_size_of_file_or_directory "$srcdir")
-	if test $? -ne 0
-	then
-		error "Cannot determine disk usage of $srcdir"
-		exit 1
-	fi
+    #
+    # check disk space requirements
+    #
+    size=$(get_size_of_file_or_directory "$srcdir")
+    if test $? -ne 0
+    then
+        error "Cannot determine disk usage of $srcdir"
+        exit 1
+    fi
 
-	available=$(get_free_space_on_filesystem "$tmpdir")
-	if test $? -ne 0
-	then
-		error "Cannot determine free space on $tmpdir"
-		exit 1
-	fi
+    available=$(get_free_space_on_filesystem "$tmpdir")
+    if test $? -ne 0
+    then
+        error "Cannot determine free space on $tmpdir"
+        exit 1
+    fi
 
-	if test $available -lt $size
-	then
-		error "Need at least $size kilobytes free on $tmpdir"
-		exit 1
-	fi
+    if test $available -lt $size
+    then
+        error "Need at least $size kilobytes free on $tmpdir"
+        exit 1
+    fi
 
-	#
-	# take a snapshot of the repository
-	#
-	srcdir=${srcdir%/}
-	dirname=$reponame
-	dirname=${dirname//\//.}
-	if test -z "$dirname"
-	then
-		dirname="root"
-	fi
-	snapdir="$tmpdir"/"$dirname".$$
-	if test -d "$snapdir"
-	then
-		error "Snapshot directory $snapdir already exists"
-		exit 1
-	fi
+    #
+    # take a snapshot of the repository
+    #
+    srcdir=${srcdir%/}
+    dirname=$reponame
+    dirname=${dirname//\//.}
+    if test -z "$dirname"
+    then
+        dirname="root"
+    fi
+    snapdir="$tmpdir"/"$dirname".$$
+    if test -d "$snapdir"
+    then
+        error "Snapshot directory $snapdir already exists"
+        exit 1
+    fi
 
-	info "Creating a hot copy of $srcdir"
-	run git clone --bare --quiet "$srcdir" "$snapdir"
-	if test $? -ne 0
-	then
-		error "Cannot create hotcopy of $srcdir"
-		exit 1
-	fi
+    info "Creating a hot copy of $srcdir"
+    run git clone --bare --quiet "$srcdir" "$snapdir"
+    if test $? -ne 0
+    then
+        error "Cannot create hotcopy of $srcdir"
+        exit 1
+    fi
 
-	#
-	# copy the hot copy to the backup directory
-	#
-	dstdir=$dstbase$reponame
-	dsturl=$dsthost:$dstdir
-	debug "dstdir=$dstdir, dsturl=$dsturl"
+    #
+    # copy the hot copy to the backup directory
+    #
+    dstdir=$dstbase$reponame
+    dsturl=$dsthost:$dstdir
+    debug "dstdir=$dstdir, dsturl=$dsturl"
 
-	# create the distination directory if it doesn't exist
-	# (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
-	debug "Creating $dstdir on $dsthost"
-	run ssh $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
+    # create the distination directory if it doesn't exist
+    # (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
+    debug "Creating $dstdir on $dsthost"
+    run ssh $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
 
-	flags=
-	if test "$debug"
-	then
-		flags="$flags -v"
-	fi
-	if test "$quiet"
-	then
-		flags="$flags -q"
-	fi
-	#scp -C -r $flags "$snapdir" "$dst"
-	# ensure source has a trailing slash so we only copy the directory contents
-	# (local:~/svn.12345/ -> remote:~/svn rather than
-	#  local:~/svn.12345/ -> remote:~/svn/svn.12345)
-	snapdir=${snapdir%/}/
-	info "Synchronizing $snapdir to $dsturl"
-	run rsync -a --delete $flags "$snapdir" "$dsturl"
-	if test $? -ne 0
-	then
-		error "Error synchronizing $snapdir to $dsturl"
-		exit 1
-	fi
+    flags=
+    if test "$debug"
+    then
+        flags="$flags -v"
+    fi
+    if test "$quiet"
+    then
+        flags="$flags -q"
+    fi
+    #scp -C -r $flags "$snapdir" "$dst"
+    # ensure source has a trailing slash so we only copy the directory contents
+    # (local:~/svn.12345/ -> remote:~/svn rather than
+    #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
+    snapdir=${snapdir%/}/
+    info "Synchronizing $snapdir to $dsturl"
+    run rsync -a --delete $flags "$snapdir" "$dsturl"
+    if test $? -ne 0
+    then
+        error "Error synchronizing $snapdir to $dsturl"
+        exit 1
+    fi
 
-	)
+    )
 
-	info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+    info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
 done
 
 info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
