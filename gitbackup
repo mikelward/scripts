@@ -227,11 +227,11 @@ do
     # (local:~/svn.12345/ -> remote:~/svn rather than
     #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
     snapdir=${snapdir%/}/
-    info "Synchronizing $snapdir to $dsturl"
+    info "Syncing $snapdir to $dsturl"
     run rsync -a --delete $flags "$snapdir" "$dsturl"
     if test $? -ne 0
     then
-        error "Error synchronizing $snapdir to $dsturl"
+        error "Error syncing $snapdir to $dsturl"
         exit 1
     fi
 
