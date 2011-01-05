@@ -24,13 +24,13 @@ cleanup()
 {
     if test -f "$dfout"
     then
-        info "Cleaning up '$dfout'"
+        info "Cleaning up $dfout"
         run rm -rf -- "$dfout"
     fi
 
     if test -d "$snapdir"
     then
-        info "Cleaning up '$snapdir'"
+        info "Cleaning up $snapdir"
         run rm -rf -- "$snapdir"
     fi
 }
@@ -192,11 +192,11 @@ do
         exit 1
     fi
 
-    info "Creating a hot copy of $srcdir"
+    info "Cloning $srcdir to $snapdir"
     run git clone --bare --quiet "$srcdir" "$snapdir"
     if test $? -ne 0
     then
-        error "Cannot create hotcopy of $srcdir"
+        error "Cannot clone $srcdir"
         exit 1
     fi
 
