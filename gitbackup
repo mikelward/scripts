@@ -65,8 +65,8 @@ fi
 usage()
 {
     cat <<EOF 1>&2
-    Usage: gitbackup [-h]
-    EOF
+Usage: gitbackup [-hn]
+EOF
 }
 
 while getopts ":hn" option
