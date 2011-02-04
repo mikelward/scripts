@@ -10,6 +10,7 @@
 # when a command is running
 #
 # see <http://unix.stackexchange.com/questions/6842> for more details
+# and an example .bashrc to set the title (requires bash 3.2 or newer)
 #
 # Mikel Ward <mikel@mikelward.com>
 
