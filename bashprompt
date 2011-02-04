@@ -1,0 +1,47 @@
+#!/bin/bash
+#
+# bashprompt
+#
+# if there is an xterm open at a bash prompt, raise/focus that window
+# if there isn't start a new xterm
+#
+# requires that your xterm window title changes to have "bash" at the end
+# when there is no command running, and to something not ending in "bash"
+# when a command is running
+#
+# see
+# http://unix.stackexchange.com/questions/6842/fluxbox-shortcut-to-open-an-xterm-or-switch-to-an-existing-one
+# for more details
+#
+# Mikel Ward <mikel@mikelward.com>
+
+# change this to whatever is unique about your window title
+# (i.e. a string that appears in the title when the shell is at a prompt
+#  but does not appear when running a command)
+prompttitle="bash$"
+terminalprog="xterm"
+
+if ! type wmctrl >/dev/null 2>&1; then
+    echo "wmctrl can't be found, please install it" 1>&2
+    exit 1
+fi
+
+if ! output="$(wmctrl -l)"; then
+    echo "Error running wmctrl -l" 1>&2
+    exit 1
+fi
+while IFS=$'\n' read -r line; do
+    if [[ $line =~ $prompttitle ]]; then
+        id=${line%% *}
+        break
+    fi
+done <<EOF
+$output
+EOF
+
+if test -n "$id"; then
+    wmctrl -i -a "$id"
+else
+    "$terminalprog"&
+fi
+
