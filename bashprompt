@@ -5,13 +5,11 @@
 # if there is an xterm open at a bash prompt, raise/focus that window
 # if there isn't start a new xterm
 #
-# requires that your xterm window title changes to have "bash" at the end
-# when there is no command running, and to something not ending in "bash"
+# requires that your xterm window title has "bash" at the end
+# when there is no command running and doesn't have "bash" at the end
 # when a command is running
 #
-# see
-# http://unix.stackexchange.com/questions/6842/fluxbox-shortcut-to-open-an-xterm-or-switch-to-an-existing-one
-# for more details
+# see <http://unix.stackexchange.com/questions/6842> for more details
 #
 # Mikel Ward <mikel@mikelward.com>
 
