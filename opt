@@ -1,0 +1,44 @@
+#!/bin/bash
+# print information about a single option or command
+# Mikel Ward <mikel@mikelward.com>
+
+# Example Usage:
+# opt bash continue
+# opt rsync -v
+
+if test $# -ne 2; then
+    echo "Usage: opt <command> <option>" 1>&2
+    exit 2
+fi
+
+# TODO handle -s <section> etc.
+manpage="$1"
+option="$2"
+
+man "$manpage" | perl -n -e "
+BEGIN {
+    \$option = \"$option\";
+    \$inside = 0;
+}"'
+if (!$inside) {
+    if (/^(\s*)\Q$option\E\b/p) {
+        # start of this option
+        $spaces = $1;
+        $inside = 1;
+        print;
+    }
+}
+else {
+    if (/^$spaces\S/) {
+        # start of next option;
+        exit;
+    }
+    elsif (/^\S/) {
+        # start of next section
+        exit;
+    }
+    else {
+        print;
+    }
+}
+'
