@@ -1,41 +1,97 @@
 #!/bin/bash
-
+#
 # cwhere2
 #
-# find which C header file defines the requested symbol/definition
+# find which C header file defines the requested macro/identifier
 #
 # Would normally do this in Perl, but doing it in pure bash for
 # something different.
 #
 # Mikel Ward <mikel@mikelward.com>
 
+trap cleanup EXIT
+
+cleanup()
+{
+    test -f "$sourcefile" && rm "$sourcefile"
+    test -f "$processedfile" && rm "$processedfile"
+}
+
+# split <delim> <string>
+# e.g. split , "foo,bar,baz"
+split()
+{
+    delim="$1"
+    shift
+    local IFS="$delim"
+    local word
+    for word in $1; do
+        echo "$word"
+    done
+}
+
+# print a message saying how to run this program
+usage()
+{
+    cat <<EOF 1>&2
+Usage: cwhere2 [-h HEADER[,HEADER...]] IDENTIFIER[|IDENTIFIER...]
+Options:
+    -h HEADER      Include HEADER, e.g. sys/types.h
+Example:
+    cwhere2 -h sys/types.h,sys/stat.h,fcntl.h O_RDONLY 
+EOF
+}
+
 headers=''
 while getopts ":h:" option; do
     case $option in
     h)
-        OIFS="$IFS"
-        IFS=','
-        for header in $OPTARG; do
-            headers="${headers:+$headers
-}$header"
-        done
+        # e.g. -h HEADER1,HEADER2,HEADER3...
+        headers="$(split , $OPTARG)"
         IFS="$OIFS"
         ;;
+    '?')
+        echo "Error: Invalid option -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    ':')
+        echo "Error: Missing argument to -$OPTARG" 1>&2
+        exit 2
+        ;;
     *)
-        echo "Usage: cwhere [-h HEADER] SYMBOL[|SYMBOL...]" 1>&2
+        echo "Error: Program does not support -$option yet" 1>&2
+        exit 2
         ;;
     esac
 done
 shift $((OPTIND - 1))
 
+if test $# -ne 1; then
+    usage
+    exit 2
+fi
+
 identifier="$1"
 
 sourcefile=$(mktemp)
+if test $? -ne 0; then
+    echo "Error: Cannot create source file" 1>&2
+    exit 1
+fi
 for header in $headers; do
     echo "#include <$header>" >> "$sourcefile"
 done
 processedfile=$(mktemp)
+if test $? -ne 0; then
+    echo "Error: Cannot create cpp output file" 1>&2
+    exit 1
+fi
 cpp -dD "$sourcefile" > "$processedfile"
+if test $? -ne 0; then
+    echo "Error: Cannot run cpp" 1>&2
+    exit 1
+fi
 file=''
 #cat "$processedfile"
 while read -r line; do
@@ -46,7 +102,3 @@ while read -r line; do
         echo "$file: $line"
     fi
 done < "$processedfile"
-
-rm "$sourcefile"
-rm "$processedfile"
-
