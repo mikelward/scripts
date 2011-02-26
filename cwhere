@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# cwhere2
+# cwhere
 #
 # find which C header file defines the requested macro/identifier
 #
@@ -11,7 +11,7 @@
 #
 # TODO move cleanup trap inside print_definitions()
 
-name=cwhere2
+name=cwhere
 
 trap cleanup EXIT
 
