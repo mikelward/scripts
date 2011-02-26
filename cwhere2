@@ -8,17 +8,24 @@
 # something different.
 #
 # Mikel Ward <mikel@mikelward.com>
+#
+# TODO move cleanup trap inside print_definitions()
+
+name=cwhere2
 
 trap cleanup EXIT
 
+# remove any temporary files, etc.
+# Usage: cleanup
 cleanup()
 {
     test -f "$sourcefile" && rm "$sourcefile"
     test -f "$processedfile" && rm "$processedfile"
 }
 
-# split <delim> <string>
-# e.g. split , "foo,bar,baz"
+# break <string> into words by splitting on delimiter <delim>
+# Usage: split <delim> <string>
+# Example: split , "foo,bar,baz"
 split()
 {
     if test $# -ne 2; then
@@ -35,6 +42,44 @@ split()
     done
 }
 
+# Print the definition of <identifier> and which header file it appears in
+# Usage: print_definitions <identifier> <header>...
+# Example: print_definitions O_WRONLY sys/types.h sys/stat.h fcntl.h
+print_definitions()
+{
+    sourcefile=$(mktemp)
+    if test $? -ne 0; then
+        echo "Error: Cannot create source file" 1>&2
+        exit 1
+    fi
+    for header in $headers; do
+        echo "#include <$header>" >> "$sourcefile"
+    done
+    processedfile=$(mktemp)
+    if test $? -ne 0; then
+        echo "Error: Cannot create cpp output file" 1>&2
+        exit 1
+    fi
+    cpp -dD "$sourcefile" > "$processedfile"
+    if test $? -ne 0; then
+        cat "$sourcefile"
+        echo "Error: Cannot run cpp" 1>&2
+        exit 1
+    fi
+    file=''
+    while read -r line; do
+        # this is evil, just doing it to learn something new
+        # put the pattern in a variable to avoid bash treating pattern as a string :-(
+        filenamepattern='^# [0-9]+ "([^"]*)"'
+        identifierpattern='(^|#define|typedef)[[:space:]]*'"$identifier"'([[:space:]]|$)'
+        if [[ $line =~ $filenamepattern ]]; then
+            file=${BASH_REMATCH[1]}
+        elif [[ $line =~ $identifierpattern ]]; then
+            echo "$file: $line"
+        fi
+    done < "$processedfile"
+}
+
 # print a message saying how to run this program
 usage()
 {
@@ -47,72 +92,48 @@ Example:
 EOF
 }
 
-name=cwhere2
+main()
+{
+    headers=''
+    while getopts ":h:" option; do
+        case $option in
+        h)
+            # e.g. -h HEADER1,HEADER2,HEADER3...
+            headers="$(split , "$OPTARG")"
+            ;;
+        '?')
+            echo "Error: Invalid option -$OPTARG" 1>&2
+            usage
+            exit 2
+            ;;
+        ':')
+            echo "Error: Missing argument to -$OPTARG" 1>&2
+            exit 2
+            ;;
+        *)
+            echo "Error: Program does not support -$option yet" 1>&2
+            exit 2
+            ;;
+        esac
+    done
+    shift $((OPTIND - 1))
 
-# only run the rest of this script if it was executed, not sourced
-# works out of the box in bash and ksh
-# zsh requires unsetopt functionargzero in ~/.zshenv
-case $0 in *$name)
-
-headers=''
-while getopts ":h:" option; do
-    case $option in
-    h)
-        # e.g. -h HEADER1,HEADER2,HEADER3...
-        headers="$(split , "$OPTARG")"
-        ;;
-    '?')
-        echo "Error: Invalid option -$OPTARG" 1>&2
+    if test $# -ne 1; then
         usage
         exit 2
-        ;;
-    ':')
-        echo "Error: Missing argument to -$OPTARG" 1>&2
-        exit 2
-        ;;
-    *)
-        echo "Error: Program does not support -$option yet" 1>&2
-        exit 2
-        ;;
-    esac
-done
-shift $((OPTIND - 1))
-
-if test $# -ne 1; then
-    usage
-    exit 2
-fi
-
-identifier="$1"
-
-sourcefile=$(mktemp)
-if test $? -ne 0; then
-    echo "Error: Cannot create source file" 1>&2
-    exit 1
-fi
-for header in $headers; do
-    echo "#include <$header>" >> "$sourcefile"
-done
-processedfile=$(mktemp)
-if test $? -ne 0; then
-    echo "Error: Cannot create cpp output file" 1>&2
-    exit 1
-fi
-cpp -dD "$sourcefile" > "$processedfile"
-if test $? -ne 0; then
-    cat "$sourcefile"
-    echo "Error: Cannot run cpp" 1>&2
-    exit 1
-fi
-file=''
-#cat "$processedfile"
-while read -r line; do
-    # this is evil, just doing it to learn something new
-    if [[ $line =~ ^#\ [0-9]+\ \"([^\"]*)\" ]]; then
-        file=${BASH_REMATCH[1]}
-    elif [[ $line =~ (^|#define|typedef)[[:space:]]*$identifier([[:space:]]|$) ]]; then
-        echo "$file: $line"
     fi
-done < "$processedfile"
 
+    identifier="$1"
+
+    print_definitions "$identifier" $headers
+}
+
+# only run the main script if it was executed
+# allows sourcing of the script to get function definitions
+# works out of the box in bash and ksh
+# zsh requires unsetopt functionargzero in ~/.zshenv
+case "$0" in *$name)
+    main "$@"
+    ;;
 esac
+
