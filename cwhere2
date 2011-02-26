@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# cwhere2
+#
+# find which C header file defines the requested symbol/definition
+#
+# Would normally do this in Perl, but doing it in pure bash for
+# something different.
+#
+# Mikel Ward <mikel@mikelward.com>
+
+headers=''
+while getopts ":h:" option; do
+    case $option in
+    h)
+        OIFS="$IFS"
+        IFS=','
+        for header in $OPTARG; do
+            headers="${headers:+$headers
+}$header"
+        done
+        IFS="$OIFS"
+        ;;
+    *)
+        echo "Usage: cwhere [-h HEADER] SYMBOL[|SYMBOL...]" 1>&2
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+identifier="$1"
+
+sourcefile=$(mktemp)
+for header in $headers; do
+    echo "#include <$header>" >> "$sourcefile"
+done
+processedfile=$(mktemp)
+cpp -dD "$sourcefile" > "$processedfile"
+file=''
+#cat "$processedfile"
+while read -r line; do
+    # this is evil, just doing it to learn something new
+    if [[ $line =~ ^#\ [0-9]+\ \"([^\"]*)\" ]]; then
+        file=${BASH_REMATCH[1]}
+    elif [[ $line =~ (^|[[:space:]])$identifier([[:space:]]|$) ]]; then
+        echo "$file: $line"
+    fi
+done < "$processedfile"
+
+rm "$sourcefile"
+rm "$processedfile"
+
