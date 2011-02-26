@@ -1,0 +1,8 @@
+#!/bin/bash
+# set up a minimal bash/shell environment to test stuff
+# also set a simple prompt so the output is easy to copy and paste
+
+name="${1:-demo}"
+prompt="PS1=$name'$ '"
+dir=$(mktemp -d) && cd "$dir" && bash --noprofile --rcfile <(echo "$prompt")
+
