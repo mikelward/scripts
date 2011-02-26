@@ -23,30 +23,15 @@ cleanup()
     test -f "$processedfile" && rm "$processedfile"
 }
 
-# break <string> into words by splitting on delimiter <delim>
-# Usage: split <delim> <string>
-# Example: split , "foo,bar,baz"
-split()
-{
-    if test $# -ne 2; then
-        echo "Usage: split <delim> <string>" 1>&2
-        return 1
-    fi
-
-    delim="$1"
-    shift
-    local IFS="$delim"
-    local word
-    for word in $1; do
-        echo "$word"
-    done
-}
-
 # Print the definition of <identifier> and which header file it appears in
 # Usage: print_definitions <identifier> <header>...
 # Example: print_definitions O_WRONLY sys/types.h sys/stat.h fcntl.h
 print_definitions()
 {
+    local identifier="$1"
+    shift
+    local headers="$@"
+
     sourcefile=$(mktemp)
     if test $? -ne 0; then
         echo "Error: Cannot create source file" 1>&2
@@ -84,48 +69,21 @@ print_definitions()
 usage()
 {
     cat <<EOF 1>&2
-Usage: $name [-h HEADER[,HEADER...]] IDENTIFIER[|IDENTIFIER...]
-Options:
-    -h HEADER      Include HEADER, e.g. sys/types.h
+Usage: $name IDENTIFIER HEADER [HEADER...]
 Example:
-    $name -h sys/types.h,sys/stat.h,fcntl.h O_RDONLY 
+    $name O_RDONLY sys/stat.h sys/types.h fcntl.h
+    $name 'struct sockaddr(|in) sys/types.h sys/socket.h netinet/in.h
 EOF
 }
 
 main()
 {
-    headers=''
-    while getopts ":h:" option; do
-        case $option in
-        h)
-            # e.g. -h HEADER1,HEADER2,HEADER3...
-            headers="$(split , "$OPTARG")"
-            ;;
-        '?')
-            echo "Error: Invalid option -$OPTARG" 1>&2
-            usage
-            exit 2
-            ;;
-        ':')
-            echo "Error: Missing argument to -$OPTARG" 1>&2
-            exit 2
-            ;;
-        *)
-            echo "Error: Program does not support -$option yet" 1>&2
-            exit 2
-            ;;
-        esac
-    done
-    shift $((OPTIND - 1))
-
-    if test $# -ne 1; then
+    if test $# -lt 2; then
         usage
         exit 2
     fi
 
-    identifier="$1"
-
-    print_definitions "$identifier" $headers
+    print_definitions "$@"
 }
 
 # only run the main script if it was executed

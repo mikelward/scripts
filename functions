@@ -519,3 +519,25 @@ get_script_name()
     echo "${0##/*/}"
 }
 
+###
+# STRING PROCESSING
+
+# break <string> into words by splitting on delimiter <delim>
+# Usage: split <delim> <string>
+# Example: split , "foo,bar,baz"
+split()
+{
+    if test $# -ne 2; then
+        echo "Usage: split <delim> <string>" 1>&2
+        return 1
+    fi
+
+    delim="$1"
+    shift
+    local IFS="$delim"
+    local word
+    for word in $1; do
+        echo "$word"
+    done
+}
+
