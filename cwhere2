@@ -42,7 +42,7 @@ while read -r line; do
     # this is evil, just doing it to learn something new
     if [[ $line =~ ^#\ [0-9]+\ \"([^\"]*)\" ]]; then
         file=${BASH_REMATCH[1]}
-    elif [[ $line =~ (^|[[:space:]])$identifier([[:space:]]|$) ]]; then
+    elif [[ $line =~ (^|#define|typedef)[[:space:]]*$identifier([[:space:]]|$) ]]; then
         echo "$file: $line"
     fi
 done < "$processedfile"
