@@ -21,6 +21,11 @@ cleanup()
 # e.g. split , "foo,bar,baz"
 split()
 {
+    if test $# -ne 2; then
+        echo "Usage: split <delim> <string>" 1>&2
+        return 1
+    fi
+
     delim="$1"
     shift
     local IFS="$delim"
@@ -34,21 +39,27 @@ split()
 usage()
 {
     cat <<EOF 1>&2
-Usage: cwhere2 [-h HEADER[,HEADER...]] IDENTIFIER[|IDENTIFIER...]
+Usage: $name [-h HEADER[,HEADER...]] IDENTIFIER[|IDENTIFIER...]
 Options:
     -h HEADER      Include HEADER, e.g. sys/types.h
 Example:
-    cwhere2 -h sys/types.h,sys/stat.h,fcntl.h O_RDONLY 
+    $name -h sys/types.h,sys/stat.h,fcntl.h O_RDONLY 
 EOF
 }
+
+name=cwhere2
+
+# only run the rest of this script if it was executed, not sourced
+# works out of the box in bash and ksh
+# zsh requires unsetopt functionargzero in ~/.zshenv
+case $0 in *$name)
 
 headers=''
 while getopts ":h:" option; do
     case $option in
     h)
         # e.g. -h HEADER1,HEADER2,HEADER3...
-        headers="$(split , $OPTARG)"
-        IFS="$OIFS"
+        headers="$(split , "$OPTARG")"
         ;;
     '?')
         echo "Error: Invalid option -$OPTARG" 1>&2
@@ -89,6 +100,7 @@ if test $? -ne 0; then
 fi
 cpp -dD "$sourcefile" > "$processedfile"
 if test $? -ne 0; then
+    cat "$sourcefile"
     echo "Error: Cannot run cpp" 1>&2
     exit 1
 fi
@@ -102,3 +114,5 @@ while read -r line; do
         echo "$file: $line"
     fi
 done < "$processedfile"
+
+esac
