@@ -6,46 +6,22 @@
 # opt bash continue
 # opt rsync -v
 
+scriptname=desc
+
 usage()
 {
     cat <<EOF 1>&2
-Usage: $scriptname [-h]
+Usage: $scriptname <command> [<option|section>]
+Example:
+    $scriptname bash getopts (shows documentation for bash getopts)
+    $scriptname ssh -v       (shows documentation for ssh -v flag)
+    $scriptname select       (shows SYNOPSIS for select(2))
+    $scriptname 'open(2)'    (shows SYNOPSIS for open(2))
 EOF
 }
 
-scriptname=
-
-while getopts ":hs:" option
-do
-    case $option in
-    h)
-        usage
-        exit 0
-        ;;
-    s)
-        section="$OPTARG"
-        ;;
-    ':')
-        echo "Missing argument to -$option" 1>&2
-        usage
-        exit 2
-        ;;
-    '?')
-        echo "Invalid option -$OPTARG" 1>&2
-        usage
-        exit 2
-        ;;
-    *)
-        echo "Program does not support -$option yet" 1>&2
-        usage
-        exit 2
-        ;;
-    esac
-done
-shift $((OPTIND - 1))
-
 if test $# -ne 2; then
-    echo "Usage: opt [-s <section>] <command> <option>" 1>&2
+    usage
     exit 2
 fi
 
