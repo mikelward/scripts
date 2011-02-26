@@ -20,13 +20,13 @@ Example:
 EOF
 }
 
-if test $# -ne 2; then
+if test $# -lt 1; then
     usage
     exit 2
 fi
 
 manpage="$1"
-option="$2"
+option="${2:-SYNOPSIS}"
 
 if [[ "$manpage" =~ (.*)\((.*)\) ]]; then
     manpage=${BASH_REMATCH[1]}
