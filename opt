@@ -6,20 +6,62 @@
 # opt bash continue
 # opt rsync -v
 
+usage()
+{
+    cat <<EOF 1>&2
+Usage: $scriptname [-h]
+EOF
+}
+
+scriptname=
+
+while getopts ":hs:" option
+do
+    case $option in
+    h)
+        usage
+        exit 0
+        ;;
+    s)
+        section="$OPTARG"
+        ;;
+    ':')
+        echo "Missing argument to -$option" 1>&2
+        usage
+        exit 2
+        ;;
+    '?')
+        echo "Invalid option -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    *)
+        echo "Program does not support -$option yet" 1>&2
+        usage
+        exit 2
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
 if test $# -ne 2; then
-    echo "Usage: opt <command> <option>" 1>&2
+    echo "Usage: opt [-s <section>] <command> <option>" 1>&2
     exit 2
 fi
 
-# TODO handle -s <section> etc.
 manpage="$1"
 option="$2"
+
+if [[ "$manpage" =~ (.*)\((.*)\) ]]; then
+    manpage=${BASH_REMATCH[1]}
+    section=${BASH_REMATCH[2]}
+fi
 
 # XXX man calls col when it's part of a pipeline,
 # which strips the bold and underline, and breaks
 # UTF-8 encoding (try "man bash" for example)
 # set LANG=C until a better solution is found
-LANG=C man "$manpage" | perl -n -e "
+LANG=C man ${section:+-s $section} "$manpage" | perl -n -e "
 BEGIN {
     \$option = \"$option\";
     \$inside = 0;
