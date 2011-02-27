@@ -56,7 +56,7 @@ print_definitions()
         # this is evil, just doing it to learn something new
         # put the pattern in a variable to avoid bash treating pattern as a string :-(
         filenamepattern='^# [0-9]+ "([^"]*)"'
-        identifierpattern='(^|#define|typedef)[[:space:]]*'"$identifier"'([[:space:]]|$)'
+        identifierpattern='^[[:space:]]*(#define|typedef)?[[:space:]]*'"$identifier"'([[:space:]]|\(|$)'
         if [[ $line =~ $filenamepattern ]]; then
             file=${BASH_REMATCH[1]}
         elif [[ $line =~ $identifierpattern ]]; then
