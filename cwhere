@@ -65,15 +65,29 @@ print_definitions()
     done < "$processedfile"
 }
 
+# Usage: get_headers <function|syscall>
+# Example: get_headers select
+# Example: get_headers 'open(2)'
+get_headers()
+{
+    desc "$@" | sed -ne '/^[[:space:]]*#include/{s/^[[:space:]]*#include <\(.*\)>.*/\1/;p}'
+}
+
 # print a message saying how to run this program
 usage()
 {
     cat <<EOF 1>&2
-Usage: $name IDENTIFIER HEADER [HEADER...]
-Example:
+Usage: $name IDENTIFIER HEADER|FUNCTION [HEADER|FUNCTION]...
+Examples:
     $name O_RDONLY sys/stat.h sys/types.h fcntl.h
-    $name 'struct sockaddr(|in) sys/types.h sys/socket.h netinet/in.h
+    $name O_RDONLY 'open(2)'
+    $name 'struct sockaddr(|_in)?' sys/types.h sys/socket.h netinet/in.h
+    $name 'struct sockaddr(|_in)?' 'socket(2)' 'ip(7)'
 EOF
+#Arguments:
+#    IDENTIFIER is regex matching a C identifier
+#    HEADER is a C include file, without the < >
+#    FUNCTION is a function with an optional man section in parens
 }
 
 main()
@@ -83,7 +97,33 @@ main()
         exit 2
     fi
 
-    print_definitions "$@"
+    # identifier is always the first argument...
+    local args=("$1")
+
+    # now look at the remaining arguments
+    # they are either headers, which should be passed on verbatim
+    # or are function/syscall names, in which case we have to find
+    # which headers should be included according to the man pages
+    shift
+    i=1
+    for arg in "$@"; do
+        # accept open() or open(2), convert to open or open(2)
+        if [[ $arg =~ (.*)\((.*)\) ]]; then
+            page=${BASH_REMATCH[1]}
+            section=${BASH_REMATCH[2]}
+            section="${section:+($section)}"
+
+            headers=$(get_headers "$page$section")
+            for header in $headers; do
+                args[$i]=$header
+                i=$((i+1))
+            done
+        else
+            args[$i]=$arg
+            i=$((i+1))
+        fi
+    done
+    print_definitions "${args[@]}"
 }
 
 # only run the main script if it was executed
