@@ -34,10 +34,10 @@ my %flags_for_extension = (
 	'tbz' => '-j',
 	'tar.gz' => '-z',
 	'tgz' => '-z',
-	'tar.xz' => '--use-compress-program xz',
-	'txz' => '--use-compress-program xz',
-	'tar.lzma' => '--use-compress-program xz',
-	'tlzma' => '--use-compress-program xz',
+	'tar.xz' => '--use-compress-program=xz',
+	'txz' => '--use-compress-program=xz',
+	'tar.lzma' => '--use-compress-program=xz',
+	'tlzma' => '--use-compress-program=xz',
 	'tar' => undef
 );
 
