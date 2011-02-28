@@ -62,8 +62,8 @@ if ($safe) {
 	$tempdir = tempdir $tarfile_without_extension . ".XXXX", DIR => "."
 		or die "untar: Cannot create temporary directory: $!\n";
 
-	#print STDERR "untar: Safe mode, expanding into " . $tempdir . "\n";
-	print STDERR "untar: Safe mode, expanding into temporary directory\n";
+    #print STDERR "untar: Safe mode, expanding into " . $tempdir . "\n";
+    print STDERR "untar: Safe mode, expanding into temporary directory\n";
 	push @flags, "-C", $tempdir;
 }
 else {
@@ -104,13 +104,15 @@ if ($safe) {
 	if (opendir TEMPDIR, $tempdir) {
 		my @files = grep { $_ ne "." and $_ ne ".." } readdir TEMPDIR;
 		if (scalar @files == 1) {
+            # archive contained a single file or directory,
+            # the file is in a temporary directory,
+            # try to rename it to the name it has in the archive
 			my $src = $tempdir . "/" . $files[0];
 			my $dst = $files[0];
 			my $srctype = file_description($src);
-			#print STDERR "untar: Trying to move extracted $srctype to $dst\n";
 			if (-e $dst) {
+                # desired name is already in use...
 				my $dsttype = file_description($dst);
-				#print STDERR "untar: $dsttype already exists\n";
 				print STDERR "untar: Original name was $dst, but there is already a $dsttype called that\n";
 				if (-d $src) {
 					print STDERR "untar: Extracted files are in $src\n";
@@ -120,31 +122,39 @@ if ($safe) {
 				}
 			}
 			else {
-				if (rename $src, $dst and ! -e $src) {
-					#print STDERR "untar: Extracted $srctype is $dst\n";
-					if (-d $dst) {
-						print STDERR "untar: Extracted files are in $dst\n";
-					}
-					else {
-						print STDERR "untar: Extracted $dst\n";
-					}
+                # desired name is available, rename it...
+                if (rename $src, $dst and ! -e $src) {
+                    if (-d $dst) {
+                        # it was a single directory
+                        print STDERR "untar: Extracted files are in $dst\n";
+                    }
+                    elsif (-e $dst) {
+                        # it was a single file
+                        print STDERR "untar: Extracted $dst\n";
+                    }
+                    else {
+                        print STDERR "untar: Unexpected error: No files found\n";
+                    }
+                    # the archive contents have now been moved out of the temporary directory,
+                    # clean up the temporary directory
+                    remove_tree($tempdir);
 				}
 				else {
 					print STDERR "untar: Move failed: $!\n";
-					print STDERR "untar: Extracted files are in $dst\n";
+                    if (-e $src) {
+                        print STDERR "untar: Extracted files are in $src\n";
+                    }
 				}
 			}
 		}
 		else {
 			my $src = $tempdir;
 			my $dst = $tarfile_without_extension;
-			#print STDERR "untar: tarbomb\n";
-			#print STDERR "untar: Trying to move extracted files into $dst\n";
+			print STDERR "untar: Archive contained multiple files\n";
+			print STDERR "untar: Trying to move extracted files into $dst\n";
 			if (-e $dst) {
 				my $dsttype = file_description($dst);
-				#print STDERR "untar: $dsttype already exists\n";
-				#print STDERR "untar: $dst already exists\n";
-				print STDERR "untar: Desired name is $dst, but there is already a $dsttype called that\n";
+				print STDERR "untar: Original name was $dst, but there is already a $dsttype called that\n";
 				print STDERR "untar: Extracted files are in $src\n";
 			}
 			else {
