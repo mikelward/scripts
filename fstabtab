@@ -1,1 +1,4 @@
-grep -v '^#' /etc/fstab | column -t
+{
+    echo '#<device> <mount> <fstype> <options> <dump> <fsck>'
+    grep -v '^#' /etc/fstab
+} | column -t
