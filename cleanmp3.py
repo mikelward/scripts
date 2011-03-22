@@ -3,7 +3,7 @@
 import os
 import mutagen
 
-musicroot = r'''/home/mikel/allmusic/iTunes/iTunes Music'''
+musicroot = r'''D:\Music'''
 
 # whitelist of tracks I legitimately own/are free
 free = {}
@@ -96,12 +96,12 @@ def dirs_to_check(musicdir, musicroot):
         ntracks = len(tracks)
         maxtrack = tracks[-1]
         if ntracks != maxtrack:
-            print '{0}: bad number of tracks (last={1}, tracks={2})'.format(mp3dir, maxtrack, ntracks)
+            print '{0}: bad number of tracks (last={1}, tracks={2})'.format(musicdir, maxtrack, ntracks)
             continue
         for i in range(1, tracks[-1]):
             if tracks[i-1] != i:
-                print '{0}: missing track {1}'.format(mp3dir, i)
+                print '{0}: missing track {1}'.format(musicdir, i)
                 break
 
-dirs_to_check(musicdir, musicroot)
+dirs_to_check(musicroot, musicroot)
 
