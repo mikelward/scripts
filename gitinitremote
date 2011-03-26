@@ -127,49 +127,44 @@ esac
 
 test "$local" = "$PWD" || die "must currently be run from the local git directory"
 
-run git init --quiet
+if git status >/dev/null 2>&1; then
+    localalreadyrepo=true
+else
+    localalreadyrepo=false
+fi
+
+if ! $localalreadyrepo; then
+    run git init --quiet
+fi
 
 case $remoteproto in
 ssh)
-	ssh $remotehost true \
-		|| die "Cannot connect to $remotehost via ssh"
-
-	ssh $remotehost test -d "'$remotedir'" \
-		&& die "$remotedir already exists on $remotehost"
-
-	ssh $remotehost git --help >/dev/null 2>&1 \
-		|| die "git is not installed on $remotehost"
-
-	run ssh $remotehost git init --quiet --bare "'$remotedir'" \
-		|| die "Cannot initialize remote repository"
-
+	ssh $remotehost true || die "Cannot connect to $remotehost via ssh"
+	ssh $remotehost test -d "'$remotedir'" && die "$remotedir already exists on $remotehost"
+	ssh $remotehost git --help >/dev/null 2>&1 || die "git is not installed on $remotehost"
+	run ssh $remotehost git init --quiet --bare "'$remotedir'" || die "Cannot initialize remote repository"
 	# git remote does not accept --quiet option
-	run git remote add "$remotename" "$remote" \
-		|| die "git remote add failed"
-
+	run git remote add "$remotename" "$remote" || die "git remote add failed"
 	;;
 *)
 	die "only ssh remotes are supported at the moment"
 	;;
 esac
 
-# git <= 1.7 requires we have a non-empty directory for commit to work
-# (avoid "error: pathspec '' did not match any file(s) known to git.")
-dummyfile="$local/.gitignore"
-if ! test -f "$dummyfile"; then
-	run touch "$dummyfile"
+if ! $localalreadyrepo; then
+    # git <= 1.7 requires we have a non-empty directory for commit to work
+    # (avoid "error: pathspec '' did not match any file(s) known to git.")
+    dummyfile="$local/.gitignore"
+    if ! test -f "$dummyfile"; then
+        run touch "$dummyfile"
+    fi
+    # git add does not accept --quiet option
+    run git add "$local"                                                            || die "git add failed"
+    run git commit --quiet --message "Initial commit" "$local"                      || die "git commit failed"
 fi
 
-# git add does not accept --quiet option
-run git add "$local" \
-	|| die "git add failed"
-
-run git commit --quiet --message "Initial commit" "$local" \
-	|| die "git commit failed"
-
 # git push does not accept --quiet option
-run git push "$remotename" "$refspec" \
-	|| die "git push failed"
+run git push "$remotename" "$refspec"                                           || die "git push failed"
 
 notice "Successfully created remote $remote as $remotename"
 
