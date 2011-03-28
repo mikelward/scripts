@@ -1,0 +1,23 @@
+#!/bin/bash
+
+read label dimensions rest <<<"$(xdpyinfo | grep dimensions)"
+IFS='x' read width height <<<"$dimensions"
+half=$((width/2))
+margin=4     # allowance to ensure windows don't overlap
+
+case $1 in
+left)
+    coords=0,0,0,$((half-margin)),-1
+    ;;
+right)
+    coords=0,$half,0,$((half-margin)),-1
+    ;;
+*)
+    echo "Usage: snapleft {left|right}" 1>&2
+    exit 1
+    ;;
+esac
+wmctrl -r :ACTIVE: -b remove,maximized_horz
+wmctrl -r :ACTIVE: -b add,maximized_vert
+wmctrl -r :ACTIVE: -e $coords
+
