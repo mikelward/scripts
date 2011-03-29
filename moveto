@@ -1,3 +1,5 @@
 #!/bin/bash
 
-wmctrl -r :ACTIVE: -t $(($1 + -1))
+workspace=$(($1 + -1))
+wmctrl -r :ACTIVE: -t $workspace
+wmctrl -s $workspace
