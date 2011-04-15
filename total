@@ -1,0 +1,3 @@
+# print the total of a given column of input, default column 1
+awk -v field=${1:-1} '{ total += $field }
+END { print total }'
