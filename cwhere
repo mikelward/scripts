@@ -51,18 +51,27 @@ print_definitions()
     shift
     local headers="$@"
 
+    local filenamepattern='^# [0-9]+ "([^"]*)"'
+    local identifierpattern='^[[:space:]]*(#define|typedef)?[[:space:]]*'"$identifier"'([[:space:]]|\(|$)'
+
     get_cpp_output "$@" |
     while read -r line; do
         # this is evil, just doing it to learn something new
         # put the pattern in a variable to avoid bash treating pattern as a string :-(
-        filenamepattern='^# [0-9]+ "([^"]*)"'
-        identifierpattern='^[[:space:]]*(#define|typedef)?[[:space:]]*'"$identifier"'([[:space:]]|\(|$)'
         if [[ $line =~ $filenamepattern ]]; then
             file=${BASH_REMATCH[1]}
+            if [[ $identifier == "INCLUDES" ]]; then
+                echo "$file"
+            else
+                # just save it in case there's a symbol match
+                :
+            fi
         elif [[ $line =~ $identifierpattern ]]; then
-            echo "$file: $line"
+            if [[ $identifier != "INCLUDES" ]]; then
+                echo "$file: $line"
+            fi
         fi
-    done
+    done | grep -v '^/tmp/' | sort | uniq
 }
 
 # Usage: get_headers <function|syscall>
