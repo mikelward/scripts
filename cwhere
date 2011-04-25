@@ -20,7 +20,26 @@ trap cleanup EXIT
 cleanup()
 {
     test -f "$sourcefile" && rm "$sourcefile"
-    test -f "$processedfile" && rm "$processedfile"
+}
+
+get_cpp_output()
+{
+    local headers="$@"
+
+    sourcefile=$(mktemp)
+    if test $? -ne 0; then
+        echo "Error: Cannot create source file" 1>&2
+        exit 1
+    fi
+    for header in $headers; do
+        echo "#include <$header>" >> "$sourcefile"
+    done
+    cpp -dD "$sourcefile"
+    if test $? -ne 0; then
+        cat "$sourcefile"
+        echo "Error: Cannot run cpp" 1>&2
+        exit 1
+    fi
 }
 
 # Print the definition of <identifier> and which header file it appears in
@@ -32,26 +51,7 @@ print_definitions()
     shift
     local headers="$@"
 
-    sourcefile=$(mktemp)
-    if test $? -ne 0; then
-        echo "Error: Cannot create source file" 1>&2
-        exit 1
-    fi
-    for header in $headers; do
-        echo "#include <$header>" >> "$sourcefile"
-    done
-    processedfile=$(mktemp)
-    if test $? -ne 0; then
-        echo "Error: Cannot create cpp output file" 1>&2
-        exit 1
-    fi
-    cpp -dD "$sourcefile" > "$processedfile"
-    if test $? -ne 0; then
-        cat "$sourcefile"
-        echo "Error: Cannot run cpp" 1>&2
-        exit 1
-    fi
-    file=''
+    get_cpp_output "$@" |
     while read -r line; do
         # this is evil, just doing it to learn something new
         # put the pattern in a variable to avoid bash treating pattern as a string :-(
@@ -62,7 +62,7 @@ print_definitions()
         elif [[ $line =~ $identifierpattern ]]; then
             echo "$file: $line"
         fi
-    done < "$processedfile"
+    done
 }
 
 # Usage: get_headers <function|syscall>
