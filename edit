@@ -24,7 +24,7 @@ confirm()
             ;;
         esac
     else
-        printf "Standard input is not a terminal\n" 1>&2
+        printf "You are not on a terminal\n" 1>&2
         return 1
     fi
 }
