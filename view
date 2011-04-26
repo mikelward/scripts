@@ -11,4 +11,4 @@ case $editor in
     ;;
 esac
 
-"$editor" $readonlyflag "$1"
+"$editor" $readonlyflag "$@"
