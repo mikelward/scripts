@@ -7,8 +7,8 @@ editor=${EDITOR:-vi}
 # prints a question and returns 0 (true) if the user said "y", 1 (false) otherwise
 confirm()
 {
-    printf "%s? [y/n]" "$1" 1>&2
     if test -t 0 && test -t 2; then
+        printf "%s? [y/n] " "$1" 1>&2
         read -n 1
         printf "\n"
         case $REPLY in
@@ -19,27 +19,23 @@ confirm()
             return 1
             ;;
         *)
-            printf "Expected y or n.  Saying n to be safe." 1>&2
+            printf "Expected y or n\n" 1>&2
             return 1
             ;;
         esac
     else
-        printf "You are not on a terminal.  Saying n to be safe." 1>&2
+        printf "Standard input is not a terminal\n" 1>&2
         return 1
     fi
 }
 
 if test ! -w "$1"; then
     ls -l "$1"
-    if test -t 0 && test -t 2; then
-        if confirm "You don't have permission to edit $1.  Edit with sudo"; then
-            sudo=true
-        else
-            printf "Canceling edit." 1>&2
-            exit 1
-        fi
+    printf "You don't have permission to edit %s\n" "$1"
+    if confirm "Edit with sudo"; then
+        sudo=true
     else
-        printf "You don't have permission to edit %s.  Fix the permissions or run \"view\" instead." "$1" 1>&2
+        printf "Canceling edit\n" 1>&2
         exit 1
     fi
 fi
