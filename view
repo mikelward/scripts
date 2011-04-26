@@ -1,0 +1,14 @@
+#!/bin/bash
+
+editor=${EDITOR:-vi}
+
+case $editor in
+*nano)
+    readonlyflag=-v
+    ;;
+*vi|*vim)
+    readonlyflag=-R
+    ;;
+esac
+
+"$editor" $readonlyflag "$1"
