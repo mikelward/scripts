@@ -30,7 +30,7 @@ confirm()
 }
 
 if test ! -w "$1"; then
-    ls -l "$1"
+    ls -l -- "$1"
     printf "You don't have permission to edit %s\n" "$1"
     if confirm "Edit with sudo"; then
         sudo=true
