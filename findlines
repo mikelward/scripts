@@ -5,7 +5,7 @@
 #
 # $Id$
 
-. licslib
+. "$HOME/bin/functions"
 
 invert=
 while getopts "v" flag
