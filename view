@@ -1,4 +1,5 @@
 #!/bin/bash
+# open a file in read-only mode using the user's preferred editor
 
 editor=${EDITOR:-vi}
 
