@@ -31,7 +31,7 @@ do
         proto=udp
         ;;
     ':')
-        echo "Missing argument to -$option" 1>&2
+        echo "Missing argument to -$OPTARG" 1>&2
         usage
         exit 2
         ;;
@@ -41,7 +41,7 @@ do
         exit 2
         ;;
     *)
-        echo "Program does not support -$option yet" 1>&2
+        echo "The -$option option is not supported yet" 1>&2
         usage
         exit 2
         ;;
@@ -102,3 +102,5 @@ while read senddata; do
         fi
     done
 done
+
+# vim: set ts=4 sw=4 tw=0 et:

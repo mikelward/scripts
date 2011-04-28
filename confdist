@@ -56,20 +56,41 @@ read_defaults()
 	test -f "$HOME"/.confdist && . "$HOME"/.confdist
 }
 
+usage()
+{
+	echo "Usage: confdist [-c <config file>] [-v] [<host>...]" 1>&2
+}
+
 read_options()
 {
-	while getopts ":v" flag
+	while getopts ":c:hv" flag
 	do
 		case $flag in
 		c)
 			conffile="$OPTARG"
 			;;
+		h)
+			usage
+			exit 0
+			;;
 		v)
 			verbose=$(($verbose + 1))
 			;;
-		*)
-			error "$0: Unknown option $flag"
+		':')
+			error "Missing argument to -$OPTARG"
+			usage
 			exit 2
+			;;
+		'?')
+			error "Unknown option -$OPTARG"
+			usage
+			exit 2
+			;;
+		*)
+			error "The -$flag option is not supported yet"
+			usage
+			exit 2
+			;;
 		esac
 	done
 	[ $verbose -gt 1 ] && set -x
@@ -128,3 +149,4 @@ do
 	copy_to $host && install_on $host && distribute_from $host || true
 done
 
+# vim: set ts=4 sw=4 tw=0 noet:

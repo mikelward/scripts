@@ -41,24 +41,46 @@ quiet=
 sms=true
 syslog=true
 
-while getopts "c:dq" flag
+usage()
+{
+    echo "Usage: checkdns.backup [-dhq]" 1>&2
+}
+
+while getopts ":dhq" flag
 do
     case $flag in
     d)
         debug=true
         quiet=
         ;;
+    h)
+        usage
+        exit 0
+        ;;
     q)
         quiet=true
         debug=
         ;;
-    *)
-        error "Invalid option -$flag"
+    ':')
+        error "Missing argument to -$OPTARG"
+        usage
         exit 2
+        ;;
+    '?')
+        error "Unknown option -$OPTARG"
+        usage
+        exit 2
+        ;;
+    *)
+        error "The -$flag option is not supported yet"
+        usage
+        exit 2
+        ;;
     esac
 done
 
 # Read local configuration.
+# XXX should this be before or after processing command line options?
 if test -f "$HOME/.checkdns"
 then
     . "$HOME/.checkdns"
@@ -76,25 +98,25 @@ cache=$HOME/.ddclient.$domain.cache
 # must always call this function at the start of the script
 get_addresses()
 {
-	primaryaddress=$(get_address_of ${primary})
-	if test $? -eq 0
-	then
-		backupaddress=$(get_address_of ${backup})
-		if test $? -eq 0
-		then
-			domainaddress=$(get_address_of ${domain})
-			if test $? -eq 0
-			then
-				return 0
-			else
-				return 1
-			fi
-		else
-			return 1
-		fi
-	else
-		return 1
-	fi
+    primaryaddress=$(get_address_of ${primary})
+    if test $? -eq 0
+    then
+        backupaddress=$(get_address_of ${backup})
+        if test $? -eq 0
+        then
+            domainaddress=$(get_address_of ${domain})
+            if test $? -eq 0
+            then
+                return 0
+            else
+                return 1
+            fi
+        else
+            return 1
+        fi
+    else
+        return 1
+    fi
 }
 
 primary_down()
@@ -114,16 +136,16 @@ redirected()
 
 redirect_to_backup()
 {
-	notice "Primary server for ${domain} is down, redirecting to ${backup} (${backupaddress})"
-	run /usr/sbin/ddclient -file "${conf}" -cache /dev/null -use=ip -ip "${backupaddress}"
-	if test $? -eq 0
-	then
-		info "Redirected ${domain} to ${backup}"
-		return 0
-	else
-		error "Error redirecting ${domain} to ${backup}"
-		return 1
-	fi
+    notice "Primary server for ${domain} is down, redirecting to ${backup} (${backupaddress})"
+    run /usr/sbin/ddclient -file "${conf}" -cache /dev/null -use=ip -ip "${backupaddress}"
+    if test $? -eq 0
+    then
+        info "Redirected ${domain} to ${backup}"
+        return 0
+    else
+        error "Error redirecting ${domain} to ${backup}"
+        return 1
+    fi
 }
 
 get_addresses
@@ -135,23 +157,25 @@ then
         info "Cannot reach ${primary}"
         if ! redirected
         then
-			if redirect_to_backup
-			then
-				info "Redirection complete"
-				exit 0
-			else
-				error "Cannot redirect ${domain}"
-				exit 1
-			fi
+            if redirect_to_backup
+            then
+                info "Redirection complete"
+                exit 0
+            else
+                error "Cannot redirect ${domain}"
+                exit 1
+            fi
         else
             debug "Backup server for ${domain} is already in charge, not redirecting"
-			exit 0
+            exit 0
         fi
     else
         debug "Primary server for ${domain} is up, not redirecting"
-		exit 0
+        exit 0
     fi
 else
-	error "Cannot reach the internet"
-	exit 1
+    error "Cannot reach the internet"
+    exit 1
 fi
+
+# vim: set ts=4 sw=4 tw=0 et:

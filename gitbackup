@@ -40,7 +40,7 @@ cleanup()
 #
 debug=
 quiet=true
-simulate=		# empty means false
+simulate=                       # empty means false
 dateformat='%-e %B %Y'
 timeformat='%H:%M:%S'
 srcroot=/home/mikelward/git
@@ -72,28 +72,28 @@ EOF
 while getopts ":hn" option
 do
     case $option in
-        h)
-            usage
-            exit 0
-            ;;
-        n)
-            simulate=true
-            ;;
-        ':')
-            echo "Missing argument to -$option" 1>&2
-            usage
-            exit 2
-            ;;
-        '?')
-            echo "Invalid option -$OPTARG" 1>&2
-            usage
-            exit 2
-            ;;
-        *)
-            echo "Program does not support -$option yet" 1>&2
-            usage
-            exit 2
-            ;;
+    h)
+        usage
+        exit 0
+        ;;
+    n)
+        simulate=true
+        ;;
+    ':')
+        echo "Missing argument to -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    '?')
+        echo "Invalid option -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    *)
+        echo "The -$option option is not supported yet" 1>&2
+        usage
+        exit 2
+        ;;
     esac
 done
 shift $((OPTIND - 1))
@@ -242,3 +242,4 @@ done
 
 info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
 
+# vim: set ts=4 sw=4 tw=0 et:

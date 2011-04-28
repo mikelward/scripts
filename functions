@@ -2,6 +2,7 @@
 ###
 # LOGGING
 
+# XXX what if the message starts with a minus??
 debug()
 {
     if test "$debug"
@@ -18,6 +19,7 @@ debug()
     fi
 }
 
+# XXX what if the message starts with a minus??
 error()
 {
     echo "$*" 1>&2
@@ -35,6 +37,7 @@ error()
     fi
 }
 
+# XXX what if the message starts with a minus??
 info()
 {
     if test ! "$quiet"
@@ -51,6 +54,7 @@ info()
     fi
 }
 
+# XXX what if the message starts with a minus??
 notice()
 {
     echo "$*" 1>&2
@@ -68,6 +72,7 @@ notice()
     fi
 }
 
+# XXX what if the message starts with a minus??
 warn()
 {
     echo "$*" 1>&2

@@ -67,9 +67,9 @@ EOF
 ###
 # process the command line
 #
-while getopts ":dhnp:v" opt
+while getopts ":dhnp:v" option
 do
-	case $opt in
+	case $option in
 	d)
 		debug=true
 		;;
@@ -87,17 +87,17 @@ do
 		verbose=true
 		;;
 	':')
-		echo "Missing argument to -$opt" 1>&2
+		error "Missing argument to -$OPTARG"
 		usage
 		exit 2
 		;;
 	'?')
-		echo "Invalid option -$opt" 1>&2
+		error "Invalid option -$OPTARG"
 		usage
 		exit 2
 		;;
 	*)
-		echo "Program does not support -$opt yet" 1>&2
+		error "The -$option option is not supported yet"
 		usage
 		exit 2
 		;;
@@ -335,3 +335,5 @@ else
 	run sudo /usr/sbin/update-alternatives \
 $install $priority $slaves
 fi
+
+# vim: set ts=4 sw=4 tw=0 et:
