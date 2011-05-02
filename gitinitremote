@@ -166,6 +166,11 @@ fi
 # git push does not accept --quiet option
 run git push "$remotename" "$refspec"                                           || die "git push failed"
 
+# make the new remote the "upstream" (make "pull" without args work)
+# in git >= 1.7, this can be done by adding the "-u" flag to "push"
+run git config branch.master.remote "$remotename"
+run git config branch.master.merge refs/heads/"$refspec"
+
 notice "Successfully created remote $remote as $remotename"
 
 exit 0
