@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # edit a file, with sudo if current user lacks write permissions
 
 sudo=                       # empty is false, non-empty is true
