@@ -24,8 +24,11 @@ do
 done
 
 # create archive file
-tar --exclude "*.svn" -czf $archivefile $archivefiles
-#pax -w -z -f "$archivefile" $archivefiles
+if type pax >/dev/null 2>&1; then
+    pax -w -z -f "$archivefile" $archivefiles
+else
+    tar --exclude "*.svn" -czf $archivefile $archivefiles
+fi
 cd "$OLDPWD" 
 
 # update symbolic link to latest configuration
