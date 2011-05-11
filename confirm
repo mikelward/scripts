@@ -1,0 +1,29 @@
+#!/bin/sh
+# prints a question and returns 0 (true) if the user said "y", 1 (false) otherwise
+
+if test $# -eq 0; then
+    printf "Usage: confirm <prompt message>\n" 1>&2
+    exit 1
+fi
+
+if test -t 0 && test -t 2; then
+    printf "%s? [y/n] " "$1" 1>&2
+    read
+    printf "\n"
+    case $REPLY in
+        y|Y)
+            exit 0
+            ;;
+        n|N)
+            exit 1
+            ;;
+        *)
+            printf "Expected y or n\n" 1>&2
+            exit 1
+            ;;
+    esac
+else
+    printf "You are not on a terminal\n" 1>&2
+    exit 1
+fi
+

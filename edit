@@ -4,30 +4,10 @@
 sudo=                       # empty is false, non-empty is true
 editor=${EDITOR:-vi}
 
-# prints a question and returns 0 (true) if the user said "y", 1 (false) otherwise
-confirm()
-{
-    if test -t 0 && test -t 2; then
-        printf "%s? [y/n] " "$1" 1>&2
-        read -n 1
-        printf "\n"
-        case $REPLY in
-        y|Y)
-            return 0
-            ;;
-        n|N)
-            return 1
-            ;;
-        *)
-            printf "Expected y or n\n" 1>&2
-            return 1
-            ;;
-        esac
-    else
-        printf "You are not on a terminal\n" 1>&2
-        return 1
-    fi
-}
+if ! type confirm >/dev/null 2>&1; then
+    printf "edit: confirm is not available\n" 1>&2
+    exit 1
+fi
 
 if test -e "$1" && test ! -w "$1"; then
     ls -l -- "$1"
