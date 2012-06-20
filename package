@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+
+# wrapper around package managers so I don't have to remember differences
+# between aptitude, apt-get, yum, etc. for basic operations
+
+import os
+import sys
+import subprocess
+
+def usage(stream=sys.stdout):
+        print >>stream, "Usage: package [install|uninstall|update|versions|list|info|files] <package>..."
+
+commands = {}
+commands['apt'] = {
+        'install': ['apt-get', 'install'],
+        'uninstall': ['apt-get', 'remove'],
+        'update': ['apt-get', 'update'],
+        'versions': ['apt-cache', 'policy'],
+        'list': ['dpkg-query', '-W'],
+        'info': ['dpkg-query', '-s'],
+        'files': ['dpkg-query', '-L']
+}
+commands['aptitude'] = {
+        'install': ['aptitude', '-q', 'install'],
+        'uninstall': ['aptitude', '-q', 'remove'],
+        'update': ['aptitude', '-q', 'update'],
+        'versions': ['aptitude', '-q', 'versions'],
+        'list': ['dpkg-query', '-W'],
+        'info': ['dpkg-query', '-s'],
+        'files': ['dpkg-query', '-L']
+}
+commands['yum'] = {
+        'install': ['yum', '-C', 'install'],
+        'uninstall': ['yum', '-C', 'erase'],
+        'update': ['yum', 'makecache'],
+        'versions': ['yum', '-C', 'info'],
+        'list': ['rpm', '-qa'],
+        'info': ['rpm', '-qi'],
+        'files': ['rpm', '-qf'],
+        'verify': ['rpm', '-V'],
+        'installlog': ['rpm', '--last']
+}
+transforms = {}
+transforms['aptitude'] = {
+        'versions': lambda args: [('^' + arg + '$') for arg in args]
+}
+
+# prefer aptitude to apt-get
+if os.access('/usr/bin/aptitude', os.X_OK):
+        package_manager = 'aptitude'
+elif os.access('/usr/bin/apt-get', os.X_OK):
+        package_manager = 'apt'
+elif os.access('/usr/bin/yum', os.X_OK):
+        package_manager = 'yum'
+else:
+        print >>sys.stderr, "Unknown package manager"
+        sys.exit(1)
+
+if len(sys.argv) < 2:
+        usage(sys.stderr)
+        sys.exit(2)
+
+command = sys.argv[1]
+if not command in commands[package_manager]:
+        print >>sys.stderr, package_manager, 'does not support', command
+        sys.exit(1)
+
+command_list = commands[package_manager][command]
+try:
+        transform = transforms[package_manager][command]
+except KeyError:
+        transform = lambda args: args
+
+command_list.extend(transform(sys.argv[2:]))
+
+return_code = subprocess.call(command_list, shell=False)
+sys.exit(return_code)
+
