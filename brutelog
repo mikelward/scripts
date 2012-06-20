@@ -1,4 +1,0 @@
-#!/bin/sh
-# scan log files for SSH brute force attempts
-
-sed -ne 's/.*Failed password for illegal user .* from \(.*\) port.*/\1/p' < /var/log/messages
