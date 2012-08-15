@@ -1,1 +1,0 @@
-find . /usr/include -name "*.h" | ctags -f - -L - | grep "^$1	" | cut -d "	" -f 1,2,3 | sed -e 's#	/\^#	#;s#\$/\;"$##'

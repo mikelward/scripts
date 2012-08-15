@@ -1,2 +1,0 @@
-#!/bin/sh
-dbus-send --system --type=method_call --print-reply --dest=org.bluez /org/bluez/hci0 org.bluez.Adapter.RemoveBonding string:$1

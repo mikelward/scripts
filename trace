@@ -1,0 +1,36 @@
+#!/bin/bash
+#
+# run a command with strace, ignoring some noisy syscalls by default
+# Mikel Ward <mbw@google.com>
+#
+
+ignore_syscalls=(
+        mmap
+        mprotect
+        brk
+        read
+        write
+        select
+        gettimeofday
+        rt_sigaction
+        )
+
+# returns $2..$n separated by $1
+join() {
+  local IFS=$1
+  shift
+  echo "$*"
+}
+
+# print command usage synopsis
+usage() {
+  echo "Usage: trace <command> [<arg>...]"
+}
+
+# command is required
+if test $# -eq 0; then
+  usage >&2
+  exit 2
+fi
+
+strace -f -e trace='!'"$(join , "${ignore_syscalls[@]}")" "$@"

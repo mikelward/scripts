@@ -1,4 +1,0 @@
-#!/bin/sh
-# print the Debian installed packages database in a readable format
-
-COLUMNS=132 dpkg -l "$@" | awk '/^i/ { print $2, $3 }'
