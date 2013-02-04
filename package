@@ -16,22 +16,24 @@ commands['apt'] = {
         'uninstall': ['apt-get', 'remove'],
         'update': ['apt-get', 'update'],
         'versions': ['apt-cache', 'policy'],
+        'search': ['apt-cache', 'search'],
         'list': ['dpkg-query', '-W'],
         'info': ['dpkg-query', '-s'],
         'files': ['dpkg-query', '-L'],
         'depends': ['apt-cache', 'depends'],
-        'rdepends': ['apt-cache', 'rdepends']
+        'rdepends': ['apt-cache', 'rdepends'],
 }
 commands['aptitude'] = {
         'install': ['aptitude', '-q', 'install'],
         'uninstall': ['aptitude', '-q', 'remove'],
         'update': ['aptitude', '-q', 'update'],
         'versions': ['aptitude', '-q', 'versions'],
+        'search': ['aptitute', 'search'],
         'list': ['dpkg-query', '-W'],
         'info': ['dpkg-query', '-s'],
         'files': ['dpkg-query', '-L'],
         'depends': ['apt-cache', 'depends'],
-        'rdepends': ['apt-cache', 'rdepends']
+        'rdepends': ['apt-cache', 'rdepends'],
 }
 commands['yum'] = {
         'install': ['yum', '-C', 'install'],
