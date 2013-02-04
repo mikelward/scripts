@@ -4,13 +4,14 @@ read label dimensions rest <<<"$(xdpyinfo | grep dimensions)"
 IFS='x' read width height <<<"$dimensions"
 half=$((width/2))
 margin=4     # allowance to ensure windows don't overlap
+top=30       # allow for XFCE panel
 
 case $1 in
 left)
-    coords=0,0,0,$((half-margin)),-1
+    coords=0,0,$top,$((half-margin)),-1
     ;;
 right)
-    coords=0,$half,0,$((half-margin)),-1
+    coords=0,$half,$top,$((half-margin)),-1
     ;;
 *)
     echo "Usage: snapleft {left|right}" 1>&2
