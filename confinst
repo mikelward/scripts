@@ -1,29 +1,76 @@
 #!/bin/sh
 # installs UNIX configuration files
 
-basedir="$HOME"
-confdir="$basedir"/etc
-conftar="$HOME"/conf.tar.gz
-destdir="$HOME"
-hostname="`hostname | sed -e 's/\..*//'`"
+extract()
+{
+	if $simulate
+	then
+		info "Would extract $conftar into $confdir"
+		return
+	fi
 
-if test ! -e "$confdir"
-then
-    mkdir "$confdir"
-fi
-if test ! -d "$confdir"
-then
-    printf "$confdir is not a directory, exiting...\n" 1>&2
-    exit 1
-fi
+	gzip -c -d "$conftar" | tar -x -C "$confdir" -f -
+	if test $? -ne 0
+	then
+		error "Error extracting configuration archive"
+		exit 1
+	fi
+}
 
-gzip -c -d "$conftar" | tar -x -C "$confdir" -f -
-if test $? -ne 0
-then
-    printf "Error extracting configuration archive\n" 1>&2
-    exit 1
-fi
+backup()
+{
+	typeset path="$1"
+	typeset backuppath="$path.$(date +%Y%m%d%H%M%S)"
+	info "Moving $path to $backuppath"
+	run mv "$path" "$backuppath"
+}
 
+link()
+{
+	run ln -s "$1" "$2"
+}
+
+remove()
+{
+	run rm "$@"
+}
+
+run()
+{
+	if $simulate
+	then
+		info "Would run $*" 1>&2
+	else
+		"$@"
+	fi
+}
+
+error()
+{
+	printf "$*\n" 1>&2
+}
+
+info()
+{
+	if ! $quiet
+	then
+		printf "$*\n" 1>&2
+	fi
+}
+
+verbose()
+{
+	if $verbose
+	then
+		printf "$*\n" 1>&2
+	fi
+}
+
+# make_links <sourcedir> <destdir> <prefix>
+# make symlinks recursively in <destdir> pointing to files in <sourcedir>
+# <prefix> will be prepended to the basename of each symlink in destdir
+# e.g. if <sourcedir> contains "bashrc" and prefix is ".", the link will be
+# ".bashrc"
 make_links()
 {
 	typeset sourcedir
@@ -34,7 +81,7 @@ make_links()
 	destdir="$2"
 	prefix="$3"
 
-	#echo "Making links from $sourcedir to $destdir" 1>&2
+	verbose "Making links from $sourcedir to $destdir"
 
 	for sourcefile in "$sourcedir"/*
 	do
@@ -42,17 +89,33 @@ make_links()
 		destfile="$destdir"/"$prefix""$filename"
 		if test -f "$sourcefile"
 		then
-			if test $destfile -nt $sourcefile
+			if test -L "$destfile"
 			then
-				ext=`date +%Y%m%d%H%M%S`
-				printf "$destfile is newer than $conffile, backing up\n" 1>&2
-				mv $destfile $destfile.$ext
+				if test "$(readlink -m "$destfile")" = "$(readlink -m "$sourcefile")"
+				then
+					# link is already correct, go to next file
+					verbose "$destfile already points to $sourcefile"
+					continue
+				else
+					# link is wrong, remove it
+					remove "$destfile"
+				fi
+			elif test -e "$destfile"
+			then
+				# something is in the way, back it up
+				backup "$destfile"
 			fi
-			ln -sf $sourcefile $destfile
+			# install the new link
+			link "$sourcefile" "$destfile"
 		elif test -d "$sourcefile"
 		then
 			if test ! -d "$destfile"
 			then
+				if test -e "$destfile"
+				then
+					# something is in the way, back it up
+					backup "$destfile"
+				fi
 				mkdir -p "$destfile"
 				if test $? -ne 0
 				then
@@ -60,10 +123,73 @@ make_links()
 					continue
 				fi
 			fi
+			# recursively make links for each file under the "$sourcefile" directory
+			# prefix is null because we assume each file below the first level
+			# should not have a "." prefix, e.g. ~/conf/vim/plugin should be
+			# ~/.vim/plugin rather than ~/.vim/.plugin
 			make_links "$sourcefile" "$destfile" ""
 		fi
 	done
 }
 
+basedir="$HOME"
+confdir="$basedir"/conf
+conftar="$HOME"/conf.tar.gz
+destdir="$HOME"
+hostname="$(hostname) | sed -e 's/\..*//'"
+simulate=false
+extract=false	# now false by default, assume ~/conf is under git
+quiet=false
+verbose=false
+
+while getopts ":enqv" opt
+do
+	case $opt in
+	e)
+		extract=true
+		;;
+	n)
+		simulate=true
+		;;
+	q)
+		quiet=true
+		verbose=false
+		;;
+	v)
+		verbose=true
+		quiet=false
+		;;
+	'?')
+		error "Unknown option -$OPTARG"
+		exit 2
+		;;
+	':')
+		error "Missing argument to -$OPTARG"
+		exit 2
+		;;
+	*)
+		error "Bug: -$OPTARG option is missing"
+		exit 1
+		;;
+	esac
+done
+shift $((OPTIND - 1))
+
+if test ! -e "$confdir"
+then
+	mkdir "$confdir"
+fi
+if test ! -d "$confdir"
+then
+	error "$confdir is not a directory, exiting"
+	exit 1
+fi
+
+if $extract
+then
+	extract
+fi
+
 make_links "$confdir" "$destdir" "."
 
+# vim: set ts=4 sw=4 tw=0 noet:
