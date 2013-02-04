@@ -1,20 +1,33 @@
 #!/bin/bash
 
-read label dimensions rest <<<"$(xdpyinfo | grep dimensions)"
-IFS='x' read width height <<<"$dimensions"
+# $ wmctrl -d
+# 0  * DG: 1920x1200  VP: 0,0  WA: 0,31 1920x1169  Workspace 1
+# 1  - DG: 1920x1200  VP: N/A  WA: 0,31 1920x1169  Workspace 2
+
+xorigin=0
+yorigin=0
+width=640
+height=480
+while read desktop current dg resolution vp vporigin wa waorigin waresolution name; do
+  if test "$current" = "*"; then
+    IFS='x' read width height <<<"$waresolution"
+    IFS=',' read xorigin yorigin <<<"$waorigin"
+    break
+  fi
+done <<<"$(wmctrl -d)"
+echo "workarea is @${width}x${height}+$xorigin+$yorigin"
 half=$((width/2))
-margin=4     # allowance to ensure windows don't overlap
-top=30       # allow for XFCE panel
+margin=8    # allow for window borders
 
 case $1 in
 left)
-    coords=0,0,$top,$((half-margin)),-1
+    coords=0,$xorigin,$yorigin,$((half-margin)),-1
     ;;
 right)
-    coords=0,$half,$top,$((half-margin)),-1
+    coords=0,$((xorigin+half)),$yorigin,$((half-margin)),-1
     ;;
 *)
-    echo "Usage: snapleft {left|right}" 1>&2
+    echo "Usage: snap {left|right}" 1>&2
     exit 1
     ;;
 esac
