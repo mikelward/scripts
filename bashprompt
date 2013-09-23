@@ -5,20 +5,22 @@
 # if there is an xterm open at a bash prompt, raise/focus that window
 # if there isn't start a new xterm
 #
-# requires that your xterm window title has "bash" at the end
-# when there is no command running and doesn't have "bash" at the end
-# when a command is running
+# Assumes that your xterm window title includes your short hostname.
+# If it doesn't, you should change the prompttitle variable below.
 #
 # see <http://unix.stackexchange.com/questions/6842> for more details
 # and an example .bashrc to set the title (requires bash 3.2 or newer)
 #
 # Mikel Ward <mikel@mikelward.com>
 
+debug=false
+$debug && exec >>$HOME/bashprompt.log 2>&1
+
 # change this to whatever is unique about your window title
 # (i.e. a string that appears in the title when the shell is at a prompt
 #  but does not appear when running a command)
-prompttitle="bash$"
-terminalprog="gnome-terminal"
+prompttitle="$(hostname -s)"
+terminalprog=("gnome-terminal" "--tab" "--maximize")
 
 if ! type wmctrl >/dev/null 2>&1; then
     echo "wmctrl can't be found, please install it" 1>&2
@@ -29,9 +31,9 @@ if ! output="$(wmctrl -l)"; then
     echo "Error running wmctrl -l" 1>&2
     exit 1
 fi
-while IFS=$'\n' read -r line; do
-    if [[ $line =~ $prompttitle ]]; then
-        id=${line%% *}
+while read -r id desktop host title; do
+    if [[ $title =~ $prompttitle ]]; then
+        $debug && echo "$title matches $prompttitle" 1>&2
         break
     fi
 done <<EOF
@@ -39,7 +41,9 @@ $output
 EOF
 
 if test -n "$id"; then
+    $debug && echo "Focusing $id" 1>&2
     wmctrl -i -a "$id"
 else
-    "$terminalprog"&
+    $debug && echo "Running ${terminalprog[*]}" 1>&2
+    "${terminalprog[@]}"&
 fi
