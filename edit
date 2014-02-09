@@ -4,6 +4,11 @@
 sudo=                       # empty is false, non-empty is true
 editor=${EDITOR:-vi}
 
+if test $# -eq 0; then
+    "$editor"
+    exit
+fi
+
 if ! type confirm >/dev/null 2>&1; then
     printf "edit: confirm is not available\n" 1>&2
     exit 1
