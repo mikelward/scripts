@@ -117,8 +117,8 @@ silent()
 # Return the directory part of a path.
 get_directory_part()
 {
-    typeset location
-    typeset dir
+    local location
+    local dir
 
     location=$(get_location_part "$1")
     dir="${location%/*}"
@@ -133,8 +133,8 @@ get_directory_part()
 # Returns: disk usage in kilobytes
 get_size_of_file_or_directory()
 {
-    typeset size
-    typeset file
+    local size
+    local file
     file="$1"
     size=$(du -ks "$file" | cut -f 1)
     if test $? -ne 0
@@ -154,8 +154,8 @@ get_size_of_file_or_directory()
 get_free_space_on_filesystem()
 {
 	(
-    typeset tmpdir
-    typeset dfout
+    local tmpdir
+    local dfout
 
     tmpdir=$(get_temporary_directory)
     dfout="$tmpdir"/df.$$
@@ -190,7 +190,7 @@ get_free_space_on_filesystem()
 # Return the filename part of a path.
 get_filename_part()
 {
-    typeset location
+    local location
     location=$(get_location_part "$1")
     echo "${location##/*/}"
     return 0
@@ -353,12 +353,12 @@ append()
 
 get_address_helper()
 {
-    typeset host
-    typeset type
-    typeset address
-    typeset nameserver
-    typeset tmpfile
-    typeset tries
+    local host
+    local type
+    local address
+    local nameserver
+    local tmpfile
+    local tries
 
     host="$1"
     nameserver="$2"
@@ -395,9 +395,9 @@ get_address_helper()
 # Determine's the current IP address of a host.
 get_address_of()
 {
-    typeset host
-    typeset address
-    typeset nameserver
+    local host
+    local address
+    local nameserver
 
     host="$1"
 
@@ -433,7 +433,7 @@ get_address_of()
 # Determine whether a host is up
 host_up()
 {
-    typeset host
+    local host
     host="$1"
 
     ping -c 3 $host >/dev/null

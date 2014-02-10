@@ -19,8 +19,8 @@ extract()
 
 backup()
 {
-	typeset path="$1"
-	typeset backuppath="$path.$(date +%Y%m%d%H%M%S)"
+	local path="$1"
+	local backuppath="$path.$(date +%Y%m%d%H%M%S)"
 	info "Moving $path to $backuppath"
 	run mv "$path" "$backuppath"
 }
@@ -73,9 +73,9 @@ verbose()
 # ".bashrc"
 make_links()
 {
-	typeset sourcedir
-	typeset destdir
-	typeset prefix
+	local sourcedir
+	local destdir
+	local prefix
 
 	sourcedir="$1"
 	destdir="$2"
