@@ -4,7 +4,7 @@
 set -e
 set -u
 
-SUDO=                       # empty is false, non-empty is true
+SUDO=sudo                    # empty is false, non-empty is true
 EDITOR=${EDITOR:-vi}
 
 try_edit_as_root() {
