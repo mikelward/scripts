@@ -1,28 +1,36 @@
 #!/bin/sh
 # edit a file, with sudo if current user lacks write permissions
 
-sudo=                       # empty is false, non-empty is true
-editor=${EDITOR:-vi}
+set -e
+set -u
+
+SUDO=                       # empty is false, non-empty is true
+EDITOR=${EDITOR:-vi}
+
+try_edit_as_root() {
+    printf "You don't have permission to edit %s\n" "$1"
+    confirm "Edit as root" && "$SUDO" "$EDITOR" "$1"
+}
+
+error() {
+    printf "$*\n"
+    false
+}
 
 if test $# -eq 0; then
-    "$editor"
-    exit
-fi
-
-if ! type confirm >/dev/null 2>&1; then
-    printf "edit: confirm is not available\n" 1>&2
-    exit 1
-fi
-
-if test -e "$1" && test ! -w "$1"; then
-    ls -l -- "$1"
-    printf "You don't have permission to edit %s\n" "$1"
-    if confirm "Edit with sudo"; then
-        sudo=true
+    "$EDITOR"
+else
+    if test -e "$1"; then
+        if test -w "$1"; then
+            "$EDITOR" "$1"
+        else
+           try_edit_as_root "$1" || view "$1"
+        fi
     else
-        printf "Canceling edit\n" 1>&2
-        exit 1
+        if test -w "$(dirname "$1")"; then
+            "$EDITOR" "$1"
+        else
+            try_edit_as_root "$1" || error "$1 does not exist"
+        fi
     fi
 fi
-
-${sudo:+sudo} "$editor" "$1"
