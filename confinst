@@ -19,8 +19,8 @@ extract()
 
 backup()
 {
-	typeset path="$1"
-	typeset backuppath="$path.$(date +%Y%m%d%H%M%S)"
+	local path="$1"
+	local backuppath="$path.$(date +%Y%m%d%H%M%S)"
 	info "Moving $path to $backuppath"
 	run mv "$path" "$backuppath"
 }
@@ -68,10 +68,10 @@ verbose()
 
 get_link()
 {
-	typeset sourcefile
-	typeset destdir
-	typeset prefix
-	typeset destfile
+	local sourcefile
+	local destdir
+	local prefix
+	local destfile
 
 	sourcefile="$1"
 	destdir="$2"
@@ -109,8 +109,8 @@ file_starts_with()
 
 link_points_to()
 {
-	typeset link
-	typeset file
+	local link
+	local file
 
 	link="$1"
 	file="$2"
@@ -125,11 +125,11 @@ link_points_to()
 # ".bashrc"
 make_links()
 {
-	typeset sourcedir
-	typeset destdir
-	typeset prefix
-	typeset file
-	typeset link
+	local sourcedir
+	local destdir
+	local prefix
+	local file
+	local link
 
 	sourcedir="$1"
 	destdir="$2"
