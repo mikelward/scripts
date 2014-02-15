@@ -1,8 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 # edit a file, with sudo if current user lacks write permissions
+# also turns file:line into file +line
 
 sudo=                       # empty is false, non-empty is true
 editor=${EDITOR:-vi}
+args=()
 
 if ! type confirm >/dev/null 2>&1; then
     printf "edit: confirm is not available\n" 1>&2
@@ -20,4 +22,14 @@ if test -e "$1" && test ! -w "$1"; then
     fi
 fi
 
-${sudo:+sudo} "$editor" "$1"
+for arg; do
+  line=${arg##*:}
+  if test "$line" != "$arg"; then
+    file=${arg%:$line}
+    args=("$file" "+$line")
+  else
+    args=("$file")
+  fi
+done
+
+${sudo:+sudo} "$editor" "${args[@]}"
