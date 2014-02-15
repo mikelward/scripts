@@ -32,7 +32,7 @@ under_svn()
 
 modified()
 {
-	typeset dir
+	local dir
 	path="$1"
 
 	lines=$(svn stat "$path" | wc -l)

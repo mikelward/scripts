@@ -1,4 +1,5 @@
 #!/bin/sh
+echo nargs: $#
 echo 0: "$0"
 i=1
 for arg; do

@@ -2,34 +2,45 @@
 # edit a file, with sudo if current user lacks write permissions
 # also turns file:line into file +line
 
-sudo=                       # empty is false, non-empty is true
-editor=${EDITOR:-vi}
-args=()
+set -e
+set -u
 
-if ! type confirm >/dev/null 2>&1; then
-    printf "edit: confirm is not available\n" 1>&2
-    exit 1
-fi
+SUDO=sudo                    # empty is false, non-empty is true
+EDITOR=${EDITOR:-vi}
 
-if test -e "$1" && test ! -w "$1"; then
-    ls -l -- "$1"
+error() {
+    printf "$*\n"
+    false
+}
+
+try_edit_as_root() {
     printf "You don't have permission to edit %s\n" "$1"
-    if confirm "Edit with sudo"; then
-        sudo=true
+    confirm "Edit as root" && "$SUDO" "$EDITOR" "$1"
+}
+
+if test $# -eq 0; then
+    "$EDITOR"
+else
+    line=${1##*:}
+    if test "$line" != "$1"; then
+      file=${1%:$line}
     else
-        printf "Canceling edit\n" 1>&2
-        exit 1
+      line=
+    fi
+
+    set -- "$file" ${line:++$line}
+
+    if test -e "$file"; then
+        if test -w "$file"; then
+            "$EDITOR" "$@"
+        else
+           try_edit_as_root "$@" || view "$@"
+        fi
+    else
+        if test -w "$(dirname "$file")"; then
+            "$EDITOR" "$@"
+        else
+            try_edit_as_root "$@" || error "$file does not exist"
+        fi
     fi
 fi
-
-for arg; do
-  line=${arg##*:}
-  if test "$line" != "$arg"; then
-    file=${arg%:$line}
-    args=("$file" "+$line")
-  else
-    args=("$file")
-  fi
-done
-
-${sudo:+sudo} "$editor" "${args[@]}"
