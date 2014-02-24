@@ -47,14 +47,14 @@ run()
 
 error()
 {
-	printf "$*\n" 1>&2
+	printf "%s\n" "$*" 1>&2
 }
 
 info()
 {
 	if ! $quiet
 	then
-		printf "$*\n" 1>&2
+		printf "%s\n" "$*" 1>&2
 	fi
 }
 
@@ -62,8 +62,60 @@ verbose()
 {
 	if $verbose
 	then
-		printf "$*\n" 1>&2
+		printf "%s\n" "$*" 1>&2
 	fi
+}
+
+get_link()
+{
+	local sourcefile
+	local destdir
+	local prefix
+	local destfile
+
+	sourcefile="$1"
+	destdir="$2"
+	prefix="$3"
+
+	sourcename="${sourcefile##*/}"
+	if file_starts_with "$sourcename" "$prefix"
+	then
+		verbose "Not adding extra $prefix to $sourcename"
+		prefix=
+	fi
+
+	echo "$destdir"/${use_prefix:+"$prefix"}"$sourcename"
+}
+
+file_starts_with()
+{
+	local filename="$1"
+	local prefix="$2"
+
+	if test -n "$prefix"
+	then
+		case $filename in
+			$prefix*)
+				true
+				;;
+			*)
+				false
+				;;
+		esac
+	else
+		false
+	fi
+}
+
+link_points_to()
+{
+	local link
+	local file
+
+	link="$1"
+	file="$2"
+
+	test "$(readlink -m "$link")" = "$(readlink -m "$file")"
 }
 
 # make_links <sourcedir> <destdir> <prefix>
@@ -76,6 +128,8 @@ make_links()
 	local sourcedir
 	local destdir
 	local prefix
+	local file
+	local link
 
 	sourcedir="$1"
 	destdir="$2"
@@ -83,51 +137,50 @@ make_links()
 
 	verbose "Making links from $sourcedir to $destdir"
 
-	for sourcefile in "$sourcedir"/*
+	for file in "$sourcedir"/* "$sourcedir"/.[!.]* "$sourcedir"/..?*
 	do
-		filename=${sourcefile##*/}
-		destfile="$destdir"/"$prefix""$filename"
-		if test -f "$sourcefile"
+		link=$(get_link "$file" "$destdir" "$prefix")
+		if test -f "$file"
 		then
-			if test -L "$destfile"
+			if test -L "$link"
 			then
-				if test "$(readlink -m "$destfile")" = "$(readlink -m "$sourcefile")"
+				if link_points_to "$link" "$file"
 				then
 					# link is already correct, go to next file
-					verbose "$destfile already points to $sourcefile"
+					verbose "$link already points to $file"
 					continue
 				else
 					# link is wrong, remove it
-					remove "$destfile"
+					remove "$link"
 				fi
-			elif test -e "$destfile"
+			elif test -e "$link"
 			then
 				# something is in the way, back it up
-				backup "$destfile"
+				backup "$link"
 			fi
 			# install the new link
-			link "$sourcefile" "$destfile"
-		elif test -d "$sourcefile"
+			link "$file" "$link"
+		elif test -d "$file"
 		then
-			if test ! -d "$destfile"
+			if test ! -d "$link"
 			then
-				if test -e "$destfile"
+				if test -e "$link"
 				then
 					# something is in the way, back it up
-					backup "$destfile"
+					backup "$link"
 				fi
-				mkdir -p "$destfile"
+				mkdir -p "$link"
 				if test $? -ne 0
 				then
-					printf "Error creating $destfile, skipping $sourcefile\n" 1>&2
+					printf "Error creating $link, skipping $file\n" 1>&2
 					continue
 				fi
 			fi
-			# recursively make links for each file under the "$sourcefile" directory
+			# recursively make links for each file under the "$file" directory
 			# prefix is null because we assume each file below the first level
 			# should not have a "." prefix, e.g. ~/conf/vim/plugin should be
 			# ~/.vim/plugin rather than ~/.vim/.plugin
-			make_links "$sourcefile" "$destfile" ""
+			make_links "$file" "$link" ""
 		fi
 	done
 }
@@ -136,13 +189,13 @@ basedir="$HOME"
 confdir="$basedir"/conf
 conftar="$HOME"/conf.tar.gz
 destdir="$HOME"
-hostname="$(hostname) | sed -e 's/\..*//'"
 simulate=false
 extract=false	# now false by default, assume ~/conf is under git
+prefix=.
 quiet=false
 verbose=false
 
-while getopts ":d:enqv" opt
+while getopts ":d:enpqv" opt
 do
 	case $opt in
 	d)
@@ -157,6 +210,9 @@ do
 	q)
 		quiet=true
 		verbose=false
+		;;
+	p)
+		prefix=$OPTARG
 		;;
 	v)
 		verbose=true
@@ -193,6 +249,6 @@ then
 	extract
 fi
 
-make_links "$confdir" "$destdir" "."
+make_links "$confdir" "$destdir" "$prefix"
 
 # vim: set ts=4 sw=4 tw=0 noet:

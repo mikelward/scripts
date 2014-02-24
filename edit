@@ -1,5 +1,6 @@
-#!/bin/sh
+#!/bin/bash
 # edit a file, with sudo if current user lacks write permissions
+# also turns file:line into file +line
 
 set -e
 set -u
@@ -7,30 +8,39 @@ set -u
 SUDO=sudo                    # empty is false, non-empty is true
 EDITOR=${EDITOR:-vi}
 
-try_edit_as_root() {
-    printf "You don't have permission to edit %s\n" "$1"
-    confirm "Edit as root" && "$SUDO" "$EDITOR" "$1"
-}
-
 error() {
     printf "$*\n"
     false
 }
 
+try_edit_as_root() {
+    printf "You don't have permission to edit %s\n" "$1"
+    confirm "Edit as root" && "$SUDO" "$EDITOR" "$1"
+}
+
 if test $# -eq 0; then
     "$EDITOR"
 else
-    if test -e "$1"; then
-        if test -w "$1"; then
-            "$EDITOR" "$1"
+    line=${1##*:}
+    if test "$line" != "$1"; then
+      file=${1%:$line}
+    else
+      line=
+    fi
+
+    set -- "$file" ${line:++$line}
+
+    if test -e "$file"; then
+        if test -w "$file"; then
+            "$EDITOR" "$@"
         else
-           try_edit_as_root "$1" || view "$1"
+           try_edit_as_root "$@" || view "$@"
         fi
     else
-        if test -w "$(dirname "$1")"; then
-            "$EDITOR" "$1"
+        if test -w "$(dirname "$file")"; then
+            "$EDITOR" "$@"
         else
-            try_edit_as_root "$1" || error "$1 does not exist"
+            try_edit_as_root "$@" || error "$file does not exist"
         fi
     fi
 fi
