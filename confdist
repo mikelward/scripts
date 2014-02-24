@@ -118,15 +118,15 @@ install_on()
 {
 	local host=$1
 	printf "Installing on $host... "
-	ssh $host "mkdir bin"
-	scp $HOME/bin/confinst $host:bin
+	ssh $host "mkdir scripts"
+	scp $HOME/scripts/confinst $host:scripts
 	if test $? -ne 0
 	then
-		printf "failure copying install script to $host:bin\n"
+		printf "failure copying install script to $host:scripts\n"
 		continue
 	fi
 
-	ssh $host "bin/confinst"
+	ssh $host "scripts/confinst" -e
 	if test $? -ne 0
 	then
 		printf "failure running remote install script\n"

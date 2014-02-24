@@ -142,9 +142,12 @@ extract=false	# now false by default, assume ~/conf is under git
 quiet=false
 verbose=false
 
-while getopts ":enqv" opt
+while getopts ":d:enqv" opt
 do
 	case $opt in
+	d)
+		confdir=$OPTARG
+		;;
 	e)
 		extract=true
 		;;
