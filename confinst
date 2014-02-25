@@ -195,9 +195,12 @@ prefix=.
 quiet=false
 verbose=false
 
-while getopts ":enpqv" opt
+while getopts ":d:enpqv" opt
 do
 	case $opt in
+	d)
+		confdir=$OPTARG
+		;;
 	e)
 		extract=true
 		;;
