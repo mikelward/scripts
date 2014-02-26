@@ -27,6 +27,7 @@ backup()
 
 link()
 {
+	info "Linking $link to $file"
 	run ln -s "$1" "$2"
 }
 
@@ -167,7 +168,6 @@ make_links()
 				backup "$link"
 			fi
 			# install the new link
-			info "Linking $link to $file"
 			link "$file" "$link"
 		elif test -d "$file"
 		then
