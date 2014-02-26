@@ -25,6 +25,7 @@ else
     if test "$line" != "$1"; then
       file=${1%:$line}
     else
+      file=$1
       line=
     fi
 
