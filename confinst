@@ -84,7 +84,7 @@ get_link()
 		prefix=
 	fi
 
-	echo "$destdir"/${use_prefix:+"$prefix"}"$sourcename"
+	echo "$destdir"/"$prefix""$sourcename"
 }
 
 file_starts_with()
@@ -135,10 +135,18 @@ make_links()
 	destdir="$2"
 	prefix="$3"
 
+	case "$(basename "$sourcedir")" in .git)
+		verbose "Skipping $sourcedir"
+		return
+		;;
+	esac
+
 	verbose "Making links from $sourcedir to $destdir"
 
 	for file in "$sourcedir"/* "$sourcedir"/.[!.]* "$sourcedir"/..?*
 	do
+		test -e "$file" || continue
+
 		link=$(get_link "$file" "$destdir" "$prefix")
 		if test -f "$file"
 		then
@@ -159,6 +167,7 @@ make_links()
 				backup "$link"
 			fi
 			# install the new link
+			info "Linking $link to $file"
 			link "$file" "$link"
 		elif test -d "$file"
 		then
