@@ -119,7 +119,7 @@ install_on()
 	local host=$1
 	printf "Installing on $host... "
 	ssh $host "mkdir scripts"
-	scp $HOME/scripts/confinst $host:scripts
+	scp "$(dirname "$0")/confinst" $host:scripts
 	if test $? -ne 0
 	then
 		printf "failure copying install script to $host:scripts\n"
