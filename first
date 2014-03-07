@@ -1,0 +1,19 @@
+
+git_rev() {
+    git log --pretty=format:%H "$@" | head -1
+}
+
+oldest=$(git_rev --reverse)
+newest=HEAD
+
+echo "Starting bisect with first revision:"
+git log -1 $oldest
+
+git bisect start
+git bisect good $oldest
+git bisect bad $newest
+git bisect run not "$@" >/dev/null
+
+first=$(git_rev)
+echo "First revision where $* succeeds:"
+git log -1 $first
