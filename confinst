@@ -1,6 +1,21 @@
 #!/bin/sh
 # installs UNIX configuration files
 
+create_dir()
+{
+	if test -e "$confdir"
+	then
+		return
+	fi
+
+	run mkdir "$confdir"
+	if ! $simulate && test ! -d "$confdir"
+	then
+		error "$confdir is not a directory, exiting"
+		exit 1
+	fi
+}
+
 extract()
 {
 	if $simulate
@@ -178,7 +193,7 @@ make_links()
 					# something is in the way, back it up
 					backup "$link"
 				fi
-				mkdir -p "$link"
+				run mkdir -p "$link"
 				if test $? -ne 0
 				then
 					printf "Error creating $link, skipping $file\n" 1>&2
@@ -243,15 +258,7 @@ do
 done
 shift $((OPTIND - 1))
 
-if test ! -e "$confdir"
-then
-	mkdir "$confdir"
-fi
-if test ! -d "$confdir"
-then
-	error "$confdir is not a directory, exiting"
-	exit 1
-fi
+create_dir "$confdir"
 
 if $extract
 then

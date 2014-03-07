@@ -5,7 +5,7 @@
 # directory to look for configuration files
 confdir="$HOME"/conf
 # space-separated list of configuration files
-conffiles="*"
+conffiles="* .[a-z]* .[A-Z]* ..[a-z]* ..[A-Z]*"
 # directory to store archive files in
 archivedir="$HOME"
 # name of archive file
