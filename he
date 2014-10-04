@@ -26,8 +26,10 @@ if test $# -lt 1; then
 fi
 
 manpage="$1"
+# show the SYNOPSIS section if no section or option was given
 option="${2:-SYNOPSIS}"
 
+# handle manpage(number)
 case $manpage in *\(*\))
     page=${manpage%\(*\)}
     section=${manpage#$page}
@@ -37,11 +39,11 @@ case $manpage in *\(*\))
     ;;
 esac
 
-man ${section:+-s $section} "$manpage" | perl -n -e "
+man ${section:+-s $section} "$manpage" | perl -n -e '
 BEGIN {
-    \$option = \"$option\";
-    \$inside = 0;
-}"'
+    $option = "'$option'";
+    $inside = 0;
+}
 if (!$inside) {
     if (/^(\s*)\Q$option\E\b/p) {
         # start of this option
