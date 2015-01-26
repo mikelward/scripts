@@ -47,13 +47,18 @@ BEGIN {
 if (!$inside) {
     if (/^(\s*)\Q$option\E\b/p) {
         # start of this option
-        $spaces = $1;
+        $start = $1;
         $inside = 1;
+        $blank = 0;
         print;
     }
 }
 else {
-    if (/^$spaces\S/) {
+    if (/^$/) {
+        $blank = 1;
+        print;
+    }
+    elsif (/^\Q$start\E\S/ and $blank) {
         # start of next option;
         exit;
     }
