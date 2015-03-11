@@ -197,9 +197,13 @@ make_links()
 		then
 			if test ! -d "$link"
 			then
-				if test -e "$link"
+				if test -L "$link"
 				then
-					# something is in the way, back it up
+					# a symlink is in the way, remove it
+					remove "$link"
+				elif test -e "$link"
+				then
+					# a file is in the way, back it up
 					backup "$link"
 				fi
 				run mkdir -p "$link"
