@@ -1,0 +1,8 @@
+#!/bin/sh
+if type terminator >/dev/null 2>&1; then
+    terminator
+elif type gnome-terminal >/dev/null 2>&1; then
+    gnome-terminal
+else
+    xterm
+fi

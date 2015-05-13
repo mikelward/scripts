@@ -134,7 +134,7 @@ link_points_to()
 	test "$(readlink -m "$link")" = "$(readlink -m "$file")"
 }
 
-# make_links <sourcedir> <destdir> <prefix>
+# make_links <sourcedir> <destdir> <prefix> [<overwrite>]
 # make symlinks recursively in <destdir> pointing to files in <sourcedir>
 # <prefix> will be prepended to the basename of each symlink in destdir
 # e.g. if <sourcedir> contains "bashrc" and prefix is ".", the link will be
@@ -146,10 +146,12 @@ make_links()
 	local prefix
 	local file
 	local link
+	local overwrite
 
 	sourcedir="$1"
 	destdir="$2"
 	prefix="$3"
+	overwrite="${4:-true}"
 
 	case "$(basename "$sourcedir")" in .git)
 		verbose "Skipping $sourcedir"
@@ -164,6 +166,13 @@ make_links()
 		test -e "$file" || continue
 
 		link=$(get_link "$file" "$destdir" "$prefix")
+
+		if test -f "$link" && ! "$overwrite"
+		then
+			verbose "$link already exists and overwrite=$overwrite"
+			continue
+		fi
+
 		if test -f "$file"
 		then
 			if test -L "$link"
@@ -188,9 +197,13 @@ make_links()
 		then
 			if test ! -d "$link"
 			then
-				if test -e "$link"
+				if test -L "$link"
 				then
-					# something is in the way, back it up
+					# a symlink is in the way, remove it
+					remove "$link"
+				elif test -e "$link"
+				then
+					# a file is in the way, back it up
 					backup "$link"
 				fi
 				run mkdir -p "$link"
@@ -204,7 +217,7 @@ make_links()
 			# prefix is null because we assume each file below the first level
 			# should not have a "." prefix, e.g. ~/conf/vim/plugin should be
 			# ~/.vim/plugin rather than ~/.vim/.plugin
-			make_links "$file" "$link" ""
+			make_links "$file" "$link" "" "$overwrite"
 		fi
 	done
 }
@@ -266,5 +279,9 @@ then
 fi
 
 make_links "$confdir" "$destdir" "$prefix"
+for dir in "$confdir".*
+do
+	make_links "$dir" "$destdir" "$prefix" false
+done
 
 # vim: set ts=4 sw=4 tw=0 noet:
