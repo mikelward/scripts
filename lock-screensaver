@@ -1,1 +1,5 @@
-xdg-screensaver lock
+if dm-tool list-seats; then
+  dm-tool lock
+else
+  xdg-screensaver lock
+fi
