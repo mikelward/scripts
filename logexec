@@ -1,0 +1,12 @@
+# Run a program, logging args and parent process info to syslog.
+# Should be useful to help track down how something gets started.
+#
+# Example installation:
+# dpkg-divert --add --rename /usr/bin/gnome-keyring-daemon
+# cp logexec /usr/bin
+# ln /usr/bin/logexec /usr/bin/gnome-keyring-daemon
+
+ppid="$(ps -o ppid= -p $$)"
+pcomm="$(ps -o comm= -p $ppid)"
+logger -s -t "$0" "started by pid $ppid ($pcomm) with args $*"
+exec "$0".distrib "$@"
