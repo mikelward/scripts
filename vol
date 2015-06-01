@@ -1,0 +1,17 @@
+# Change the system volume.
+
+# Use amixer rather than pactl, since it's simpler, and should work on
+# more systems.
+
+case "$1" in
+down)
+    amixer set Master 5%-;;
+up)
+    amixer set Master 5%+;;
+mute)
+    # -D pulse is needed to correctly unmute.
+    # https://bugs.launchpad.net/ubuntu/+source/pulseaudio/+bug/496354
+    amixer -D pulse set Master toggle;;
+*)
+    printf 'vol: Unknown subcommand %s\n' "$1" >&2;;
+esac

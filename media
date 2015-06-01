@@ -1,0 +1,24 @@
+# Control media playback.
+
+send_key() {
+    xdotool key "$1"
+}
+
+case "$1" in
+play|pause|playpause)
+    send_key XF86AudioPlay;;
+next)
+    send_key XF86AudioNext;;
+prev)
+    send_key XF86AudioPrev;;
+mute)
+    send_key XF86AudioMute;;
+down)
+    send_key XF86AudioLowerVolume;;
+up)
+    send_key XF86AudioRaiseVolume;;
+stop)
+    send_key XF86AudioStop;;
+*)
+    printf 'media: Unknown command %s\n' "$1" >&2;;
+esac
