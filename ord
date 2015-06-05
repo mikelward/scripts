@@ -1,2 +1,2 @@
 #!/bin/bash
-printf "%s" "$*" | od -t x1 | cut -f 2- -d ' ' -s
+printf '%s' "$*" | hexdump -v -e '/1 "%d "'
