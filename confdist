@@ -50,7 +50,6 @@ ssh()
 
 read_defaults()
 {
-	conffile="$HOME"/conf.tar.gz
 	hosts=
 	verbose=0
 	test -f "$HOME"/.confdist && . "$HOME"/.confdist
@@ -63,12 +62,9 @@ usage()
 
 read_options()
 {
-	while getopts ":c:hv" flag
+	while getopts ":hv" flag
 	do
 		case $flag in
-		c)
-			conffile="$OPTARG"
-			;;
 		h)
 			usage
 			exit 0
@@ -103,22 +99,29 @@ read_options()
 copy_to()
 {
 	local host=$1
-	info "Copying to $host"
-	printf "Copying to $host... "
-	scp $conffile $host:~
-	if test $? -ne 0
-	then
-		printf "failure\n"
-		continue
-	fi
-	printf "success\n"
+	local conffile
+	local confname
+
+	for conffile in "$HOME"/conf*.tar.gz; do
+		test -f "$conffile" || continue
+		confname=$(basename "$conffile")
+		info "Copying $confname to $host"
+		printf "Copying $confname to $host... "
+		scp "$conffile" $host:~
+		if test $? -ne 0
+		then
+			printf "failure\n"
+			continue
+		fi
+		printf "success\n"
+	done
 }
 
 install_on()
 {
 	local host=$1
 	printf "Installing on $host... "
-	ssh $host "mkdir scripts"
+	ssh $host "test -d scripts || mkdir scripts"
 	scp "$(dirname "$0")/confinst" $host:scripts
 	if test $? -ne 0
 	then
