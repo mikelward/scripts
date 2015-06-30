@@ -1,37 +1,17 @@
 #!/bin/sh
 # $Id: confback,v 1.5 2005/07/09 14:54:58 michael Exp $
-# Create an archive of important Unix user configuration files
+# Create tarballs of configuration directories.
 
-# directory to look for configuration files
-confdir="$HOME"/conf
-# space-separated list of configuration files
-conffiles="* .[a-z]* .[A-Z]* ..[a-z]* ..[A-Z]*"
-# directory to store archive files in
-archivedir="$HOME"
-# name of archive file
-archivefile="$archivedir"/conf.tar.gz
+# One tarball per ~/conf.* directory.
+cd
+for dir in conf/ conf.*/; do
+  test -d "$dir" || continue
 
-cd "$confdir"
+  tarball="${dir%/}.tar.gz"
+  echo "Backing up $dir to $tarball"
 
-# create list of files to archive
-archivefiles=
-for f in $conffiles
-do
-    if test -e "$f"
-    then
-        archivefiles="$archivefiles $f"
-    fi
+  cd "$dir"
+  find . '(' -name '.svn' -o -name '.git' ')' -prune -o '(' -type f -o -type l ')' -print0 |
+  pax -w -z -L -0 -f "$HOME/$tarball"
+  cd "$OLDPWD"
 done
-
-# create archive file
-if type pax >/dev/null 2>&1; then
-    pax -w -z -f "$archivefile" $archivefiles
-else
-    tar --exclude "*.svn" -czf $archivefile $archivefiles
-fi
-cd "$OLDPWD" 
-
-# update symbolic link to latest configuration
-#archivelink="${archivefile%/*}"/conf.tar.gz
-#ln -sf "$archivefile" "$archivelink"
-
