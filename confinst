@@ -3,33 +3,45 @@
 
 create_dir()
 {
-	if test -e "$confdir"
+	if test -e "$1"
 	then
 		return
 	fi
 
-	run mkdir "$confdir"
-	if ! $simulate && test ! -d "$confdir"
+	info "Creating $1"
+	run mkdir "$1"
+	if ! $simulate && test ! -d "$1"
 	then
-		error "$confdir is not a directory, exiting"
+		error "$1 is not a directory, exiting"
 		exit 1
 	fi
 }
 
 extract()
 {
-	if $simulate
-	then
-		info "Would extract $conftar into $confdir"
-		return
-	fi
+	local confball
+	local confdir
 
-	gzip -c -d "$conftar" | tar -x -C "$confdir" -f -
-	if test $? -ne 0
-	then
-		error "Error extracting configuration archive"
-		exit 1
-	fi
+	for confball in "$HOME"/conf*.tar.gz; do
+		confdir="$(basename "$confball" .tar.gz)"
+
+		if $simulate
+		then
+			info "Would extract $confball into $confdir"
+			continue
+		fi
+
+
+		create_dir "$confdir"
+
+		info "Extracting $confball into $confdir"
+		tar -C "$confdir" -xzf "$confball"
+		if test $? -ne 0
+		then
+			error "Error extracting configuration archive"
+			exit 1
+		fi
+	done
 }
 
 backup()
@@ -223,7 +235,6 @@ make_links()
 }
 
 basedir="$HOME"
-confdir="$basedir"/conf
 conftar="$HOME"/conf.tar.gz
 destdir="$HOME"
 simulate=false
@@ -232,12 +243,9 @@ prefix=.
 quiet=false
 verbose=false
 
-while getopts ":d:enpqv" opt
+while getopts ":enpqv" opt
 do
 	case $opt in
-	d)
-		confdir=$OPTARG
-		;;
 	e)
 		extract=true
 		;;
@@ -271,15 +279,13 @@ do
 done
 shift $((OPTIND - 1))
 
-create_dir "$confdir"
-
 if $extract
 then
 	extract
 fi
 
-make_links "$confdir" "$destdir" "$prefix"
-for dir in "$confdir".*
+make_links "$HOME/conf" "$destdir" "$prefix"
+for dir in "$HOME"/conf.*
 do
 	make_links "$dir" "$destdir" "$prefix" false
 done
