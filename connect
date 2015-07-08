@@ -1,0 +1,9 @@
+#!/bin/bash
+# Prompts the user to choose a connection from a list then connects to it
+# using NetworkManager.
+
+IFS=$'\n'
+select name in $(nmcli -t -f name conn); do
+   break
+done
+nmcli conn up id "$name"
