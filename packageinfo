@@ -1,0 +1,23 @@
+#!/bin/sh
+# List Android package versions from a bugreport.
+sed -n '
+/^  Package \[/ {
+  s/^  Package \[\([^]]*\)\].*/Package \1:/
+  x
+  s/./&/
+  t print
+}
+/^    versionCode=/ {
+  s/.*versionCode=\([^ ]*\).*/\1/
+  H
+}
+/^    versionName=/ {
+  s/.*versionName=\([^ ]*\).*/(\1)/
+  H
+}
+b
+:print
+s/\n/ /g
+p
+b
+' "$1"
