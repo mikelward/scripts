@@ -1,0 +1,44 @@
+#!/bin/bash
+# Switch mouse buttons to left- or right-handed.
+
+# Usage: left <xinput id>
+left() {
+    xinput --set-button-map $1 3 2 1 4 5 6 7 8 9
+}
+
+# Usage: right <xinput id>
+right() {
+    xinput --set-button-map $1 1 2 3 4 5 6 7 8 9
+}
+
+# Prints mice one per line using a format:
+# <name>TAB<xinput id>
+list_pointing_devices() {
+    xinput --list |
+    sed 's/[^A-Za-z0-9= 	]//g' |
+    sed 's/^ *//' |
+    awk -F ' *	 *' '$3 ~ / pointer / {
+        gsub(/^id=/, "", $2)
+        printf "%s\t%s\n", $1, $2
+    }'
+}
+
+# Symlinks called "left" and "right" determine which button map to use.
+handedness=$(basename $0)
+case $handedness in left|right)
+    ;;
+*)
+    printf 'Must be invoked via a symlink called "left" or "right"\n' >&2
+    exit 1
+esac
+
+printf "Found the following pointing devices:\n"
+list_pointing_devices |
+while IFS=$'\t' read -r name id; do
+    printf '%s (%d)\n' "$name" "$id"
+done
+printf "Enter the number of the device to make $handedness-handed: "
+read -r id
+if test -n "$id"; then
+    $handedness "$id"
+fi
