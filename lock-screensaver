@@ -1,5 +1,10 @@
-if dm-tool list-seats; then
-  dm-tool lock
-else
-  xdg-screensaver lock
-fi
+# Disable dm-tool lock due to https://bugs.launchpad.net/lightdm/+bug/1322275.
+#if dm-tool list-seats; then
+#  dm-tool lock
+# Disable xdg-screensaver since it doesn't support XFCE or light-locker.
+# See e.g. https://bugs.launchpad.net/ubuntu/+source/xdg-utils/+bug/1366153.
+#else
+#  xdg-screensaver lock
+#fi
+
+xscreensaver-command -activate
