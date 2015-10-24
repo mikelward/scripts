@@ -234,8 +234,6 @@ make_links()
 	done
 }
 
-basedir="$HOME"
-conftar="$HOME"/conf.tar.gz
 destdir="$HOME"
 simulate=false
 extract=false	# now false by default, assume ~/conf is under git
