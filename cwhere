@@ -34,6 +34,7 @@ get_cpp_output()
     for header in $headers; do
         echo "#include <$header>" >> "$sourcefile"
     done
+    # TODO: Do we need -D_GNU_SOURCE?
     cpp -dD "$sourcefile"
     if test $? -ne 0; then
         cat "$sourcefile"
@@ -51,8 +52,11 @@ print_definitions()
     shift
     local headers="$@"
 
-    local filenamepattern='^# [0-9]+ "([^"]*)"'
-    local identifierpattern='^[[:space:]]*(#define|typedef)?[[:space:]]*'"$identifier"'([[:space:]]|\(|$)'
+    local filenamepattern definepattern typedefpattern declarepattern
+    filenamepattern='^# [0-9]+ "([^"]*)"'
+    definepattern='^[[:space:]]*#define[[:space:]][[:space:]]*'"$identifier"
+    typedefpattern='^[[:space:]]*typedef[[:space:]].*'"$identifier"
+    declarepattern='^[[:space:]]*(extern[[:space:]]*)?(_|int|void|char|short).*[[:space:]]'"$identifier"
 
     get_cpp_output "$@" |
     while read -r line; do
@@ -66,7 +70,9 @@ print_definitions()
                 # just save it in case there's a symbol match
                 :
             fi
-        elif [[ $line =~ $identifierpattern ]]; then
+        elif [[ $line =~ $typedefpattern ]] ||
+             [[ $line =~ $definepattern ]] ||
+             [[ $line =~ $declarepattern ]]; then
             if [[ $identifier != "INCLUDES" ]]; then
                 echo "$file: $line"
             fi
