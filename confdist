@@ -144,6 +144,8 @@ distribute_from()
 	ssh $host confdist
 }
 
+trap "exit" INT TERM QUIT
+
 read_defaults
 read_options "$@"
 

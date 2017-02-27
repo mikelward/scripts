@@ -2,6 +2,8 @@
 # $Id: confback,v 1.5 2005/07/09 14:54:58 michael Exp $
 # Create tarballs of configuration directories.
 
+trap "exit" INT TERM QUIT
+
 # One tarball per ~/conf.* directory.
 cd
 for dir in conf/ conf.*/; do
