@@ -176,6 +176,9 @@ make_links()
 	for file in "$sourcedir"/* "$sourcedir"/.[!.]* "$sourcedir"/..?*
 	do
 		test -e "$file" || continue
+		case "$file" in *.swp)
+			continue;;
+		esac
 
 		link=$(get_link "$file" "$destdir" "$prefix")
 
