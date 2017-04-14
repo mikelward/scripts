@@ -1,3 +1,4 @@
+#!/bin/bash
 # Run a program, logging args and parent process info to syslog.
 # Should be useful to help track down how something gets started.
 #
