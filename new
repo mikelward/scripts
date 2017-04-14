@@ -1,6 +1,6 @@
 #!/bin/bash
 
-templatedir=$HOME/templates
+templatedir=$HOME/.templates
 filename=$1
 extension=${filename##*.}
 if test "$extension" = "$filename"; then
