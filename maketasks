@@ -1,0 +1,16 @@
+#!/bin/bash
+# Create a Visual Studio Code task runner for the current project, based
+# on the presence of a build system configuration file.
+# For example, if the current directory has a BUILD file, maketasks will copy
+# ~/templates/tasks.json.BUILD to .vscode/tasks.json.
+
+cd "$1" || exit
+test -d .vscode || mkdir .vscode
+test -f .vscode/tasks.json && exit 0
+
+for f in ~/templates/tasks.json.*; do
+  if test -f ${f##*.}; then
+    cp $f .vscode/tasks.json
+    exit 0
+  fi
+done
