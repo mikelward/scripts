@@ -6,5 +6,4 @@
 #else
 #  xdg-screensaver lock
 #fi
-light-locker-command --lock
-#xscreensaver-command -activate
+gnome-screensaver-command --lock || xdg-screensaver lock
