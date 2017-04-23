@@ -8,9 +8,10 @@ cd "$1" || exit
 test -d .vscode || mkdir .vscode
 test -f .vscode/tasks.json && exit 0
 
-for f in ~/.templates/tasks.json.*; do
-  if test -f ${f##*.}; then
-    cp $f .vscode/tasks.json
+for f in "$HOME/.templates/tasks.json."*; do
+  test -f "$f" || break  # no templates => f == tasks.json.*
+  if test -f "${f#$HOME/.templates/tasks.json.}"; then
+    cp "$f" .vscode/tasks.json
     exit 0
   fi
 done
