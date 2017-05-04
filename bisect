@@ -1,0 +1,68 @@
+#!/bin/bash
+# print the first version where script exits non-zero
+
+usage() {
+    cat <<EOF 1>&2
+Usage: $scriptname <script> <good> <bad>
+EOF
+}
+
+error() {
+    echo "$scriptname: $*" >&2
+}
+
+scriptname=bisect
+
+while getopts ":hoptions" option; do
+    case $option in
+    h)
+        usage
+        exit 0
+        ;;
+    ':')
+        echo "Missing argument to -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    '?')
+        echo "Invalid option -$OPTARG" 1>&2
+        usage
+        exit 2
+        ;;
+    *)
+        echo "Program does not support -$option yet" 1>&2
+        usage
+        exit 2
+        ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+script=$1
+good=$2
+bad=$3
+
+if [[ -z $script ]] || [[ -z $good ]] || [[ -z $bad ]]; then
+    usage
+    exit 2
+fi
+if ! [[ -x $script ]]; then
+    error "$script is not executable"
+    exit 1
+fi
+if ((bad <= good)); then
+    error "bad version must be higher than good version"
+    exit 1
+fi
+
+echo "Given $good is good and $bad is bad..."
+while ((bad-good > 1)); do
+    version=$((good + (bad-good)/2))
+    if "$script" "$version" >/dev/null 2>&1; then
+        good=$version
+    else
+        bad=$version
+    fi
+done
+
+echo "$bad is bad"
