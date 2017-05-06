@@ -1,0 +1,8 @@
+#!/bin/bash
+# Create a Scala Ensime Config for the current project, if build.sbt is present.
+
+cd "$1" || exit
+test -f build.sbt || exit
+test -f .ensime && exit
+
+sbt ensimeConfig
