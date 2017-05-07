@@ -1,0 +1,2 @@
+#!/bin/bash
+exec chrome --app-id=icppfcnhkcmnfdhfhphakoifcfokfdhg ${MUSIC_PROFILE+--profile-directory="$MUSIC_PROFILE"}
