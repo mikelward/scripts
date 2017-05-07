@@ -1,1 +1,1 @@
-google-chrome --app-id=$1
+chrome --app-id=$1
