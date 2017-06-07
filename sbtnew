@@ -1,0 +1,9 @@
+#!/bin/bash
+tildepwd() {
+    echo "$PWD" | sed "s#^$HOME/#~/#;s#^$HOME$/#~#"
+}
+cd ~/src
+echo "Creating $(tildepwd)/$1"
+sbt new sbt/scala-seed.g8 --name="$1"
+cd "$1"
+echo "Created $(tildepwd)"
