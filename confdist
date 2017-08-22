@@ -126,7 +126,7 @@ install_on()
 	if test $? -ne 0
 	then
 		printf "failure copying install script to $host:scripts\n"
-		continue
+		return 1
 	fi
 
 	ssh $host "scripts/confinst" -e
