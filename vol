@@ -9,9 +9,7 @@ down)
 up)
     amixer set Master 5%+;;
 mute)
-    # -D pulse is needed to correctly unmute.
-    # https://bugs.launchpad.net/ubuntu/+source/pulseaudio/+bug/496354
-    amixer -D pulse set Master toggle;;
+    amixer set Master toggle;;
 *)
     printf 'vol: Unknown subcommand %s\n' "$1" >&2;;
 esac
