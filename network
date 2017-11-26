@@ -1,2 +1,0 @@
-# tell NetworkManager to connect to the named WiFi network
-nmcli con up id "$@"
