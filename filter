@@ -1,0 +1,29 @@
+#!/bin/bash
+# Send matching lines to be processed, pass non-matching lines thru unprocessed.
+# Example: </etc/fstab filter "^[^#]" column -t
+
+if test $# -lt 2; then
+    printf "Usage: filter <pattern> <command> [<command args>]\n" >&2
+    exit 2
+fi
+
+# Decorate, sort, then undecorate lines to ensure line order is preserved, even
+# if the command uses different buffering (e.g. only produces output after
+# reading all input).
+# Undecorate using whitespace rather than just tabs so we can use "column" as
+# the command (column converts the tab separator into spaces).
+pattern=$1
+shift
+i=0
+{
+while read -r line; do
+    i=$((i+1))
+    if [[ "$line" =~ $pattern ]]; then
+        printf "%d\t%s\n" "$i" "$line" >&3
+    else
+        printf "%d\t%s\n" "$i" "$line"
+    fi
+done 3> >("$@")
+} |
+sort -k1n |
+sed 's/^[0-9][0-9]*[[:space:]]*//'
