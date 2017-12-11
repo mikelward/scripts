@@ -1,5 +1,5 @@
 #!/bin/sh
-for term in sakura terminator gnome-terminal xterm; do
+for term in kitty sakura terminator gnome-terminal xterm; do
   if type "$term" >/dev/null 2>&1; then
     exec "$term"
   fi
