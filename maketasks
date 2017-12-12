@@ -17,7 +17,7 @@ for f in "$HOME/.templates/tasks.json."*; do
   test -f "$f" || break  # no templates => f == tasks.json.*
   if test -f "${f#$HOME/.templates/tasks.json.}"; then
     builddir="$(builddir)"
-    sed -e 's#@BUILDDIR#'"$builddir"'#' "$f" > .vscode/tasks.json
+    sed -e 's#@BUILDDIR@#'"$builddir"'#' "$f" > .vscode/tasks.json
     exit 0
   fi
 done
