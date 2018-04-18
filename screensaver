@@ -1,0 +1,21 @@
+xset s 300 5
+if test -x "$(command -v xsecurelock)"; then
+  case $1 in
+    init)
+      (xss-lock -l -- xsecurelock&)
+      ;;
+    lock)
+      exec xsecurelock
+      ;;
+  esac
+else
+  case $1 in
+    init)
+      (setsid xscreensaver&)
+      (xss-lock -- xscreensaver-command --lock&)
+      ;;
+    lock)
+      exec xscreensaver-command --lock
+      ;;
+  esac
+fi
