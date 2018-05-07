@@ -1,0 +1,15 @@
+#!/bin/bash
+# Create a Visual Studio Code workspace settings.json for the current project.
+# This is a workaround for VSCode issue 17634, allowing separate work and home
+# overrides to the global settings.json.
+
+source "$HOME/.shrc"
+
+set -e
+
+cd "$1" >/dev/null
+
+test -d .vscode || mkdir .vscode
+test -f .vscode/settings.json && exit 0
+
+cp "$HOME/.vscode/settings.json.local" .vscode/settings.json
