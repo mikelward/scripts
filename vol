@@ -1,15 +1,15 @@
 # Change the system volume.
 
 # Use amixer rather than pactl, since it's simpler, and should work on
-# more systems.
+# more systems.  Fall back to pactl.
 
 case "$1" in
 down)
-    amixer set Master 5%-;;
+    amixer set Master 5%- 2>/dev/null || pactl set-sink-volume 0 -5%;;
 up)
-    amixer set Master 5%+;;
+    amixer set Master 5%+ 2>/dev/null || pactl set-sink-volume 0 +5%;;
 mute)
-    amixer set Master toggle;;
+    amixer set Master toggle 2>/dev/null || pactl set-sink-mute 0 toggle;;
 *)
     printf 'vol: Unknown subcommand %s\n' "$1" >&2;;
 esac
