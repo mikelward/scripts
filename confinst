@@ -173,7 +173,7 @@ make_links()
 
 	verbose "Making links from $sourcedir to $destdir"
 
-	for file in "$sourcedir"/* "$sourcedir"/.[!.]* "$sourcedir"/..?*
+	for file in "$sourcedir"/*
 	do
 		test -e "$file" || continue
 		case "$file" in *.swp)
