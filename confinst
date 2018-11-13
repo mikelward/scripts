@@ -106,12 +106,6 @@ get_link()
 	prefix="$3"
 
 	sourcename="${sourcefile##*/}"
-	if file_starts_with "$sourcename" "$prefix"
-	then
-		verbose "Not adding extra $prefix to $sourcename"
-		prefix=
-	fi
-
 	echo "$destdir"/"$prefix""$sourcename"
 }
 
@@ -176,7 +170,7 @@ make_links()
 	for file in "$sourcedir"/*
 	do
 		test -e "$file" || continue
-		case "$file" in *.swp)
+		case "$(basename "$file")" in .*)
 			continue;;
 		esac
 
