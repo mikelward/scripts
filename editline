@@ -1,0 +1,16 @@
+#!/bin/bash
+typeset -a args
+for arg in "$@"; do
+    file="${arg%:[0-9]*}"
+    args+=("$file")
+    if test "$file" != "$arg"; then
+        num="${arg#$file:}"
+        args+=("+$num")
+    fi
+done
+for editor in nvim vim; do
+    if test -x "$(command -v "$editor")"; then
+        "$editor" "${args[@]}"
+        break
+    fi
+done
