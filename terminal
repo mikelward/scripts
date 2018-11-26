@@ -1,6 +1,10 @@
-#!/bin/sh
+#!/bin/bash
+declare -A term_args=(
+[terminator]="--working-directory=$HOME"
+[gnome-terminal]="--working-directory=$HOME"
+)
 for term in terminator kitty sakura gnome-terminal xterm; do
   if type "$term" >/dev/null 2>&1; then
-    exec "$term"
+    exec "$term" ${term_args[$term]}
   fi
 done
