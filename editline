@@ -8,7 +8,7 @@ for arg in "$@"; do
         args+=("+$num")
     fi
 done
-for editor in nvim vim; do
+for editor in nvr nvim vim; do
     if test -x "$(command -v "$editor")"; then
         "$editor" "${args[@]}"
         break
