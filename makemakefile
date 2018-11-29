@@ -1,0 +1,22 @@
+#!/bin/bash
+# Create a Makefile for the current project, based on the presence of a build
+# system configuration file.
+# For example, if the current directory has a BUILD file, makemakefile will copy
+# ~/templates/Makefile.BUILD to ./Makefile.
+
+source "$HOME/.shrc"
+
+set -e
+
+cd "$1" >/dev/null
+
+test -f Makefile && exit 0
+
+for f in "$HOME/.templates/Makefile."*; do
+  test -f "$f" || break  # no templates
+  if test -f "${f#$HOME/.templates/Makefile.}"; then
+    builddir="$(builddir)"
+    sed -e 's#@BUILDDIR@#'"$builddir"'#' "$f" > Makefile
+    exit 0
+  fi
+done
