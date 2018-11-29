@@ -5,11 +5,14 @@
 
 case "$1" in
 down)
-    pactl set-sink-volume 0 -5% || amixer set Master 5%- 2>/dev/null;;
+    pactl set-sink-volume @DEFAULT_SINK@ -5% ||
+    amixer set Master 5%- 2>/dev/null;;
 up)
-    pactl set-sink-volume 0 +5% || amixer set Master 5%+ 2>/dev/null;;
+    pactl set-sink-volume @DEFAULT_SINK@ +5% ||
+    amixer set Master 5%+ 2>/dev/null;;
 mute)
-    pactl set-sink-mute 0 toggle || amixer set Master toggle 2>/dev/null;;
+    pactl set-sink-mute @DEFAULT_SINK@ toggle ||
+    amixer set Master toggle 2>/dev/null;;
 *)
     printf 'vol: Unknown subcommand %s\n' "$1" >&2;;
 esac
