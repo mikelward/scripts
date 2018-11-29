@@ -1,5 +1,5 @@
 #!/bin/bash
-typeset -a args
+declare -a args
 for arg in "$@"; do
     file="${arg%:[0-9]*}"
     args+=("$file")
@@ -8,9 +8,9 @@ for arg in "$@"; do
         args+=("+$num")
     fi
 done
-for editor in nvr nvim vim; do
+for editor in nvimr nvim vim; do
     if test -x "$(command -v "$editor")"; then
-        "$editor" "${args[@]}"
+        "$editor" ${editor_args[$editor]} "${args[@]}"
         break
     fi
 done
