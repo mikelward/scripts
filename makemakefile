@@ -16,7 +16,7 @@ for f in "$HOME/.templates/Makefile."*; do
   test -f "$f" || break  # no templates
   if test -f "${f#$HOME/.templates/Makefile.}"; then
     builddir="$(builddir)"
-    sed -e 's#@BUILDDIR@#'"$builddir"'#' "$f" > Makefile
+    sed -e 's#@BUILDDIR@#'"$builddir"'#' "$f" > .Makefile
     exit 0
   fi
 done
