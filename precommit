@@ -1,0 +1,16 @@
+#!/bin/bash
+# precommit hook for git, hg, etc.
+set -e
+
+source ~/.shrc.vcs
+
+allknown
+
+while IFS=$'\n' read path; do
+    cd "$(dirname "$path")"
+    while test "$PWD" != "/"; do
+      test -f .Makefile && break
+      cd ..
+    done
+done <<<"$(changed)"
+make -f .Makefile test
