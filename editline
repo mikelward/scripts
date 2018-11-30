@@ -2,6 +2,7 @@
 declare -a args
 for arg in "$@"; do
     file="${arg%:[0-9]*}"
+    file="$(realpath "$file")"
     args+=("$file")
     if test "$file" != "$arg"; then
         num="${arg#$file:}"
