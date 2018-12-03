@@ -1,3 +1,4 @@
+#!/bin/bash
 xset s 300 5
 if test -x "$(command -v xsecurelock)"; then
   case $1 in

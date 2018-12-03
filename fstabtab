@@ -1,3 +1,4 @@
+#!/bin/sh
 {
     echo '#<device> <mount> <fstype> <options> <dump> <fsck>'
     grep -v '^#' /etc/fstab
