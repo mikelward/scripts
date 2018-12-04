@@ -5,7 +5,7 @@ for arg in "$@"; do
     file="$(realpath "$file")"
     args+=("$file")
     case "$arg" in *:*)
-        num="${arg#$file:}"
+        num="${arg##*:}"
         args+=("+$num")
         ;;
     esac
