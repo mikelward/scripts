@@ -6,7 +6,9 @@ source ~/.shrc.vcs
 
 allknown
 
+rootdir="$PWD"
 while IFS=$'\n' read path; do
+    cd "$rootdir"
     cd "$(dirname "$path")"
     while test "$PWD" != "/"; do
       test -f .Makefile && break
