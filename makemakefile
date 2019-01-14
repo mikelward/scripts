@@ -12,6 +12,9 @@ cd "$1" >/dev/null
 
 test -f .Makefile && exit 0
 
+# Hack so we match BUILD and Makefile before angular.json and makefile.
+LC_ALL=C
+
 for f in "$HOME/.templates/Makefile."*; do
   test -f "$f" || break  # no templates
   if test -f "${f#$HOME/.templates/Makefile.}"; then
