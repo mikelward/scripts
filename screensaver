@@ -1,6 +1,9 @@
 #!/bin/bash
 xset s 300 5
 if test -x "$(command -v xsecurelock)"; then
+  if test -f "$HOME/.xsecurelockrc"; then
+      . "$HOME/.xsecurelockrc"
+  fi
   case $1 in
     init)
       (xss-lock -l -- xsecurelock&)
