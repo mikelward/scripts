@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Works with $EDITOR to use vscode as editor if run from inside vscode.
+
+case "$TERM_PROGRAM" in
+vscode)
+    ;;
+*)
+    # Pretend this script isn't available.
+    exit 127;;
+esac
+
+# Switch <filename> +<lineno> to --goto <filename>:<lineno>
+declare -a args
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+    arg="${args[i]}"
+    case "$arg" in +*)
+        file="${args[i-1]}"
+        line="${arg#+}"
+        args[i-1]="--goto"
+        args[i]="${file}:${line}"
+        ;;
+    *)
+        ;;
+    esac
+done
+
+code "${args[@]}"

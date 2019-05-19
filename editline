@@ -10,9 +10,6 @@ for arg in "$@"; do
         ;;
     esac
 done
-for editor in nvimr nvim vim; do
-    if test -x "$(command -v "$editor")"; then
-        "$editor" ${editor_args[$editor]} "${args[@]}"
-        break
-    fi
+for editor in codeedit nvimr nvim vim; do
+    "$editor" ${editor_args[$editor]} "${args[@]}" && break
 done
