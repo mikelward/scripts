@@ -26,4 +26,4 @@ for ((i=0; i<${#args[@]}; i++)); do
     esac
 done
 
-code "${args[@]}"
+code --wait "${args[@]}"
