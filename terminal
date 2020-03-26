@@ -3,8 +3,8 @@ declare -A term_args=(
 [terminator]="--working-directory=$HOME"
 [gnome-terminal]="--working-directory=$HOME"
 )
-for term in terminator kitty sakura gnome-terminal xterm; do
+for term in mate-terminal gnome-terminal terminator kitty sakura xterm; do
   if type "$term" >/dev/null 2>&1; then
-    exec "$term" ${term_args[$term]}
+    exec "$term" ${term_args[$term]} "$@"
   fi
 done
