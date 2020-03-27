@@ -282,7 +282,7 @@ fi
 make_links "$HOME/conf" "$destdir" "$prefix"
 for dir in "$HOME"/conf.*
 do
-	make_links "$dir" "$destdir" "$prefix" false
+	make_links "$dir" "$destdir" "$prefix" true
 done
 
 # vim: set ts=4 sw=4 tw=0 noet:
