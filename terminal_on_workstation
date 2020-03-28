@@ -1,6 +1,6 @@
 #!/bin/bash
 . "$HOME"/.shrc
-. "$HOME"/.workstation
+WORKSTATION="$(workstation)"
 if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
