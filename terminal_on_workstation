@@ -5,5 +5,5 @@ if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
   need_auth && auth
-  terminal -- ssh "$WORKSTATION"
+  terminal -e "ssh $WORKSTATION"
 fi
