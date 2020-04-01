@@ -4,5 +4,8 @@ WORKSTATION="$(workstation)"
 if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
-  terminal -e "$SHELL -c '. $HOME/.shrc; need_auth && auth; ssh $WORKSTATION'"
+  need_auth && terminal -e ". $HOME/.shrc && auth"
+  # establish a ControlMaster if possible
+  ssh -n $WORKSTATION true
+  terminal -e "ssh $WORKSTATION"
 fi
