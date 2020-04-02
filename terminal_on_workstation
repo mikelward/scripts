@@ -4,8 +4,10 @@ WORKSTATION="$(workstation)"
 if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
-  need_auth && terminal -e ". $HOME/.shrc && auth"
-  # establish a ControlMaster if possible
-  ssh -n $WORKSTATION true
-  terminal -e "ssh $WORKSTATION"
+  # We need to run several steps all in the same terminal.
+  # - Explicitly start an interactive shell, so we can use the need_auth and
+  #   auth_functions from .shrc, and can run multiple commands
+  # - Run ssh -n to start an ssh ControlMaster, if possible
+  # - Actually do the ssh
+  terminal -e "bash -i -c 'need_auth && auth; ssh -n $WORKSTATION true; ssh $WORKSTATION'"
 fi
