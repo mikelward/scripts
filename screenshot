@@ -1,0 +1,9 @@
+#!/bin/bash
+. "$HOME"/.shrc
+for command in xfce4-screenshooter; do
+    if have_command "$command"; then
+        exec "$command" "$@"
+    fi
+done
+exit 1
+
