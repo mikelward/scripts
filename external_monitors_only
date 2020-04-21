@@ -1,0 +1,7 @@
+#!/bin/bash
+monitors=$(xrandr | awk '$2 ~ /(dis)?connected/')
+if <<<"$monitors" grep -q '^eDP-1 connected' &&
+   <<<"$monitors" grep -q -c '\<connected\>'; then
+    xrandr --output eDP-1 --off
+fi
+
