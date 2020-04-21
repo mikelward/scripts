@@ -32,6 +32,18 @@ case $handedness in left|right)
     exit 1
 esac
 
+# All mice, but not trackpads.
+if test "$1" = "mice"; then
+    list_pointing_devices |
+    while IFS=$'\t' read -r name id; do
+        case "$name" in *"Mouse"|"Logitech M"*)
+            echo "$name"
+            $handedness "$id";;
+        esac
+    done
+    exit
+fi
+
 printf "Found the following pointing devices:\n"
 list_pointing_devices |
 while IFS=$'\t' read -r name id; do
