@@ -11,5 +11,9 @@ for arg in "$@"; do
     esac
 done
 for editor in codeedit nvimr nvim vim; do
-    "$editor" ${editor_args[$editor]} "${args[@]}" && break
+    # exit status is 127 if a command is not found
+    # codeedit returns 127 if it wants to be skipped
+    "$editor" ${editor_args[$editor]} "${args[@]}"
+    status=$?
+    test $status -ne 127 && exit $status
 done
