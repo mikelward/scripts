@@ -1,0 +1,3 @@
+#!/bin/bash
+# Need to focus the window due to crbug.com/393145.
+xdotool search --name "YouTube Music" windowfocus key space
