@@ -1,7 +1,16 @@
 #!/bin/bash
 monitors=$(xrandr | awk '$2 ~ /(dis)?connected/')
-if <<<"$monitors" grep -q '^eDP-1 connected' &&
-   <<<"$monitors" grep -q -c '\<connected\>'; then
-    xrandr --output eDP-1 --off
+internal_display='eDP-1'
+internal_display_connected() {
+  <<<"$monitors" grep -q "^$internal_display connected"
+}
+external_display_connected() {
+   <<<"$monitors" grep -v "^$internal_display " |
+     grep -q -w 'connected'
+}
+disable_internal_display() {
+    xrandr --output "$internal_display" --off
+  }
+if internal_display_connected && external_display_connected; then
+    disable_internal_display
 fi
-
