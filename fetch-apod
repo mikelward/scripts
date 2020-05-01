@@ -1,0 +1,19 @@
+#!/bin/bash
+. "$HOME/.shrc"
+
+set -e
+set -o pipefail
+baseurl=https://apod.nasa.gov/apod
+pageurl=$baseurl/astropix.html
+dest=$HOME/Pictures/apod.jpg
+
+if test "$(age "$dest")" -lt 86400; then
+    echo "$dest is less than a day old, not fetching"
+    exit 0
+fi
+echo "$dest is more than a day old, fetching"
+
+imageurl=$baseurl/$(curl -s "$pageurl" | grep --only-matching --max-count=1 'image/[0-9]*/[^"]*')
+curl -s --output "$dest".tmp "$imageurl"
+mv "$dest".tmp "$dest"
+echo "Fetched $imageurl -> $dest"
