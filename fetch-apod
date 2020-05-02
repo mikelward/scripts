@@ -3,17 +3,25 @@
 
 set -e
 set -o pipefail
+trap 'echo "A step failed, exiting"' ERR
+
 baseurl=https://apod.nasa.gov/apod
 pageurl=$baseurl/astropix.html
 dest=$HOME/Pictures/apod.jpg
 
-if test "$(age "$dest")" -lt 86400; then
-    echo "$dest is less than a day old, not fetching"
+age="$(age "$dest" 2>/dev/null || echo -1)"
+if test "$age" -ne -1 && test "$age" -lt 86400; then
+    echo "$dest is less than a day old, not fetching" >&2
     exit 0
 fi
-echo "$dest is more than a day old, fetching"
+echo "$dest is more than a day old, fetching" >&2
 
-imageurl=$baseurl/$(curl -s "$pageurl" | grep --only-matching --max-count=1 'image/[0-9]*/[^"]*')
+imagelinks=($(curl -s "$pageurl" | grep --only-matching 'image/[0-9]*/[^"]*'))
+if test "${#imagelinks[@]}" -lt 1; then
+    echo "No image link found at $pageurl" >&2
+    exit 1
+fi
+imageurl=$baseurl/${imagelinks[0]}
 curl -s --output "$dest".tmp "$imageurl"
 mv "$dest".tmp "$dest"
 echo "Fetched $imageurl -> $dest"
