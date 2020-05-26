@@ -1,7 +1,25 @@
 #!/bin/bash
+exists() {
+  type "$@" >/dev/null 2>&1
+}
+exec_dash_e() {
+  program=$1
+  shift
+  test $# -eq 0 && exec "$program"
+  exec "$program" -e "$*"
+}
+exec_positional() {
+  program=$1
+  shift
+  test $# -eq 0 && exec "$program"
+  exec "$program" -- "$@"
+}
+
 cd
-for term in kitty xfce4-terminal mate-terminal gnome-terminal terminator sakura xterm; do
-  if type "$term" >/dev/null 2>&1; then
-    exec "$term" "$@"
-  fi
-done
+exists kitty && exec_positional kitty "$@"
+exists xfce4-terminal && exec_with_e_flag xfce4-terminal "$@"
+exists mate-terminal && exec_dash_e mate-terminal "$@"
+exists gnome-terminal && exec_positional gnome-terminal "$@"
+exists terminator && exec_dash_e terminator "$@"
+exists sakura && exec_dash_e sakura "$@"
+exists xterm && exec_dash_e xterm "$@"

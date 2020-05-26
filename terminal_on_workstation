@@ -1,6 +1,6 @@
 #!/bin/bash
 . "$HOME"/.shrc
-WORKSTATION="$(workstation)"
+export WORKSTATION="$(workstation)"
 if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
@@ -9,5 +9,5 @@ else
   #   auth_functions from .shrc, and can run multiple commands
   # - Run ssh -n to start an ssh ControlMaster, if possible
   # - Actually do the ssh
-  terminal -e "bash -i -c 'need_auth && auth; ssh -n $WORKSTATION true; ssh $WORKSTATION'"
+  terminal bash -i -c 'need_auth && auth; ssh -n $WORKSTATION true; ssh $WORKSTATION'
 fi
