@@ -1,6 +1,6 @@
 #!/bin/bash
 cd
-for term in xfce4-terminal mate-terminal gnome-terminal terminator kitty sakura xterm; do
+for term in kitty xfce4-terminal mate-terminal gnome-terminal terminator sakura xterm; do
   if type "$term" >/dev/null 2>&1; then
     exec "$term" "$@"
   fi
