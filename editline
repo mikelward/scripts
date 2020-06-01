@@ -10,10 +10,16 @@ for arg in "$@"; do
         ;;
     esac
 done
-for editor in codeedit nvimr nvim vim; do
+declare -a editors=(
+    codeedit nvimr nvim vim
+)
+for editor in "${editors[@]}"; do
+    type "$editor" >/dev/null 2>&1 || continue
     # exit status is 127 if a command is not found
     # codeedit returns 127 if it wants to be skipped
     "$editor" ${editor_args[$editor]} "${args[@]}"
     status=$?
     test $status -ne 127 && exit $status
 done
+printf '%s %s\n' "Couldn't find any editor, looked for" "${editors[*]}" >&2
+exit 1
