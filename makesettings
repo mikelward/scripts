@@ -4,6 +4,7 @@
 # overrides to the global settings.json.
 
 source "$HOME/.shrc"
+source "$HOME/.shrc.vcs"
 
 set -e
 
@@ -12,4 +13,6 @@ cd "$1" >/dev/null
 test -d .vscode || mkdir .vscode
 test -f .vscode/settings.json && exit 0
 
-cp "$HOME/.vscode/settings.json.local" .vscode/settings.json
+rootdir="$(rootdir)"
+
+sed -e "s#@ROOTDIR@#$rootdir#" "$HOME/.vscode/settings.json.local" > .vscode/settings.json

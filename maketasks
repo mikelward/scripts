@@ -5,6 +5,7 @@
 # ~/templates/tasks.json.BUILD to .vscode/tasks.json.
 
 source "$HOME/.shrc"
+source "$HOME/.shrc.vcs"
 
 set -e
 
@@ -13,11 +14,12 @@ cd "$1" >/dev/null
 test -d .vscode || mkdir .vscode
 test -f .vscode/tasks.json && exit 0
 
+builddir="$(builddir)"
+
 for f in "$HOME/.templates/tasks.json."*; do
   test -f "$f" || break  # no templates => f == tasks.json.*
   if test -f "${f#$HOME/.templates/tasks.json.}"; then
-    builddir="$(builddir)"
-    sed -e 's#@BUILDDIR@#'"$builddir"'#' "$f" > .vscode/tasks.json
+    sed -e "s#@BUILDDIR@#$builddir#" "$f" > .vscode/tasks.json
     exit 0
   fi
 done
