@@ -11,7 +11,7 @@ for arg in "$@"; do
     esac
 done
 declare -a editors=(
-    codeedit nvimr nvim vim
+    codeedit vim
 )
 for editor in "${editors[@]}"; do
     type "$editor" >/dev/null 2>&1 || continue
