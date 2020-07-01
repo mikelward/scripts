@@ -1,0 +1,12 @@
+#!/bin/bash
+
+current_workspace=$(
+i3-msg -t get_workspaces | jq -r '.[] | select(.focused==true).name'
+)
+for workspace in $(
+i3-msg -t get_workspaces | jq -r '.[1:][].name'
+); do
+    i3-msg workspace $workspace
+    i3-msg move workspace to output DP-1
+done
+i3-msg workspace $current_workspace
