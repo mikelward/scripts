@@ -1,0 +1,4 @@
+#!/bin/bash
+
+headphones=$(cat ~/.headphones)
+bluetoothctl connect "$headphones"
