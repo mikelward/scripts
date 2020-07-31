@@ -1,2 +1,1 @@
-#chrome-app gbchcmhmhahfdphkhkmpfmihenigjmpp
-chrome-app akmopbcjmaodehjcgfolkcehjamfeojk
+chrome --app="https://remotedesktop.google.com"

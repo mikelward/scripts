@@ -1,2 +1,2 @@
 #!/bin/bash
-exec mousepad "$@"
+chrome --app="https://keep.google.com"
