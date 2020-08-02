@@ -1,2 +1,2 @@
 #!/bin/bash
-exec chrome --app-id=cinhimbnkkaeohfgghhklpknlkffjgod ${CHROME_MUSIC_USER_DATA_DIR+--user-data-dir="$CHROME_MUSIC_USER_DATA_DIR"}
+exec chrome --app="https://music.youtube.com" ${CHROME_MUSIC_USER_DATA_DIR+--user-data-dir="$CHROME_MUSIC_USER_DATA_DIR"}
