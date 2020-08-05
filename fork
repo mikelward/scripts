@@ -1,0 +1,21 @@
+#!/bin/bash
+url="$1"
+git clone "$url"
+dir=${url##*/}
+dir=${dir%.git}
+cd $dir
+git remote add upstream "$url"
+# "hub" doesn't support Security Keys, but it can still help a bit.
+case "$url" in
+"git@github.com:"*)
+    echo "Please fork the repository on GitHub at $url"
+    ;;
+*)
+    echo "Please create the $dir repository on GitHub at https://github.com/new"
+    ;;
+esac
+echo "Press ENTER when done"
+read
+git remote remove origin
+git remote add origin "git@github.com:mikelward/$dir"
+git push origin
