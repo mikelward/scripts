@@ -1,3 +1,5 @@
 #!/bin/bash
-# Need to focus the window due to crbug.com/393145.
-xdotool search --name "YouTube Music" windowfocus key space
+# Need to activate the window due to crbug.com/393145.
+current_window=$(xdotool getactivewindow)
+xdotool search --name "YouTube Music" windowactivate --sync key space
+xdotool windowactivate "$current_window"
