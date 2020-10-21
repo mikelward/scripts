@@ -1,2 +1,2 @@
 #!/bin/bash
-chrome --app="https://keep.google.com"
+mousepad
