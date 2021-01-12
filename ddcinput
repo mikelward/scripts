@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+set -u
+
+if test $# -ne 2; then
+    echo "Usage: ddcinput <display number> <source name>" >&2
+    exit 2
+fi
+
+display="$1"
+source="$2"
+case "$2" in
+DisplayPort-1) source="0x0f";;
+DisplayPort-2) source="0x10";;
+HDMI-1)        source="0x11";;
+HDMI-2)        source="0x12";;
+esac
+
+ddcutil --display "$display" setvcp 0x60 "$source"
+
