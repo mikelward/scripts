@@ -17,6 +17,6 @@ HDMI-1)        source="0x11";;
 HDMI-2)        source="0x12";;
 esac
 
-logger "Switching display $display to source $source"
-ddcutil --display "$display" setvcp 0x60 "$source"
+logger -t "ddcinput[$$]" "Switching display $display to source $source"
+ddcutil --display "$display" setvcp 0x60 "$source" >>/var/log/ddcinput.log 2>&1
 

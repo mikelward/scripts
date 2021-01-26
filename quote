@@ -1,0 +1,17 @@
+#!/bin/bash
+upper=$(tr a-z A-Z <<<"$1")
+urls=(
+https://www.barrons.com/quote/stock/us/xnys/$1/research-ratings
+https://www.barrons.com/quote/stock/us/xnas/$1/research-ratings
+https://seekingalpha.com/symbol/$1/ratings/quant-ratings
+https://www.morningstar.com/stocks/xnys/$1/quote
+https://www.morningstar.com/stocks/xnas/$1/quote
+https://www.marketwatch.com/investing/stock/$1/analystestimates?mod=mw_quote_tab
+https://www.tipranks.com/stocks/$1/forecast
+https://www.zacks.com/zer/report/$1
+https://ycharts.com/companies/$upper
+)
+for url in "${urls[@]}"; do
+    chrome "$url"
+done
+
