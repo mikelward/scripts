@@ -5,6 +5,7 @@ upper=$(tr a-z A-Z <<<"$1")
 urls=(
 https://www.barrons.com/quote/stock/us/xnys/$1/research-ratings
 https://www.barrons.com/quote/stock/us/xnas/$1/research-ratings
+https://finviz.com/quote.ashx?t=$1
 https://seekingalpha.com/symbol/$1/ratings/quant-ratings
 https://www.morningstar.com/stocks/xnys/$1/quote
 https://www.morningstar.com/stocks/xnas/$1/quote
