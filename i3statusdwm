@@ -1,0 +1,4 @@
+#!/bin/sh
+i3status -c "$HOME/.config/i3status/dwm" | while read -r line; do
+    xsetroot -name "$line"
+done
