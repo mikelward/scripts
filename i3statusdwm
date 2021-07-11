@@ -1,6 +1,6 @@
 #!/bin/sh
-i3status -c "$HOME/.config/i3status/dwm" | while read -r line; do
+i3status | while read -r line; do
     line="$(echo "$line" | sed -e 's#/ DisplayPort ##')"
-    line="$(echo "$line" | tr -s ' ')"
+    line="$(echo "$line" | tr -d '|' | tr -s ' ')"
     xsetroot -name "$line"
 done
