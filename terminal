@@ -17,7 +17,7 @@ exec_positional() {
 
 cd
 exists kitty && exec_positional kitty "$@"
-exists xfce4-terminal && exec_with_e_flag xfce4-terminal "$@"
+exists xfce4-terminal && exec_dash_e xfce4-terminal "$@"
 exists mate-terminal && exec_dash_e mate-terminal "$@"
 exists gnome-terminal && exec_positional gnome-terminal "$@"
 exists terminator && exec_dash_e terminator "$@"
