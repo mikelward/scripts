@@ -1,1 +1,2 @@
-chrome --user-data-dir="$HOME/.config/google-chrome-alt" "$@"
+#chrome --user-data-dir="$HOME/.config/google-chrome-alt" "$@"
+edge "$@"
