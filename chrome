@@ -2,4 +2,4 @@
 # Adding --password-store=basic makes Chrome start 25 seconds faster on XFCE.
 # See <http://crbug.com/489030> for details.
 # TODO: Fix libsecret/gnome-keyring.
-google-chrome-beta --password-store=basic --disable-features="UseOzonePlatform" "$@"
+google-chrome-stable --password-store=basic --disable-features="UseOzonePlatform" "$@"
