@@ -1,0 +1,2 @@
+#!/bin/sh
+nmcli --terse -f NAME conn show --active | grep -v lo | tr '\n' ' '
