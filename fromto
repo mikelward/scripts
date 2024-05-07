@@ -6,16 +6,20 @@ use strict;
 use warnings;
 use Getopt::Long;
 
+my $invert;
 my $skip;
 my $help;
-my $result = GetOptions("skip|s" => \$skip,
-						"help|h" =>);
+my $result = GetOptions(
+  "invert|v" => \$invert,
+  "skip|s" => \$skip,
+  "help|h" =>);
 
 sub usage
 {
 	print STDERR "Usage: fromto [options] <from pattern> <to pattern> [<file>]\n";
 	print STDERR "Options:\n";
 	print STDERR "    -s    Skip the lines matching the patterns\n";
+    print STDERR "    -v    Invert - print the opposite of normal\n";
 	print STDERR "Notes:\n";
 	print STDERR "          Reads from stdin if no file name is supplied\n";
 	print STDERR "          Patterns are in Perl compatible regex syntax\n";
@@ -36,29 +40,48 @@ my $from = shift @ARGV;
 my $to = shift @ARGV;
 
 my $started = 0;
-my $skipmarker = 0;
+my $skip_boundary = 0;
+
+sub print_boundary {
+  if ($invert) {
+    print if $skip_boundary;
+  } else {
+    print if !$skip_boundary;
+  }
+}
+
+sub print_middle {
+  if (!$invert) {
+    print;
+  }
+}
+
+sub dont_print {
+  if ($invert) {
+    print;
+  }
+}
 
 LINE:
 while (<>) {
     if ($started) {
         if ($to && /$to/) {
-			if (!$skipmarker) {
-				print;
-			}
+            print_boundary();
 			$started = 0;
 			next LINE;
         }
         else {
-            print;
+            print_middle();
             next LINE;
         }
     }
     if (!$from || /$from/) {
         $started = 1;
-		if (!$skipmarker) {
-			print;
-		}
+        print_boundary;
         next LINE;
     }
+    dont_print;
+    next LINE;
 }
+
 
