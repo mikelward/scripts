@@ -1,6 +1,17 @@
 #!/bin/bash
 xset s 300 5
-if test -x "$(command -v xsecurelock)"; then
+
+if test -x "$(command -v mate-screensaver)"; then
+  case $1 in
+    init)
+      (setsid mate-screensaver&)
+      ;;
+    lock)
+      exec mate-screensaver-command --lock
+      ;;
+    esac
+elif false; then
+#if test -x "$(command -v xsecurelock)"; then
   if test -f "$HOME/.xsecurelockrc"; then
       . "$HOME/.xsecurelockrc"
   fi
