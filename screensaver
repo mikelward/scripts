@@ -1,13 +1,13 @@
 #!/bin/bash
 xset s 300 5
 
-if test -x "$(command -v mate-screensaver)"; then
+if test -x "$(command -v xfce4-screensaver)"; then
   case $1 in
     init)
-      (setsid mate-screensaver&)
+      (setsid xfce4-screensaver&)
       ;;
     lock)
-      exec mate-screensaver-command --lock
+      exec xfce4-screensaver-command --lock
       ;;
     esac
 elif false; then
