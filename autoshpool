@@ -1,0 +1,40 @@
+#!/bin/bash
+# autoshpool - connect to first existing shpool session or start a new one
+
+get_current_shpool_session() {
+  echo "$SHPOOL_SESSION_NAME"
+}
+
+get_disconnected_shpool_sessions() {
+  shpool list | awk '$NF == "disconnected" { print $1 }'
+}
+
+get_shpool_sessions() {
+  shpool list | awk 'NR > 1 { print $1 }'
+}
+
+session=$(get_current_shpool_session)
+if test -n "$session"; then
+  exec echo "Already connected to shpool session $session"
+fi
+
+declare -a disconnected=( $(get_disconnected_shpool_sessions) )
+if test "${#disconnected[@]}" -gt 0; then
+  session="${disconnected[0]}"
+  echo "Attaching shpool session $session"
+  exec shpool attach "$session"
+fi
+
+declare -A sessions
+for session in $(get_shpool_sessions); do
+  sessions[$session]=1
+done
+for session in $(seq 1 100); do
+  if test -z "${sessions[$session]}"; then
+    echo "Creating shpool session $session"
+    exec shpool attach "$session"
+  fi
+done
+echo "You already have more than 100 sessions??" >&2
+exit 2
+
