@@ -5,36 +5,64 @@ get_current_shpool_session() {
   echo "$SHPOOL_SESSION_NAME"
 }
 
-get_disconnected_shpool_sessions() {
-  shpool list | awk '$NF == "disconnected" { print $1 }'
+exit_if_already_attached() {
+  session=$(get_current_shpool_session)
+  if test -n "$session"; then
+    echo "Already connected to shpool session $session"
+    exit 1
+  fi
+}
+
+get_prefix() {
+  basename "$(rootdir)"
 }
 
 get_shpool_sessions() {
-  shpool list | awk 'NR > 1 { print $1 }'
+  # Session names can be empty, so need handle rows with only 2 columns specially.
+  shpool list | awk 'NR > 1 && NF == 3 && $1 ~ /^'"${SHPOOL_PREFIX:-.}"'/ { print }'
 }
 
-session=$(get_current_shpool_session)
-if test -n "$session"; then
-  exec echo "Already connected to shpool session $session"
-fi
+get_disconnected_shpool_sessions() {
+  get_shpool_sessions | awk '$NF == "disconnected" { print $1 }'
+}
 
-declare -a disconnected=( $(get_disconnected_shpool_sessions) )
-if test "${#disconnected[@]}" -gt 0; then
-  session="${disconnected[0]}"
-  echo "Attaching shpool session $session"
-  exec shpool attach "$session"
-fi
-
-declare -A sessions
-for session in $(get_shpool_sessions); do
-  sessions[$session]=1
-done
-for session in $(seq 1 100); do
-  if test -z "${sessions[$session]}"; then
-    echo "Creating shpool session $session"
+attach_first_disconnected() {
+  declare -a disconnected=( $(get_disconnected_shpool_sessions) )
+  if test "${#disconnected[@]}" -gt 0; then
+    session="${disconnected[0]}"
+    echo "Attaching shpool session $session"
     exec shpool attach "$session"
   fi
-done
-echo "You already have more than 100 sessions??" >&2
-exit 2
+}
 
+create_and_attach_next() {
+  declare -A sessions
+  for session in $(get_shpool_sessions); do
+    sessions[$session]=1
+  done
+  for num in $(seq 1 100); do
+    declare session="$SHPOOL_PREFIX$num"
+    if test -z "${sessions[$session]}"; then
+      echo "Creating shpool session $session"
+      exec shpool attach "$session"
+    fi
+  done
+  echo "You already have more than 100 sessions??" >&2
+  exit 2
+}
+
+autoshpool_main() {
+  #exec >>"$HOME/.autoshpool.log" 2>>"$HOME/.autoshpool.log"
+
+  exit_if_already_attached
+
+  source "$HOME/.shrc.vcs"
+
+  SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
+
+  attach_first_disconnected
+
+  create_and_attach_next
+}
+
+autoshpool_main
