@@ -13,6 +13,13 @@ exit_if_already_attached() {
   fi
 }
 
+abort_if_hung() {
+  if ! timeout 1 shpool list >/dev/null; then
+    error "shpool not responding"
+    exit 124
+  fi
+}
+
 get_prefix() {
   basename "$(rootdir)"
 }
@@ -59,6 +66,8 @@ autoshpool_main() {
   source "$HOME/.shrc.vcs"
 
   SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
+
+  abort_if_hung
 
   attach_first_disconnected
 
