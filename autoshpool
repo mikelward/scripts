@@ -15,7 +15,7 @@ exit_if_already_attached() {
 
 abort_if_hung() {
   if ! timeout 1 shpool list >/dev/null; then
-    error "shpool not responding"
+    echo "shpool not responding" >&2
     exit 124
   fi
 }
