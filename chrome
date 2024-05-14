@@ -1,4 +1,2 @@
 #!/bin/sh
-# Adding --password-store=basic makes Chrome start 25 seconds faster on XFCE.
-# See <http://crbug.com/489030> for details.
-google-chrome-stable --disable-features="UseOzonePlatform" "$@"
+google-chrome --disable-features="UseOzonePlatform" "$@"
