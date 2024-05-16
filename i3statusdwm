@@ -1,5 +1,8 @@
 #!/bin/sh
-env | grep HOST
+
+# Close stdout and stderr so it doesn't keep the terminal open.
+exec >/dev/null 2>/dev/null
+
 username=$(whoami)
 short_hostname=$(hostname)
 short_hostname=${short_hostname#$username-}
