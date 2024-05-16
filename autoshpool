@@ -89,6 +89,8 @@ is_sourced() {
   return 1
 }
 
+test $# -gt 0 && exec shpool "$@"
+
 if ! is_sourced; then
   autoshpool_main
 fi
