@@ -9,6 +9,9 @@ i3status | while read -r line; do
         sed -e 's#/ DisplayPort ##' \
             -e 's/Headset/headset/g' \
             -e 's/|//g' \
-            -e 's/  */ /'g)"
+            -e 's/  */ /g' \
+            -e 's/\<P[DS]T\>/PT/g' \
+            -e 's/\<GMT\>/UT/g' \
+            -e 's/\<BST\>/BT/g')"
     xsetroot -name "$line"
 done
