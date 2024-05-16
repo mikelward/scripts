@@ -1,36 +1,59 @@
 #!/bin/bash
+
 xset s 300 5
 
-if test -x "$(command -v xfce4-screensaver)"; then
+have_command() {
+  test -x "$(command -v "$1")"
+}
+
+maybe_xfce4_screensaver() {
+  local init_command="xfce4-screensaver"
+  local lock_command="xfce4-screensaver-command"
+  have_command "$init_command" || return 1
+  have_command "$lock_command" || return 1
   case $1 in
     init)
-      (setsid xfce4-screensaver&)
+      (setsid "$init_command"&)
+      # TODO: is this needed?
+      (xss-lock -l -- "$lock_command" --lock&)
       ;;
     lock)
-      exec xfce4-screensaver-command --lock
+      exec "$lock_command" --lock
       ;;
-    esac
-elif false; then
-#if test -x "$(command -v xsecurelock)"; then
+  esac
+}
+
+maybe_xsecurelock() {
+  local init_command="xsecurelock"
+  local lock_command="xsecurelock"
+  have_command "$init_command" || return 1
   if test -f "$HOME/.xsecurelockrc"; then
       . "$HOME/.xsecurelockrc"
   fi
   case $1 in
     init)
-      (xss-lock -l -- xsecurelock&)
+      (xss-lock -l -- "$init_command"&)
       ;;
     lock)
-      exec xsecurelock
+      exec "$lock_command"
       ;;
   esac
-else
+}
+
+maybe_xscreensaver() {
+  local init_command="xscreensaver"
+  local lock_command="xscreensaver-command"
+  have_command "$init_command" || return 1
+  have_command "$lock_command" || return 1
   case $1 in
     init)
-      (setsid xscreensaver&)
-      (xss-lock -- xscreensaver-command --lock&)
+      (setsid "$init_command"&)
+      (xss-lock -- "$lock_command" --lock&)
       ;;
     lock)
-      exec xscreensaver-command --lock
+      exec "$lock_command" --lock
       ;;
   esac
-fi
+}
+
+maybe_xsecurelock "$@" || maybe_xscreensaver "$@" || maybe_xfce4_screensaver "$@" || exit 1
