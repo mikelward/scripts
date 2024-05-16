@@ -21,7 +21,9 @@ abort_if_hung() {
 }
 
 get_prefix() {
-  basename "$(rootdir)"
+  # Use the current project name with a hyphen at the end, or empty string.
+  local prefix="$(basename "$(rootdir)")"
+  echo "${prefix:+$prefix-}"
 }
 
 get_shpool_sessions() {
