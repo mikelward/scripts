@@ -1,9 +1,54 @@
 #!/bin/bash
 . "$HOME"/.shrc
-for command in xfce4-screenshooter; do
-    if have_command "$command"; then
-        exec "$command" "$@"
-    fi
-done
-exit 1
+usage() {
+  cat <<EOF 1>&2
+Usage: $scriptname [-h]
+EOF
+}
 
+scriptname=
+delay=0
+typeset -a args=()
+window=false
+
+while getopts ":d:hw" option; do
+  case $option in
+  d)
+    delay=$OPTARG
+    ;;
+  w)
+    window=true
+    ;;
+  h)
+    usage
+    exit 0
+    ;;
+  ':')
+    echo "Missing argument to -$OPTARG" 1>&2
+    usage
+    exit 2
+    ;;
+  '?')
+    echo "Invalid option -$OPTARG" 1>&2
+    usage
+    exit 2
+    ;;
+  *)
+    echo "Program does not support -$option yet" 1>&2
+    usage
+    exit 2
+    ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+cd "$HOME/Pictures"
+
+sleep $delay
+
+if $window; then
+  wid=$(xdotool selectwindow)
+  args+=("-w" "$wid")
+fi
+
+exec scrot "${args[@]}"
