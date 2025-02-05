@@ -1,0 +1,24 @@
+#!/bin/zsh
+source ~/.shrc
+# List login shells...
+pgrep -U "$(whoami)" -f -- '^-(bash|zsh)$' | while read pid; do
+  # Skip any that don't have shpool as a parent.
+  ppid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+  test -z "$ppid" && continue
+  pcomm="$(ps -o comm= -p "$ppid" | tr -d ' ')"
+  case "$pcomm" in
+  shpool) ;;
+  *) continue;;
+  esac
+  # Get the shpool session name.
+  shpool_session_name=$(envgrep 'SHPOOL_SESSION_NAME=.*' $pid | tr -d '\0')
+  if test -n "$shpool_session_name"; then
+    shpool_session_name=$(cut -f 2- -d = <<<"$shpool_session_name")
+    # Get a one-line list of the children.
+    children="$(ps --ppid=$pid -o comm= | tr '\n' ' ')"
+    test -z "$children" && continue
+    # Print a list item.
+    printf '%-20s %s\n' "$shpool_session_name" "$children"
+  fi
+done
+
