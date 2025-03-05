@@ -11,12 +11,13 @@ scriptname=he
 usage()
 {
     cat <<EOF 1>&2
-Usage: $scriptname <command> [<option|section>]
+Usage: $scriptname {<command> or -} [<option|section>]
 Example:
     $scriptname bash getopts (shows documentation for bash getopts)
     $scriptname ssh -v       (shows documentation for ssh -v flag)
     $scriptname select       (shows SYNOPSIS for select(2))
     $scriptname 'open(2)'    (shows SYNOPSIS for open(2))
+    adb help | $scriptname - install    (shows documentation for adb install)
 EOF
 }
 
@@ -39,7 +40,8 @@ case $manpage in *\(*\))
     ;;
 esac
 
-man ${section:+-s $section} "$manpage" | perl -n -e '
+he() {
+perl -n -e '
 BEGIN {
     $option = "'$option'";
     $inside_option = 0;
@@ -67,3 +69,10 @@ if (!$inside_option) {
     }
 }
 '
+}
+
+if test "$manpage" = "-"; then
+  he
+else
+  man ${section:+-s $section} "$manpage" | he
+fi
