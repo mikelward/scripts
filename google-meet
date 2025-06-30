@@ -1,1 +1,3 @@
+#!/bin/bash
+. "$HOME"/.shrc
 chrome --app="https://meet.google.com"

@@ -1,2 +1,4 @@
-chrome --user-data-dir="$HOME/.config/google-chrome-alt" "$@"
+. "$HOME"/.shrc
+brave-browser "$@"
+#chrome --user-data-dir="$HOME/.config/google-chrome-alt" "$@"
 #edge "$@"
