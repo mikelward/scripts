@@ -1,2 +1,2 @@
 #!/bin/sh
-google-chrome --disable-features="UseOzonePlatform" "$@"
+google-chrome --disable-features="UseOzonePlatform" --enable-features=VaapiVideoDecoder,Vulkan --ignore-gpu-blocklist --use-gl=desktop --enable-gpu-rasterization --enable-zero-copy "$@"
