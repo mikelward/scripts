@@ -1,2 +1,3 @@
-. "$HOME"/.shrc
+#!/bin/bash
+. "$HOME/.shrc"
 chrome "$@"
