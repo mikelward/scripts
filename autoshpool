@@ -51,6 +51,7 @@ create_and_attach_next() {
   done
   for num in $(seq 1 100); do
     declare session="$SHPOOL_PREFIX$num"
+    export SHPOOL_INITIAL_PWD="$PWD"
     if test -z "${sessions[$session]}"; then
       echo "Creating shpool session $session"
       exec shpool attach "$session"
