@@ -10,7 +10,8 @@ short_hostname=${short_hostname%%.*}
 i3status | while read -r line; do
     line="$(echo "$short_hostname $(showconn) $line" |
         sed -e 's#/ DisplayPort ##' \
-            -e 's/Headset/headset/g' \
+            -e 's/Headset/🎧/g' \
+            -e 's/Speaker/🔉/g'
             -e 's/|//g' \
             -e 's/  */ /g')"
     xsetroot -name "$line"
