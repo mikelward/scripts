@@ -26,4 +26,8 @@ for ((i=0; i<${#args[@]}; i++)); do
     esac
 done
 
-code --wait "${args[@]}"
+# Antigravity sets TERM_PROGRAM=vscode and ANTIGRAVITY_CLI_ALIAS=antigravity.
+# We could try looking at the parent process name and only calling
+# $ANTIGRAVITY_CLI_ALIAS if we were run inside Antigravity, but this seems
+# simpler and good enough for now.
+${ANTIGRAVITY_CLI_ALIAS:-code} --wait "${args[@]}"
