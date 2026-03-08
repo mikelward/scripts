@@ -1,2 +1,2 @@
 #!/bin/sh
-google-chrome-beta "$@"
+google-chrome-beta "$@" || google-chrome "$@"
