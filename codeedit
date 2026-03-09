@@ -2,8 +2,8 @@
 
 # Works with $EDITOR to use vscode as editor if run from inside vscode.
 
-case "$TERM_PROGRAM" in
-vscode)
+case "${TERM_PROGRAM:-noterm}" in
+vscode|"${ANTIGRAVITY_CLI_ALIAS:-noantigravity}")
     ;;
 *)
     # Pretend this script isn't available.
@@ -30,4 +30,4 @@ done
 # We could try looking at the parent process name and only calling
 # $ANTIGRAVITY_CLI_ALIAS if we were run inside Antigravity, but this seems
 # simpler and good enough for now.
-${ANTIGRAVITY_CLI_ALIAS:-code} --wait "${args[@]}"
+"${ANTIGRAVITY_CLI_ALIAS:-code}" --wait "${args[@]}"
