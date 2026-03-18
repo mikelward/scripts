@@ -1,0 +1,24 @@
+#!/bin/bash
+# set-ssh-alias.sh - updates ~/.ssh/config safely
+# Usage: set-ssh-alias <alias> <fqdn> <username>
+
+set-ssh-alias() {
+    local alias
+    local fqdn
+    local username
+    alias="$1"
+    fqdn="$2"
+    username="$3"
+
+    if test -z "$alias" || test -z "$fqdn" || test -z "$username"; then
+        echo "Usage: set-ssh-alias <alias> <fqdn> <username>"
+        return 1
+    fi
+
+    set-ssh-alias.py "$alias" "$fqdn" "$username" --backup
+}
+
+# If the script is run directly, execute the function
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set-ssh-alias "$@"
+fi
