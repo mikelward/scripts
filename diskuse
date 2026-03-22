@@ -274,7 +274,7 @@ sub units_to_bytes
 		$size *= (1024 * 1024 * 1024 * 1024);
 	}
 	else {
-		print STDERR "Unrecognised size unit $sizeunit\n";
+		print STDERR "Unrecognised size unit $sizeunits\n";
 		return undef;
 	}
 
