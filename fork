@@ -3,7 +3,7 @@ url="$1"
 git clone "$url"
 dir=${url##*/}
 dir=${dir%.git}
-cd $dir
+cd "$dir"
 git remote add upstream "$url"
 case "$url" in
 "git@github.com:"*)
