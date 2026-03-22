@@ -238,7 +238,7 @@ prefix=.
 quiet=false
 verbose=false
 
-while getopts ":enpqv" opt
+while getopts ":enp:qv" opt
 do
 	case $opt in
 	e)
