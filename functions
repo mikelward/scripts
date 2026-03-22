@@ -490,7 +490,7 @@ interface_up()
 
     if test -z "$_status"
     then
-        ifconfig $interface >/dev/null  # discard stdout, keep stderr
+        ifconfig $_interface >/dev/null  # discard stdout, keep stderr
         if test $? -eq 0
         then
             info "$_interface is configured, assuming this means it's up"
