@@ -78,7 +78,7 @@ push @flags, "-f", $tarfile;
 
 my $status = system $tar, @flags;
 if ($status != 0) {
-	print STDERR "untar: Cannot untar $tar: $?\n";
+	print STDERR "untar: Cannot untar $tarfile: $?\n";
 	if (defined $tempdir) {
 		print STDERR "untar: Removing temporary directory $tempdir\n";
 		remove_tree($tempdir);
