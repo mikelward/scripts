@@ -4,5 +4,5 @@ hex() {
 }
 
 for arg; do
-    printf '\x'"$(hex "$1")"
+    printf '\x'"$(hex "$arg")"
 done
