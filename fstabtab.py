@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 #
 # fstabtab.py
 # make all the entries in /etc/fstab line up
@@ -34,7 +34,7 @@ format = '  '.join(map(fieldlen_to_format, fieldlens))
 
 for line in lines:
     if line.startswith('#'):
-        print line,
+        print(line, end='')
     else:
         fields = line.split()
-        print format % tuple(fields)
+        print(format % tuple(fields))
