@@ -8,7 +8,7 @@ import sys
 import subprocess
 
 def usage(stream=sys.stdout):
-        print >>stream, "Usage: package [install|uninstall|update|versions|list|info|files] <package>..."
+        print("Usage: package [install|uninstall|update|versions|list|info|files] <package>...", file=stream)
 
 commands = {}
 commands['apt'] = {
@@ -61,7 +61,7 @@ elif os.access('/usr/bin/apt-get', os.X_OK):
 elif os.access('/usr/bin/yum', os.X_OK):
         package_manager = 'yum'
 else:
-        print >>sys.stderr, "Unknown package manager"
+        print("Unknown package manager", file=sys.stderr)
         sys.exit(1)
 
 if len(sys.argv) < 2:
@@ -70,7 +70,7 @@ if len(sys.argv) < 2:
 
 command = sys.argv[1]
 if not command in commands[package_manager]:
-        print >>sys.stderr, package_manager, 'does not support', command
+        print(package_manager, 'does not support', command, file=sys.stderr)
         sys.exit(1)
 
 command_list = commands[package_manager][command]
