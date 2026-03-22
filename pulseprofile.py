@@ -31,7 +31,7 @@ def next_profile(output, card_index):
     profiles = []
     profile_nums = {}
     profile_num = 0
-    want = b'    index: %d' % card_index
+    want = ('    index: %d' % card_index).encode()
     for line in output.splitlines():
         if line.startswith(want):
             in_card = True
