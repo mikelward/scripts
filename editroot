@@ -15,7 +15,7 @@ error() {
 
 try_edit_as_root() {
     printf "You don't have permission to edit %s\n" "$1"
-    confirm "Edit as root" && "$SUDO" "$EDITOR" "$1"
+    confirm "Edit as root" && "$SUDO" "$EDITOR" "$@"
 }
 
 if test $# -eq 0; then
