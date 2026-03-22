@@ -12,7 +12,7 @@ my $help;
 my $result = GetOptions(
   "invert|v" => \$invert,
   "skip|s" => \$skip,
-  "help|h" =>);
+  "help|h" => \$help);
 
 sub usage
 {
