@@ -383,7 +383,7 @@ if ($showdirtotals) {
 }
 
 # XXX free up some memory
-%dirsize = {};
+%dirsize = ();
 
 # $width means total width and we have to leave some for non-pathname fields (i.e. size)
 if (defined($width)) {
