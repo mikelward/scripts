@@ -6,7 +6,7 @@ Usage: $scriptname [-h]
 EOF
 }
 
-scriptname=
+scriptname=${0##*/}
 delay=0
 typeset -a args=()
 window=false
