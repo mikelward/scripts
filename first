@@ -1,3 +1,4 @@
+#!/bin/bash
 
 git_rev() {
     git log --pretty=format:%H "$@" | head -1
