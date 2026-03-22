@@ -194,7 +194,7 @@ sub process_dir
 					$dirsize{$dir} += $size;
 				}
 				else {
-					print STDERR "Skipping $path ($age seconds < $maxage seconds)\n" if $debug;
+					print STDERR "Skipping $path ($age seconds >= $maxage seconds)\n" if $debug;
 				}
 			}
 		}
