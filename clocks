@@ -20,5 +20,5 @@ do
 		time=$(TZ="$timezone" date ${when:+-d "$when $localzone"} +"$format")
 		printf "%-15s %9s\n" "$description" "$time"
 	fi
-done < $HOME/.timezones
+done < "$HOME/.timezones"
 
