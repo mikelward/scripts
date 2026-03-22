@@ -312,7 +312,7 @@ prepend()
 
     echo "$line" > "$tempfile"
 
-    if test $status -ne 0
+    if test $? -ne 0
     then
         error "Cannot store line in $tempfile"
         rm "$tempfile"
