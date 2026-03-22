@@ -98,7 +98,6 @@ run()
         debug "Running $@"
         if test "$logfile"
         then
-            #"$@" 2>&1 | tee -a "$logfile"
             "$@" 2>&1 | tee -a "$logfile"
         else
             "$@"
