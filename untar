@@ -163,7 +163,7 @@ if ($safe) {
 				}
 				else {
 					print STDERR "untar: Move failed: $!\n";
-					print STDERR "untar: Extracted files are in $dst\n";
+					print STDERR "untar: Extracted files are in $src\n";
 				}
 			}
 		}
