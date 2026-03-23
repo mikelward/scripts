@@ -1,5 +1,4 @@
 #!/bin/sh
-# $Id: confback,v 1.5 2005/07/09 14:54:58 michael Exp $
 # Create tarballs of configuration directories.
 
 trap "exit" INT TERM QUIT
@@ -13,7 +12,7 @@ for dir in conf/ conf.*/; do
   echo "Backing up $dir to $tarball"
 
   cd "$dir"
-  find . '(' -name '.svn' -o -name '.git' ')' -prune -o '(' -type f -o -type l ')' -print0 |
+  find . '(' -name '.*' ')' -prune -o '(' -type f -o -type l ')' -print0 |
   pax -w -z -L -0 -f "$HOME/$tarball"
   cd "$OLDPWD"
 done
