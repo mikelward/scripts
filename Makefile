@@ -1,0 +1,2 @@
+test:
+	./autoshpool_test
