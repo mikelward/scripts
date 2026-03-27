@@ -2,7 +2,8 @@
 . "$HOME"/.shrc
 usage() {
   cat <<EOF 1>&2
-Usage: $scriptname [-h]
+Usage: $scriptname [-d <delay>] [-h] [-w]
+       $scriptname [--delay <delay>] [--help] [--window]
 EOF
 }
 
@@ -11,36 +12,37 @@ delay=0
 typeset -a args=()
 window=false
 
-while getopts ":d:hw" option; do
-  case $option in
-  d)
-    delay=$OPTARG
+while test $# -gt 0; do
+  case "$1" in
+  -d|--delay)
+    delay=$2
+    shift
     ;;
-  w)
+  --delay=*)
+    delay=${1#*=}
+    ;;
+  -w|--window)
     window=true
     ;;
-  h)
+  -h|--help)
     usage
     exit 0
     ;;
-  ':')
-    echo "Missing argument to -$OPTARG" 1>&2
-    usage
-    exit 2
+  --)
+    shift
+    break
     ;;
-  '?')
-    echo "Invalid option -$OPTARG" 1>&2
+  -*)
+    echo "Invalid option $1" 1>&2
     usage
     exit 2
     ;;
   *)
-    echo "Program does not support -$option yet" 1>&2
-    usage
-    exit 2
+    break
     ;;
   esac
+  shift
 done
-shift $((OPTIND - 1))
 
 cd "$HOME/Pictures"
 

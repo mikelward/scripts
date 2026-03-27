@@ -231,6 +231,12 @@ make_links()
 	done
 }
 
+usage()
+{
+	echo "Usage: confinst [-e] [-h] [-n] [-p <prefix>] [-q] [-v]" 1>&2
+	echo "       confinst [--extract] [--help] [--simulate] [--prefix <prefix>] [--quiet] [--verbose]" 1>&2
+}
+
 destdir="$HOME"
 simulate=false
 extract=false	# now false by default, assume ~/conf is under git
@@ -238,41 +244,49 @@ prefix=.
 quiet=false
 verbose=false
 
-while getopts ":enp:qv" opt
+while test $# -gt 0
 do
-	case $opt in
-	e)
+	case "$1" in
+	-e|--extract)
 		extract=true
 		;;
-	n)
+	-h|--help)
+		usage
+		exit 0
+		;;
+	-n|--simulate)
 		simulate=true
 		;;
-	q)
+	-q|--quiet)
 		quiet=true
 		verbose=false
 		;;
-	p)
-		prefix=$OPTARG
+	-p|--prefix)
+		prefix=$2
+		shift
 		;;
-	v)
+	--prefix=*)
+		prefix=${1#*=}
+		;;
+	-v|--verbose)
 		verbose=true
 		quiet=false
 		;;
-	'?')
-		error "Unknown option -$OPTARG"
-		exit 2
+	--)
+		shift
+		break
 		;;
-	':')
-		error "Missing argument to -$OPTARG"
+	-*)
+		error "Unknown option $1"
+		usage
 		exit 2
 		;;
 	*)
-		error "Bug: -$OPTARG option is missing"
-		exit 1
+		break
 		;;
 	esac
+	shift
 done
-shift $((OPTIND - 1))
 
 if $extract
 then

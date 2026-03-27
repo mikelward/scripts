@@ -59,7 +59,8 @@ run()
 usage()
 {
 	cat <<EOF >&2
-Usage: java-alternatives.sh [-dhnv] [-p <priority>] [<java root>]
+Usage: java-alternatives.sh [-d] [-h] [-n] [-p <priority>] [-v] [<java root>]
+       java-alternatives.sh [--debug] [--help] [--simulate] [--priority <priority>] [--verbose] [<java root>]
 Example: java-alternatives.sh /usr/jdk1.5.0_22
 EOF
 }
@@ -67,43 +68,44 @@ EOF
 ###
 # process the command line
 #
-while getopts ":dhnp:v" option
+while test $# -gt 0
 do
-	case $option in
-	d)
+	case "$1" in
+	-d|--debug)
 		debug=true
 		;;
-	h)
+	-h|--help)
 		usage
 		exit 0
 		;;
-	n)
+	-n|--simulate)
 		simulate=true
 		;;
-	p)
-		priority=$OPTARG
+	-p|--priority)
+		priority=$2
+		shift
 		;;
-	v)
+	--priority=*)
+		priority=${1#*=}
+		;;
+	-v|--verbose)
 		verbose=true
 		;;
-	':')
-		error "Missing argument to -$OPTARG"
-		usage
-		exit 2
+	--)
+		shift
+		break
 		;;
-	'?')
-		error "Invalid option -$OPTARG"
+	-*)
+		error "Invalid option $1"
 		usage
 		exit 2
 		;;
 	*)
-		error "The -$option option is not supported yet"
-		usage
-		exit 2
+		break
 		;;
 	esac
+	shift
 done
-shift $((OPTIND - 1))
 
 basedir=$1
 if test -z "$basedir"; then

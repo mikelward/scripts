@@ -65,38 +65,36 @@ fi
 usage()
 {
     cat <<EOF 1>&2
-Usage: gitbackup [-hn]
+Usage: gitbackup [-h] [-n]
+       gitbackup [--help] [--simulate]
 EOF
 }
 
-while getopts ":hn" option
+while test $# -gt 0
 do
-    case $option in
-    h)
+    case "$1" in
+    -h|--help)
         usage
         exit 0
         ;;
-    n)
+    -n|--simulate)
         simulate=true
         ;;
-    ':')
-        echo "Missing argument to -$OPTARG" 1>&2
-        usage
-        exit 2
+    --)
+        shift
+        break
         ;;
-    '?')
-        echo "Invalid option -$OPTARG" 1>&2
+    -*)
+        echo "Invalid option $1" 1>&2
         usage
         exit 2
         ;;
     *)
-        echo "The -$option option is not supported yet" 1>&2
-        usage
-        exit 2
+        break
         ;;
     esac
+    shift
 done
-shift $((OPTIND - 1))
 
 #
 # normalize paths
