@@ -1,0 +1,241 @@
+#!/bin/bash
+# Tests for autoshpool
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  export HOME="$TEST_TMPDIR"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+
+  mkdir -p "$TEST_TMPDIR/bin"
+
+  # Create a fake shpool that records its calls
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    exit "${SHPOOL_ATTACH_EXIT:-0}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  # Create a fake rootdir
+  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+#!/bin/bash
+echo ""
+ROOTDIR
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+
+  # Create a fake timeout that just runs the command
+  cat > "$TEST_TMPDIR/bin/timeout" <<'TIMEOUT'
+#!/bin/bash
+shift
+"$@"
+TIMEOUT
+  chmod +x "$TEST_TMPDIR/bin/timeout"
+
+  # Create stub .shrc.vcs
+  touch "$TEST_TMPDIR/.shrc.vcs"
+
+  # Clean state
+  unset SHPOOL_SESSION_NAME
+  unset SHPOOL_PREFIX
+  unset SHPOOL_ATTACH_EXIT
+  rm -f "$TEST_TMPDIR/.autoshpool_switch"
+  rm -f "$TEST_TMPDIR/.shpool_calls"
+  rm -f "$TEST_TMPDIR/.shpool_sessions"
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run_autoshpool() {
+  set +e
+  output="$("$SCRIPT_DIR/autoshpool" "$@" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_status() {
+  local expected=$1
+  if [ "$status" -ne "$expected" ]; then
+    echo "  FAIL: expected exit status $expected, got $status"
+    echo "  output: $output"
+    return 1
+  fi
+}
+
+assert_output_contains() {
+  if [[ "$output" != *"$1"* ]]; then
+    echo "  FAIL: output does not contain '$1'"
+    echo "  output: $output"
+    return 1
+  fi
+}
+
+assert_called() {
+  if ! grep -q "$1" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: expected call '$1' not found"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
+run_test() {
+  local name="$1"
+  local func="$2"
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  if "$func"; then
+    echo "ok $TESTS_RUN $name"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $name"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- tests ---
+
+test_switch_writes_file() {
+  run_autoshpool switch mysession
+  assert_status 0
+  [ "$(cat "$HOME/.autoshpool_switch")" = "mysession" ]
+}
+
+test_switch_exits_0() {
+  run_autoshpool switch foo
+  assert_status 0
+}
+
+test_passthrough_to_shpool() {
+  run_autoshpool list
+  assert_status 0
+  assert_called "shpool list"
+}
+
+test_passthrough_preserves_args() {
+  run_autoshpool attach mysession
+  assert_status 0
+  assert_called "shpool attach mysession"
+}
+
+test_exits_if_already_attached() {
+  export SHPOOL_SESSION_NAME="existing"
+  run_autoshpool
+  assert_status 1
+  assert_output_contains "Already connected"
+}
+
+test_creates_session_1() {
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 1"
+  assert_output_contains "Creating shpool session 1"
+}
+
+test_attaches_disconnected_first() {
+  cat > "$HOME/.shpool_sessions" <<EOF
+2      2025-01-01T00:00:00Z   connected
+3      2025-01-01T00:00:00Z   disconnected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 3"
+  assert_output_contains "Attaching shpool session 3"
+}
+
+test_returns_nonzero_on_failure() {
+  export SHPOOL_ATTACH_EXIT=1
+  run_autoshpool
+  assert_status 1
+}
+
+test_preserves_exit_code() {
+  export SHPOOL_ATTACH_EXIT=42
+  run_autoshpool
+  assert_status 42
+}
+
+test_loop_handles_switch() {
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    call_count=$(grep -c "shpool attach" "$HOME/.shpool_calls" 2>/dev/null || echo 0)
+    if [ "$call_count" -le 1 ]; then
+      echo "other" > "$HOME/.autoshpool_switch"
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 1"
+  assert_called "shpool attach other"
+}
+
+test_uses_prefix() {
+  export SHPOOL_PREFIX="myproject:"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach myproject:1"
+}
+
+test_skips_existing_sessions() {
+  export SHPOOL_PREFIX=""
+  cat > "$HOME/.shpool_sessions" <<EOF
+1      2025-01-01T00:00:00Z   connected
+2      2025-01-01T00:00:00Z   connected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 3"
+  assert_output_contains "Creating shpool session 3"
+}
+
+# --- run ---
+
+run_test "switch writes session name to switch file" test_switch_writes_file
+run_test "switch exits 0" test_switch_exits_0
+run_test "unknown subcommand passes through to shpool" test_passthrough_to_shpool
+run_test "passthrough preserves all arguments" test_passthrough_preserves_args
+run_test "exits with error if already in a shpool session" test_exits_if_already_attached
+run_test "creates session 1 when no sessions exist" test_creates_session_1
+run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
+run_test "returns non-zero when shpool attach fails" test_returns_nonzero_on_failure
+run_test "preserves specific exit code from shpool attach" test_preserves_exit_code
+run_test "loop handles switch request after session ends" test_loop_handles_switch
+run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
+run_test "skips existing sessions when creating" test_skips_existing_sessions
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

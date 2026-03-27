@@ -1,5 +1,16 @@
 #!/bin/bash
 # autoshpool - connect to first existing shpool session or start a new one
+#
+# Usage:
+#   autoshpool                - attach to or create a shpool session (loops for switching)
+#   autoshpool switch <session> - request a switch to the named session (from inside shpool)
+#
+# In shrc, replace shpool_loop with:
+#   autoshpool && exit
+# And replace switchshpool with:
+#   switchshpool() { autoshpool switch "$1" && exit; }
+
+switch_session_file="$HOME/.autoshpool_switch"
 
 get_current_shpool_session() {
   echo "$SHPOOL_SESSION_NAME"
@@ -40,8 +51,10 @@ attach_first_disconnected() {
   if test "${#disconnected[@]}" -gt 0; then
     session="${disconnected[0]}"
     echo "Attaching shpool session $session"
-    exec shpool attach "$session"
+    shpool attach "$session"
+    return
   fi
+  return 1
 }
 
 create_and_attach_next() {
@@ -54,14 +67,32 @@ create_and_attach_next() {
     export SHPOOL_INITIAL_PWD="$PWD"
     if test -z "${sessions[$session]}"; then
       echo "Creating shpool session $session"
-      exec shpool attach "$session"
+      shpool attach "$session"
+      return
     fi
   done
   echo "You already have more than 100 sessions??" >&2
-  exit 2
+  return 2
 }
 
-autoshpool_main() {
+get_switch_session() {
+  cat "$switch_session_file" 2>/dev/null
+}
+
+request_switch() {
+  echo "$1" > "$switch_session_file"
+  exit 0
+}
+
+clear_switch() {
+  rm -f "$switch_session_file"
+}
+
+# Start an shpool session with a useful session name.
+# Disconnect if the user cleanly exited the session.
+# Stay connected if there was an error, so the user can see and fix the error.
+# Run in a loop so the user can switch to a different session.
+autoshpool_loop() {
   #exec >>"$HOME/.autoshpool.log" 2>>"$HOME/.autoshpool.log"
 
   exit_if_already_attached
@@ -72,9 +103,30 @@ autoshpool_main() {
 
   abort_if_hung
 
-  attach_first_disconnected
+  while true; do
+    switch_session="$(get_switch_session)"
+    if test -n "$switch_session"; then
+      clear_switch
+      shpool attach "$switch_session"
+    else
+      attach_first_disconnected || create_and_attach_next
+    fi
+    rc=$?
 
-  create_and_attach_next
+    if test $rc -ne 0; then
+      # Maybe .shrc failed or something.
+      # Stay here so the user can see the error and fix it.
+      return $rc
+    fi
+
+    switch_session="$(get_switch_session)"
+    if test -n "$switch_session"; then
+      continue
+    fi
+
+    # autoshpool exited cleanly with no switch pending.
+    return 0
+  done
 }
 
 is_sourced() {
@@ -90,8 +142,21 @@ is_sourced() {
   return 1
 }
 
-test $# -gt 0 && exec shpool "$@"
-
-if ! is_sourced; then
-  autoshpool_main
+if is_sourced; then
+  return
 fi
+
+# autoshpool switch <session> - request a switch to the named session
+# autoshpool <shpool args...> - pass through to shpool
+# autoshpool (no args) - run the loop
+case "$1" in
+  switch)
+    request_switch "$2"
+    ;;
+  "")
+    autoshpool_loop
+    ;;
+  *)
+    exec shpool "$@"
+    ;;
+esac
