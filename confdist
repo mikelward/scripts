@@ -57,41 +57,38 @@ read_defaults()
 
 usage()
 {
-	echo "Usage: confdist [-c <config file>] [-v] [<host>...]" 1>&2
+	echo "Usage: confdist [-h] [-v] [<host>...]" 1>&2
+	echo "       confdist [--help] [--verbose] [<host>...]" 1>&2
 }
 
 read_options()
 {
-	while getopts ":hv" flag
+	while test $# -gt 0
 	do
-		case $flag in
-		h)
+		case "$1" in
+		-h|--help)
 			usage
 			exit 0
 			;;
-		v)
+		-v|--verbose)
 			verbose=$(($verbose + 1))
 			;;
-		':')
-			error "Missing argument to -$OPTARG"
-			usage
-			exit 2
+		--)
+			shift
+			break
 			;;
-		'?')
-			error "Unknown option -$OPTARG"
+		-*)
+			error "Unknown option $1"
 			usage
 			exit 2
 			;;
 		*)
-			error "The -$flag option is not supported yet"
-			usage
-			exit 2
+			break
 			;;
 		esac
+		shift
 	done
 	[ $verbose -gt 1 ] && set -x
-
-	shift `expr $OPTIND - 1`
 
 	test $# -gt 0 && hosts="$@"
 }

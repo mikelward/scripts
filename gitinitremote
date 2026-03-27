@@ -43,7 +43,8 @@ run()
 usage()
 {
 	cat <<EOF 1>&2
-Usage: $scriptname [-hn] [-r <remote name>] <new remote URL>
+Usage: $scriptname [-h] [-n] [-r <remote name>] <new remote URL>
+       $scriptname [--help] [--simulate] [--remote <remote name>] <new remote URL>
 EOF
 }
 
@@ -53,37 +54,38 @@ refspec=master		# refspec ("branch") to push - can't be changed yet
 local=$PWD			# local directory to create the repository out of
 simulate=false
 
-while getopts ":hnr:" option
+while test $# -gt 0
 do
-	case $option in
-	h)
+	case "$1" in
+	-h|--help)
 		usage
 		exit 0
 		;;
-	n)
+	-n|--simulate)
 		simulate=true
 		;;
-	r)
-		remotename=$OPTARG
+	-r|--remote)
+		remotename=$2
+		shift
 		;;
-	':')
-		error "Missing argument to -$OPTARG"
-		usage
-		exit 2
+	--remote=*)
+		remotename=${1#*=}
 		;;
-	'?')
-		error "Invalid option -$OPTARG"
+	--)
+		shift
+		break
+		;;
+	-*)
+		error "Invalid option $1"
 		usage
 		exit 2
 		;;
 	*)
-		error "The -$option option is not supported yet"
-		usage
-		exit 2
+		break
 		;;
 	esac
+	shift
 done
-shift $((OPTIND - 1))
 
 remote=$1
 

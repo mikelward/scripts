@@ -13,30 +13,27 @@ error() {
 
 scriptname=bisect
 
-while getopts ":h" option; do
-    case $option in
-    h)
+while test $# -gt 0; do
+    case "$1" in
+    -h|--help)
         usage
         exit 0
         ;;
-    ':')
-        echo "Missing argument to -$OPTARG" 1>&2
-        usage
-        exit 2
+    --)
+        shift
+        break
         ;;
-    '?')
-        echo "Invalid option -$OPTARG" 1>&2
+    -*)
+        echo "Invalid option $1" 1>&2
         usage
         exit 2
         ;;
     *)
-        echo "Program does not support -$option yet" 1>&2
-        usage
-        exit 2
+        break
         ;;
     esac
+    shift
 done
-shift $((OPTIND - 1))
 
 script=$1
 good=$2
