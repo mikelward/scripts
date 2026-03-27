@@ -115,7 +115,8 @@ autoshpool_loop() {
 
     if test $rc -ne 0; then
       # Maybe .shrc failed or something.
-      # Stay here so the user can see the error and fix it.
+      # Return non-zero so the caller (shrc) shows the error to the user
+      # and does not cleanly exit and disconnect.
       return $rc
     fi
 
