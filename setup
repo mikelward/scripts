@@ -47,32 +47,89 @@ clone_or_pull() {
     fi
 }
 
+# --- Detect OS ---
+
+detect_os() {
+    case "$(uname -s)" in
+        Darwin)
+            OS="macos"
+            ;;
+        Linux)
+            if command -v apt-get >/dev/null 2>&1; then
+                OS="debian"
+            elif command -v dnf >/dev/null 2>&1; then
+                OS="redhat"
+            else
+                OS="unknown"
+            fi
+            ;;
+        *)
+            OS="unknown"
+            ;;
+    esac
+}
+
 # --- Install system packages ---
 
 install_packages() {
-    if ! command -v apt-get >/dev/null 2>&1; then
-        warn "apt-get not found, skipping package installation"
-        warn "Please install manually: build-essential git golang kitty kwin-dev make mercurial npm p7zip-full plasma-desktop plasma-sdk zsh"
-        return
-    fi
-
-    info "Updating package lists"
-    sudo apt-get update -qq
-
-    info "Installing system packages"
-    sudo apt-get install -y \
-        build-essential \
-        git \
-        golang \
-        kitty \
-        kwin-dev \
-        make \
-        mercurial \
-        npm \
-        p7zip-full \
-        plasma-desktop \
-        plasma-sdk \
-        zsh
+    case "$OS" in
+        debian)
+            info "Updating package lists"
+            sudo apt-get update -qq
+            info "Installing system packages"
+            sudo apt-get install -y \
+                build-essential \
+                git \
+                golang \
+                kitty \
+                kwin-dev \
+                make \
+                mercurial \
+                npm \
+                p7zip-full \
+                plasma-desktop \
+                plasma-sdk \
+                zsh
+            ;;
+        redhat)
+            info "Installing system packages"
+            sudo dnf install -y \
+                gcc \
+                gcc-c++ \
+                git \
+                golang \
+                kitty \
+                kwin-devel \
+                make \
+                mercurial \
+                npm \
+                p7zip \
+                p7zip-plugins \
+                plasma-desktop \
+                plasma-sdk \
+                zsh
+            ;;
+        macos)
+            if ! command -v brew >/dev/null 2>&1; then
+                warn "Homebrew not found, skipping package installation"
+                warn "Install Homebrew from https://brew.sh then re-run this script"
+                return
+            fi
+            info "Installing system packages"
+            brew install \
+                git \
+                go \
+                kitty \
+                mercurial \
+                node \
+                p7zip \
+                zsh
+            ;;
+        *)
+            warn "Unsupported OS, skipping package installation"
+            warn "Please install manually: git golang kitty make mercurial npm p7zip zsh"
+            ;;
+    esac
 }
 
 # --- Install or update Rust, cargo, and rustup, using rustup ---
@@ -120,23 +177,35 @@ install_shpool() {
 # --- Configure keyboard ---
 
 configure_keyboard() {
-    if ! command -v apt-get >/dev/null 2>&1; then
-        warn "apt-get not found, skipping keyboard configuration"
-        return
-    fi
-
-    info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
-    sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
+    case "$OS" in
+        debian)
+            info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
+            sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
 XKBMODEL="pc105"
 XKBLAYOUT="us"
 XKBVARIANT="dvorak"
 XKBOPTIONS="compose:caps"
 BACKSPACE="guess"
 KEYBOARD
-    # Apply to virtual consoles
-    if command -v setupcon >/dev/null 2>&1; then
-        sudo setupcon --save
-    fi
+            # Apply to virtual consoles
+            if command -v setupcon >/dev/null 2>&1; then
+                sudo setupcon --save
+            fi
+            ;;
+        redhat)
+            info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
+            sudo localectl set-keymap us-dvorak
+            sudo localectl set-x11-keymap us "" dvorak compose:caps
+            ;;
+        macos)
+            info "Skipping keyboard configuration on macOS (use System Settings)"
+            return
+            ;;
+        *)
+            warn "Unsupported OS, skipping keyboard configuration"
+            return
+            ;;
+    esac
     # Apply to current X/Wayland session if running
     if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-${WAYLAND_DISPLAY:-}}"; then
         setxkbmap -layout us -variant dvorak -option "" -option compose:caps
@@ -145,6 +214,7 @@ KEYBOARD
 
 # --- Main ---
 
+detect_os
 install_packages
 configure_keyboard
 
@@ -173,8 +243,12 @@ install_rust
 install_jj
 install_shpool
 
-info "Installing and configuring Krohnkite for KDE"
-"$SCRIPTS_DIR/setup-krohnkite"
+if test "$OS" != "macos"; then
+    info "Installing and configuring Krohnkite for KDE"
+    "$SCRIPTS_DIR/setup-krohnkite"
+else
+    info "Skipping Krohnkite on macOS (no KDE)"
+fi
 
 # --- Install root config ---
 
