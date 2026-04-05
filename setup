@@ -172,6 +172,9 @@ install_rust
 install_jj
 install_shpool
 
+info "Installing and configuring Krohnkite for KDE"
+"$SCRIPTS_DIR/setup-krohnkite"
+
 # --- Install root config ---
 
 mkdir -p "$SRC_DIR"
