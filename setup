@@ -52,7 +52,7 @@ clone_or_pull() {
 install_packages() {
     if ! command -v apt-get >/dev/null 2>&1; then
         warn "apt-get not found, skipping package installation"
-        warn "Please install manually: build-essential cargo git golang kitty make mercurial npm zsh"
+        warn "Please install manually: build-essential git golang kitty make mercurial npm zsh"
         return
     fi
 
@@ -62,7 +62,6 @@ install_packages() {
     info "Installing system packages"
     sudo apt-get install -y \
         build-essential \
-        cargo \
         git \
         golang \
         kitty \
@@ -72,43 +71,46 @@ install_packages() {
         zsh
 }
 
+# --- Install or update Rust, cargo, and rustup, using rustup ---
+
+install_rust() {
+    # Ensure cargo/rustup are on PATH even if profile hasn't been sourced
+    if test -f "$HOME/.cargo/env"; then
+        . "$HOME/.cargo/env"
+    fi
+
+    if command -v rustup >/dev/null 2>&1; then
+        info "Updating Rust toolchain"
+        rustup update
+    else
+        info "Installing Rust via rustup"
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        . "$HOME/.cargo/env"
+    fi
+}
+
 # --- Install jj (Jujutsu) ---
 
 install_jj() {
-    if command -v jj >/dev/null 2>&1; then
-        info "jj is already installed"
-        return
-    fi
-
     if ! command -v cargo >/dev/null 2>&1; then
         warn "cargo not found, skipping jj installation"
         return
     fi
 
-    info "Installing jj via cargo"
-    if ! cargo install --locked jj-cli; then
-        warn "Latest jj failed, trying v0.14.0 (compatible with Rust 1.75)"
-        cargo install --locked jj-cli@0.14.0
-    fi
+    info "Installing/updating jj via cargo"
+    cargo install --locked jj-cli
 }
 
 # --- Install shpool ---
 
 install_shpool() {
-    if command -v shpool >/dev/null 2>&1; then
-        info "shpool is already installed"
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "cargo not found, skipping shpool installation"
         return
     fi
 
-    if command -v cargo >/dev/null 2>&1; then
-        info "Installing shpool via cargo"
-        if cargo install shpool; then
-            return
-        fi
-        warn "cargo install shpool failed"
-    else
-        warn "cargo not found, skipping shpool installation"
-    fi
+    info "Installing/updating shpool via cargo"
+    cargo install shpool
 }
 
 # --- Main ---
@@ -136,6 +138,7 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
     make -C "$CONF_DIR/vcs" install
 fi
 
+install_rust
 install_jj
 install_shpool
 
