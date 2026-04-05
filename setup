@@ -1,0 +1,53 @@
+#!/bin/sh
+# Bootstrap script for setting up a new machine.
+#
+# Usage:
+#     wget -qO- https://raw.githubusercontent.com/mikelward/scripts/main/setup | sh
+#  or
+#     curl -fsSL https://raw.githubusercontent.com/mikelward/scripts/main/setup | sh
+
+set -e
+
+SCRIPTS_REPO="https://github.com/mikelward/scripts.git"
+CONF_REPO="https://github.com/mikelward/conf.git"
+
+SCRIPTS_DIR="$HOME/scripts"
+CONF_DIR="$HOME/conf"
+
+info() {
+    printf "%s\n" "$*"
+}
+
+error() {
+    printf "%s\n" "$*" >&2
+}
+
+clone_or_pull() {
+    repo="$1"
+    dir="$2"
+
+    if test -d "$dir/.git"; then
+        info "$dir already exists, pulling latest changes"
+        git -C "$dir" pull
+        git -C "$dir" submodule update --init --recursive
+    else
+        info "Cloning $repo into $dir"
+        git clone --recurse-submodules "$repo" "$dir"
+    fi
+}
+
+if ! command -v git >/dev/null 2>&1; then
+    error "git is not installed, please install git first"
+    exit 1
+fi
+
+clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR"
+clone_or_pull "$CONF_REPO" "$CONF_DIR"
+
+info "Running confinst"
+"$SCRIPTS_DIR/confinst"
+
+if test -f "$CONF_DIR/vcs/Makefile"; then
+    info "Installing vcs"
+    make -C "$CONF_DIR/vcs" install
+fi
