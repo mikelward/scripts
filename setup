@@ -2,9 +2,9 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     wget -qO- https://raw.githubusercontent.com/mikelward/scripts/main/setup | sh
+#     wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 #  or
-#     curl -fsSL https://raw.githubusercontent.com/mikelward/scripts/main/setup | sh
+#     curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 
 set -e
 
