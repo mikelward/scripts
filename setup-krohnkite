@@ -1,0 +1,165 @@
+#!/bin/sh
+# Install and configure Krohnkite tiling window manager for KDE Plasma 6.
+#
+# Installs Krohnkite from https://codeberg.org/anametologin/Krohnkite
+# and sets up keybindings for tiling window management.
+#
+# Requires: git, npm, kpackagetool6, kwriteconfig6
+# Optional: go-task (preferred build tool), p7zip
+#
+# Usage:
+#     setup-krohnkite
+
+set -e
+
+KROHNKITE_REPO="https://codeberg.org/anametologin/Krohnkite.git"
+KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+cleanup() {
+    rm -rf "$KROHNKITE_DIR"
+}
+trap cleanup EXIT
+
+# --- Check prerequisites ---
+
+command -v git >/dev/null 2>&1 || error "git is required"
+command -v npm >/dev/null 2>&1 || error "npm is required (to build Krohnkite)"
+command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
+command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
+
+# --- Install Krohnkite ---
+
+install_krohnkite() {
+    info "Cloning Krohnkite"
+    git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+
+    cd "$KROHNKITE_DIR"
+
+    # Build using go-task (preferred) or make (fallback)
+    if command -v go-task >/dev/null 2>&1; then
+        info "Building Krohnkite with go-task"
+        go-task package
+    elif test -f Makefile; then
+        info "Building Krohnkite with make"
+        make
+    else
+        info "Building Krohnkite with npm"
+        npm install && npm run build
+    fi
+
+    # Find the built .kwinscript file
+    kwinscript=$(find . -name '*.kwinscript' -print -quit)
+    if test -n "$kwinscript"; then
+        info "Installing Krohnkite from $kwinscript"
+        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
+            kpackagetool6 -t KWin/Script -i "$kwinscript"
+    elif test -f metadata.json || test -f metadata.desktop; then
+        info "Installing Krohnkite from source directory"
+        kpackagetool6 -t KWin/Script -u . 2>/dev/null ||
+            kpackagetool6 -t KWin/Script -i .
+    else
+        error "Could not find installable Krohnkite package"
+    fi
+}
+
+# --- Enable Krohnkite ---
+
+enable_krohnkite() {
+    info "Enabling Krohnkite plugin"
+    kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true
+}
+
+# --- Configure keybindings ---
+
+set_shortcut() {
+    action="$1"
+    shortcut="$2"
+    kwriteconfig6 --file kglobalshortcutsrc --group kwin \
+        --key "$action" "$shortcut,none,$action"
+}
+
+unbind_shortcut() {
+    action="$1"
+    kwriteconfig6 --file kglobalshortcutsrc --group kwin \
+        --key "$action" "none,none,$action"
+}
+
+configure_keybindings() {
+    info "Configuring keybindings"
+
+    # Switch to desktop 1-9
+    n=1
+    while test "$n" -le 9; do
+        set_shortcut "Switch to Desktop $n" "Meta+$n"
+        set_shortcut "Window to Desktop $n" "Meta+Shift+$n"
+        n=$((n + 1))
+    done
+
+    # Window management
+    set_shortcut "Window Close" "Meta+Backspace"
+
+    # Krohnkite: resize
+    set_shortcut "Krohnkite: Increase" "Meta+\\\\"
+    set_shortcut "Krohnkite: Decrease" "Meta+/"
+
+    # Krohnkite: layouts
+    set_shortcut "Krohnkite: Monocle Layout" "Meta+\`"
+    set_shortcut "Krohnkite: Previous Layout" "Meta+,"
+    set_shortcut "Krohnkite: Cycle Layout" "Meta+."
+
+    # Krohnkite: set master
+    set_shortcut "Krohnkite: Set Master" "Meta+Return"
+
+    # Unbind unused Krohnkite shortcuts
+    unbind_shortcut "Krohnkite: Focus Next"
+    unbind_shortcut "Krohnkite: Focus Previous"
+    unbind_shortcut "Krohnkite: Focus Left"
+    unbind_shortcut "Krohnkite: Focus Right"
+    unbind_shortcut "Krohnkite: Focus Up"
+    unbind_shortcut "Krohnkite: Focus Down"
+    unbind_shortcut "Krohnkite: Move Left"
+    unbind_shortcut "Krohnkite: Move Right"
+    unbind_shortcut "Krohnkite: Move Up"
+    unbind_shortcut "Krohnkite: Move Down"
+    unbind_shortcut "Krohnkite: Tile Layout"
+    unbind_shortcut "Krohnkite: Spread Layout"
+    unbind_shortcut "Krohnkite: Stair Layout"
+    unbind_shortcut "Krohnkite: Toggle Floating"
+    unbind_shortcut "Krohnkite: Rotate"
+    unbind_shortcut "Krohnkite: Rotate Part"
+}
+
+# --- Reload KWin ---
+
+reload_kwin() {
+    info "Reloading KWin configuration"
+    if command -v qdbus6 >/dev/null 2>&1; then
+        qdbus6 org.kde.KWin /KWin reconfigure
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus org.kde.KWin /KWin reconfigure
+    else
+        warn "qdbus not found, please restart KWin manually or log out and back in"
+    fi
+}
+
+# --- Main ---
+
+install_krohnkite
+enable_krohnkite
+configure_keybindings
+reload_kwin
+
+info "Krohnkite installed and configured successfully"
