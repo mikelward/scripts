@@ -113,9 +113,36 @@ install_shpool() {
     cargo install shpool
 }
 
+# --- Configure keyboard ---
+
+configure_keyboard() {
+    if ! command -v apt-get >/dev/null 2>&1; then
+        warn "apt-get not found, skipping keyboard configuration"
+        return
+    fi
+
+    info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
+    sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
+XKBMODEL="pc105"
+XKBLAYOUT="us"
+XKBVARIANT="dvorak"
+XKBOPTIONS="compose:caps"
+BACKSPACE="guess"
+KEYBOARD
+    # Apply to virtual consoles
+    if command -v setupcon >/dev/null 2>&1; then
+        sudo setupcon --save
+    fi
+    # Apply to current X/Wayland session if running
+    if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-${WAYLAND_DISPLAY:-}}"; then
+        setxkbmap -layout us -variant dvorak -option "" -option compose:caps
+    fi
+}
+
 # --- Main ---
 
 install_packages
+configure_keyboard
 
 if ! command -v git >/dev/null 2>&1; then
     error "git is not installed and could not be installed"
