@@ -1,0 +1,503 @@
+#!/usr/bin/env python3
+"""Jujutsu VCS operations.
+
+Usage: vcs-jj <command> [args...]
+
+Implements a uniform VCS interface for Jujutsu repositories.
+"""
+
+import os
+import sys
+import subprocess
+
+
+def run(args, **kwargs):
+    return subprocess.call(args, **kwargs)
+
+
+def run_output(args, **kwargs):
+    try:
+        return subprocess.check_output(args, stderr=subprocess.DEVNULL, **kwargs).decode().strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def warn(msg):
+    print(msg, file=sys.stderr)
+
+
+def jj(*args):
+    return run(["jj"] + list(args))
+
+
+def jj_output(*args):
+    return run_output(["jj"] + list(args))
+
+
+def rootdir():
+    return jj_output("workspace", "root")
+
+
+def backend():
+    root = rootdir()
+    if root is None:
+        return None
+    store_type = os.path.join(root, ".jj", "repo", "store", "type")
+    if os.path.isfile(store_type):
+        with open(store_type) as f:
+            return f.read().strip()
+    return None
+
+
+def hosting():
+    b = backend()
+    if b != "git":
+        return None
+    root = rootdir()
+    if root is None:
+        return None
+    git_dir = os.path.join(root, ".jj", "repo", "store", "git")
+    origin_url = run_output(["git", "-C", git_dir, "remote", "get-url", "origin"])
+    if origin_url is None:
+        return None
+    if "github.com" in origin_url:
+        return "github"
+    if "gitlab.com" in origin_url or "gitlab." in origin_url:
+        return "gitlab"
+    if "bitbucket.org" in origin_url:
+        return "bitbucket"
+    if "sr.ht" in origin_url:
+        return "sourcehut"
+    if "googlesource.com" in origin_url:
+        return "gerrit"
+    return None
+
+
+# --- commands ---
+
+def cmd_absorb(args):
+    return jj("absorb", *args)
+
+
+def cmd_add(args):
+    return jj("file", "track", *args)
+
+
+def cmd_addremove(args):
+    # jj auto-tracks all files
+    return 0
+
+
+def cmd_amend(args):
+    return jj("squash", *args)
+
+
+def cmd_annotate(args):
+    return jj("file", "annotate", *args)
+
+
+def cmd_base(args):
+    tmpl = ('if(self.contained_in("@"), '
+            'if(description.first_line(), "@ " ++ change_id.shortest() ++ " " ++ description.first_line() ++ "\\n"), '
+            '"* " ++ change_id.shortest() ++ " " ++ description.first_line() ++ "\\n")')
+    return jj("--no-pager", "log", "--no-graph", "-r", "@|@-", "--template", tmpl, *args)
+
+
+def cmd_blame(args):
+    return jj("file", "annotate", *args)
+
+
+def cmd_branch(args):
+    # no current bookmark concept in jj
+    return 0
+
+
+def cmd_branches(args):
+    return jj("bookmark", "list", *args)
+
+
+def cmd_change(args):
+    return jj("describe", *args)
+
+
+def cmd_changed(args):
+    return jj("diff", "--summary", *args)
+
+
+def cmd_changelog(args):
+    return jj("log", "--template=builtin_log_oneline", *args)
+
+
+def cmd_changes(args):
+    return jj("diff", *args)
+
+
+def cmd_checkout(args):
+    return jj("new", *args)
+
+
+def cmd_commit(args):
+    return jj("commit", *args)
+
+
+def cmd_commitforce(args):
+    return jj("commit", *args)
+
+
+def cmd_copy(args):
+    return run(["cp"] + list(args))
+
+
+def cmd_describe(args):
+    return jj("describe", *args)
+
+
+def cmd_diffedit(args):
+    return jj("diffedit", *args)
+
+
+def cmd_diffs(args):
+    return jj("diff", *args)
+
+
+def cmd_diffstat(args):
+    return jj("diff", "--stat", *args)
+
+
+def cmd_drop(args):
+    return jj("abandon", *args)
+
+
+def cmd_evolve(args):
+    warn("jj automatically rebases descendants; nothing to do")
+    return 0
+
+
+def cmd_fastforward(args):
+    b = backend()
+    if b == "git":
+        return jj("git", "fetch", *args)
+    return jj("piper", "pull", *args)
+
+
+def cmd_fetchtime(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    fetch_head = os.path.join(root, ".jj", "repo", "store", "git", "FETCH_HEAD")
+    if os.path.isfile(fetch_head):
+        print(int(os.path.getmtime(fetch_head)))
+        return 0
+    return 1
+
+
+def cmd_fix(args):
+    return jj("fix", *args)
+
+
+def cmd_goto(args):
+    return jj("new", *args)
+
+
+def cmd_graft(args):
+    return jj("duplicate", *args)
+
+
+def cmd_graph(args):
+    tmpl = ('change_id.shortest() ++ " " ++ '
+            'if(description, description.first_line(), "(no description set)") ++ '
+            'if(bookmarks, " [" ++ bookmarks.join(", ") ++ "]", "") ++ "\\n"')
+    if not args:
+        return jj("log", "--template", tmpl,
+                   "-r", "mutable() ~ empty() ~ ancestors(remote_bookmarks())")
+    return jj("log", "--template", tmpl, *args)
+
+
+def cmd_histedit(args):
+    warn("no interactive histedit in jj; use: jj squash, jj split, jj edit")
+    return 1
+
+
+def cmd_ignore(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    with open(os.path.join(root, ".gitignore"), "a") as f:
+        for arg in args:
+            f.write(arg + "\n")
+    return 0
+
+
+def cmd_incoming(args):
+    return jj("op", "log", *args)
+
+
+def cmd_lint(args):
+    return jj("fix", *args)
+
+
+def cmd_map(args):
+    # Check if at tip
+    output = jj_output("--no-pager", "log", "--no-graph",
+                       "-r", "children(@) | (children(@-) ~ @)",
+                       "--template", '"x"')
+    if not output:
+        return cmd_base(args)
+    return cmd_graph(args)
+
+
+def cmd_move(args):
+    return _rename(args)
+
+
+def cmd_mv(args):
+    return _rename(args)
+
+
+def cmd_next(args):
+    return jj("next", *args)
+
+
+def cmd_outgoing(args):
+    return jj("--no-pager", "log", "--no-graph",
+              "-r", "mutable() ~ empty() ~ ancestors(remote_bookmarks())",
+              "--template", 'change_id.shortest() ++ " " ++ description.first_line() ++ "\\n"',
+              *args)
+
+
+def cmd_pending(args):
+    return jj("--no-pager", "log", "-r", "mutable() ~ empty()", *args)
+
+
+def cmd_pick(args):
+    return jj("duplicate", *args)
+
+
+def cmd_precommit(args):
+    return jj("fix", *args)
+
+
+def cmd_prev(args):
+    return jj("prev", *args)
+
+
+def cmd_presubmit(args):
+    b = backend()
+    if b == "git":
+        warn("no presubmit for git-backed repos; run tests locally")
+        return 1
+    return jj("piper", "presubmit", *args)
+
+
+def cmd_projectroot(args):
+    return jj("workspace", "root")
+
+
+def cmd_pull(args):
+    b = backend()
+    if b == "git":
+        return jj("git", "fetch", *args)
+    return jj("sync", *args)
+
+
+def cmd_push(args):
+    b = backend()
+    if b == "git":
+        return jj("git", "push", *args)
+    return jj("upload", *args)
+
+
+def cmd_rebase(args):
+    return jj("rebase", *args)
+
+
+def cmd_recommit(args):
+    return jj("describe", *args)
+
+
+def cmd_remove(args):
+    ret = run(["rm"] + list(args))
+    if ret != 0:
+        return ret
+    return jj("file", "untrack", *args)
+
+
+def cmd_rename(args):
+    return _rename(args)
+
+
+def cmd_resolve(args):
+    return jj("resolve", *args)
+
+
+def cmd_mergetool(args):
+    return jj("resolve", *args)
+
+
+def cmd_restore(args):
+    return jj("restore", *args)
+
+
+def cmd_revert(args):
+    return jj("revert", *args)
+
+
+def cmd_review(args):
+    return _github_review(args)
+
+
+def cmd_reword(args):
+    if not args:
+        return jj("describe")
+    return jj("describe", "-m", *args)
+
+
+def cmd_rm(args):
+    return cmd_remove(args)
+
+
+def cmd_rootdir(args):
+    r = rootdir()
+    if r:
+        print(r)
+        return 0
+    return 1
+
+
+def cmd_show(args):
+    return jj("show", *args)
+
+
+def cmd_split(args):
+    return jj("split", *args)
+
+
+def cmd_squash(args):
+    return jj("squash", *args)
+
+
+def cmd_status(args):
+    # Only show status for undescribed commits
+    desc = jj_output("log", "--no-graph", "-r", "@", "-T", "description")
+    if desc is None:
+        return 1
+    if not desc:
+        return jj("diff", "--summary", *args)
+    return 0
+
+
+def cmd_submit(args):
+    b = backend()
+    if b == "git":
+        return jj("git", "push", *args)
+    return jj("submit", *args)
+
+
+def cmd_submitforce(args):
+    b = backend()
+    if b == "git":
+        return jj("git", "push", *args)
+    return jj("submit", *args)
+
+
+def cmd_track(args):
+    return jj("file", "track", *args)
+
+
+def cmd_unamend(args):
+    return jj("undo", *args)
+
+
+def cmd_uncommit(args):
+    return jj("squash", "--from", "@-", "--into", "@", *args)
+
+
+def cmd_undo(args):
+    return jj("undo", *args)
+
+
+def cmd_unknown(args):
+    return jj("file", "list", "--untracked", *args)
+
+
+def cmd_untrack(args):
+    return jj("untrack", *args)
+
+
+def cmd_upload(args):
+    return _github_review(args)
+
+
+def cmd_uploadchain(args):
+    return _github_review(args)
+
+
+# --- helpers ---
+
+def _rename(args):
+    if len(args) != 2:
+        warn("usage: rename <source> <dest>")
+        return 1
+    return run(["mv", args[0], args[1]])
+
+
+def _github_review(args):
+    """Send current change for review."""
+    reviewers = []
+    push_flags = []
+    it = iter(args)
+    for arg in it:
+        if arg in ("-r", "-m", "--reviewer"):
+            try:
+                reviewers.append(next(it))
+            except StopIteration:
+                pass
+        elif arg.startswith("--reviewer="):
+            reviewers.append(arg.split("=", 1)[1])
+        else:
+            push_flags.append(arg)
+
+    b = backend()
+    if b == "git":
+        ret = jj("git", "push", *push_flags)
+        if ret != 0:
+            return ret
+        h = hosting()
+        if h == "github":
+            bookmark = jj_output("bookmark", "list", "-r", "@")
+            head = None
+            if bookmark:
+                head = bookmark.split(":")[0].strip()
+            gh_args = ["gh", "pr", "create"]
+            for r in reviewers:
+                gh_args.extend(["-r", r])
+            if head:
+                gh_args.extend(["--head", head])
+            return run(gh_args)
+        return 0
+    return jj("upload", *push_flags)
+
+
+COMMANDS = {name[4:]: func for name, func in globals().copy().items()
+            if name.startswith("cmd_") and callable(func)}
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: vcs-jj <command> [args...]", file=sys.stderr)
+        print(f"Commands: {', '.join(sorted(COMMANDS))}", file=sys.stderr)
+        return 1
+
+    command = sys.argv[1]
+    args = sys.argv[2:]
+
+    func = COMMANDS.get(command)
+    if func is None:
+        warn(f"vcs-jj: unknown command '{command}'")
+        return 1
+
+    return func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
