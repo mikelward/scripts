@@ -52,7 +52,7 @@ clone_or_pull() {
 install_packages() {
     if ! command -v apt-get >/dev/null 2>&1; then
         warn "apt-get not found, skipping package installation"
-        warn "Please install manually: build-essential git golang kitty kwin-dev make mercurial npm p7zip-full plasma-desktop zsh"
+        warn "Please install manually: build-essential git golang kitty kwin-dev make mercurial npm p7zip-full plasma-desktop plasma-sdk zsh"
         return
     fi
 
@@ -65,12 +65,13 @@ install_packages() {
         git \
         golang \
         kitty \
+        kwin-dev \
         make \
         mercurial \
         npm \
         p7zip-full \
         plasma-desktop \
-        kwin-dev \
+        plasma-sdk \
         zsh
 }
 
