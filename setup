@@ -246,8 +246,11 @@ install_shpool
 if test "$OS" != "macos"; then
     info "Installing and configuring Krohnkite for KDE"
     "$SCRIPTS_DIR/setup-krohnkite"
+
+    info "Configuring custom KDE shortcuts"
+    "$SCRIPTS_DIR/setup-kde-shortcuts"
 else
-    info "Skipping Krohnkite on macOS (no KDE)"
+    info "Skipping KDE setup on macOS (no KDE)"
 fi
 
 # --- Install root config ---

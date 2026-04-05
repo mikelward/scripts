@@ -1,0 +1,104 @@
+#!/bin/sh
+# Configure custom KDE Plasma keyboard shortcuts for launching applications.
+#
+# Requires: kwriteconfig6
+# Optional: qdbus6 or qdbus (to reload without logging out)
+#
+# Usage:
+#     setup-kde-shortcuts
+
+set -e
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
+
+# --- Configure custom shortcuts ---
+
+# khotkeysrc uses a hierarchical numbering scheme:
+#   [Data]           - top level, DataCount = number of groups
+#   [Data_1]         - a group of shortcuts
+#   [Data_1_1]       - first shortcut in the group
+#   [Data_1_1Actions0]  - the command to run
+#   [Data_1_1Triggers0] - the key binding
+
+set_group() {
+    kwriteconfig6 --file khotkeysrc --group Data --key DataCount 1
+
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key Comment "Custom application shortcuts"
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key DataCount 4
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key Enabled true
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key Name "Custom Shortcuts"
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key SystemGroup 0
+    kwriteconfig6 --file khotkeysrc --group Data_1 --key Type ACTION_DATA_GROUP
+}
+
+add_shortcut() {
+    index="$1"
+    name="$2"
+    command="$3"
+    shortcut="$4"
+
+    prefix="Data_1_${index}"
+
+    kwriteconfig6 --file khotkeysrc --group "$prefix" --key Comment ""
+    kwriteconfig6 --file khotkeysrc --group "$prefix" --key Enabled true
+    kwriteconfig6 --file khotkeysrc --group "$prefix" --key Name "$name"
+    kwriteconfig6 --file khotkeysrc --group "$prefix" --key Type SIMPLE_ACTION_DATA
+
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Actions" --key ActionsCount 1
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Actions0" --key CommandURL "$command"
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Actions0" --key Type COMMAND_URL
+
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Conditions" --key Comment ""
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Conditions" --key ConditionsCount 0
+
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Triggers" --key Comment "Simple_action"
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Triggers" --key TriggersCount 1
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Triggers0" --key Key "$shortcut"
+    kwriteconfig6 --file khotkeysrc --group "${prefix}Triggers0" --key Type SHORTCUT
+}
+
+configure_shortcuts() {
+    info "Configuring custom KDE shortcuts"
+
+    set_group
+
+    add_shortcut 1 "Browser 1" "$HOME/scripts/browser1" "Meta+G"
+    add_shortcut 2 "Browser 2" "$HOME/scripts/browser2" "Meta+F"
+    add_shortcut 3 "Music"     "$HOME/scripts/music"    "Meta+Y"
+    add_shortcut 4 "Terminal"  "$HOME/scripts/terminal"  "Meta+T"
+}
+
+# --- Reload khotkeys ---
+
+reload_khotkeys() {
+    info "Reloading KDE shortcut configuration"
+    if command -v qdbus6 >/dev/null 2>&1; then
+        qdbus6 org.kde.keyboard /modules/khotkeys reread_configuration 2>/dev/null || true
+        qdbus6 org.kde.KWin /KWin reconfigure 2>/dev/null || true
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus org.kde.keyboard /modules/khotkeys reread_configuration 2>/dev/null || true
+        qdbus org.kde.KWin /KWin reconfigure 2>/dev/null || true
+    else
+        warn "qdbus not found, please log out and back in to apply shortcuts"
+    fi
+}
+
+# --- Main ---
+
+configure_shortcuts
+reload_khotkeys
+
+info "Custom KDE shortcuts configured successfully"
