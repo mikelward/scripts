@@ -14,16 +14,23 @@ set -e
 
 SCRIPTS_REPO="https://github.com/mikelward/scripts.git"
 CONF_REPO="https://github.com/mikelward/conf.git"
+ROOT_REPO="git@github.com:mikelward/root.git"
 
 SCRIPTS_DIR="$HOME/scripts"
 CONF_DIR="$HOME/conf"
+SRC_DIR="$HOME/src"
+ROOT_DIR="$SRC_DIR/root"
 
 info() {
     printf "%s\n" "$*"
 }
 
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
 error() {
-    printf "%s\n" "$*" >&2
+    printf "Error: %s\n" "$*" >&2
 }
 
 clone_or_pull() {
@@ -40,8 +47,81 @@ clone_or_pull() {
     fi
 }
 
+# --- Install system packages ---
+
+install_packages() {
+    if ! command -v apt-get >/dev/null 2>&1; then
+        warn "apt-get not found, skipping package installation"
+        warn "Please install manually: build-essential cargo git golang kitty make mercurial npm zsh"
+        return
+    fi
+
+    info "Updating package lists"
+    sudo apt-get update -qq
+
+    info "Installing system packages"
+    sudo apt-get install -y \
+        build-essential \
+        cargo \
+        git \
+        golang \
+        kitty \
+        make \
+        mercurial \
+        npm \
+        zsh
+}
+
+# --- Install jj (Jujutsu) ---
+
+install_jj() {
+    if command -v jj >/dev/null 2>&1; then
+        info "jj is already installed"
+        return
+    fi
+
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "cargo not found, skipping jj installation"
+        return
+    fi
+
+    info "Installing jj via cargo"
+    if ! cargo install --locked jj-cli; then
+        warn "Latest jj failed, trying v0.14.0 (compatible with Rust 1.75)"
+        cargo install --locked jj-cli@0.14.0
+    fi
+}
+
+# --- Install shpool ---
+
+install_shpool() {
+    if command -v shpool >/dev/null 2>&1; then
+        info "shpool is already installed"
+        return
+    fi
+
+    if command -v cargo >/dev/null 2>&1; then
+        info "Installing shpool via cargo"
+        if cargo install shpool; then
+            return
+        fi
+        warn "cargo install shpool failed"
+    else
+        warn "cargo not found, skipping shpool installation"
+    fi
+}
+
+# --- Main ---
+
+install_packages
+
 if ! command -v git >/dev/null 2>&1; then
-    error "git is not installed, please install git first"
+    error "git is not installed and could not be installed"
+    exit 1
+fi
+
+if ! command -v make >/dev/null 2>&1; then
+    error "make is not installed and could not be installed"
     exit 1
 fi
 
@@ -55,3 +135,16 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
     info "Installing vcs"
     make -C "$CONF_DIR/vcs" install
 fi
+
+install_jj
+install_shpool
+
+# --- Install root config ---
+
+mkdir -p "$SRC_DIR"
+clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
+make -C "$ROOT_DIR"
+sudo make -C "$ROOT_DIR" install
+root_group=$(getent group 0 | cut -d: -f1)
+sudo gpasswd -a "$USER" "$root_group"
+info "Added $USER to $root_group group (log out and back in for this to take effect)"
