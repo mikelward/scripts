@@ -198,6 +198,18 @@ install_shpool() {
     cargo install shpool
 }
 
+# --- Install Nushell ---
+
+install_nushell() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "cargo not found, skipping nushell installation"
+        return
+    fi
+
+    info "Installing/updating nushell via cargo"
+    cargo install nu
+}
+
 # --- Install Starship ---
 
 install_starship() {
@@ -278,6 +290,7 @@ fi
 install_rust
 install_jj
 install_shpool
+install_nushell
 install_starship
 
 if test "$OS" != "macos"; then
