@@ -78,10 +78,15 @@ install_packages() {
             sudo apt-get update -qq
             info "Installing system packages"
             sudo apt-get install -y \
+                bat \
                 build-essential \
+                curl \
+                fd-find \
                 fzf \
                 git \
+                git-delta \
                 golang \
+                jq \
                 kitty \
                 kwin-dev \
                 make \
@@ -91,16 +96,22 @@ install_packages() {
                 plasma-desktop \
                 plasma-sdk \
                 ripgrep \
+                shellcheck \
                 zsh
             ;;
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
+                bat \
+                curl \
+                fd-find \
                 fzf \
                 gcc \
                 gcc-c++ \
                 git \
+                git-delta \
                 golang \
+                jq \
                 kitty \
                 kwin-devel \
                 make \
@@ -111,6 +122,7 @@ install_packages() {
                 plasma-desktop \
                 plasma-sdk \
                 ripgrep \
+                ShellCheck \
                 zsh
             ;;
         macos)
@@ -121,19 +133,25 @@ install_packages() {
             fi
             info "Installing system packages"
             brew install \
+                bat \
+                curl \
+                fd \
                 fzf \
                 git \
+                git-delta \
                 go \
+                jq \
                 kitty \
                 mercurial \
                 node \
                 p7zip \
                 ripgrep \
+                shellcheck \
                 zsh
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: fzf git golang kitty make mercurial npm p7zip ripgrep zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip ripgrep shellcheck zsh"
             ;;
     esac
 }
