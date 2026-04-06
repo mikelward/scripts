@@ -79,6 +79,7 @@ install_packages() {
             info "Installing system packages"
             sudo apt-get install -y \
                 build-essential \
+                fzf \
                 git \
                 golang \
                 kitty \
@@ -89,11 +90,13 @@ install_packages() {
                 p7zip-full \
                 plasma-desktop \
                 plasma-sdk \
+                ripgrep \
                 zsh
             ;;
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
+                fzf \
                 gcc \
                 gcc-c++ \
                 git \
@@ -107,6 +110,7 @@ install_packages() {
                 p7zip-plugins \
                 plasma-desktop \
                 plasma-sdk \
+                ripgrep \
                 zsh
             ;;
         macos)
@@ -117,17 +121,19 @@ install_packages() {
             fi
             info "Installing system packages"
             brew install \
+                fzf \
                 git \
                 go \
                 kitty \
                 mercurial \
                 node \
                 p7zip \
+                ripgrep \
                 zsh
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: git golang kitty make mercurial npm p7zip zsh"
+            warn "Please install manually: fzf git golang kitty make mercurial npm p7zip ripgrep zsh"
             ;;
     esac
 }
