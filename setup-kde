@@ -93,6 +93,14 @@ configure_focus_follows_mouse() {
     kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
 }
 
+# --- Configure virtual desktops ---
+
+configure_desktops() {
+    info "Configuring 9 virtual desktops"
+    kwriteconfig6 --file kwinrc --group Desktops --key Number 9
+    kwriteconfig6 --file kwinrc --group Desktops --key Rows 1
+}
+
 # --- Configure keybindings ---
 
 set_shortcut() {
@@ -217,6 +225,7 @@ reload_kwin() {
 install_krohnkite
 enable_krohnkite
 configure_focus_follows_mouse
+configure_desktops
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings
