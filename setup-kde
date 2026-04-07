@@ -1,14 +1,15 @@
 #!/bin/sh
-# Install and configure Krohnkite tiling window manager for KDE Plasma 6.
+# Configure KDE Plasma 6 desktop environment.
 #
-# Installs Krohnkite from https://codeberg.org/anametologin/Krohnkite
-# and sets up keybindings for tiling window management.
+# Sets up:
+# - Krohnkite tiling window manager
+# - Window management and desktop switching keybindings
 #
 # Requires: git, npm, kpackagetool6, kwriteconfig6
 # Optional: go-task (preferred build tool), p7zip
 #
 # Usage:
-#     setup-krohnkite
+#     setup-kde
 
 set -e
 
@@ -97,6 +98,33 @@ unbind_shortcut() {
         --key "$action" "none,none,$action"
 }
 
+unbind_all_krohnkite_shortcuts() {
+    config_file="${XDG_CONFIG_HOME:-$HOME/.config}/kglobalshortcutsrc"
+    test -f "$config_file" || return 0
+
+    in_kwin=false
+    while IFS= read -r line; do
+        case "$line" in
+            "[kwin]")
+                in_kwin=true
+                ;;
+            "["*)
+                in_kwin=false
+                ;;
+            *)
+                if $in_kwin; then
+                    case "$line" in
+                        "Krohnkite: "*)
+                            action="${line%%=*}"
+                            unbind_shortcut "$action"
+                            ;;
+                    esac
+                fi
+                ;;
+        esac
+    done < "$config_file"
+}
+
 configure_keybindings() {
     info "Configuring keybindings"
 
@@ -111,6 +139,9 @@ configure_keybindings() {
     # Window management
     set_shortcut "Window Close" "Meta+Backspace"
 
+    # Unbind all Krohnkite shortcuts, then set only the ones we want
+    unbind_all_krohnkite_shortcuts
+
     # Krohnkite: resize
     set_shortcut "Krohnkite: Increase" "Meta+\\\\"
     set_shortcut "Krohnkite: Decrease" "Meta+/"
@@ -122,24 +153,6 @@ configure_keybindings() {
 
     # Krohnkite: set master
     set_shortcut "Krohnkite: Set Master" "Meta+Return"
-
-    # Unbind unused Krohnkite shortcuts
-    unbind_shortcut "Krohnkite: Focus Next"
-    unbind_shortcut "Krohnkite: Focus Previous"
-    unbind_shortcut "Krohnkite: Focus Left"
-    unbind_shortcut "Krohnkite: Focus Right"
-    unbind_shortcut "Krohnkite: Focus Up"
-    unbind_shortcut "Krohnkite: Focus Down"
-    unbind_shortcut "Krohnkite: Move Left"
-    unbind_shortcut "Krohnkite: Move Right"
-    unbind_shortcut "Krohnkite: Move Up"
-    unbind_shortcut "Krohnkite: Move Down"
-    unbind_shortcut "Krohnkite: Tile Layout"
-    unbind_shortcut "Krohnkite: Spread Layout"
-    unbind_shortcut "Krohnkite: Stair Layout"
-    unbind_shortcut "Krohnkite: Toggle Floating"
-    unbind_shortcut "Krohnkite: Rotate"
-    unbind_shortcut "Krohnkite: Rotate Part"
 }
 
 # --- Reload KWin ---
@@ -159,7 +172,10 @@ reload_kwin() {
 
 install_krohnkite
 enable_krohnkite
+# Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
+reload_kwin
 configure_keybindings
+# Reload again to apply our keybinding changes
 reload_kwin
 
-info "Krohnkite installed and configured successfully"
+info "KDE configured successfully"
