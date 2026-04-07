@@ -145,6 +145,7 @@ install_packages() {
         macos)
             install_homebrew
             info "Installing system packages"
+            brew install koekeishiya/formulae/skhd
             brew install \
                 bat \
                 curl \
