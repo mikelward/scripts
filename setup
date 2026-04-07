@@ -195,7 +195,7 @@ install_shpool() {
     fi
 
     info "Installing/updating shpool via cargo"
-    cargo install shpool
+    cargo install --locked shpool
 }
 
 # --- Install Nushell ---
@@ -207,7 +207,7 @@ install_nushell() {
     fi
 
     info "Installing/updating nushell via cargo"
-    cargo install nu
+    cargo install --locked nu
 }
 
 # --- Install Starship ---
