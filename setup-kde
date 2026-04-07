@@ -4,6 +4,7 @@
 # Sets up:
 # - Krohnkite tiling window manager
 # - Window management and desktop switching keybindings
+# - Application launch shortcuts (browser, terminal, music)
 #
 # Requires: git, npm, kpackagetool6, kwriteconfig6
 # Optional: go-task (preferred build tool), p7zip
@@ -125,6 +126,40 @@ unbind_all_krohnkite_shortcuts() {
     done < "$config_file"
 }
 
+# --- Application launch shortcuts ---
+
+add_app_shortcut() {
+    name="$1"
+    command="$2"
+    shortcut="$3"
+    desktop_file="$4"
+
+    desktop_dir="$HOME/.local/share/applications"
+    mkdir -p "$desktop_dir"
+
+    cat > "$desktop_dir/$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$name
+Exec=$command
+NoDisplay=true
+EOF
+
+    kwriteconfig6 --file kglobalshortcutsrc --group "$desktop_file" \
+        --key _launch "$shortcut,none,$name"
+}
+
+configure_app_shortcuts() {
+    info "Configuring application shortcuts"
+
+    scripts="$HOME/scripts"
+    add_app_shortcut "Browser 1" "$scripts/browser1" "Meta+G" "scripts-browser1.desktop"
+    add_app_shortcut "Browser 2" "$scripts/browser2" "Meta+H" "scripts-browser2.desktop"
+    add_app_shortcut "Terminal" "$scripts/terminal" "Meta+T" "scripts-terminal.desktop"
+    add_app_shortcut "Terminal on Workstation" "$scripts/terminal_on_workstation" "Meta+W" "scripts-terminal-workstation.desktop"
+    add_app_shortcut "Music" "$scripts/music" "Meta+Y" "scripts-music.desktop"
+}
+
 configure_keybindings() {
     info "Configuring keybindings"
 
@@ -175,7 +210,12 @@ enable_krohnkite
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings
-# Reload again to apply our keybinding changes
+configure_app_shortcuts
+# Rebuild service database so KDE picks up the new .desktop files
+if command -v kbuildsycoca6 >/dev/null 2>&1; then
+    kbuildsycoca6
+fi
+# Reload to apply all changes
 reload_kwin
 
 info "KDE configured successfully"
