@@ -176,6 +176,92 @@ install_packages() {
     esac
 }
 
+# --- Install fonts ---
+
+install_fonts() {
+    case "$OS" in
+        macos)
+            font_dir="$HOME/Library/Fonts"
+            ;;
+        *)
+            font_dir="$HOME/.local/share/fonts"
+            ;;
+    esac
+    mkdir -p "$font_dir"
+
+    # Ubuntu Mono
+    if ls "$font_dir"/UbuntuMono*.ttf >/dev/null 2>&1; then
+        info "Ubuntu Mono already installed"
+    else
+        info "Installing Ubuntu Mono"
+        ubuntu_mono_url="https://github.com/google/fonts/raw/main/ufl/ubuntumono"
+        for style in Regular Bold Italic BoldItalic; do
+            curl -fsSL -o "$font_dir/UbuntuMono-${style}.ttf" \
+                "$ubuntu_mono_url/UbuntuMono-${style}.ttf"
+        done
+    fi
+
+    # Ubuntu Mono Nerd Font
+    if ls "$font_dir"/UbuntuMonoNerdFont*.ttf >/dev/null 2>&1; then
+        info "Ubuntu Mono Nerd Font already installed"
+    else
+        info "Installing Ubuntu Mono Nerd Font"
+        nerd_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/UbuntuMono.tar.xz"
+        nerd_tmp="${TMPDIR:-/tmp}/nerd-fonts-$$"
+        mkdir -p "$nerd_tmp"
+        curl -fsSL "$nerd_url" | tar -xJ -C "$nerd_tmp"
+        # Install only .ttf files, skip Windows-compatible ones
+        find "$nerd_tmp" -name '*.ttf' ! -name '*Windows*' -exec cp {} "$font_dir/" \;
+        rm -rf "$nerd_tmp"
+    fi
+
+    # Refresh font cache on Linux
+    if command -v fc-cache >/dev/null 2>&1; then
+        info "Refreshing font cache"
+        fc-cache -f "$font_dir"
+    fi
+}
+
+# --- Start services ---
+
+start_services() {
+    case "$OS" in
+        debian|redhat)
+            # Enable shpool as a systemd user service
+            if command -v shpool >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+                shpool_service_dir="$HOME/.config/systemd/user"
+                shpool_service="$shpool_service_dir/shpool.service"
+                if ! test -f "$shpool_service"; then
+                    info "Creating shpool systemd user service"
+                    mkdir -p "$shpool_service_dir"
+                    cat > "$shpool_service" <<'SERVICE'
+[Unit]
+Description=shpool session manager
+Documentation=https://github.com/shell-pool/shpool
+
+[Service]
+ExecStart=%h/.cargo/bin/shpool daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+SERVICE
+                    systemctl --user daemon-reload
+                fi
+                info "Enabling and starting shpool service"
+                systemctl --user enable --now shpool.service
+            fi
+            ;;
+        macos)
+            # Start skhd service
+            if command -v skhd >/dev/null 2>&1; then
+                info "Starting skhd service"
+                skhd --start-service 2>/dev/null || true
+            fi
+            ;;
+    esac
+}
+
 # --- Install or update Rust, cargo, and rustup, using rustup ---
 
 install_rust() {
@@ -355,6 +441,7 @@ KEYBOARD
 
 detect_os
 install_packages
+install_fonts
 install_go_task
 generate_ssh_key
 set_default_terminal
@@ -385,6 +472,8 @@ install_rust
 install_jj
 install_shpool
 install_nushell
+
+start_services
 
 if test "$OS" = "macos"; then
     info "Configuring macOS desktop environment"
