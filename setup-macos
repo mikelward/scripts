@@ -5,7 +5,7 @@
 # - Dvorak keyboard layout
 # - Caps Lock as Compose key via Karabiner-Elements
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
-# - Amethyst tiling window manager (layouts, modifiers, margins)
+# - Amethyst tiling window manager (layouts, modifiers, margins, focus follows mouse)
 # - skhd application launch shortcuts (browser, terminal, music)
 # - Finder preferences (show hidden files, path bar, file extensions)
 #
@@ -118,6 +118,10 @@ configure_amethyst() {
     if ! test -f "$HOME/.amethyst.yml"; then
         warn "~/.amethyst.yml not found; run confinst after cloning the conf repo"
     fi
+
+    # Enable focus follows mouse
+    info "Enabling focus follows mouse"
+    defaults write com.amethyst.Amethyst focus-follows-mouse -bool true
 }
 
 # --- Configure skhd (application launch shortcuts) ---

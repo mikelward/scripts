@@ -3,6 +3,7 @@
 #
 # Sets up:
 # - Krohnkite tiling window manager
+# - Focus follows mouse
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 #
@@ -82,6 +83,14 @@ install_krohnkite() {
 enable_krohnkite() {
     info "Enabling Krohnkite plugin"
     kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true
+}
+
+# --- Focus follows mouse ---
+
+configure_focus_follows_mouse() {
+    info "Enabling focus follows mouse"
+    kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusUnderMouse
+    kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
 }
 
 # --- Configure keybindings ---
@@ -207,6 +216,7 @@ reload_kwin() {
 
 install_krohnkite
 enable_krohnkite
+configure_focus_follows_mouse
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings
