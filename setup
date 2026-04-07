@@ -210,18 +210,6 @@ install_nushell() {
     cargo install --locked nu
 }
 
-# --- Install Starship ---
-
-install_starship() {
-    if command -v starship >/dev/null 2>&1; then
-        info "Starship already installed, skipping"
-        return
-    fi
-
-    info "Installing Starship"
-    curl -fsSL https://starship.rs/install.sh | sh -s -- --yes
-}
-
 # --- Configure keyboard ---
 
 configure_keyboard() {
@@ -291,7 +279,6 @@ install_rust
 install_jj
 install_shpool
 install_nushell
-install_starship
 
 if test "$OS" != "macos"; then
     info "Installing and configuring Krohnkite for KDE"
