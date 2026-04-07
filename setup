@@ -69,6 +69,23 @@ detect_os() {
     esac
 }
 
+# --- Install Homebrew (macOS) ---
+
+install_homebrew() {
+    if command -v brew >/dev/null 2>&1; then
+        info "Homebrew already installed"
+        return
+    fi
+    info "Installing Homebrew"
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    # Add Homebrew to PATH for the rest of this script
+    if test -x /opt/homebrew/bin/brew; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif test -x /usr/local/bin/brew; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    fi
+}
+
 # --- Install system packages ---
 
 install_packages() {
@@ -126,11 +143,7 @@ install_packages() {
                 zsh
             ;;
         macos)
-            if ! command -v brew >/dev/null 2>&1; then
-                warn "Homebrew not found, skipping package installation"
-                warn "Install Homebrew from https://brew.sh then re-run this script"
-                return
-            fi
+            install_homebrew
             info "Installing system packages"
             brew install \
                 bat \
@@ -148,6 +161,12 @@ install_packages() {
                 ripgrep \
                 shellcheck \
                 zsh
+            info "Installing macOS applications"
+            brew install --cask \
+                amethyst \
+                iterm2 \
+                karabiner-elements \
+                rectangle
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
@@ -234,7 +253,7 @@ KEYBOARD
             sudo localectl set-x11-keymap us "" dvorak compose:caps
             ;;
         macos)
-            info "Skipping keyboard configuration on macOS (use System Settings)"
+            # Handled by setup-macos
             return
             ;;
         *)
@@ -280,11 +299,12 @@ install_jj
 install_shpool
 install_nushell
 
-if test "$OS" != "macos"; then
+if test "$OS" = "macos"; then
+    info "Configuring macOS desktop environment"
+    "$SCRIPTS_DIR/setup-macos"
+else
     info "Configuring KDE desktop environment"
     "$SCRIPTS_DIR/setup-kde"
-else
-    info "Skipping KDE setup on macOS"
 fi
 
 # --- Install root config ---
@@ -293,6 +313,12 @@ mkdir -p "$SRC_DIR"
 clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
 make -C "$ROOT_DIR"
 sudo make -C "$ROOT_DIR" install
-root_group=$(getent group 0 | cut -d: -f1)
-sudo gpasswd -a "$USER" "$root_group"
-info "Added $USER to $root_group group (log out and back in for this to take effect)"
+if test "$OS" = "macos"; then
+    # macOS: the admin group (GID 80) already has sudo access; the wheel/admin
+    # group membership is managed by Directory Services, not /etc/group.
+    info "On macOS, use System Settings to manage admin group membership"
+else
+    root_group=$(getent group 0 | cut -d: -f1)
+    sudo gpasswd -a "$USER" "$root_group"
+    info "Added $USER to $root_group group (log out and back in for this to take effect)"
+fi
