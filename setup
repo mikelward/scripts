@@ -12,8 +12,8 @@
 
 set -e
 
-SCRIPTS_REPO="https://github.com/mikelward/scripts.git"
-CONF_REPO="https://github.com/mikelward/conf.git"
+SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
+CONF_REPO="git@github.com:mikelward/conf.git"
 ROOT_REPO="git@github.com:mikelward/root.git"
 
 SCRIPTS_DIR="$HOME/scripts"
