@@ -1,0 +1,127 @@
+#!/bin/sh
+# Configure macOS desktop environment.
+#
+# Sets up:
+# - Dvorak keyboard layout
+# - Caps Lock as Compose key via Karabiner-Elements
+# - Disables auto-correct, auto-capitalize, smart quotes/dashes
+# - Finder preferences (show hidden files, path bar, file extensions)
+#
+# Requires: defaults
+# Optional: Karabiner-Elements (for Compose key support)
+#
+# Usage:
+#     setup-macos
+
+set -e
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+# --- Configure keyboard ---
+
+configure_keyboard() {
+    info "Configuring keyboard"
+
+    # Set Dvorak as the input source
+    # This adds Dvorak; the user may still need to remove other layouts in System Settings
+    defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID \
+        "com.apple.keylayout.Dvorak"
+    defaults write com.apple.HIToolbox AppleEnabledInputSources -array \
+        '<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>16300</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>'
+
+    # Disable auto-correct, auto-capitalize, smart quotes/dashes
+    defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
+    defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
+    defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
+    defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
+    defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false
+
+    # Configure Karabiner-Elements: Caps Lock as Compose key
+    configure_karabiner
+}
+
+# --- Configure Karabiner-Elements ---
+
+configure_karabiner() {
+    karabiner_dir="$HOME/.config/karabiner"
+    karabiner_conf="$karabiner_dir/karabiner.json"
+
+    if ! command -v /Library/Application\ Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli \
+        >/dev/null 2>&1 && ! test -d "/Applications/Karabiner-Elements.app"; then
+        warn "Karabiner-Elements not installed yet, writing config for later"
+    fi
+
+    mkdir -p "$karabiner_dir"
+
+    if test -f "$karabiner_conf"; then
+        info "Karabiner config already exists, not overwriting"
+        info "To use Caps Lock as Compose, add the caps_lock rule manually"
+        return
+    fi
+
+    info "Writing Karabiner-Elements config (Caps Lock → Compose key behavior)"
+    cat > "$karabiner_conf" <<'KARABINER'
+{
+    "profiles": [
+        {
+            "complex_modifications": {
+                "rules": [
+                    {
+                        "description": "Caps Lock as Compose key (tap for Caps Lock, hold for modifier)",
+                        "manipulators": [
+                            {
+                                "from": {
+                                    "key_code": "caps_lock",
+                                    "modifiers": { "optional": ["any"] }
+                                },
+                                "to": [
+                                    { "set_variable": { "name": "compose_mode", "value": 1 } }
+                                ],
+                                "to_after_key_up": [
+                                    { "set_variable": { "name": "compose_mode", "value": 0 } }
+                                ],
+                                "to_if_alone": [
+                                    { "key_code": "caps_lock" }
+                                ],
+                                "type": "basic"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "name": "Default profile",
+            "selected": true,
+            "simple_modifications": [
+                {
+                    "from": { "key_code": "caps_lock" },
+                    "to": [{ "key_code": "right_option" }]
+                }
+            ]
+        }
+    ]
+}
+KARABINER
+}
+
+# --- Configure Finder ---
+
+configure_finder() {
+    info "Configuring Finder"
+    defaults write com.apple.finder AppleShowAllFiles -bool true
+    defaults write com.apple.finder ShowPathbar -bool true
+    defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+    killall Finder 2>/dev/null || true
+}
+
+# --- Main ---
+
+configure_keyboard
+configure_finder
+
+info "macOS configured successfully"
