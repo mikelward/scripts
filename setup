@@ -281,10 +281,10 @@ install_shpool
 install_nushell
 
 if test "$OS" != "macos"; then
-    info "Installing and configuring Krohnkite for KDE"
-    "$SCRIPTS_DIR/setup-krohnkite"
+    info "Configuring KDE desktop environment"
+    "$SCRIPTS_DIR/setup-kde"
 else
-    info "Skipping Krohnkite on macOS (no KDE)"
+    info "Skipping KDE setup on macOS"
 fi
 
 # --- Install root config ---
