@@ -5,10 +5,12 @@
 # - Dvorak keyboard layout
 # - Caps Lock as Compose key via Karabiner-Elements
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
+# - Amethyst tiling window manager (layouts, modifiers, margins)
+# - skhd application launch shortcuts (browser, terminal, music)
 # - Finder preferences (show hidden files, path bar, file extensions)
 #
 # Requires: defaults
-# Optional: Karabiner-Elements (for Compose key support)
+# Optional: Karabiner-Elements (for Compose key support), skhd (for app shortcuts)
 #
 # Usage:
 #     setup-macos
@@ -106,6 +108,50 @@ configure_karabiner() {
 KARABINER
 }
 
+# --- Configure Amethyst tiling window manager ---
+
+configure_amethyst() {
+    info "Configuring Amethyst"
+
+    # Amethyst config lives in ~/conf/amethyst.yml and is symlinked
+    # to ~/.amethyst.yml by confinst. Nothing to do here.
+    if ! test -f "$HOME/.amethyst.yml"; then
+        warn "~/.amethyst.yml not found; run confinst after cloning the conf repo"
+    fi
+}
+
+# --- Configure skhd (application launch shortcuts) ---
+
+configure_skhd() {
+    if ! command -v skhd >/dev/null 2>&1; then
+        warn "skhd not installed yet, writing config for later"
+    fi
+
+    info "Configuring skhd"
+
+    skhd_dir="$HOME/.config/skhd"
+    skhd_conf="$skhd_dir/skhdrc"
+
+    mkdir -p "$skhd_dir"
+
+    scripts="$HOME/scripts"
+    cat > "$skhd_conf" <<EOF
+# Application launch shortcuts
+# Modifier: alt (option) matches Amethyst mod1
+# With Karabiner mapping Caps Lock to option, Caps+key launches apps
+alt - g : $scripts/browser1
+alt - h : $scripts/browser2
+alt - t : $scripts/terminal
+alt - w : $scripts/terminal_on_workstation
+alt - y : $scripts/music
+EOF
+
+    # Start skhd service if not already running
+    if command -v skhd >/dev/null 2>&1; then
+        skhd --start-service 2>/dev/null || true
+    fi
+}
+
 # --- Configure Finder ---
 
 configure_finder() {
@@ -119,6 +165,8 @@ configure_finder() {
 # --- Main ---
 
 configure_keyboard
+configure_amethyst
+configure_skhd
 configure_finder
 
 info "macOS configured successfully"
