@@ -230,6 +230,89 @@ install_nushell() {
     cargo install --locked nu
 }
 
+# --- Install go-task ---
+
+install_go_task() {
+    if command -v task >/dev/null 2>&1; then
+        info "go-task already installed"
+        return
+    fi
+
+    if ! command -v go >/dev/null 2>&1; then
+        warn "go not found, skipping go-task installation"
+        return
+    fi
+
+    info "Installing go-task"
+    go install github.com/go-task/task/v3/cmd/task@latest
+}
+
+# --- Generate SSH key ---
+
+generate_ssh_key() {
+    if test -f "$HOME/.ssh/id_ed25519"; then
+        info "SSH key already exists"
+        return
+    fi
+
+    info "Generating SSH key"
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
+
+    info ""
+    info "Add this SSH public key to GitHub before continuing:"
+    info "  https://github.com/settings/ssh/new"
+    info ""
+    cat "$HOME/.ssh/id_ed25519.pub"
+    info ""
+
+    # When run via "curl | sh", stdin is the script itself, so we
+    # can't read user input.  Open /dev/tty to read from the terminal.
+    if test -t 0; then
+        printf "Press Enter after adding the key to GitHub..."
+        read _
+    elif test -e /dev/tty; then
+        printf "Press Enter after adding the key to GitHub..."
+        read _ < /dev/tty
+    else
+        warn "Cannot prompt for input; add the key to GitHub manually before cloning SSH repos"
+    fi
+}
+
+# --- Set kitty as default terminal ---
+
+set_default_terminal() {
+    case "$OS" in
+        debian)
+            if command -v update-alternatives >/dev/null 2>&1 && command -v kitty >/dev/null 2>&1; then
+                info "Setting kitty as default terminal"
+                sudo update-alternatives --set x-terminal-emulator "$(command -v kitty)"
+            fi
+            ;;
+        redhat)
+            if command -v kitty >/dev/null 2>&1; then
+                info "Setting kitty as default terminal"
+                # Set via xdg for Wayland/X11
+                mkdir -p "$HOME/.config"
+                if command -v xdg-mime >/dev/null 2>&1; then
+                    xdg-mime default kitty.desktop x-scheme-handler/terminal
+                fi
+                kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty 2>/dev/null || true
+                kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop 2>/dev/null || true
+            fi
+            ;;
+        macos)
+            # macOS doesn't have a system-wide default terminal concept;
+            # kitty is launched directly via scripts/terminal
+            info "On macOS, kitty is launched via ~/scripts/terminal"
+            ;;
+        *)
+            warn "Unsupported OS, skipping default terminal configuration"
+            ;;
+    esac
+}
+
 # --- Configure keyboard ---
 
 configure_keyboard() {
@@ -272,6 +355,9 @@ KEYBOARD
 
 detect_os
 install_packages
+install_go_task
+generate_ssh_key
+set_default_terminal
 configure_keyboard
 
 if ! command -v git >/dev/null 2>&1; then
