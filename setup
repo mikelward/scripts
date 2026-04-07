@@ -112,6 +112,9 @@ install_packages() {
                 p7zip-full \
                 plasma-desktop \
                 plasma-sdk \
+                python3 \
+                python3-pip \
+                python3-venv \
                 ripgrep \
                 shellcheck \
                 zsh
@@ -138,6 +141,8 @@ install_packages() {
                 p7zip-plugins \
                 plasma-desktop \
                 plasma-sdk \
+                python3 \
+                python3-pip \
                 ripgrep \
                 ShellCheck \
                 zsh
@@ -159,6 +164,7 @@ install_packages() {
                 mercurial \
                 node \
                 p7zip \
+                python3 \
                 ripgrep \
                 shellcheck \
                 zsh
@@ -171,7 +177,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip ripgrep shellcheck zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck zsh"
             ;;
     esac
 }
@@ -333,6 +339,18 @@ install_go_task() {
     go install github.com/go-task/task/v3/cmd/task@latest
 }
 
+# --- Install uv (Python package manager) ---
+
+install_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        info "Updating uv"
+        uv self update
+    else
+        info "Installing uv"
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    fi
+}
+
 # --- Generate SSH key ---
 
 generate_ssh_key() {
@@ -443,6 +461,7 @@ detect_os
 install_packages
 install_fonts
 install_go_task
+install_uv
 generate_ssh_key
 set_default_terminal
 configure_keyboard
