@@ -73,7 +73,7 @@ configure_karabiner() {
             "complex_modifications": {
                 "rules": [
                     {
-                        "description": "Caps Lock as Compose key (tap for Caps Lock, hold for modifier)",
+                        "description": "Caps Lock as Compose key (never Caps Lock)",
                         "manipulators": [
                             {
                                 "from": {
@@ -85,9 +85,6 @@ configure_karabiner() {
                                 ],
                                 "to_after_key_up": [
                                     { "set_variable": { "name": "compose_mode", "value": 0 } }
-                                ],
-                                "to_if_alone": [
-                                    { "key_code": "caps_lock" }
                                 ],
                                 "type": "basic"
                             }
