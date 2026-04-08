@@ -171,7 +171,6 @@ install_packages() {
             brew install --cask \
                 amethyst \
                 iterm2 \
-                karabiner-elements \
                 rectangle
             ;;
         *)
