@@ -1,8 +1,0 @@
-#!/bin/bash
-hex() {
-    printf '%02x' "$1"
-}
-
-for arg; do
-    printf '\x'"$(hex "$arg")"
-done

@@ -1,6 +1,0 @@
-#!/bin/bash
-if test -n "$NVIM_LISTEN_ADDRESS"; then
-    nvr "$@"
-else
-    nvim "$@"
-fi
