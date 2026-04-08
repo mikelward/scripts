@@ -1,2 +1,0 @@
-#!/bin/bash
-printf '%s' "$*" | hexdump -v -e '/1 "%d "'
