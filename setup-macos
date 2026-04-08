@@ -8,7 +8,7 @@
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
 # - Amethyst tiling window manager (layouts, modifiers, margins, focus follows mouse)
-# - skhd application launch shortcuts (browser, terminal, music)
+# - Application launch shortcuts via Automator Quick Actions (browser, terminal, music)
 # - Finder preferences (show hidden files, path bar, file extensions)
 #
 # Modifier key philosophy (matches Linux muscle memory):
@@ -17,7 +17,7 @@
 #   Physical Alt (by space)  → Control  → available for per-app custom shortcuts
 #
 # Requires: defaults, hidutil
-# Optional: Karabiner-Elements (for Compose key support), skhd (for app shortcuts)
+# Optional: Karabiner-Elements (for Compose key support)
 #
 # Usage:
 #     setup-macos
@@ -115,18 +115,22 @@ configure_karabiner() {
 KARABINER
 }
 
-# --- Swap Control and Command keys ---
+# --- Remap modifier keys ---
 
 configure_modifier_keys() {
-    info "Swapping Control and Command keys"
+    info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
 
-    # Swap left and right Control <-> Command immediately using hidutil
-    # Makes physical Ctrl (pinky) send Command, physical Cmd send Control
+    # Remap modifier keys to match Linux muscle memory:
+    #   Physical Ctrl (E0/E4) → Command (E3/E7)
+    #   Physical Win  (E3/E7) → Option  (E2/E6)
+    #   Physical Alt  (E2/E6) → Control (E0/E4)
     hidutil property --set '{"UserKeyMapping":[
         {"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E0},
+        {"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},
+        {"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},
         {"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E4}
+        {"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},
+        {"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}
     ]}' >/dev/null
 
     # Persist across reboots with a LaunchAgent
@@ -146,7 +150,7 @@ configure_modifier_keys() {
         <string>/usr/bin/hidutil</string>
         <string>property</string>
         <string>--set</string>
-        <string>{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E4}]}</string>
+        <string>{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}]}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -236,36 +240,181 @@ configure_amethyst() {
     defaults write com.amethyst.Amethyst focus-follows-mouse -bool true
 }
 
-# --- Configure skhd (application launch shortcuts) ---
+# --- Configure application launch shortcuts ---
 
-configure_skhd() {
-    if ! command -v skhd >/dev/null 2>&1; then
-        warn "skhd not installed yet, writing config for later"
-    fi
+configure_app_shortcuts() {
+    info "Configuring application launch shortcuts (Automator Quick Actions)"
 
-    info "Configuring skhd"
-
-    skhd_dir="$HOME/.config/skhd"
-    skhd_conf="$skhd_dir/skhdrc"
-
-    mkdir -p "$skhd_dir"
+    services_dir="$HOME/Library/Services"
+    mkdir -p "$services_dir"
 
     scripts="$HOME/scripts"
-    cat > "$skhd_conf" <<EOF
-# Application launch shortcuts
-# Modifier: alt (option) matches Amethyst mod1
-# With Karabiner mapping Caps Lock to option, Caps+key launches apps
-alt - g : $scripts/browser1
-alt - h : $scripts/browser2
-alt - t : $scripts/terminal
-alt - w : $scripts/terminal_on_workstation
-alt - y : $scripts/music
-EOF
 
-    # Start skhd service if not already running
-    if command -v skhd >/dev/null 2>&1; then
-        skhd --start-service 2>/dev/null || true
-    fi
+    # Create an Automator Quick Action (.workflow) that runs a shell script.
+    # These appear in System Settings > Keyboard > Shortcuts > Services,
+    # where we assign Option+key shortcuts (physical Win key sends Option).
+    create_launcher_workflow() {
+        name="$1"
+        script="$2"
+        workflow_dir="$services_dir/$name.workflow"
+        mkdir -p "$workflow_dir/Contents"
+
+        cat > "$workflow_dir/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSServices</key>
+    <array>
+        <dict>
+            <key>NSMenuItem</key>
+            <dict>
+                <key>default</key>
+                <string>Launch WORKFLOWNAME</string>
+            </dict>
+            <key>NSMessage</key>
+            <string>runWorkflowAsService</string>
+        </dict>
+    </array>
+</dict>
+</plist>
+PLIST
+        # Replace placeholder with actual name
+        sed -i '' "s/WORKFLOWNAME/$name/" "$workflow_dir/Contents/Info.plist"
+
+        cat > "$workflow_dir/Contents/document.wflow" <<WFLOW
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AMApplicationBuild</key>
+    <string>523</string>
+    <key>AMApplicationVersion</key>
+    <string>2.10</string>
+    <key>AMDocumentVersion</key>
+    <string>2</string>
+    <key>actions</key>
+    <array>
+        <dict>
+            <key>action</key>
+            <dict>
+                <key>AMAccepts</key>
+                <dict>
+                    <key>Container</key>
+                    <string>List</string>
+                    <key>Optional</key>
+                    <true/>
+                    <key>Types</key>
+                    <array>
+                        <string>com.apple.cocoa.string</string>
+                    </array>
+                </dict>
+                <key>AMActionVersion</key>
+                <string>2.0.3</string>
+                <key>AMApplication</key>
+                <array>
+                    <string>Automator</string>
+                </array>
+                <key>AMCategory</key>
+                <string>AMCategoryUtilities</string>
+                <key>AMIconName</key>
+                <string>Run Shell Script</string>
+                <key>AMName</key>
+                <string>Run Shell Script</string>
+                <key>AMParameterProperties</key>
+                <dict>
+                    <key>COMMAND_STRING</key>
+                    <dict/>
+                    <key>inputMethod</key>
+                    <dict/>
+                    <key>shell</key>
+                    <dict/>
+                    <key>source</key>
+                    <dict/>
+                </dict>
+                <key>AMProvides</key>
+                <dict>
+                    <key>Container</key>
+                    <string>List</string>
+                    <key>Types</key>
+                    <array>
+                        <string>com.apple.cocoa.string</string>
+                    </array>
+                </dict>
+                <key>ActionBundlePath</key>
+                <string>/System/Library/Automator/Run Shell Script.action</string>
+                <key>ActionName</key>
+                <string>Run Shell Script</string>
+                <key>BundleIdentifier</key>
+                <string>com.apple.RunShellScript</string>
+                <key>CFBundleVersion</key>
+                <string>2.0.3</string>
+                <key>CanShowSelectedItemsWhenRun</key>
+                <false/>
+                <key>CanShowWhenRun</key>
+                <true/>
+                <key>Parameters</key>
+                <dict>
+                    <key>COMMAND_STRING</key>
+                    <string>$script</string>
+                    <key>CheckedForUserDefaultShell</key>
+                    <true/>
+                    <key>inputMethod</key>
+                    <integer>1</integer>
+                    <key>shell</key>
+                    <string>/bin/sh</string>
+                    <key>source</key>
+                    <string></string>
+                </dict>
+            </dict>
+            <key>class</key>
+            <string>AMBundleAction</string>
+            <key>identifier</key>
+            <string>com.apple.RunShellScript</string>
+            <key>isViewVisible</key>
+            <true/>
+        </dict>
+    </array>
+    <key>connectors</key>
+    <dict/>
+    <key>workflowMetaData</key>
+    <dict>
+        <key>workflowTypeIdentifier</key>
+        <string>com.apple.Automator.servicesMenu</string>
+    </dict>
+</dict>
+</plist>
+WFLOW
+    }
+
+    # Create Quick Action workflows for each launcher
+    create_launcher_workflow "Launch Browser1" "$scripts/browser1"
+    create_launcher_workflow "Launch Browser2" "$scripts/browser2"
+    create_launcher_workflow "Launch Terminal" "$scripts/terminal"
+    create_launcher_workflow "Launch Terminal on Workstation" "$scripts/terminal_on_workstation"
+    create_launcher_workflow "Launch Music" "$scripts/music"
+
+    # Assign Option+key shortcuts to each Quick Action
+    # Option modifier = 524288, Option+Shift would be 655360
+    # These use logical key names, so Dvorak layout is handled by the OS
+    #
+    # Shortcut keys (physical Win sends Option after hidutil remap):
+    #   Win+G → Option+G → browser1
+    #   Win+H → Option+H → browser2
+    #   Win+T → Option+T → terminal
+    #   Win+W → Option+W → terminal_on_workstation
+    #   Win+Y → Option+Y → music
+    defaults write pbs NSServicesStatus -dict-add \
+        '"(null) - Launch Browser1 - runWorkflowAsService"' \
+        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~g"; }' \
+        '"(null) - Launch Browser2 - runWorkflowAsService"' \
+        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~h"; }' \
+        '"(null) - Launch Terminal - runWorkflowAsService"' \
+        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~t"; }' \
+        '"(null) - Launch Terminal on Workstation - runWorkflowAsService"' \
+        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~w"; }' \
+        '"(null) - Launch Music - runWorkflowAsService"' \
+        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~y"; }'
 }
 
 # --- Configure Finder ---
@@ -284,7 +433,7 @@ configure_keyboard
 configure_modifier_keys
 configure_shortcuts
 configure_amethyst
-configure_skhd
+configure_app_shortcuts
 configure_finder
 
 info "macOS configured successfully"
