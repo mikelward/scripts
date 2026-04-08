@@ -150,7 +150,6 @@ install_packages() {
         macos)
             install_homebrew
             info "Installing system packages"
-            brew install koekeishiya/formulae/skhd
             brew install \
                 bat \
                 curl \
@@ -259,11 +258,8 @@ SERVICE
             fi
             ;;
         macos)
-            # Start skhd service
-            if command -v skhd >/dev/null 2>&1; then
-                info "Starting skhd service"
-                skhd --start-service 2>/dev/null || true
-            fi
+            # App launch shortcuts are handled by Automator Quick Actions
+            # configured in setup-macos (no service needed)
             ;;
     esac
 }
