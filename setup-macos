@@ -3,7 +3,6 @@
 #
 # Sets up:
 # - Dvorak keyboard layout
-# - Caps Lock as Compose key via Karabiner-Elements
 # - Swap Control and Command keys (for Linux-like Ctrl shortcuts)
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
@@ -17,7 +16,6 @@
 #   Physical Alt (by space)  → Control  → available for per-app custom shortcuts
 #
 # Requires: defaults, hidutil
-# Optional: Karabiner-Elements (for Compose key support)
 #
 # Usage:
 #     setup-macos
@@ -51,68 +49,6 @@ configure_keyboard() {
     defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
     defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false
 
-    # Configure Karabiner-Elements: Caps Lock as Compose key
-    configure_karabiner
-}
-
-# --- Configure Karabiner-Elements ---
-
-configure_karabiner() {
-    karabiner_dir="$HOME/.config/karabiner"
-    karabiner_conf="$karabiner_dir/karabiner.json"
-
-    if ! command -v /Library/Application\ Support/org.pqrs/Karabiner-Elements/bin/karabiner_cli \
-        >/dev/null 2>&1 && ! test -d "/Applications/Karabiner-Elements.app"; then
-        warn "Karabiner-Elements not installed yet, writing config for later"
-    fi
-
-    mkdir -p "$karabiner_dir"
-
-    if test -f "$karabiner_conf"; then
-        info "Karabiner config already exists, not overwriting"
-        info "To use Caps Lock as Compose, add the caps_lock rule manually"
-        return
-    fi
-
-    info "Writing Karabiner-Elements config (Caps Lock → Compose key behavior)"
-    cat > "$karabiner_conf" <<'KARABINER'
-{
-    "profiles": [
-        {
-            "complex_modifications": {
-                "rules": [
-                    {
-                        "description": "Caps Lock as Compose key (never Caps Lock)",
-                        "manipulators": [
-                            {
-                                "from": {
-                                    "key_code": "caps_lock",
-                                    "modifiers": { "optional": ["any"] }
-                                },
-                                "to": [
-                                    { "set_variable": { "name": "compose_mode", "value": 1 } }
-                                ],
-                                "to_after_key_up": [
-                                    { "set_variable": { "name": "compose_mode", "value": 0 } }
-                                ],
-                                "type": "basic"
-                            }
-                        ]
-                    }
-                ]
-            },
-            "name": "Default profile",
-            "selected": true,
-            "simple_modifications": [
-                {
-                    "from": { "key_code": "caps_lock" },
-                    "to": [{ "key_code": "right_option" }]
-                }
-            ]
-        }
-    ]
-}
-KARABINER
 }
 
 # --- Remap modifier keys ---
