@@ -1,85 +1,211 @@
-#!/usr/bin/env python
+#!/bin/sh
+# package - package manager dispatcher
+# Abstracts differences between dnf, yum, and apt-get.
 
-# wrapper around package managers so I don't have to remember differences
-# between aptitude, apt-get, yum, etc. for basic operations
+scriptname=package
 
-import os
-import sys
-import subprocess
+usage() {
+    cat <<EOF 1>&2
+Usage: $scriptname <command> [<args>...]
 
-def usage(stream=sys.stdout):
-        print("Usage: package [install|uninstall|update|versions|list|info|files] <package>...", file=stream)
+Commands:
+    update       Update package index
+    search       Search for packages by name
+    install      Install packages
+    installed    List installed packages
+    uninstall    Uninstall packages
+    reinstall    Reinstall packages
+    autoremove   Remove unneeded dependencies
+    upgrade      Upgrade installed packages
+    versions     Show available versions of a package
+    info         Show detailed info about a package
+    files        Search for which package provides a file
+    listfiles    List files installed by a package
+    depends      Show package dependencies
+    rdepends     Show reverse dependencies
 
-commands = {}
-commands['apt'] = {
-        'install': ['apt-get', 'install'],
-        'uninstall': ['apt-get', 'remove'],
-        'update': ['apt-get', 'update'],
-        'versions': ['apt-cache', 'policy'],
-        'search': ['apt-cache', 'search'],
-        'list': ['dpkg-query', '-W'],
-        'info': ['dpkg-query', '-s'],
-        'files': ['dpkg-query', '-L'],
-        'depends': ['apt-cache', 'depends'],
-        'rdepends': ['apt-cache', 'rdepends'],
-}
-commands['aptitude'] = {
-        'install': ['aptitude', '-q', 'install'],
-        'uninstall': ['aptitude', '-q', 'remove'],
-        'update': ['aptitude', '-q', 'update'],
-        'versions': ['aptitude', '-q', 'versions'],
-        'search': ['aptitude', 'search'],
-        'list': ['dpkg-query', '-W'],
-        'info': ['dpkg-query', '-s'],
-        'files': ['dpkg-query', '-L'],
-        'depends': ['apt-cache', 'depends'],
-        'rdepends': ['apt-cache', 'rdepends'],
-}
-commands['yum'] = {
-        'install': ['yum', '-C', 'install'],
-        'uninstall': ['yum', '-C', 'erase'],
-        'update': ['yum', 'makecache'],
-        'versions': ['yum', '-C', 'info'],
-        'list': ['rpm', '-qa'],
-        'info': ['rpm', '-qi'],
-        'files': ['rpm', '-qf'],
-        'verify': ['rpm', '-V'],
-        'installlog': ['rpm', '--last'],
-        'depends': ['yum', '-C', 'deplist'],
-        'repolist': ['yum', 'repolist']
-}
-transforms = {}
-transforms['aptitude'] = {
-        'versions': lambda args: [('^' + arg + '$') for arg in args]
+Options:
+    -h, --help          Show this help
+    --list-commands     List available commands (one per line)
+EOF
 }
 
-# prefer aptitude to apt-get
-if os.access('/usr/bin/aptitude', os.X_OK):
-        package_manager = 'aptitude'
-elif os.access('/usr/bin/apt-get', os.X_OK):
-        package_manager = 'apt'
-elif os.access('/usr/bin/yum', os.X_OK):
-        package_manager = 'yum'
-else:
-        print("Unknown package manager", file=sys.stderr)
-        sys.exit(1)
+list_commands() {
+    cat <<EOF
+update
+search
+install
+installed
+uninstall
+reinstall
+autoremove
+upgrade
+versions
+info
+files
+listfiles
+depends
+rdepends
+EOF
+}
 
-if len(sys.argv) < 2:
-        usage(sys.stderr)
-        sys.exit(2)
+# Detect the package manager backend.
+detect_backend() {
+    if command -v dnf >/dev/null 2>&1; then
+        echo dnf
+    elif command -v yum >/dev/null 2>&1; then
+        echo yum
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo apt-get
+    else
+        echo "Error: no supported package manager found (tried dnf, yum, apt-get)" 1>&2
+        exit 1
+    fi
+}
 
-command = sys.argv[1]
-if not command in commands[package_manager]:
-        print(package_manager, 'does not support', command, file=sys.stderr)
-        sys.exit(1)
+# Run a command as root.
+# Uses "root" helper if available, otherwise falls back to sudo.
+run_as_root() {
+    if command -v root >/dev/null 2>&1; then
+        root --nohome "$@"
+    else
+        sudo "$@"
+    fi
+}
 
-command_list = commands[package_manager][command]
-try:
-        transform = transforms[package_manager][command]
-except KeyError:
-        transform = lambda args: args
+if test $# -eq 0; then
+    usage
+    exit 2
+fi
 
-command_list.extend(transform(sys.argv[2:]))
+case "$1" in
+    -h|--help)
+        usage
+        exit 0
+        ;;
+    --list-commands)
+        list_commands
+        exit 0
+        ;;
+esac
 
-return_code = subprocess.call(command_list, shell=False)
-sys.exit(return_code)
+# Use cached backend or detect it.
+PACKAGE_BACKEND="${PACKAGE_BACKEND:-$(detect_backend)}"
+export PACKAGE_BACKEND
+
+command="$1"
+shift
+
+case "$PACKAGE_BACKEND" in
+    dnf|yum)
+        case "$command" in
+            update)
+                run_as_root "$PACKAGE_BACKEND" makecache "$@"
+                ;;
+            search)
+                "$PACKAGE_BACKEND" -C search "$@"
+                ;;
+            install)
+                run_as_root "$PACKAGE_BACKEND" -C install "$@"
+                ;;
+            installed)
+                rpm -qa "$@"
+                ;;
+            uninstall)
+                run_as_root "$PACKAGE_BACKEND" -C erase "$@"
+                ;;
+            reinstall)
+                run_as_root "$PACKAGE_BACKEND" -C reinstall "$@"
+                ;;
+            autoremove)
+                run_as_root "$PACKAGE_BACKEND" -C autoremove "$@"
+                ;;
+            upgrade)
+                run_as_root "$PACKAGE_BACKEND" -C upgrade "$@"
+                ;;
+            versions)
+                "$PACKAGE_BACKEND" -C list "$@"
+                ;;
+            info)
+                rpm -qi "$@"
+                ;;
+            files)
+                if test "$PACKAGE_BACKEND" = dnf; then
+                    dnf -C repoquery --file "$@"
+                else
+                    repoquery --file "$@"
+                fi
+                ;;
+            listfiles)
+                rpm -ql "$@"
+                ;;
+            depends)
+                "$PACKAGE_BACKEND" -C deplist "$@"
+                ;;
+            rdepends)
+                echo "Error: rdepends is not supported for $PACKAGE_BACKEND" 1>&2
+                exit 1
+                ;;
+            *)
+                echo "Error: unknown command '$command'" 1>&2
+                usage
+                exit 2
+                ;;
+        esac
+        ;;
+    apt-get)
+        case "$command" in
+            update)
+                run_as_root apt-get update "$@"
+                ;;
+            search)
+                apt-cache search --names-only "$@"
+                ;;
+            install)
+                run_as_root apt-get install "$@"
+                ;;
+            installed)
+                dpkg-query --show --showformat='${binary:Package;-36} ${Version;-32} ${Status;-10}\n' "$@"
+                ;;
+            uninstall)
+                run_as_root apt-get remove "$@"
+                ;;
+            reinstall)
+                run_as_root apt-get install --reinstall "$@"
+                ;;
+            autoremove)
+                run_as_root apt-get autoremove "$@"
+                ;;
+            upgrade)
+                run_as_root apt-get upgrade "$@"
+                ;;
+            versions)
+                apt-cache policy "$@"
+                ;;
+            info)
+                dpkg-query -s "$@"
+                ;;
+            files)
+                apt-file search "$@"
+                ;;
+            listfiles)
+                dpkg-query -L "$@"
+                ;;
+            depends)
+                apt-cache depends "$@"
+                ;;
+            rdepends)
+                apt-cache rdepends "$@"
+                ;;
+            *)
+                echo "Error: unknown command '$command'" 1>&2
+                usage
+                exit 2
+                ;;
+        esac
+        ;;
+    *)
+        echo "Error: unsupported backend '$PACKAGE_BACKEND'" 1>&2
+        exit 1
+        ;;
+esac
