@@ -1,0 +1,473 @@
+#!/bin/sh
+# Tests for package
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    # Put mocks first on PATH so they shadow real commands
+    export PATH="$TEST_TMPDIR/bin:$PATH"
+    mkdir -p "$TEST_TMPDIR/bin"
+
+    # Create mock commands that record how they were called
+    for cmd in dnf yum apt-get apt-cache apt-file dpkg-query rpm repoquery sudo; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$TEST_TMPDIR/calls"
+MOCK
+        chmod +x "$TEST_TMPDIR/bin/$cmd"
+    done
+
+    # Create a mock root helper
+    cat > "$TEST_TMPDIR/bin/root" <<MOCK
+#!/bin/sh
+shift
+echo "root \$*" >> "$TEST_TMPDIR/calls"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/root"
+
+    rm -f "$TEST_TMPDIR/calls"
+    unset PACKAGE_BACKEND
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+run_package() {
+    set +e
+    output="$("$SCRIPT_DIR/package" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    expected=$1
+    if test "$status" -ne "$expected"; then
+        echo "  FAIL: expected exit status $expected, got $status"
+        echo "  output: $output"
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            return 1
+            ;;
+    esac
+}
+
+assert_output_not_contains() {
+    case "$output" in
+        *"$1"*)
+            echo "  FAIL: output should not contain '$1'"
+            echo "  output: $output"
+            return 1
+            ;;
+        *) ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -q "$1" "$TEST_TMPDIR/calls" 2>/dev/null; then
+        echo "  FAIL: expected call '$1' not found"
+        echo "  calls: $(cat "$TEST_TMPDIR/calls" 2>/dev/null)"
+        return 1
+    fi
+}
+
+assert_not_called() {
+    if grep -q "$1" "$TEST_TMPDIR/calls" 2>/dev/null; then
+        echo "  FAIL: unexpected call '$1' found"
+        echo "  calls: $(cat "$TEST_TMPDIR/calls" 2>/dev/null)"
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    if "$func"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help tests ---
+
+test_no_args_shows_usage() {
+    run_package
+    assert_status 2 &&
+    assert_output_contains "Usage: package"
+}
+
+test_help_flag() {
+    run_package --help
+    assert_status 0 &&
+    assert_output_contains "Usage: package"
+}
+
+test_h_flag() {
+    run_package -h
+    assert_status 0 &&
+    assert_output_contains "Usage: package"
+}
+
+test_list_commands() {
+    run_package --list-commands
+    assert_status 0 &&
+    assert_output_contains "install" &&
+    assert_output_contains "update" &&
+    assert_output_contains "search" &&
+    assert_output_contains "uninstall" &&
+    assert_output_contains "reinstall" &&
+    assert_output_contains "autoremove" &&
+    assert_output_contains "upgrade" &&
+    assert_output_contains "versions" &&
+    assert_output_contains "info" &&
+    assert_output_contains "files" &&
+    assert_output_contains "listfiles" &&
+    assert_output_contains "depends" &&
+    assert_output_contains "rdepends"
+}
+
+test_list_commands_one_per_line() {
+    run_package --list-commands
+    assert_status 0
+    count=$(echo "$output" | wc -l)
+    if test "$count" -ne 14; then
+        echo "  FAIL: expected 14 lines, got $count"
+        echo "  output: $output"
+        return 1
+    fi
+}
+
+test_unknown_command() {
+    PACKAGE_BACKEND=apt-get run_package bogus
+    assert_status 2 &&
+    assert_output_contains "unknown command 'bogus'"
+}
+
+# --- backend detection tests ---
+
+test_detects_dnf_first() {
+    run_package search foo
+    assert_status 0 &&
+    assert_called "dnf"
+}
+
+test_detects_yum_without_dnf() {
+    rm "$TEST_TMPDIR/bin/dnf"
+    run_package search foo
+    assert_status 0 &&
+    assert_called "yum"
+}
+
+test_detects_apt_get_without_dnf_or_yum() {
+    rm "$TEST_TMPDIR/bin/dnf" "$TEST_TMPDIR/bin/yum"
+    run_package search foo
+    assert_status 0 &&
+    assert_called "apt-cache"
+}
+
+test_error_no_package_manager() {
+    # Use empty PATH so no real system package managers are found either
+    mkdir -p "$TEST_TMPDIR/empty"
+    PATH="$TEST_TMPDIR/empty" run_package search foo
+    assert_status 1 &&
+    assert_output_contains "no supported package manager found"
+}
+
+test_respects_package_backend_env() {
+    PACKAGE_BACKEND=apt-get run_package search foo
+    assert_status 0 &&
+    assert_called "apt-cache" &&
+    assert_not_called "dnf" &&
+    assert_not_called "yum"
+}
+
+test_unsupported_backend() {
+    PACKAGE_BACKEND=unsupported run_package install foo
+    assert_status 1 &&
+    assert_output_contains "unsupported backend 'unsupported'"
+}
+
+# --- dnf/yum command dispatch tests ---
+
+test_dnf_update() {
+    PACKAGE_BACKEND=dnf run_package update
+    assert_called "root dnf makecache"
+}
+
+test_dnf_search() {
+    PACKAGE_BACKEND=dnf run_package search foo
+    assert_called "dnf -C search foo"
+}
+
+test_dnf_install() {
+    PACKAGE_BACKEND=dnf run_package install vim
+    assert_called "root dnf -C install vim"
+}
+
+test_dnf_installed() {
+    PACKAGE_BACKEND=dnf run_package installed
+    assert_called "rpm -qa"
+}
+
+test_dnf_uninstall() {
+    PACKAGE_BACKEND=dnf run_package uninstall vim
+    assert_called "root dnf -C erase vim"
+}
+
+test_dnf_reinstall() {
+    PACKAGE_BACKEND=dnf run_package reinstall vim
+    assert_called "root dnf -C reinstall vim"
+}
+
+test_dnf_autoremove() {
+    PACKAGE_BACKEND=dnf run_package autoremove
+    assert_called "root dnf -C autoremove"
+}
+
+test_dnf_upgrade() {
+    PACKAGE_BACKEND=dnf run_package upgrade
+    assert_called "root dnf -C upgrade"
+}
+
+test_dnf_versions() {
+    PACKAGE_BACKEND=dnf run_package versions vim
+    assert_called "dnf -C list vim"
+}
+
+test_dnf_info() {
+    PACKAGE_BACKEND=dnf run_package info vim
+    assert_called "rpm -qi vim"
+}
+
+test_dnf_files() {
+    PACKAGE_BACKEND=dnf run_package files /usr/bin/vim
+    assert_called "dnf -C repoquery --file /usr/bin/vim"
+}
+
+test_dnf_listfiles() {
+    PACKAGE_BACKEND=dnf run_package listfiles vim
+    assert_called "rpm -ql vim"
+}
+
+test_dnf_depends() {
+    PACKAGE_BACKEND=dnf run_package depends vim
+    assert_called "dnf -C deplist vim"
+}
+
+test_dnf_rdepends() {
+    PACKAGE_BACKEND=dnf run_package rdepends vim
+    assert_status 1 &&
+    assert_output_contains "rdepends is not supported for dnf"
+}
+
+test_yum_update() {
+    PACKAGE_BACKEND=yum run_package update
+    assert_called "root yum makecache"
+}
+
+test_yum_search() {
+    PACKAGE_BACKEND=yum run_package search foo
+    assert_called "yum -C search foo"
+}
+
+test_yum_install() {
+    PACKAGE_BACKEND=yum run_package install vim
+    assert_called "root yum -C install vim"
+}
+
+test_yum_uninstall() {
+    PACKAGE_BACKEND=yum run_package uninstall vim
+    assert_called "root yum -C erase vim"
+}
+
+test_yum_files() {
+    PACKAGE_BACKEND=yum run_package files /usr/bin/vim
+    assert_called "repoquery --file /usr/bin/vim"
+}
+
+test_yum_rdepends() {
+    PACKAGE_BACKEND=yum run_package rdepends vim
+    assert_status 1 &&
+    assert_output_contains "rdepends is not supported for yum"
+}
+
+# --- apt-get command dispatch tests ---
+
+test_apt_update() {
+    PACKAGE_BACKEND=apt-get run_package update
+    assert_called "root apt-get update"
+}
+
+test_apt_search() {
+    PACKAGE_BACKEND=apt-get run_package search foo
+    assert_called "apt-cache search --names-only foo"
+}
+
+test_apt_install() {
+    PACKAGE_BACKEND=apt-get run_package install vim
+    assert_called "root apt-get install vim"
+}
+
+test_apt_installed() {
+    PACKAGE_BACKEND=apt-get run_package installed
+    assert_called "dpkg-query --show"
+}
+
+test_apt_uninstall() {
+    PACKAGE_BACKEND=apt-get run_package uninstall vim
+    assert_called "root apt-get remove vim"
+}
+
+test_apt_reinstall() {
+    PACKAGE_BACKEND=apt-get run_package reinstall vim
+    assert_called "root apt-get install --reinstall vim"
+}
+
+test_apt_autoremove() {
+    PACKAGE_BACKEND=apt-get run_package autoremove
+    assert_called "root apt-get autoremove"
+}
+
+test_apt_upgrade() {
+    PACKAGE_BACKEND=apt-get run_package upgrade
+    assert_called "root apt-get upgrade"
+}
+
+test_apt_versions() {
+    PACKAGE_BACKEND=apt-get run_package versions vim
+    assert_called "apt-cache policy vim"
+}
+
+test_apt_info() {
+    PACKAGE_BACKEND=apt-get run_package info vim
+    assert_called "dpkg-query -s vim"
+}
+
+test_apt_files() {
+    PACKAGE_BACKEND=apt-get run_package files /usr/bin/vim
+    assert_called "apt-file search /usr/bin/vim"
+}
+
+test_apt_listfiles() {
+    PACKAGE_BACKEND=apt-get run_package listfiles vim
+    assert_called "dpkg-query -L vim"
+}
+
+test_apt_depends() {
+    PACKAGE_BACKEND=apt-get run_package depends vim
+    assert_called "apt-cache depends vim"
+}
+
+test_apt_rdepends() {
+    PACKAGE_BACKEND=apt-get run_package rdepends vim
+    assert_status 0 &&
+    assert_called "apt-cache rdepends vim"
+}
+
+# --- privilege escalation tests ---
+
+test_root_helper_preferred_over_sudo() {
+    PACKAGE_BACKEND=apt-get run_package install vim
+    assert_called "root apt-get install vim" &&
+    assert_not_called "sudo"
+}
+
+test_sudo_fallback_without_root() {
+    rm "$TEST_TMPDIR/bin/root"
+    PACKAGE_BACKEND=apt-get run_package install vim
+    assert_called "sudo apt-get install vim"
+}
+
+test_no_root_for_query_commands() {
+    PACKAGE_BACKEND=apt-get run_package search vim
+    assert_not_called "root" &&
+    assert_not_called "sudo"
+}
+
+# --- passthrough tests ---
+
+test_extra_args_passed_through() {
+    PACKAGE_BACKEND=apt-get run_package install -y vim emacs
+    assert_called "root apt-get install -y vim emacs"
+}
+
+# --- run ---
+
+run_test "no args shows usage and exits 2" test_no_args_shows_usage
+run_test "--help shows usage and exits 0" test_help_flag
+run_test "-h shows usage and exits 0" test_h_flag
+run_test "--list-commands lists all commands" test_list_commands
+run_test "--list-commands outputs one command per line" test_list_commands_one_per_line
+run_test "unknown command shows error" test_unknown_command
+
+run_test "detects dnf first" test_detects_dnf_first
+run_test "detects yum when dnf is absent" test_detects_yum_without_dnf
+run_test "detects apt-get when dnf and yum are absent" test_detects_apt_get_without_dnf_or_yum
+run_test "errors when no package manager is found" test_error_no_package_manager
+run_test "respects PACKAGE_BACKEND env var" test_respects_package_backend_env
+run_test "errors on unsupported backend" test_unsupported_backend
+
+run_test "dnf update" test_dnf_update
+run_test "dnf search" test_dnf_search
+run_test "dnf install" test_dnf_install
+run_test "dnf installed" test_dnf_installed
+run_test "dnf uninstall" test_dnf_uninstall
+run_test "dnf reinstall" test_dnf_reinstall
+run_test "dnf autoremove" test_dnf_autoremove
+run_test "dnf upgrade" test_dnf_upgrade
+run_test "dnf versions" test_dnf_versions
+run_test "dnf info" test_dnf_info
+run_test "dnf files" test_dnf_files
+run_test "dnf listfiles" test_dnf_listfiles
+run_test "dnf depends" test_dnf_depends
+run_test "dnf rdepends errors" test_dnf_rdepends
+run_test "yum update" test_yum_update
+run_test "yum search" test_yum_search
+run_test "yum install" test_yum_install
+run_test "yum uninstall" test_yum_uninstall
+run_test "yum files uses repoquery" test_yum_files
+run_test "yum rdepends errors" test_yum_rdepends
+
+run_test "apt-get update" test_apt_update
+run_test "apt-get search" test_apt_search
+run_test "apt-get install" test_apt_install
+run_test "apt-get installed" test_apt_installed
+run_test "apt-get uninstall" test_apt_uninstall
+run_test "apt-get reinstall" test_apt_reinstall
+run_test "apt-get autoremove" test_apt_autoremove
+run_test "apt-get upgrade" test_apt_upgrade
+run_test "apt-get versions" test_apt_versions
+run_test "apt-get info" test_apt_info
+run_test "apt-get files" test_apt_files
+run_test "apt-get listfiles" test_apt_listfiles
+run_test "apt-get depends" test_apt_depends
+run_test "apt-get rdepends" test_apt_rdepends
+
+run_test "prefers root helper over sudo" test_root_helper_preferred_over_sudo
+run_test "falls back to sudo without root helper" test_sudo_fallback_without_root
+run_test "no privilege escalation for query commands" test_no_root_for_query_commands
+run_test "extra args are passed through" test_extra_args_passed_through
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
