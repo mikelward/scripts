@@ -349,10 +349,15 @@ install_uv() {
 # --- Generate SSH key ---
 
 generate_ssh_key() {
-    if test -f "$HOME/.ssh/id_ed25519"; then
-        info "SSH key already exists"
-        return
-    fi
+    for key in "$HOME"/.ssh/id_*; do
+        case "$key" in
+            *.pub) continue ;;
+        esac
+        if test -f "$key"; then
+            info "SSH key already exists: $key"
+            return
+        fi
+    done
 
     info "Generating SSH key"
     mkdir -p "$HOME/.ssh"
