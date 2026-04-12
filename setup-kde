@@ -63,18 +63,22 @@ install_krohnkite() {
         npm install && npm run build
     fi
 
-    # Find the built .kwinscript file
+    # Find the built .kwinscript file, or a directory containing metadata.json
     kwinscript=$(find . -name '*.kwinscript' -print -quit)
     if test -n "$kwinscript"; then
         info "Installing Krohnkite from $kwinscript"
         kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
             kpackagetool6 -t KWin/Script -i "$kwinscript"
-    elif test -f metadata.json || test -f metadata.desktop; then
-        info "Installing Krohnkite from source directory"
-        kpackagetool6 -t KWin/Script -u . 2>/dev/null ||
-            kpackagetool6 -t KWin/Script -i .
     else
-        error "Could not find installable Krohnkite package"
+        pkgdir=$(find . \( -name metadata.json -o -name metadata.desktop \) \
+            -printf '%h\n' -quit 2>/dev/null)
+        if test -n "$pkgdir"; then
+            info "Installing Krohnkite from $pkgdir"
+            kpackagetool6 -t KWin/Script -u "$pkgdir" 2>/dev/null ||
+                kpackagetool6 -t KWin/Script -i "$pkgdir"
+        else
+            error "Could not find installable Krohnkite package"
+        fi
     fi
 }
 
