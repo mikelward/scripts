@@ -89,6 +89,30 @@ enable_krohnkite() {
     kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true
 }
 
+# --- Configure Krohnkite ---
+
+# Pick the layouts available in the cycle and their order. A *LayoutOrder
+# value of 0 removes the layout from the cycle entirely (Krohnkite source:
+# KWinConfig.getSortedLayouts skips orders that validate to 0).
+configure_krohnkite() {
+    info "Configuring Krohnkite layouts: Tile, ThreeColumn, Columns, Monocle"
+    set_layout_order() {
+        kwriteconfig6 --file kwinrc --group Script-krohnkite --key "$1" "$2"
+    }
+    # Columns layout has its own enable flag in addition to the order.
+    kwriteconfig6 --file kwinrc --group Script-krohnkite --key enableColumnsLayout true
+    set_layout_order tileLayoutOrder 1
+    set_layout_order threeColumnLayoutOrder 2
+    set_layout_order columnsLayoutOrder 3
+    set_layout_order monocleLayoutOrder 4
+    # Everything else: removed from the cycle.
+    for key in spiralLayoutOrder quarterLayoutOrder stackedLayoutOrder \
+               spreadLayoutOrder floatingLayoutOrder stairLayoutOrder \
+               binaryTreeLayoutOrder cascadeLayoutOrder; do
+        set_layout_order "$key" 0
+    done
+}
+
 # --- Focus follows mouse ---
 
 configure_focus_follows_mouse() {
@@ -273,6 +297,19 @@ reload_kwin() {
     fi
 }
 
+# KWin scripts don't pick up config changes on `kwin reconfigure` — the
+# script keeps its original config until unloaded and reloaded. Do that
+# via dbus so layout/order changes apply in the current session.
+reload_krohnkite() {
+    command -v qdbus6 >/dev/null 2>&1 || return 0
+    main_qml="$HOME/.local/share/kwin/scripts/krohnkite/contents/ui/main.qml"
+    test -f "$main_qml" || return 0
+    info "Reloading Krohnkite so config changes apply"
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript krohnkite >/dev/null 2>&1 || true
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadDeclarativeScript "$main_qml" krohnkite >/dev/null 2>&1 || true
+    qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.start >/dev/null 2>&1 || true
+}
+
 # In Plasma 6, kglobalaccel is embedded in kwin — the systemd service is a
 # no-op stub. On X11 we can safely replace kwin in-session to reload
 # kglobalshortcutsrc; on Wayland kwin_wayland *is* the compositor, so
@@ -296,6 +333,7 @@ reload_kglobalaccel() {
 
 install_krohnkite
 enable_krohnkite
+configure_krohnkite
 configure_focus_follows_mouse
 configure_desktops
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
@@ -308,6 +346,7 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
 fi
 # Reload to apply all changes
 reload_kwin
+reload_krohnkite
 reload_kglobalaccel
 
 info "KDE configured successfully"
