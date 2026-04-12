@@ -165,20 +165,27 @@ add_app_shortcut() {
     desktop_dir="$HOME/.local/share/applications"
     mkdir -p "$desktop_dir"
 
+    # X-KDE-GlobalAccel-CommandShortcut=true is what flags this .desktop as
+    # a launch-shortcut component; without it, kglobalaccel won't register
+    # the _launch entry, the shortcut never grabs, and the keypress falls
+    # through to the focused window.
     cat > "$desktop_dir/$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$name
 Exec=$command
 NoDisplay=true
+StartupNotify=false
+X-KDE-GlobalAccel-CommandShortcut=true
 EOF
 
     # Nested group [services][foo.desktop] is what kglobalaccel reads for
     # desktop-file launch shortcuts; a top-level [foo.desktop] group is
-    # silently ignored.
+    # silently ignored. The value is just the shortcut — the ",default,name"
+    # suffix used for [kwin] actions doesn't apply to launch shortcuts.
     kwriteconfig6 --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
-        --key _launch "$shortcut,none,$name"
+        --key _launch "$shortcut"
 }
 
 # An earlier version of this script wrote app-launch shortcuts under a
