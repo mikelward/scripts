@@ -121,6 +121,32 @@ configure_focus_follows_mouse() {
     kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
 }
 
+# --- Dim inactive windows ---
+
+configure_dim_inactive() {
+    info "Enabling dim inactive windows"
+    kwriteconfig6 --file kwinrc --group Plugins --key diminactiveEnabled true
+    # Strength is 0-100; KWin's default is 25, 15 is noticeably gentler.
+    kwriteconfig6 --file kwinrc --group Effect-diminactive --key Strength 15
+    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimByGroup true
+    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimPanels false
+    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimFullScreen false
+}
+
+# `kwin reconfigure` doesn't load a newly-enabled effect, and `loadEffect`
+# is a no-op when the effect is already loaded — so it also won't re-read
+# Strength after a config change. The sequence that actually re-reads
+# config is: unload, reconfigure, load. A plain unload+load leaves kwin
+# using stale cached config.
+reload_diminactive_effect() {
+    command -v qdbus6 >/dev/null 2>&1 || return 0
+    qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect diminactive \
+        >/dev/null 2>&1 || true
+    qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+    qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.loadEffect diminactive \
+        >/dev/null 2>&1 || true
+}
+
 # --- Configure virtual desktops ---
 
 configure_desktops() {
@@ -335,6 +361,7 @@ install_krohnkite
 enable_krohnkite
 configure_krohnkite
 configure_focus_follows_mouse
+configure_dim_inactive
 configure_desktops
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
@@ -347,6 +374,7 @@ fi
 # Reload to apply all changes
 reload_kwin
 reload_krohnkite
+reload_diminactive_effect
 reload_kglobalaccel
 
 info "KDE configured successfully"
