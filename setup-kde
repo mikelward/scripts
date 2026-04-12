@@ -120,6 +120,13 @@ unbind_shortcut() {
         --key "$action" "none,none,$action"
 }
 
+unbind_shortcut_in() {
+    group="$1"
+    action="$2"
+    kwriteconfig6 --file kglobalshortcutsrc --group "$group" \
+        --key "$action" "none,none,$action"
+}
+
 unbind_all_krohnkite_shortcuts() {
     config_file="${XDG_CONFIG_HOME:-$HOME/.config}/kglobalshortcutsrc"
     test -f "$config_file" || return 0
@@ -166,7 +173,11 @@ Exec=$command
 NoDisplay=true
 EOF
 
-    kwriteconfig6 --file kglobalshortcutsrc --group "$desktop_file" \
+    # Nested group [services][foo.desktop] is what kglobalaccel reads for
+    # desktop-file launch shortcuts; a top-level [foo.desktop] group is
+    # silently ignored.
+    kwriteconfig6 --file kglobalshortcutsrc \
+        --group services --group "$desktop_file" \
         --key _launch "$shortcut,none,$name"
 }
 
@@ -194,6 +205,19 @@ configure_keybindings() {
 
     # Window management
     set_shortcut "Window Close" "Meta+Backspace"
+
+    # Unbind KWin/plasmashell defaults that conflict with shortcuts we set
+    # below or in configure_app_shortcuts.
+    unbind_shortcut "Grid View"                                 # Meta+G -> Browser 1
+    unbind_shortcut "Overview"                                  # Meta+W -> Terminal on Workstation
+    unbind_shortcut "Edit Tiles"                                # Meta+T -> Terminal
+    unbind_shortcut "Walk Through Windows of Current Application" # Meta+` -> Krohnkite Monocle
+    n=1
+    while test "$n" -le 9; do
+        # Meta+1..9 -> Switch to Desktop N (plasmashell grabs these by default).
+        unbind_shortcut_in plasmashell "activate task manager entry $n"
+        n=$((n + 1))
+    done
 
     # Unbind all Krohnkite shortcuts, then set only the ones we want
     unbind_all_krohnkite_shortcuts
@@ -224,6 +248,24 @@ reload_kwin() {
     fi
 }
 
+# kglobalaccel only reads kglobalshortcutsrc on startup, so restart it to
+# pick up shortcuts written via kwriteconfig6.
+reload_kglobalaccel() {
+    info "Restarting kglobalaccel to register shortcuts"
+    if command -v kquitapp6 >/dev/null 2>&1; then
+        kquitapp6 kglobalaccel >/dev/null 2>&1 || true
+    elif command -v kquitapp5 >/dev/null 2>&1; then
+        kquitapp5 kglobalaccel >/dev/null 2>&1 || true
+    fi
+    # Give it a moment to exit before relaunching via dbus activation.
+    sleep 1
+    if command -v qdbus6 >/dev/null 2>&1; then
+        qdbus6 org.kde.kglobalaccel / >/dev/null 2>&1 || true
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus org.kde.kglobalaccel / >/dev/null 2>&1 || true
+    fi
+}
+
 # --- Main ---
 
 install_krohnkite
@@ -240,5 +282,6 @@ if command -v kbuildsycoca6 >/dev/null 2>&1; then
 fi
 # Reload to apply all changes
 reload_kwin
+reload_kglobalaccel
 
 info "KDE configured successfully"
