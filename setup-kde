@@ -298,8 +298,8 @@ configure_keybindings() {
     unbind_all_krohnkite_shortcuts
 
     # Krohnkite: resize
-    set_shortcut "Krohnkite: Increase" "Meta+\\\\"
-    set_shortcut "Krohnkite: Decrease" "Meta+/"
+    set_shortcut "Krohnkite: Grow Width" "Meta+\\\\"
+    set_shortcut "Krohnkite: Shrink Width" "Meta+/"
 
     # Krohnkite: layouts
     set_shortcut "Krohnkite: Monocle Layout" "Meta+\`"
