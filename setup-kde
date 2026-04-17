@@ -3,7 +3,7 @@
 #
 # Sets up:
 # - Krohnkite tiling window manager
-# - Focus follows mouse
+# - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 #
@@ -115,10 +115,23 @@ configure_krohnkite() {
 
 # --- Focus follows mouse ---
 
+# FocusFollowsMouse (not FocusUnderMouse): under FocusUnderMouse the
+# system application launcher (Kickoff) popup never received keyboard
+# focus when opened, so typing to filter the menu didn't work.
+# FocusFollowsMouse lets the launcher take keyboard focus on open while
+# still tracking the pointer between normal windows.
+# NextFocusPrefersMouse=true keeps "mouse precedence" so Alt+Tab and
+# similar prefer the hovered window.
+#
+# FocusStealingPreventionLevel=2 (Medium) blocks background apps from
+# snatching focus mid-typing while still letting the launcher and other
+# user-initiated popups grab focus. 1/Low is the KDE default and also
+# works; 3/High or higher can suppress legitimate popups.
 configure_focus_follows_mouse() {
-    info "Enabling focus follows mouse"
-    kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusUnderMouse
+    info "Enabling focus follows mouse (mouse precedence)"
+    kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse
     kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
+    kwriteconfig6 --file kwinrc --group Windows --key FocusStealingPreventionLevel 2
 }
 
 # --- Dim inactive windows ---
