@@ -20,3 +20,10 @@ The short URLs redirect to the raw script on GitHub. You can also use the full U
 curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 ```
+
+## Third-party code
+
+This repository vendors [pidcat](https://github.com/JakeWharton/pidcat)
+as `./pidcat`. See [`NOTICE`](./NOTICE) for attribution. The whole
+repository (including `pidcat`) is distributed under the Apache License,
+Version 2.0; see [`LICENSE`](./LICENSE).

@@ -95,6 +95,7 @@ install_packages() {
             sudo apt-get update -qq
             info "Installing system packages"
             sudo apt-get install -y \
+                adb \
                 bat \
                 build-essential \
                 curl \
@@ -122,6 +123,7 @@ install_packages() {
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
+                android-tools \
                 bat \
                 curl \
                 fd-find \
@@ -170,6 +172,7 @@ install_packages() {
             info "Installing macOS applications"
             brew install --cask \
                 amethyst \
+                android-platform-tools \
                 iterm2 \
                 rectangle
             ;;
