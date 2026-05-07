@@ -1,0 +1,7 @@
+Copyright 2005-2026 Mikel Ward
+
+This product includes pidcat (https://github.com/JakeWharton/pidcat),
+Copyright 2009, The Android Open Source Project, licensed under the
+Apache License, Version 2.0. The full license header is preserved at
+the top of ./pidcat. Modifications from upstream are documented in a
+comment block at the top of that file.
