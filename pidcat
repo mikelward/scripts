@@ -4,7 +4,14 @@
 #   - Shebang changed from `python` to `python3` for portability on
 #     systems where the unversioned `python` command is not installed.
 #     The `-u` (unbuffered stdout) flag is preserved.
-# No other changes.
+#   - Python 3 fixes:
+#     - Materialize the `named_processes` map() into a list so the
+#       membership test in `match_packages()` works on every line, not
+#       only the first one (map() returns a one-shot iterator in Py3).
+#     - In `FakeStdinProcess`, expose `sys.stdin.buffer` so piped input
+#       returns bytes for the `.decode()` call below.
+#     - Print log lines as `str`, not `bytes`, to avoid emitting the
+#       `b'...'` repr.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -80,7 +87,7 @@ catchall_package = list(filter(lambda package: package.find(":") == -1, package)
 # Store the name of processes to match exactly.
 named_processes = list(filter(lambda package: package.find(":") != -1, package))
 # Convert default process names from <package>: (cli notation) to <package> (android notation) in the exact names match group.
-named_processes = map(lambda package: package if package.find(":") != len(package) - 1 else package[:-1], named_processes)
+named_processes = [package if package.find(":") != len(package) - 1 else package[:-1] for package in named_processes]
 
 header_size = args.tag_width + 1 + 3 + 1 # space, level, space
 
@@ -199,7 +206,7 @@ if args.clear_logcat:
 # This is a ducktype of the subprocess.Popen object
 class FakeStdinProcess():
   def __init__(self):
-    self.stdout = sys.stdin
+    self.stdout = sys.stdin.buffer
   def poll(self):
     return None
 
@@ -365,4 +372,4 @@ while adb.poll() is None:
     message = matcher.sub(replace, message)
 
   linebuf += indent_wrap(message)
-  print(linebuf.encode('utf-8'))
+  print(linebuf)
