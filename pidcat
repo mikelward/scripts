@@ -10,8 +10,10 @@
 #       only the first one (map() returns a one-shot iterator in Py3).
 #     - In `FakeStdinProcess`, expose `sys.stdin.buffer` so piped input
 #       returns bytes for the `.decode()` call below.
-#     - Print log lines as `str`, not `bytes`, to avoid emitting the
-#       `b'...'` repr.
+#     - Write each log line to `sys.stdout.buffer` as UTF-8 bytes,
+#       preserving upstream's locale-independent output (the Py2
+#       `print` of a `str`/bytes), instead of `print(linebuf)` which
+#       would `UnicodeEncodeError` under `LC_ALL=C` on non-ASCII text.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -372,4 +374,4 @@ while adb.poll() is None:
     message = matcher.sub(replace, message)
 
   linebuf += indent_wrap(message)
-  print(linebuf)
+  sys.stdout.buffer.write(linebuf.encode('utf-8') + b'\n')
