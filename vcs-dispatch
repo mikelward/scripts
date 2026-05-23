@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""VCS dispatcher - detects the version control system and delegates to vcs-git/vcs-hg/vcs-jj.
+
+Usage: vcs-dispatch <command> [args...]
+       vcs-dispatch                  (prints the detected VCS name)
+
+Walks up from $PWD looking for .jj, .hg, .git markers.
+Caches the result in .vcs_cache for speed.
+"""
+
+import os
+import sys
+import subprocess
+
+
+def warn(msg):
+    print(msg, file=sys.stderr)
+
+
+def detect_vcs():
+    """Detect VCS by walking up from cwd. Returns (vcs, rootdir) or (None, None)."""
+    d = os.getcwd()
+    while True:
+        for marker, name in [(".jj", "jj"), (".hg", "hg"), (".git", "git")]:
+            if os.path.exists(os.path.join(d, marker)):
+                return name, d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None, None
+
+
+def read_cache():
+    """Read .vcs_cache if present. Returns (vcs, rootdir) or (None, None)."""
+    try:
+        with open(".vcs_cache") as f:
+            lines = f.read().splitlines()
+            if len(lines) >= 2:
+                parts = lines[0].split()
+                vcs_name = parts[0] if parts else None
+                rootdir = lines[1]
+                return vcs_name, rootdir
+    except (OSError, IndexError):
+        pass
+    return None, None
+
+
+def write_cache(vcs_name, rootdir):
+    """Write .vcs_cache, ignoring errors (e.g. read-only fs)."""
+    try:
+        with open(".vcs_cache", "w") as f:
+            f.write(f"{vcs_name} - -\n{rootdir}\n")
+    except OSError:
+        pass
+
+
+def get_vcs():
+    """Get VCS name, using cache if available."""
+    vcs_name, rootdir = read_cache()
+    if vcs_name and rootdir:
+        return vcs_name, rootdir
+
+    vcs_name, rootdir = detect_vcs()
+    if vcs_name and rootdir and os.access(".", os.W_OK):
+        write_cache(vcs_name, rootdir)
+    return vcs_name, rootdir
+
+
+def clear_cache():
+    """Remove all .vcs_cache files under current directory."""
+    for dirpath, dirnames, filenames in os.walk("."):
+        if ".vcs_cache" in filenames:
+            try:
+                os.remove(os.path.join(dirpath, ".vcs_cache"))
+            except OSError:
+                pass
+
+
+def main():
+    # Special case: "vcs-dispatch cv" clears caches
+    if len(sys.argv) >= 2 and sys.argv[1] == "cv":
+        clear_cache()
+        return 0
+
+    vcs_name, rootdir = get_vcs()
+
+    if vcs_name is None:
+        warn("vcs-dispatch: no version control system detected")
+        return 1
+
+    # No command: just print the VCS name
+    if len(sys.argv) < 2:
+        print(vcs_name)
+        return 0
+
+    # Delegate to vcs-<name>
+    script = f"vcs-{vcs_name}"
+    # Look for the script next to this one first
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(script_dir, script)
+    if os.access(script_path, os.X_OK):
+        return subprocess.call([script_path] + sys.argv[1:])
+    else:
+        # Fall back to PATH
+        return subprocess.call([script] + sys.argv[1:])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

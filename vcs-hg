@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""Mercurial VCS operations.
+
+Usage: vcs-hg <command> [args...]
+
+Implements a uniform VCS interface for Mercurial repositories.
+"""
+
+import os
+import shutil
+import sys
+import subprocess
+
+
+def run(args, **kwargs):
+    return subprocess.call(args, **kwargs)
+
+
+def run_output(args, **kwargs):
+    try:
+        return subprocess.check_output(args, stderr=subprocess.DEVNULL, **kwargs).decode().strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def warn(msg):
+    print(msg, file=sys.stderr)
+
+
+HG_CMD = "chg" if shutil.which("chg") else "hg"
+
+
+def hg(*args):
+    return run([HG_CMD] + list(args))
+
+
+def hg_output(*args):
+    return run_output([HG_CMD] + list(args))
+
+
+def rootdir():
+    return hg_output("root")
+
+
+# --- commands ---
+
+def cmd_absorb(args):
+    return hg("--config", "extensions.absorb=", "absorb", "--apply-changes", *args)
+
+
+def cmd_add(args):
+    return hg("add", *args)
+
+
+def cmd_addremove(args):
+    return hg("addremove", *args)
+
+
+def cmd_amend(args):
+    return hg("amend", *args)
+
+
+def cmd_annotate(args):
+    return hg("annotate", *args)
+
+
+def cmd_base(args):
+    return hg("--pager", "never", "log", "-r", ".", "--template", "{onelinesummary}\\n", *args)
+
+
+def cmd_blame(args):
+    return hg("blame", *args)
+
+
+def cmd_branch(args):
+    return hg("branch")
+
+
+def cmd_branches(args):
+    return hg("branches", *args)
+
+
+def cmd_change(args):
+    if not args:
+        return hg("commit", "--amend", "-e")
+    return hg("commit", "--amend", *args)
+
+
+def cmd_changed(args):
+    if not args:
+        return hg("status", "--no-status")
+    return hg("log", *args, "--template", "{files}\\n")
+
+
+def cmd_changelog(args):
+    return hg("log", "--template", "{onelinesummary}\\n", *args)
+
+
+def cmd_changes(args):
+    return hg("diff", *args)
+
+
+def cmd_checkout(args):
+    return hg("checkout", *args)
+
+
+def cmd_commit(args):
+    return hg("commit", *args)
+
+
+def cmd_commitforce(args):
+    return hg("--config", "hooks.precommit=", "--config", "hooks.pre-commit=", "commit", *args)
+
+
+def cmd_describe(args):
+    if not args:
+        return hg("commit", "--amend", "-e")
+    return hg("commit", "--amend", *args)
+
+
+def cmd_diffedit(args):
+    return hg("histedit", *args)
+
+
+def cmd_diffs(args):
+    return hg("diff", *args)
+
+
+def cmd_diffstat(args):
+    return hg("diff", "--stat", *args)
+
+
+def cmd_drop(args):
+    return hg("prune", *args)
+
+
+def cmd_evolve(args):
+    return hg("evolve", *args)
+
+
+def cmd_fastforward(args):
+    ret = run(["hg", "sync", "--tool=internal:fail"], stderr=subprocess.DEVNULL)
+    if ret != 0:
+        hg("rebase", "--abort")
+        return 1
+    return 0
+
+
+def cmd_fetchtime(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    changelog = os.path.join(root, ".hg", "store", "00changelog.i")
+    if os.path.isfile(changelog):
+        print(int(os.path.getmtime(changelog)))
+        return 0
+    return 1
+
+
+def cmd_fix(args):
+    return hg("fix", *args)
+
+
+def cmd_goto(args):
+    return hg("update", *args)
+
+
+def cmd_graft(args):
+    return hg("graft", *args)
+
+
+def cmd_graph(args):
+    if not args:
+        return hg("--pager", "never", "log", "--graph", "--template", "oneline",
+                   "-r", "draft() and not obsolete()")
+    return hg("--pager", "never", "log", "--graph", "--template", "oneline", *args)
+
+
+def cmd_histedit(args):
+    return hg("histedit", *args)
+
+
+def cmd_ignore(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    with open(os.path.join(root, ".hgignore"), "a") as f:
+        for arg in args:
+            f.write(arg + "\n")
+    return 0
+
+
+def cmd_incoming(args):
+    return hg("incoming", "--template", "{onelinesummary}\\n", *args)
+
+
+def cmd_lint(args):
+    return hg("lint", *args)
+
+
+def cmd_map(args):
+    # Check if at tip
+    output = hg_output("--pager", "never", "log", "-r", ". and last(heads(branch(.)))",
+                       "--template", "x")
+    if output:
+        return cmd_base(args)
+    return cmd_graph(args)
+
+
+def cmd_move(args):
+    return hg("rename", *args)
+
+
+def cmd_mv(args):
+    return hg("rename", *args)
+
+
+def cmd_next(args):
+    return hg("update", "-r", "min(children(.))", *args)
+
+
+def cmd_copy(args):
+    return hg("copy", *args)
+
+
+def cmd_outgoing(args):
+    return hg("--pager", "never", "--quiet", "log", "-r", "draft() and not obsolete()",
+              "--template", "{onelinesummary}\\n", *args)
+
+
+def cmd_pending(args):
+    return hg("--pager", "never", "status", *args)
+
+
+def cmd_pick(args):
+    return hg("graft", *args)
+
+
+def cmd_precommit(args):
+    return hg("precommit", *args)
+
+
+def cmd_prereview(args):
+    return hg("prereview", *args)
+
+
+def cmd_prev(args):
+    return hg("update", "-r", ".^", *args)
+
+
+def cmd_presubmit(args):
+    return hg("presubmit", *args)
+
+
+def cmd_projectroot(args):
+    return hg("root")
+
+
+def cmd_pull(args):
+    return hg("pull", "--update", "--rebase", *args)
+
+
+def cmd_push(args):
+    return hg("push", *args)
+
+
+def cmd_rebase(args):
+    return hg("rebase", *args)
+
+
+def cmd_recommit(args):
+    return hg("commit", "--amend", *args)
+
+
+def cmd_remove(args):
+    return hg("remove", *args)
+
+
+def cmd_rename(args):
+    return hg("rename", *args)
+
+
+def cmd_resolve(args):
+    return hg("resolve", *args)
+
+
+def cmd_mergetool(args):
+    return hg("resolve", *args)
+
+
+def cmd_restore(args):
+    return hg("revert", *args)
+
+
+def cmd_revert(args):
+    return hg("revert", *args)
+
+
+def cmd_review(args):
+    warn("hg review not supported")
+    return 1
+
+
+def cmd_reword(args):
+    if not args:
+        return hg("commit", "--amend", "-e")
+    return hg("commit", "--amend", *args)
+
+
+def cmd_rm(args):
+    return hg("remove", *args)
+
+
+def cmd_rootdir(args):
+    return hg("root")
+
+
+def cmd_show(args):
+    return hg("export", *args)
+
+
+def cmd_split(args):
+    return hg("split", *args)
+
+
+def cmd_squash(args):
+    return hg("fold", *args)
+
+
+def cmd_status(args):
+    return hg("status", *args)
+
+
+def cmd_submit(args):
+    return hg("submit", *args)
+
+
+def cmd_submitforce(args):
+    return hg("--config", "hooks.preoutgoing=", "--config", "hooks.pre-push=", "submit", *args)
+
+
+def cmd_track(args):
+    return hg("add", *args)
+
+
+def cmd_unamend(args):
+    return hg("unamend", *args)
+
+
+def cmd_uncommit(args):
+    return hg("--config", "extensions.uncommit=", "uncommit", *args)
+
+
+def cmd_undo(args):
+    return hg("undo", *args)
+
+
+def cmd_unknown(args):
+    return hg("status", "--unknown", "--deleted")
+
+
+def cmd_untrack(args):
+    return hg("forget", *args)
+
+
+def cmd_upload(args):
+    if not args:
+        return hg("push", "-r", ".")
+    return hg("push", *args)
+
+
+def cmd_uploadchain(args):
+    return hg("uploadchain", *args)
+
+
+COMMANDS = {name[4:]: func for name, func in globals().copy().items()
+            if name.startswith("cmd_") and callable(func)}
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: vcs-hg <command> [args...]", file=sys.stderr)
+        print(f"Commands: {', '.join(sorted(COMMANDS))}", file=sys.stderr)
+        return 1
+
+    command = sys.argv[1]
+    args = sys.argv[2:]
+
+    func = COMMANDS.get(command)
+    if func is None:
+        warn(f"vcs-hg: unknown command '{command}'")
+        return 1
+
+    return func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

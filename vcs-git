@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+"""Git VCS operations.
+
+Usage: vcs-git <command> [args...]
+
+Implements a uniform VCS interface for git repositories.
+"""
+
+import os
+import sys
+import subprocess
+
+
+def run(args, **kwargs):
+    """Run a command, passing through stdin/stdout/stderr."""
+    return subprocess.call(args, **kwargs)
+
+
+def run_output(args, **kwargs):
+    """Run a command and capture its stdout."""
+    try:
+        return subprocess.check_output(args, stderr=subprocess.DEVNULL, **kwargs).decode().strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def warn(msg):
+    print(msg, file=sys.stderr)
+
+
+def git(*args):
+    return run(["git"] + list(args))
+
+
+def git_output(*args):
+    return run_output(["git"] + list(args))
+
+
+def rootdir():
+    return git_output("rev-parse", "--show-toplevel")
+
+
+def git_dir():
+    return git_output("rev-parse", "--git-dir")
+
+
+# --- commands ---
+
+def cmd_absorb(args):
+    return git("absorb", *args)
+
+
+def cmd_add(args):
+    return git("add", "--intent-to-add", *args)
+
+
+def cmd_addremove(args):
+    return git("add", "--all", *args)
+
+
+def cmd_amend(args):
+    flags, files = _split_flags(args)
+    if not files:
+        flags.append("--all")
+    return git("commit", "--amend", "--no-edit", *flags, *files)
+
+
+def cmd_annotate(args):
+    return git("blame", *args)
+
+
+def cmd_base(args):
+    branch = git_output("rev-parse", "--abbrev-ref", "HEAD")
+    if branch == "HEAD":
+        sys.stdout.write("(detached) ")
+        sys.stdout.flush()
+    return git("--no-pager", "log", "-1", "--oneline", *args)
+
+
+def cmd_blame(args):
+    return git("blame", *args)
+
+
+def cmd_branch(args):
+    output = git_output("branch")
+    if output is None:
+        return 1
+    for line in output.splitlines():
+        if line.startswith("* "):
+            print(line[2:])
+            return 0
+    return 1
+
+
+def cmd_branches(args):
+    return git("branch", *args)
+
+
+def cmd_change(args):
+    return cmd_amend(args)
+
+
+def cmd_changed(args):
+    return git("diff", "--name-only", *args)
+
+
+def cmd_changelog(args):
+    return git("log", "--oneline", *args)
+
+
+def cmd_changes(args):
+    return git("diff", *args)
+
+
+def cmd_checkout(args):
+    return git("checkout", *args)
+
+
+def cmd_commit(args):
+    flags, files = _split_flags(args)
+    if not files:
+        flags.append("--all")
+    return git("commit", *flags, *files)
+
+
+def cmd_commitforce(args):
+    return cmd_commit(["--no-verify"] + list(args))
+
+
+def cmd_copy(args):
+    if not args:
+        warn("usage: copy <source>... <dest>")
+        return 1
+    ret = run(["cp"] + list(args))
+    if ret != 0:
+        return ret
+    return git("add", args[-1])
+
+
+def cmd_describe(args):
+    return git("commit", "--amend", "--only", "--allow-empty", *args)
+
+
+def cmd_diffedit(args):
+    return git("rebase", "--interactive", *args)
+
+
+def cmd_diffs(args):
+    return git("diff", *args)
+
+
+def cmd_diffstat(args):
+    return git("diff", "--stat", *args)
+
+
+def cmd_drop(args):
+    if not args:
+        warn("usage: drop <commit>")
+        return 1
+    return git("rebase", "--onto", args[0] + "~", args[0])
+
+
+def cmd_evolve(args):
+    warn("no automatic evolve in git; use: git rebase --onto <new> <old> <branch>")
+    return 1
+
+
+def cmd_fastforward(args):
+    return git("pull", "--ff-only")
+
+
+def cmd_fetchtime(args):
+    gd = git_dir()
+    if gd is None:
+        return 1
+    fetch_head = os.path.join(gd, "FETCH_HEAD")
+    if os.path.isfile(fetch_head):
+        print(int(os.path.getmtime(fetch_head)))
+        return 0
+    return 1
+
+
+def cmd_fix(args):
+    return git("fix", *args)
+
+
+def cmd_goto(args):
+    return git("checkout", *args)
+
+
+def cmd_graft(args):
+    return git("cherry-pick", *args)
+
+
+def cmd_graph(args):
+    fmt = "--pretty=format:%C(auto)%h%C(auto)%d %s"
+    if not args:
+        ret = run(["git", "--no-pager", "log", "--graph", fmt, "@{upstream}..HEAD"],
+                   stderr=subprocess.DEVNULL)
+        if ret != 0:
+            ret = git("--no-pager", "log", "--graph", fmt)
+        return ret
+    return git("--no-pager", "log", "--graph", fmt, *args)
+
+
+def cmd_histedit(args):
+    return git("rebase", "--interactive", *args)
+
+
+def cmd_hook(args):
+    if not args:
+        warn("usage: hook <hook-name> [args...]")
+        return 1
+    gd = git_dir()
+    if gd is None:
+        return 1
+    script = os.path.join(gd, "hooks", args[0])
+    if os.access(script, os.X_OK):
+        return run([script] + list(args[1:]))
+    else:
+        warn(f"No {script} hook")
+        return 1
+
+
+def cmd_ignore(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    with open(os.path.join(root, ".gitignore"), "a") as f:
+        for arg in args:
+            f.write(arg + "\n")
+    return 0
+
+
+def cmd_incoming(args):
+    return git("log", "--oneline", "HEAD..@{upstream}", *args)
+
+
+def cmd_lint(args):
+    return git("lint", *args)
+
+
+def cmd_map(args):
+    branch = git_output("rev-parse", "--abbrev-ref", "HEAD")
+    if branch != "HEAD":
+        return cmd_base(args)
+    return cmd_graph(args)
+
+
+def cmd_move(args):
+    return git("mv", *args)
+
+
+def cmd_mv(args):
+    return git("mv", *args)
+
+
+def cmd_next(args):
+    head = git_output("rev-parse", "HEAD")
+    if head is None:
+        return 1
+    output = git_output("rev-list", "--children", "--all")
+    if output is None:
+        warn("no next commit")
+        return 1
+    for line in output.splitlines():
+        parts = line.split()
+        if parts[0] == head and len(parts) > 1:
+            return git("checkout", parts[1])
+    warn("no next commit")
+    return 1
+
+
+def cmd_outgoing(args):
+    return git("--no-pager", "log", "--oneline", "@{upstream}..HEAD", *args)
+
+
+def cmd_pending(args):
+    ret = run(["git", "--no-pager", "log", "--oneline", "@{upstream}..HEAD"],
+              stderr=subprocess.DEVNULL)
+    if ret != 0:
+        return git("status", "--short")
+    return ret
+
+
+def cmd_pick(args):
+    return git("cherry-pick", *args)
+
+
+def cmd_precommit(args):
+    return cmd_hook(["pre-commit"] + list(args))
+
+
+def cmd_prereview(args):
+    return cmd_hook(["pre-commit"] + list(args))
+
+
+def cmd_prev(args):
+    return git("checkout", "HEAD~")
+
+
+def cmd_presubmit(args):
+    return cmd_hook(["pre-push"] + list(args))
+
+
+def cmd_projectroot(args):
+    return git("root")
+
+
+def cmd_pull(args):
+    return git("pull", "--rebase", *args)
+
+
+def cmd_push(args):
+    return git("push", *args)
+
+
+def cmd_rebase(args):
+    return git("rebase", *args)
+
+
+def cmd_recommit(args):
+    return cmd_amend(args)
+
+
+def cmd_remove(args):
+    return git("rm", *args)
+
+
+def cmd_rename(args):
+    return git("mv", *args)
+
+
+def cmd_resolve(args):
+    return git("mergetool", *args)
+
+
+def cmd_mergetool(args):
+    return git("mergetool", *args)
+
+
+def cmd_restore(args):
+    return git("checkout", "--", *args)
+
+
+def cmd_revert(args):
+    if not args:
+        return git("reset", "--hard", "HEAD")
+    return git("checkout", "--", *args)
+
+
+def cmd_review(args):
+    return _github_review(args)
+
+
+def cmd_reword(args):
+    return git("commit", "--amend", "--only", "--allow-empty", *args)
+
+
+def cmd_rm(args):
+    return git("rm", *args)
+
+
+def cmd_rootdir(args):
+    r = rootdir()
+    if r:
+        print(r)
+        return 0
+    return 1
+
+
+def cmd_show(args):
+    return git("show", *args)
+
+
+def cmd_split(args):
+    return git("rebase", "-i", *args)
+
+
+def cmd_squash(args):
+    return git("merge", "--squash", *args)
+
+
+def cmd_status(args):
+    return git("status", "--short", "--untracked-files=all", *args)
+
+
+def cmd_submit(args):
+    return git("push", *args)
+
+
+def cmd_submitforce(args):
+    return git("push", "--no-verify", *args)
+
+
+def cmd_track(args):
+    return git("add", "--intent-to-add", *args)
+
+
+def cmd_undo(args):
+    return git("reset", "--mixed", "HEAD~")
+
+
+def cmd_unamend(args):
+    return git("reset", "--mixed", "HEAD@{1}")
+
+
+def cmd_uncommit(args):
+    return git("reset", "--soft", "HEAD~")
+
+
+def cmd_unknown(args):
+    root = rootdir()
+    if root is None:
+        return 1
+    return run(["git", "-C", root, "ls-files", "-od", "--exclude-standard"])
+
+
+def cmd_untrack(args):
+    return git("rm", "--cached", *args)
+
+
+def cmd_upload(args):
+    return _github_review(args)
+
+
+def cmd_uploadchain(args):
+    return _github_review(args)
+
+
+# --- helpers ---
+
+def _split_flags(args):
+    """Split args into flags and positional arguments, like the shell versions."""
+    flags = []
+    files = []
+    it = iter(args)
+    for arg in it:
+        if arg == "--":
+            flags.append(arg)
+            files.extend(it)
+            break
+        elif arg in ("-m", "-C", "-c", "-F", "-t"):
+            flags.append(arg)
+            try:
+                flags.append(next(it))
+            except StopIteration:
+                pass
+        elif arg.startswith("-"):
+            flags.append(arg)
+        else:
+            files.append(arg)
+            files.extend(it)
+            break
+    return flags, files
+
+
+def _github_review(args):
+    """Send current change for review (GitHub/Gerrit aware)."""
+    reviewers = []
+    push_flags = []
+    it = iter(args)
+    for arg in it:
+        if arg in ("-r", "-m", "--reviewer"):
+            try:
+                reviewers.append(next(it))
+            except StopIteration:
+                pass
+        elif arg.startswith("--reviewer="):
+            reviewers.append(arg.split("=", 1)[1])
+        else:
+            push_flags.append(arg)
+
+    # Detect hosting from remote URL
+    origin_url = git_output("remote", "get-url", "origin") or ""
+    hosting = ""
+    if "github.com" in origin_url:
+        hosting = "github"
+    elif "gerrit" in origin_url or "googlesource.com" in origin_url:
+        hosting = "gerrit"
+
+    if hosting == "gerrit":
+        reviewer_suffix = "".join(f"%r={r}" for r in reviewers)
+        branch = git_output("rev-parse", "--abbrev-ref", "HEAD") or "HEAD"
+        return git("push", "origin", f"HEAD:refs/for/master/{branch}{reviewer_suffix}", *push_flags)
+    elif hosting == "github":
+        ret = git("push", *push_flags)
+        if ret != 0:
+            return ret
+        gh_args = ["gh", "pr", "create"]
+        for r in reviewers:
+            gh_args.extend(["-r", r])
+        return run(gh_args)
+    else:
+        return git("push", *push_flags)
+
+
+COMMANDS = {name[4:]: func for name, func in globals().copy().items()
+            if name.startswith("cmd_") and callable(func)}
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: vcs-git <command> [args...]", file=sys.stderr)
+        print(f"Commands: {', '.join(sorted(COMMANDS))}", file=sys.stderr)
+        return 1
+
+    command = sys.argv[1]
+    args = sys.argv[2:]
+
+    func = COMMANDS.get(command)
+    if func is None:
+        warn(f"vcs-git: unknown command '{command}'")
+        return 1
+
+    return func(args) or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
