@@ -15,12 +15,18 @@
 #       `print` of a `str`/bytes), instead of `print(linebuf)` which
 #       would `UnicodeEncodeError` under `LC_ALL=C` on non-ASCII text.
 #   - Added a `-f`/`--file` flag to read a saved logcat capture from a
-#     file instead of a connected device. In this offline mode the
-#     `adb shell ps` pid lookup and `--clear` are skipped so no device is
-#     touched (a live `adb logcat | pidcat` stdin pipe still runs `ps`,
-#     matching upstream). When the file is filtered by package but
-#     contains no "Start proc" lines (so no PID can be resolved and
-#     nothing matches), warn on stderr and suggest `-a`/`--all`.
+#     file instead of a connected device, and made PID discovery depend on
+#     how the logs arrive:
+#       * device mode (pidcat runs `adb logcat` itself): resolve PIDs from
+#         the connected device with `pidof`, falling back to scraping `ps`
+#         on older devices that lack it;
+#       * pipe / file mode: never query a device (it may not be the one
+#         that produced the logs) and rely solely on the `Start proc`
+#         markers parsed from the stream.
+#     `--clear` and the device PID lookup now run only in device mode. When
+#     a pipe/file is filtered by package but has no `Start proc` markers (so
+#     no PID can be resolved and nothing matches), warn on stderr and
+#     suggest `-a`/`--all`.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -204,8 +210,19 @@ adb_command = base_adb_command[:]
 adb_command.append('logcat')
 adb_command.extend(['-v', 'brief'])
 
-# Clear log before starting logcat (never touch a device when reading a file)
-if args.clear_logcat and not args.filename:
+# Determine where log lines come from:
+#   'device' - we run `adb logcat` ourselves against the connected device
+#   'pipe'   - log lines are piped in on stdin (e.g. adb logcat | pidcat)
+#   'file'   - log lines are read from a saved capture (-f)
+if args.filename:
+  input_mode = 'file'
+elif sys.stdin.isatty():
+  input_mode = 'device'
+else:
+  input_mode = 'pipe'
+
+# Clear the device log before starting (only when we own the device).
+if args.clear_logcat and input_mode == 'device':
   adb_clear_command = list(adb_command)
   adb_clear_command.append('-c')
   adb_clear = subprocess.Popen(adb_clear_command)
@@ -220,12 +237,12 @@ class FakeStdinProcess():
   def poll(self):
     return None
 
-if args.filename:
+if input_mode == 'file':
   try:
     adb = FakeStdinProcess(open(args.filename, 'rb'))
   except OSError as e:
     parser.error('cannot read %s: %s' % (args.filename, e.strerror))
-elif sys.stdin.isatty():
+elif input_mode == 'device':
   adb = subprocess.Popen(adb_command, stdin=PIPE, stdout=PIPE)
 else:
   adb = FakeStdinProcess(sys.stdin.buffer)
@@ -283,28 +300,40 @@ def parse_start_proc(line):
 def tag_in_tags_regex(tag, tags):
   return any(re.match(r'^' + t + r'$', tag) for t in map(str.strip, tags))
 
-# Resolve already-running PIDs from the device. Skipped only for file
-# input (-f), which is offline; a live stdin pipe (adb logcat | pidcat)
-# can still reach the device, matching upstream behavior.
-if not args.filename:
-  ps_command = base_adb_command + ['shell', 'ps']
-  ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-  while True:
-    try:
-      line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
-    except KeyboardInterrupt:
-      break
-    if len(line) == 0:
-      break
-
-    pid_match = PID_LINE.match(line)
-    if pid_match is not None:
-      pid = pid_match.group(1)
-      proc = pid_match.group(2)
-      if proc in catchall_package:
-        seen_pids = True
+# Seed the set of PIDs to follow for already-running processes.
+#   - device mode: ask the connected device directly. `pidof` is exact and
+#     stable across Android versions; fall back to scraping `ps` only on
+#     older devices that lack it.
+#   - pipe / file mode: don't query any device, since it may not be the one
+#     that produced these logs. Rely solely on the `Start proc` markers
+#     parsed from the stream itself (handled in the read loop below).
+if input_mode == 'device':
+  for proc_name in package:
+    pidof_command = base_adb_command + ['shell', 'pidof', proc_name]
+    pidof_out = subprocess.Popen(pidof_command, stdin=PIPE, stdout=PIPE, stderr=PIPE).communicate()[0]
+    for pid in pidof_out.decode('utf-8', 'replace').split():
+      if pid.isdigit():
         pids.add(pid)
         any_pids_found = True
+
+  if not any_pids_found:
+    ps_command = base_adb_command + ['shell', 'ps']
+    ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+    while True:
+      try:
+        line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
+      except KeyboardInterrupt:
+        break
+      if len(line) == 0:
+        break
+
+      pid_match = PID_LINE.match(line)
+      if pid_match is not None:
+        pid = pid_match.group(1)
+        proc = pid_match.group(2)
+        if proc in catchall_package:
+          pids.add(pid)
+          any_pids_found = True
 
 while adb.poll() is None:
   try:
@@ -396,12 +425,13 @@ while adb.poll() is None:
   linebuf += indent_wrap(message)
   sys.stdout.buffer.write(linebuf.encode('utf-8') + b'\n')
 
-# When reading a saved capture, package filtering relies on the PIDs
-# discovered from "Start proc" lines in the log. A clipped capture that
-# begins after the app was already running won't contain those lines, so
-# nothing matches. Point the user at -a/--all rather than failing silently.
-if args.filename and not args.all and not any_pids_found:
+# In pipe / file mode the only PID source is the "Start proc" markers in
+# the stream. A capture (or live pipe) that begins after the app was
+# already running has none, so a package filter matches nothing. Say so
+# rather than failing silently.
+if input_mode != 'device' and not args.all and not any_pids_found:
+  source = args.filename if input_mode == 'file' else 'the piped input'
   sys.stderr.write(
     'pidcat: no process start lines found in %s, so %s could not be mapped '
     'to a PID and no lines matched. Use -a/--all to show every line.\n'
-    % (args.filename, ', '.join(package)))
+    % (source, ', '.join(package)))
