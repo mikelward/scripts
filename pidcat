@@ -14,6 +14,9 @@
 #       preserving upstream's locale-independent output (the Py2
 #       `print` of a `str`/bytes), instead of `print(linebuf)` which
 #       would `UnicodeEncodeError` under `LC_ALL=C` on non-ASCII text.
+#   - Added a `-f`/`--file` flag to read a saved logcat capture from a
+#     file instead of a connected device, and skip the `adb shell ps`
+#     pid lookup when not reading from a live device.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -57,6 +60,7 @@ parser.add_argument('-s', '--serial', dest='device_serial', help='Device serial 
 parser.add_argument('-d', '--device', dest='use_device', action='store_true', help='Use first device for log input (adb -d option)')
 parser.add_argument('-e', '--emulator', dest='use_emulator', action='store_true', help='Use first emulator for log input (adb -e option)')
 parser.add_argument('-c', '--clear', dest='clear_logcat', action='store_true', help='Clear the entire log before running')
+parser.add_argument('-f', '--file', dest='filename', metavar='FILE', help='Read log input from FILE instead of a connected device')
 parser.add_argument('-t', '--tag', dest='tag', action='append', help='Filter output by specified tag(s)')
 parser.add_argument('-i', '--ignore-tag', dest='ignored_tag', action='append', help='Filter output by ignoring specified tag(s)')
 parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + __version__, help='Print the version number and exit')
@@ -207,15 +211,23 @@ if args.clear_logcat:
 
 # This is a ducktype of the subprocess.Popen object
 class FakeStdinProcess():
-  def __init__(self):
-    self.stdout = sys.stdin.buffer
+  def __init__(self, stream):
+    self.stdout = stream
   def poll(self):
     return None
 
-if sys.stdin.isatty():
+if args.filename:
+  try:
+    adb = FakeStdinProcess(open(args.filename, 'rb'))
+  except OSError as e:
+    parser.error('cannot read %s: %s' % (args.filename, e.strerror))
+  reading_from_device = False
+elif sys.stdin.isatty():
   adb = subprocess.Popen(adb_command, stdin=PIPE, stdout=PIPE)
+  reading_from_device = True
 else:
-  adb = FakeStdinProcess()
+  adb = FakeStdinProcess(sys.stdin.buffer)
+  reading_from_device = False
 pids = set()
 last_tag = None
 app_pid = None
@@ -269,23 +281,24 @@ def parse_start_proc(line):
 def tag_in_tags_regex(tag, tags):
   return any(re.match(r'^' + t + r'$', tag) for t in map(str.strip, tags))
 
-ps_command = base_adb_command + ['shell', 'ps']
-ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-while True:
-  try:
-    line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
-  except KeyboardInterrupt:
-    break
-  if len(line) == 0:
-    break
+if reading_from_device:
+  ps_command = base_adb_command + ['shell', 'ps']
+  ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+  while True:
+    try:
+      line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
+    except KeyboardInterrupt:
+      break
+    if len(line) == 0:
+      break
 
-  pid_match = PID_LINE.match(line)
-  if pid_match is not None:
-    pid = pid_match.group(1)
-    proc = pid_match.group(2)
-    if proc in catchall_package:
-      seen_pids = True
-      pids.add(pid)
+    pid_match = PID_LINE.match(line)
+    if pid_match is not None:
+      pid = pid_match.group(1)
+      proc = pid_match.group(2)
+      if proc in catchall_package:
+        seen_pids = True
+        pids.add(pid)
 
 while adb.poll() is None:
   try:
