@@ -27,6 +27,11 @@
 #     a pipe/file is filtered by package but has no `Start proc` markers (so
 #     no PID can be resolved and nothing matches), warn on stderr and
 #     suggest `-a`/`--all`.
+#   - Parse all single-line logcat formats, not just `brief`: `brief`,
+#     `process`, `tag`, `thread`, `time` and `threadtime` (adb's default
+#     for a bare `adb logcat`). Formats without a PID (`tag`, `raw`) can
+#     only be shown with `-a`/`--all`. The multi-line `long` format is not
+#     supported; its header is detected and a one-time hint is printed.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -202,9 +207,50 @@ PID_START_DALVIK = re.compile(r'^E/dalvikvm\(\s*(\d+)\): >>>>> ([a-zA-Z0-9._:]+)
 PID_KILL  = re.compile(r'^Killing (\d+):([a-zA-Z0-9._:]+)/[^:]+: (.*)$')
 PID_LEAVE = re.compile(r'^No longer want ([a-zA-Z0-9._:]+) \(pid (\d+)\): .*$')
 PID_DEATH = re.compile(r'^Process ([a-zA-Z0-9._:]+) \(pid (\d+)\) has died.?$')
-LOG_LINE  = re.compile(r'^([A-Z])/(.+?)\( *(\d+)\): (.*?)$')
+# logcat line formats (see `adb logcat -v <format>`). Device mode forces
+# `brief`, but piped/-f input may use any of these; only formats that carry
+# a PID can be filtered by package.
+LOG_DATE = r'\d\d-\d\d \d\d:\d\d:\d\d\.\d+'
+LOG_THREADTIME = re.compile(r'^' + LOG_DATE + r' +(\d+) +(\d+) +([A-Z]) +(.+?) *: (.*)$')
+LOG_TIME       = re.compile(r'^' + LOG_DATE + r' ([A-Z])/(.+?)\( *(\d+)\): (.*)$')
+LOG_BRIEF      = re.compile(r'^([A-Z])/(.+?)\( *(\d+)\): (.*)$')
+LOG_THREAD     = re.compile(r'^([A-Z])\( *(\d+): *\w+\) (.*)$')
+LOG_PROCESS    = re.compile(r'^([A-Z])\( *(\d+)\) (.*?)(?:  \((.+)\))?$')
+LOG_TAG        = re.compile(r'^([A-Z])/(.+?): (.*)$')
+LOG_LONG_HEADER = re.compile(r'^\[ ' + LOG_DATE + r' +\d+: *\d+ [A-Z]/.+ \]$')
 BUG_LINE  = re.compile(r'.*nativeGetEnabledTags.*')
 BACKTRACE_LINE = re.compile(r'^#(.*?)pc\s(.*?)$')
+
+def parse_log_line(line):
+  # Returns (level, tag, owner_pid, message), with owner_pid None for
+  # formats that don't carry a PID (those can only be shown via -a/--all).
+  # Order matters: try date-prefixed and PID-bearing forms before the
+  # looser tag form so a fuller match isn't pre-empted.
+  m = LOG_THREADTIME.match(line)
+  if m:
+    pid, _tid, level, tag, message = m.groups()
+    return level, tag.strip(), pid, message
+  m = LOG_TIME.match(line)
+  if m:
+    level, tag, pid, message = m.groups()
+    return level, tag.strip(), pid, message
+  m = LOG_BRIEF.match(line)
+  if m:
+    level, tag, pid, message = m.groups()
+    return level, tag.strip(), pid, message
+  m = LOG_THREAD.match(line)
+  if m:
+    level, pid, message = m.groups()
+    return level, '', pid, message
+  m = LOG_PROCESS.match(line)
+  if m:
+    level, pid, message, tag = m.groups()
+    return level, (tag or '').strip(), pid, message
+  m = LOG_TAG.match(line)
+  if m:
+    level, tag, message = m.groups()
+    return level, tag.strip(), None, message
+  return None
 
 adb_command = base_adb_command[:]
 adb_command.append('logcat')
@@ -248,6 +294,7 @@ else:
   adb = FakeStdinProcess(sys.stdin.buffer)
 pids = set()
 any_pids_found = False
+warned_long = False
 last_tag = None
 app_pid = None
 
@@ -347,12 +394,16 @@ while adb.poll() is None:
   if bug_line is not None:
     continue
 
-  log_line = LOG_LINE.match(line)
-  if log_line is None:
+  parsed = parse_log_line(line)
+  if parsed is None:
+    if not warned_long and LOG_LONG_HEADER.match(line):
+      warned_long = True
+      sys.stderr.write(
+        'pidcat: input looks like `-v long` format, which is not supported; '
+        'use a single-line format such as -v brief or -v threadtime.\n')
     continue
 
-  level, tag, owner, message = log_line.groups()
-  tag = tag.strip()
+  level, tag, owner, message = parsed
   start = parse_start_proc(line)
   if start:
     line_package, target, line_pid, line_uid, line_gids = start
