@@ -27,11 +27,13 @@
 #     a pipe/file is filtered by package but has no `Start proc` markers (so
 #     no PID can be resolved and nothing matches), warn on stderr and
 #     suggest `-a`/`--all`.
-#   - Parse all single-line logcat formats, not just `brief`: `brief`,
-#     `process`, `tag`, `thread`, `time` and `threadtime` (adb's default
-#     for a bare `adb logcat`). Formats without a PID (`tag`, `raw`) can
-#     only be shown with `-a`/`--all`. The multi-line `long` format is not
-#     supported; its header is detected and a one-time hint is printed.
+#   - Parse every logcat format, not just `brief`: `brief`, `process`,
+#     `tag`, `thread`, `time`, `threadtime` (adb's default for a bare
+#     `adb logcat`) and the multi-line `long` format (coalesced into a
+#     synthetic brief line). Formats without a PID (`tag`, `raw`) can only
+#     be shown with `-a`/`--all`. As part of this, true EOF is now detected
+#     from the raw read so blank lines (record separators in `long`, or
+#     stray blanks elsewhere) no longer terminate input early.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -217,7 +219,7 @@ LOG_BRIEF      = re.compile(r'^([A-Z])/(.+?)\( *(\d+)\): (.*)$')
 LOG_THREAD     = re.compile(r'^([A-Z])\( *(\d+): *\w+\) (.*)$')
 LOG_PROCESS    = re.compile(r'^([A-Z])\( *(\d+)\) (.*?)(?:  \((.+)\))?$')
 LOG_TAG        = re.compile(r'^([A-Z])/(.+?): (.*)$')
-LOG_LONG_HEADER = re.compile(r'^\[ ' + LOG_DATE + r' +\d+: *\d+ [A-Z]/.+ \]$')
+LOG_LONG_HEADER = re.compile(r'^\[ ' + LOG_DATE + r' +(\d+): *\d+ +([A-Z])/(.+?) +\]$')
 BUG_LINE  = re.compile(r'.*nativeGetEnabledTags.*')
 BACKTRACE_LINE = re.compile(r'^#(.*?)pc\s(.*?)$')
 
@@ -294,7 +296,7 @@ else:
   adb = FakeStdinProcess(sys.stdin.buffer)
 pids = set()
 any_pids_found = False
-warned_long = False
+long_pid = None  # set while coalescing a multi-line `-v long` record
 last_tag = None
 app_pid = None
 
@@ -384,11 +386,28 @@ if input_mode == 'device':
 
 while adb.poll() is None:
   try:
-    line = adb.stdout.readline().decode('utf-8', 'replace').strip()
+    raw_line = adb.stdout.readline()
   except KeyboardInterrupt:
     break
-  if len(line) == 0:
+  if not raw_line:  # genuine EOF (a blank line is b'\n', not b'')
     break
+  line = raw_line.decode('utf-8', 'replace').strip()
+
+  # `long` format spans multiple lines: a "[ ... PID:TID L/Tag ]" header,
+  # the message on the following line(s), then a blank separator. Coalesce
+  # each record into a synthetic brief line and let the normal path handle it.
+  long_header = LOG_LONG_HEADER.match(line)
+  if long_header:
+    long_pid, long_level, long_tag = long_header.groups()
+    long_lines = []
+    continue
+  if long_pid is not None:
+    if line == '':
+      line = '%s/%s(%s): %s' % (long_level, long_tag, long_pid, ' '.join(long_lines))
+      long_pid = None
+    else:
+      long_lines.append(line)
+      continue
 
   bug_line = BUG_LINE.match(line)
   if bug_line is not None:
@@ -396,11 +415,6 @@ while adb.poll() is None:
 
   parsed = parse_log_line(line)
   if parsed is None:
-    if not warned_long and LOG_LONG_HEADER.match(line):
-      warned_long = True
-      sys.stderr.write(
-        'pidcat: input looks like `-v long` format, which is not supported; '
-        'use a single-line format such as -v brief or -v threadtime.\n')
     continue
 
   level, tag, owner, message = parsed
