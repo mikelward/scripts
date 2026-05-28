@@ -427,8 +427,10 @@ while adb.poll() is None:
   if parsed is None:
     # Lines that match no format (e.g. `-v raw`, which has no metadata) carry
     # no PID and so can't be package-filtered; show them verbatim under -a.
+    # Write the original line (only the line ending removed) so leading
+    # indentation in stack traces / pretty-printed payloads is preserved.
     if args.all and line:
-      sys.stdout.buffer.write(line.encode('utf-8') + b'\n')
+      sys.stdout.buffer.write(raw_line.rstrip(b'\r\n') + b'\n')
       displayed_any = True
     continue
 
