@@ -15,11 +15,12 @@
 #       `print` of a `str`/bytes), instead of `print(linebuf)` which
 #       would `UnicodeEncodeError` under `LC_ALL=C` on non-ASCII text.
 #   - Added a `-f`/`--file` flag to read a saved logcat capture from a
-#     file instead of a connected device, and skip the `adb shell ps`
-#     pid lookup when not reading from a live device. When such input is
-#     filtered by package but contains no "Start proc" lines (so no PID
-#     can be resolved and nothing matches), warn on stderr and suggest
-#     `-a`/`--all`.
+#     file instead of a connected device. In this offline mode the
+#     `adb shell ps` pid lookup and `--clear` are skipped so no device is
+#     touched (a live `adb logcat | pidcat` stdin pipe still runs `ps`,
+#     matching upstream). When the file is filtered by package but
+#     contains no "Start proc" lines (so no PID can be resolved and
+#     nothing matches), warn on stderr and suggest `-a`/`--all`.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -203,8 +204,8 @@ adb_command = base_adb_command[:]
 adb_command.append('logcat')
 adb_command.extend(['-v', 'brief'])
 
-# Clear log before starting logcat
-if args.clear_logcat:
+# Clear log before starting logcat (never touch a device when reading a file)
+if args.clear_logcat and not args.filename:
   adb_clear_command = list(adb_command)
   adb_clear_command.append('-c')
   adb_clear = subprocess.Popen(adb_clear_command)
@@ -224,13 +225,10 @@ if args.filename:
     adb = FakeStdinProcess(open(args.filename, 'rb'))
   except OSError as e:
     parser.error('cannot read %s: %s' % (args.filename, e.strerror))
-  reading_from_device = False
 elif sys.stdin.isatty():
   adb = subprocess.Popen(adb_command, stdin=PIPE, stdout=PIPE)
-  reading_from_device = True
 else:
   adb = FakeStdinProcess(sys.stdin.buffer)
-  reading_from_device = False
 pids = set()
 any_pids_found = False
 last_tag = None
@@ -285,7 +283,10 @@ def parse_start_proc(line):
 def tag_in_tags_regex(tag, tags):
   return any(re.match(r'^' + t + r'$', tag) for t in map(str.strip, tags))
 
-if reading_from_device:
+# Resolve already-running PIDs from the device. Skipped only for file
+# input (-f), which is offline; a live stdin pipe (adb logcat | pidcat)
+# can still reach the device, matching upstream behavior.
+if not args.filename:
   ps_command = base_adb_command + ['shell', 'ps']
   ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
   while True:
@@ -399,9 +400,8 @@ while adb.poll() is None:
 # discovered from "Start proc" lines in the log. A clipped capture that
 # begins after the app was already running won't contain those lines, so
 # nothing matches. Point the user at -a/--all rather than failing silently.
-if not reading_from_device and not args.all and not any_pids_found:
-  source = args.filename if args.filename else 'the input'
+if args.filename and not args.all and not any_pids_found:
   sys.stderr.write(
     'pidcat: no process start lines found in %s, so %s could not be mapped '
     'to a PID and no lines matched. Use -a/--all to show every line.\n'
-    % (source, ', '.join(package)))
+    % (args.filename, ', '.join(package)))
