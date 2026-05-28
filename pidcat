@@ -209,7 +209,7 @@ TAGTYPES = {
   'F': colorize(' F ', fg=BLACK, bg=RED),
 }
 
-PID_LINE = re.compile(r'^\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+\w+\s+\w+\s+\w\s([\w|\.|\/]+)$')
+PID_LINE = re.compile(r'^\w+\s+(\w+)\s+\w+\s+\w+\s+\w+\s+\w+\s+\w+\s+\w\s([\w|\.|\/:]+)$')
 PID_START = re.compile(r'^.*: Start proc ([a-zA-Z0-9._:]+) for ([a-z]+ [^:]+): pid=(\d+) uid=(\d+) gids=(.*)$')
 PID_START_5_1 = re.compile(r'^.*: Start proc (\d+):([a-zA-Z0-9._:]+)/[a-z0-9]+ for (.*)$')
 PID_START_DALVIK = re.compile(r'^E/dalvikvm\(\s*(\d+)\): >>>>> ([a-zA-Z0-9._:]+) \[ userId:0 \| appId:(\d+) \]$')
@@ -302,7 +302,6 @@ elif input_mode == 'device':
 else:
   adb = FakeStdinProcess(sys.stdin.buffer)
 pids = set()
-any_pids_found = False
 displayed_any = False  # whether any actual log line was printed
 long_pid = None  # set while coalescing a multi-line `-v long` record
 last_tag = None
@@ -358,39 +357,37 @@ def tag_in_tags_regex(tag, tags):
   return any(re.match(r'^' + t + r'$', tag) for t in map(str.strip, tags))
 
 # Seed the set of PIDs to follow for already-running processes.
-#   - device mode: ask the connected device directly. `pidof` is exact and
-#     stable across Android versions; fall back to scraping `ps` only on
-#     older devices that lack it.
+#   - device mode: ask the connected device directly, taking the union of
+#     `pidof` (exact and stable across Android versions) and a `ps` scrape.
+#     `ps` also covers devices without `pidof` and lets a catchall package
+#     filter pick up secondary processes (e.g. com.example:remote).
 #   - pipe / file mode: don't query any device, since it may not be the one
 #     that produced these logs. Rely solely on the `Start proc` markers
 #     parsed from the stream itself (handled in the read loop below).
-if input_mode == 'device':
+if input_mode == 'device' and package:
   for proc_name in package:
     pidof_command = base_adb_command + ['shell', 'pidof', proc_name]
     pidof_out = subprocess.Popen(pidof_command, stdin=PIPE, stdout=PIPE, stderr=PIPE).communicate()[0]
     for pid in pidof_out.decode('utf-8', 'replace').split():
       if pid.isdigit():
         pids.add(pid)
-        any_pids_found = True
 
-  if not any_pids_found:
-    ps_command = base_adb_command + ['shell', 'ps']
-    ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
-    while True:
-      try:
-        line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
-      except KeyboardInterrupt:
-        break
-      if len(line) == 0:
-        break
+  ps_command = base_adb_command + ['shell', 'ps']
+  ps_pid = subprocess.Popen(ps_command, stdin=PIPE, stdout=PIPE, stderr=PIPE)
+  while True:
+    try:
+      line = ps_pid.stdout.readline().decode('utf-8', 'replace').strip()
+    except KeyboardInterrupt:
+      break
+    if len(line) == 0:
+      break
 
-      pid_match = PID_LINE.match(line)
-      if pid_match is not None:
-        pid = pid_match.group(1)
-        proc = pid_match.group(2)
-        if proc in catchall_package:
-          pids.add(pid)
-          any_pids_found = True
+    pid_match = PID_LINE.match(line)
+    if pid_match is not None:
+      pid = pid_match.group(1)
+      proc = pid_match.group(2)
+      if match_packages(proc):
+        pids.add(pid)
 
 while adb.poll() is None:
   try:
@@ -445,7 +442,6 @@ while adb.poll() is None:
     line_package, target, line_pid, line_uid, line_gids = start
     if match_packages(line_package):
       pids.add(line_pid)
-      any_pids_found = True
 
       app_pid = line_pid
 
