@@ -30,10 +30,14 @@
 #   - Parse every logcat format, not just `brief`: `brief`, `process`,
 #     `tag`, `thread`, `time`, `threadtime` (adb's default for a bare
 #     `adb logcat`) and the multi-line `long` format (coalesced into a
-#     synthetic brief line). Formats without a PID (`tag`, `raw`) can only
-#     be shown with `-a`/`--all`. As part of this, true EOF is now detected
-#     from the raw read so blank lines (record separators in `long`, or
-#     stray blanks elsewhere) no longer terminate input early.
+#     synthetic brief line, and flushed at EOF even without a trailing
+#     blank separator). Formats without a PID (`tag`, `raw`) can't be
+#     package-filtered; under `-a`/`--all` such lines (and any other line
+#     that matches no format) are shown verbatim. True EOF is detected from
+#     the raw read so blank lines (record separators in `long`, or stray
+#     blanks elsewhere) no longer terminate input early. The "nothing
+#     matched" hint now fires whenever no line was displayed, including
+#     `tag` captures that happen to contain a `Start proc` marker.
 
 '''
 Copyright 2009, The Android Open Source Project
@@ -299,6 +303,7 @@ else:
   adb = FakeStdinProcess(sys.stdin.buffer)
 pids = set()
 any_pids_found = False
+displayed_any = False  # whether any actual log line was printed
 long_pid = None  # set while coalescing a multi-line `-v long` record
 last_tag = None
 app_pid = None
@@ -393,24 +398,29 @@ while adb.poll() is None:
   except KeyboardInterrupt:
     break
   if not raw_line:  # genuine EOF (a blank line is b'\n', not b'')
-    break
-  line = raw_line.decode('utf-8', 'replace').strip()
+    if long_pid is None:
+      break
+    # Flush a `long` record that ended without its trailing blank separator.
+    line = '%s/%s(%s): %s' % (long_level, long_tag, long_pid, ' '.join(long_lines))
+    long_pid = None
+  else:
+    line = raw_line.decode('utf-8', 'replace').strip()
 
-  # `long` format spans multiple lines: a "[ ... PID:TID L/Tag ]" header,
-  # the message on the following line(s), then a blank separator. Coalesce
-  # each record into a synthetic brief line and let the normal path handle it.
-  long_header = LOG_LONG_HEADER.match(line)
-  if long_header:
-    long_pid, long_level, long_tag = long_header.groups()
-    long_lines = []
-    continue
-  if long_pid is not None:
-    if line == '':
-      line = '%s/%s(%s): %s' % (long_level, long_tag, long_pid, ' '.join(long_lines))
-      long_pid = None
-    else:
-      long_lines.append(line)
+    # `long` format spans multiple lines: a "[ ... PID:TID L/Tag ]" header,
+    # the message on the following line(s), then a blank separator. Coalesce
+    # each record into a synthetic brief line and let the normal path handle it.
+    long_header = LOG_LONG_HEADER.match(line)
+    if long_header:
+      long_pid, long_level, long_tag = long_header.groups()
+      long_lines = []
       continue
+    if long_pid is not None:
+      if line == '':
+        line = '%s/%s(%s): %s' % (long_level, long_tag, long_pid, ' '.join(long_lines))
+        long_pid = None
+      else:
+        long_lines.append(line)
+        continue
 
   bug_line = BUG_LINE.match(line)
   if bug_line is not None:
@@ -418,6 +428,11 @@ while adb.poll() is None:
 
   parsed = parse_log_line(line)
   if parsed is None:
+    # Lines that match no format (e.g. `-v raw`, which has no metadata) carry
+    # no PID and so can't be package-filtered; show them verbatim under -a.
+    if args.all and line:
+      sys.stdout.buffer.write(line.encode('utf-8') + b'\n')
+      displayed_any = True
     continue
 
   level, tag, owner, message = parsed
@@ -496,14 +511,14 @@ while adb.poll() is None:
 
   linebuf += indent_wrap(message)
   sys.stdout.buffer.write(linebuf.encode('utf-8') + b'\n')
+  displayed_any = True
 
-# In pipe / file mode the only PID source is the "Start proc" markers in
-# the stream. A capture (or live pipe) that begins after the app was
-# already running has none, so a package filter matches nothing. Say so
-# rather than failing silently.
-if input_mode != 'device' and not args.all and not any_pids_found:
+# In pipe / file mode PIDs are resolved only from the "Start proc" markers
+# in the stream. If a package filter matched nothing (no markers, or a
+# format such as `tag`/`raw` that carries no PID), say so rather than
+# failing silently.
+if input_mode != 'device' and not args.all and not displayed_any:
   source = args.filename if input_mode == 'file' else 'the piped input'
   sys.stderr.write(
-    'pidcat: no process start lines found in %s, so %s could not be mapped '
-    'to a PID and no lines matched. Use -a/--all to show every line.\n'
-    % (source, ', '.join(package)))
+    'pidcat: no lines matched %s in %s. Use -a/--all to show every line.\n'
+    % (', '.join(package), source))
