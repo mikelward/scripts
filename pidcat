@@ -96,6 +96,9 @@ if args.use_device:
 if args.use_emulator:
   base_adb_command.append('-e')
 
+if args.current_app and args.filename:
+  parser.error('--current queries a connected device and cannot be combined with -f/--file')
+
 if args.current_app:
   system_dump_command = base_adb_command + ["shell", "dumpsys", "activity", "activities"]
   system_dump = subprocess.Popen(system_dump_command, stdout=PIPE, stderr=PIPE).communicate()[0]
@@ -418,7 +421,11 @@ while adb.poll() is None:
     continue
 
   level, tag, owner, message = parsed
-  start = parse_start_proc(line)
+  # `parse_start_proc` keys off the "<prefix>: Start proc ..." shape, which
+  # is present in brief/time/threadtime lines but not in process/thread
+  # formats (e.g. "I( 100) Start proc ..."). Retry against the parsed
+  # message, which is uniform across formats, so PID seeding still works.
+  start = parse_start_proc(line) or parse_start_proc('x: ' + message)
   if start:
     line_package, target, line_pid, line_uid, line_gids = start
     if match_packages(line_package):
