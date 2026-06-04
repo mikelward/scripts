@@ -79,13 +79,23 @@ create_and_attach_next() {
   return 2
 }
 
+proc_dir() {
+  # Where to read per-process information from (overridable for testing).
+  printf '%s' "${SHPOOL_PROC_DIR:-/proc}"
+}
+
 get_pid_session_name() {
-  # Read the SHPOOL_SESSION_NAME from a process's environment.
-  envgrep 'SHPOOL_SESSION_NAME=.*' "$1" 2>/dev/null | tr -d '\0' | cut -f 2- -d =
+  # The SHPOOL_SESSION_NAME from a process's environment. /proc/<pid>/environ
+  # holds NUL-separated KEY=VALUE pairs. Empty if the process is gone or has no
+  # such variable. Read directly (rather than via a helper like envgrep) so this
+  # works without sourcing the user's shell functions.
+  local environ; environ="$(proc_dir)/$1/environ"
+  test -r "$environ" || return 0
+  tr '\0' '\n' < "$environ" | sed -n 's/^SHPOOL_SESSION_NAME=//p'
 }
 
 get_pid_cwd() {
-  readlink "/proc/$1/cwd" 2>/dev/null
+  readlink "$(proc_dir)/$1/cwd" 2>/dev/null
 }
 
 session_exists() {
@@ -144,23 +154,36 @@ describe_shell() {
   # session name, status, the basename of the vcs root and of the working
   # directory, a one-line process-tree summary, and the vcs unmerged items
   # (flattened onto a single line).
-  local pid="$1" session="$2" cwd="$3" status="$4"
+  local pid="$1" session="$2" cwd="$3" state="$4"
   local unmerged
   unmerged="$(dir_vcs_unmerged "$cwd")"
   printf '%s  %s  %s  %s  %s  %s' \
-    "$session" "${status:-unknown}" \
+    "$session" "${state:-unknown}" \
     "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
     "$(shell_summary "$pid")" "${unmerged//$'\n'/; }"
+}
+
+shell_matches() {
+  # True if a shell's working directory ($1) matches the argument ($2), either
+  # as a full path segment of the directory or as a whole word in the directory's
+  # vcs unmerged output.
+  local cwd="$1" arg="$2"
+  case "$cwd/" in
+    */"$arg"/*) return 0 ;;
+  esac
+  dir_vcs_unmerged "$cwd" | grep -Fwq -- "$arg"
 }
 
 resolve_switch_target() {
   # Resolve the switch argument to a session name, printing it on stdout.
   # A bare number, or the name of an existing session, is used as-is. Otherwise
-  # look for shells whose working directory contains the argument as a segment
-  # and reuse the matching shell's session: switch directly when there is a
-  # single match, prompt to disambiguate when there are several, and fall back
-  # to using the argument as-is when there are none (so new session names still
-  # work). Returns non-zero (without printing) if the user cancels a prompt.
+  # look for shells that match the argument -- either its working directory
+  # contains the argument as a path segment, or the argument is a whole word in
+  # that directory's vcs unmerged output -- and reuse the matching shell's
+  # session: switch directly when there is a single match, prompt to
+  # disambiguate when there are several, and fall back to using the argument
+  # as-is when there are none (so new session names still work). Returns
+  # non-zero (without printing) if the user cancels a prompt.
   local arg="$1"
   case "$arg" in
     ''|*[!0-9]*) ;;                      # not a bare number: try path matching
@@ -179,10 +202,7 @@ resolve_switch_target() {
   while IFS=$'\t' read -r pid session cwd; do
     test -n "$session" || continue
     test -n "$cwd" || continue
-    case "$cwd/" in
-      */"$arg"/*) ;;
-      *) continue ;;
-    esac
+    shell_matches "$cwd" "$arg" || continue
     match_pids+=("$pid")
     match_sessions+=("$session")
     match_cwds+=("$cwd")
@@ -201,14 +221,14 @@ resolve_switch_target() {
   # Several shells match: ask the user which one to switch to. Each option is
   # rendered with describe_shell (the same format as shpoollist) so the user can
   # tell similar shells apart.
-  local i sel listing status
+  local i sel listing state
   listing="$(shpool list 2>/dev/null)"
   {
     echo "Multiple shells match '$arg':"
     for i in "${!match_sessions[@]}"; do
-      status="$(session_status "${match_sessions[$i]}" "$listing")"
+      state="$(session_status "${match_sessions[$i]}" "$listing")"
       printf '  %d) %s\n' "$((i + 1))" \
-        "$(describe_shell "${match_pids[$i]}" "${match_sessions[$i]}" "${match_cwds[$i]}" "$status")"
+        "$(describe_shell "${match_pids[$i]}" "${match_sessions[$i]}" "${match_cwds[$i]}" "$state")"
     done
     printf 'Switch to which? [1-%d] ' "$n"
   } >&2
@@ -302,6 +322,9 @@ fi
 # autoshpool (no args) - run the loop
 case "$1" in
   switch)
+    # Load the user's vcs helper (best-effort) so vcs rootdir/unmerged work when
+    # matching and describing shells.
+    test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
     target="$(resolve_switch_target "$2")" || exit 1
     request_switch "$target"
     ;;
