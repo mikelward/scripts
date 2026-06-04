@@ -88,6 +88,13 @@ get_pid_cwd() {
   readlink "/proc/$1/cwd" 2>/dev/null
 }
 
+session_exists() {
+  # True if an shpool session with exactly this name exists. Best-effort: if
+  # shpool is slow or unavailable we report "no" and let path matching proceed.
+  timeout 2 shpool list 2>/dev/null \
+    | awk -v name="$1" 'NR > 1 && $1 == name { found = 1 } END { exit !found }'
+}
+
 list_shpool_shells() {
   # For simplicity and cross-shell support, treat every child of an shpool
   # process as a shell. Print a tab-separated "pid<TAB>session<TAB>cwd" line for
@@ -121,8 +128,8 @@ dir_vcs_root_name() {
 
 resolve_switch_target() {
   # Resolve the switch argument to a session name, printing it on stdout.
-  # A bare number is taken as a session name and used as-is. Otherwise look for
-  # shells whose working directory contains the argument as a full path segment
+  # A bare number, or the name of an existing session, is used as-is. Otherwise
+  # look for shells whose working directory contains the argument as a segment
   # and reuse the matching shell's session: switch directly when there is a
   # single match, prompt to disambiguate when there are several, and fall back
   # to using the argument as-is when there are none (so new session names still
@@ -132,6 +139,13 @@ resolve_switch_target() {
     ''|*[!0-9]*) ;;                      # not a bare number: try path matching
     *) printf '%s\n' "$arg"; return ;;   # bare number: use as session name
   esac
+
+  # An exact existing session name always wins, so switching to a named session
+  # keeps working even when that name also appears in some shell's path.
+  if session_exists "$arg"; then
+    printf '%s\n' "$arg"
+    return
+  fi
 
   local pid session cwd
   local -a match_pids=() match_sessions=() match_cwds=()
