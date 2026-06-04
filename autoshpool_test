@@ -74,12 +74,6 @@ VCS
   chmod +x "$TEST_TMPDIR/bin/vcs"
 
   # Fake pstree so process summaries are deterministic (empty) in tests.
-  cat > "$TEST_TMPDIR/bin/pstree" <<'PSTREE'
-#!/bin/bash
-exit 0
-PSTREE
-  chmod +x "$TEST_TMPDIR/bin/pstree"
-
   # Create a fake timeout that just runs the command
   cat > "$TEST_TMPDIR/bin/timeout" <<'TIMEOUT'
 #!/bin/bash
@@ -107,13 +101,30 @@ add_shpool() {
   echo "$1" >> "$HOME/.fake_shpool_pids"
 }
 
+# Create a fake /proc/<pid> entry: comm, status (with PPid) and a children list.
+# Usage: add_proc <pid> <comm> <ppid> [child-pid...]
+add_proc() {
+  local pid="$1" comm="$2" ppid="$3"; shift 3
+  mkdir -p "$SHPOOL_PROC_DIR/$pid/task/$pid"
+  printf '%s\n' "$comm" > "$SHPOOL_PROC_DIR/$pid/comm"
+  printf 'Name:\t%s\nPPid:\t%s\n' "$comm" "$ppid" > "$SHPOOL_PROC_DIR/$pid/status"
+  printf '%s ' "$@" > "$SHPOOL_PROC_DIR/$pid/task/$pid/children"
+}
+
+# Set the child pids of an existing fake process.
+set_children() {
+  local pid="$1"; shift
+  mkdir -p "$SHPOOL_PROC_DIR/$pid/task/$pid"
+  printf '%s ' "$@" > "$SHPOOL_PROC_DIR/$pid/task/$pid/children"
+}
+
 # Register a fake shell: pid, parent shpool pid, cwd, session name.
 # Records the pid->ppid mapping for pgrep and builds a fake /proc/<pid> entry
-# (environ + cwd symlink) that the real readlink/tr/sed read.
+# (environ, cwd symlink, comm=zsh, status with PPid) that the scripts read.
 add_shell() {
   local pid="$1" ppid="$2" cwd="$3" session="$4"
   printf '%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$cwd" "$session" >> "$HOME/.fake_shells"
-  mkdir -p "$SHPOOL_PROC_DIR/$pid"
+  add_proc "$pid" zsh "$ppid"
   printf 'PATH=/usr/bin\0SHPOOL_SESSION_NAME=%s\0TERM=xterm\0' "$session" \
     > "$SHPOOL_PROC_DIR/$pid/environ"
   ln -sf "$cwd" "$SHPOOL_PROC_DIR/$pid/cwd"
@@ -421,6 +432,32 @@ EOF
   assert_output_contains "abcdef Something"  # vcs unmerged
 }
 
+test_shpoollist_shows_process_chain() {
+  add_proc 100 systemd 0
+  add_proc 1000 shpool 100
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/work" 5
+  add_proc 3001 vim 2001
+  set_children 2001 3001
+  run_shpoollist
+  assert_status 0
+  assert_output_contains "systemd---shpool---zsh---vim"
+}
+
+test_shpoollist_chain_reveals_nested_shpool() {
+  # A shell running an shpool of its own (e.g. an accidental nested attach)
+  # shows up as shpool in the child slot of the chain.
+  add_proc 100 systemd 0
+  add_proc 1000 shpool 100
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/work" 5
+  add_proc 3001 shpool 2001
+  set_children 2001 3001
+  run_shpoollist
+  assert_status 0
+  assert_output_contains "zsh---shpool"
+}
+
 test_shpoollist_empty_when_no_shells() {
   run_shpoollist
   assert_status 0
@@ -454,6 +491,8 @@ run_test "switch does not switch when the prompt is cancelled" test_switch_cance
 run_test "switch matches a session by vcs unmerged output" test_switch_matches_vcs_unmerged
 run_test "switch unmerged matching is whole-word" test_switch_unmerged_matches_whole_word
 run_test "shpoollist lists sessions with details" test_shpoollist_lists_sessions
+run_test "shpoollist shows a cut-down process chain" test_shpoollist_shows_process_chain
+run_test "shpoollist chain reveals nested shpool" test_shpoollist_chain_reveals_nested_shpool
 run_test "shpoollist prints nothing when there are no shells" test_shpoollist_empty_when_no_shells
 
 echo

@@ -121,11 +121,51 @@ list_shpool_shells() {
   done
 }
 
-shell_summary() {
-  # A one-line description of a process and its ancestry, used to help the user
-  # tell otherwise-similar shells apart. Empty if pstree is unavailable.
-  command -v pstree >/dev/null 2>&1 || return 0
-  pstree -ps "$1" 2>/dev/null | head -n 1
+pid_comm() {
+  # The command name of a process, or empty if it is gone.
+  local f; f="$(proc_dir)/$1/comm"
+  test -r "$f" || return 0
+  tr -d '\n' < "$f"
+}
+
+pid_ppid() {
+  # The parent pid of a process, from /proc/<pid>/status.
+  local f; f="$(proc_dir)/$1/status"
+  test -r "$f" || return 0
+  awk '/^PPid:/ { print $2; exit }' "$f"
+}
+
+pid_children() {
+  # The child pids of a process (space-separated), or empty.
+  cat "$(proc_dir)/$1/task/$1/children" 2>/dev/null
+}
+
+pid_first_child() {
+  # shellcheck disable=SC2046  # intentional word-splitting of the pid list
+  set -- $(pid_children "$1")
+  printf '%s' "${1:-}"
+}
+
+shell_chain() {
+  # A cut-down, pstree-style summary for a shell: the command names of the
+  # shell's grandparent, its shpool, the shell itself, and the shell's first
+  # child, joined with "---" (e.g. systemd---shpool---zsh---vim). Read straight
+  # from /proc. Showing the grandparent and child makes an accidental nested
+  # shpool obvious -- shpool turns up in a slot where it shouldn't (e.g.
+  # ...---zsh---shpool).
+  local shell="$1" shpool parent child
+  shpool="$(pid_ppid "$shell")"
+  parent="$(pid_ppid "$shpool")"
+  child="$(pid_first_child "$shell")"
+
+  local chain="" pid comm
+  for pid in "$parent" "$shpool" "$shell" "$child"; do
+    test -n "$pid" || continue
+    comm="$(pid_comm "$pid")"
+    test -n "$comm" || continue
+    chain="${chain:+$chain---}$comm"
+  done
+  printf '%s' "$chain"
 }
 
 dir_vcs_root_name() {
@@ -149,16 +189,16 @@ session_status() {
 }
 
 describe_shell() {
-  # Render a multi-line description of a shell, shared by the switch
-  # disambiguation prompt and shpoollist so both use the same format:
-  #   line 1: session name, status, vcs root basename, working directory basename
-  #   line 2: a one-line process-tree summary
+  # Render a description of a shell, shared by the switch disambiguation prompt
+  # and shpoollist so both use the same format:
+  #   line 1: session name, status, vcs root basename, working directory
+  #           basename, and a cut-down process-tree chain
   #   remaining lines: the vcs unmerged output, unchanged
   local pid="$1" session="$2" cwd="$3" state="$4"
-  printf '%s  %s  %s  %s\n' \
+  printf '%s  %s  %s  %s  %s\n' \
     "$session" "${state:-unknown}" \
-    "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")"
-  printf '%s\n' "$(shell_summary "$pid")"
+    "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
+    "$(shell_chain "$pid")"
   dir_vcs_unmerged "$cwd"
 }
 
