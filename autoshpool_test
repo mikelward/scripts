@@ -212,6 +212,56 @@ test_switch_exits_0() {
   assert_status 0
 }
 
+test_switch_no_arg_switches_on_mismatch() {
+  # `switchshpool` (no argument) switches to the session that fits the prefix.
+  export SHPOOL_PREFIX="myproject:"
+  export SHPOOL_SESSION_NAME="other:1"
+  run_autoshpool switch
+  assert_status 0
+  assert_output_contains "does not match prefix"
+  assert_switch_file "myproject:1"
+}
+
+test_switch_no_arg_stays_when_matching() {
+  # Already in a matching session: stay put (exit 1 so `&& exit` does not fire).
+  export SHPOOL_PREFIX="myproject:"
+  export SHPOOL_SESSION_NAME="myproject:2"
+  run_autoshpool switch
+  assert_status 1
+  assert_output_contains "Already connected"
+  assert_no_switch_file
+}
+
+test_switch_no_arg_errors_when_not_attached() {
+  export SHPOOL_PREFIX="myproject:"
+  run_autoshpool switch
+  assert_status 1
+  assert_output_contains "Not in a shpool session"
+  assert_no_switch_file
+}
+
+test_switch_detaches_current_session() {
+  # A switch detaches the current session so the outer loop takes over even when
+  # the caller has no trailing `&& exit`.
+  export SHPOOL_SESSION_NAME="other:1"
+  run_autoshpool switch foo
+  assert_status 0
+  assert_switch_file foo
+  assert_called "shpool detach other:1"
+}
+
+test_switch_no_detach_when_not_attached() {
+  # With no current session there is nothing to detach.
+  run_autoshpool switch foo
+  assert_status 0
+  assert_switch_file foo
+  if grep -q "shpool detach" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: did not expect a detach call"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
 test_passthrough_to_shpool() {
   run_autoshpool list
   assert_status 0
@@ -582,6 +632,11 @@ test_shpoollist_empty_when_no_shells() {
 
 run_test "switch writes session name to switch file" test_switch_writes_file
 run_test "switch exits 0" test_switch_exits_0
+run_test "switch with no arg switches to the prefix session" test_switch_no_arg_switches_on_mismatch
+run_test "switch with no arg stays put when already matching" test_switch_no_arg_stays_when_matching
+run_test "switch with no arg errors when not in a session" test_switch_no_arg_errors_when_not_attached
+run_test "switch detaches the current session" test_switch_detaches_current_session
+run_test "switch does not detach when not attached" test_switch_no_detach_when_not_attached
 run_test "unknown subcommand passes through to shpool" test_passthrough_to_shpool
 run_test "passthrough preserves all arguments" test_passthrough_preserves_args
 run_test "exits with error if already in a shpool session" test_exits_if_already_attached

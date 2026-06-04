@@ -2,8 +2,11 @@
 # autoshpool - connect to first existing shpool session or start a new one
 #
 # Usage:
-#   autoshpool                - attach to or create a shpool session (loops for switching)
+#   autoshpool                 - attach to or create a shpool session (loops for switching)
 #   autoshpool switch <target> - request a switch to a session (from inside shpool)
+#   autoshpool switch          - request a switch to the session that fits the
+#                                current directory's project (same choice the
+#                                startup auto-switch makes)
 #
 # <target> is a session name (e.g. "2"), or any word matching a path segment of
 # a running shell's working directory. For example, "switch sep" finds the shell
@@ -13,6 +16,15 @@
 #   autoshpool && exit
 # And replace switchshpool with:
 #   switchshpool() { autoshpool switch "$1" && exit; }
+#
+# A switch is serviced by the outer loop once the current shell lets go of its
+# session. That happens two ways: the shell exits (the `&& exit` above), or
+# autoshpool detaches the session for you. Requesting a switch detaches the
+# current session as a best-effort step, so a switch lands even without a
+# trailing `&& exit` -- e.g. a bare `autoshpool`, or `mjd foo && switchshpool`
+# after moving into another project. Keep the `&& exit` in switchshpool/shrc
+# anyway: it cleanly exits the now-detached shell instead of leaving it parked
+# in a disconnected session.
 
 switch_session_file="$HOME/.autoshpool_switch"
 switch_pwd_file="$HOME/.autoshpool_switch_pwd"
@@ -371,6 +383,16 @@ request_switch() {
   else
     rm -f "$switch_pwd_file"
   fi
+  # Hand the terminal back to the outer loop so the switch lands even when the
+  # caller isn't a shell that will `exit` afterwards (a bare `autoshpool`, or a
+  # manual `switchshpool` without the `&& exit`). Detaching the current session
+  # makes the outer loop's `shpool attach` return; it then attaches the queued
+  # session. Best-effort: when we aren't inside a session, or shpool can't
+  # detach, the caller's `&& exit` (startup/switchshpool) still services the
+  # request, so this never regresses the existing flow.
+  if test -n "$SHPOOL_SESSION_NAME"; then
+    shpool detach "$SHPOOL_SESSION_NAME" 2>/dev/null
+  fi
   exit 0
 }
 
@@ -448,6 +470,7 @@ if is_sourced; then
 fi
 
 # autoshpool switch <session> - request a switch to the named session
+# autoshpool switch           - request a switch to this directory's session
 # autoshpool <shpool args...> - pass through to shpool
 # autoshpool (no args) - run the loop
 case "$1" in
@@ -455,6 +478,17 @@ case "$1" in
     # Load the user's vcs helper (best-effort) so vcs rootdir/unmerged work when
     # matching and describing shells.
     test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+    if test -z "$2"; then
+      # No target: switch to the session that fits this directory's project --
+      # the same selection the startup auto-switch makes. Reuse
+      # handle_already_attached so the "already matches, stay put" and "mismatch,
+      # switch" choices stay in one place. It only returns here when this shell
+      # isn't inside a session, in which case there's nothing to switch.
+      SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
+      handle_already_attached
+      echo "Not in a shpool session; nothing to switch to" >&2
+      exit 1
+    fi
     target="$(resolve_switch_target "$2")" || exit 1
     request_switch "$target"
     ;;
