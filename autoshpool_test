@@ -42,6 +42,38 @@ echo ""
 ROOTDIR
   chmod +x "$TEST_TMPDIR/bin/rootdir"
 
+  # Fake pgrep backed by fixture files:
+  #   .fake_shpool_pids - one shpool pid per line
+  #   .fake_shells      - pid<TAB>ppid<TAB>cwd<TAB>session per shell
+  cat > "$TEST_TMPDIR/bin/pgrep" <<'PGREP'
+#!/bin/bash
+case "$1" in
+  -x) [ "$2" = shpool ] && cat "$HOME/.fake_shpool_pids" 2>/dev/null ;;
+  -P) awk -F'\t' -v p="$2" '$2==p{print $1}' "$HOME/.fake_shells" 2>/dev/null ;;
+esac
+exit 0
+PGREP
+  chmod +x "$TEST_TMPDIR/bin/pgrep"
+
+  # Fake readlink that resolves /proc/<pid>/cwd from the shell fixtures.
+  cat > "$TEST_TMPDIR/bin/readlink" <<'READLINK'
+#!/bin/bash
+t="$1"; pid="${t#/proc/}"; pid="${pid%/cwd}"
+awk -F'\t' -v p="$pid" '$1==p{print $3}' "$HOME/.fake_shells" 2>/dev/null
+exit 0
+READLINK
+  chmod +x "$TEST_TMPDIR/bin/readlink"
+
+  # Fake envgrep that returns SHPOOL_SESSION_NAME from the shell fixtures.
+  cat > "$TEST_TMPDIR/bin/envgrep" <<'ENVGREP'
+#!/bin/bash
+# usage: envgrep <pattern> <pid>
+s=$(awk -F'\t' -v p="$2" '$1==p{print $4}' "$HOME/.fake_shells" 2>/dev/null)
+[ -n "$s" ] && printf 'SHPOOL_SESSION_NAME=%s' "$s"
+exit 0
+ENVGREP
+  chmod +x "$TEST_TMPDIR/bin/envgrep"
+
   # Create a fake timeout that just runs the command
   cat > "$TEST_TMPDIR/bin/timeout" <<'TIMEOUT'
 #!/bin/bash
@@ -60,6 +92,18 @@ TIMEOUT
   rm -f "$TEST_TMPDIR/.autoshpool_switch"
   rm -f "$TEST_TMPDIR/.shpool_calls"
   rm -f "$TEST_TMPDIR/.shpool_sessions"
+  rm -f "$TEST_TMPDIR/.fake_shpool_pids"
+  rm -f "$TEST_TMPDIR/.fake_shells"
+}
+
+# Register a fake shpool process whose children are treated as shells.
+add_shpool() {
+  echo "$1" >> "$HOME/.fake_shpool_pids"
+}
+
+# Register a fake shell: pid, parent shpool pid, cwd, session name.
+add_shell() {
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$HOME/.fake_shells"
 }
 
 teardown() {
@@ -68,7 +112,16 @@ teardown() {
 
 run_autoshpool() {
   set +e
-  output="$("$SCRIPT_DIR/autoshpool" "$@" 2>&1)"
+  output="$("$SCRIPT_DIR/autoshpool" "$@" </dev/null 2>&1)"
+  status=$?
+  set -e
+}
+
+# Like run_autoshpool, but feeds the first argument to the script on stdin.
+run_autoshpool_input() {
+  local input="$1"; shift
+  set +e
+  output="$(printf '%s\n' "$input" | "$SCRIPT_DIR/autoshpool" "$@" 2>&1)"
   status=$?
   set -e
 }
@@ -221,6 +274,79 @@ EOF
   assert_output_contains "Creating shpool session 3"
 }
 
+assert_switch_file() {
+  local expected="$1"
+  local actual
+  actual="$(cat "$HOME/.autoshpool_switch" 2>/dev/null)"
+  if [ "$actual" != "$expected" ]; then
+    echo "  FAIL: expected switch file '$expected', got '$actual'"
+    echo "  output: $output"
+    return 1
+  fi
+}
+
+assert_no_switch_file() {
+  if [ -e "$HOME/.autoshpool_switch" ]; then
+    echo "  FAIL: expected no switch file, but it exists: $(cat "$HOME/.autoshpool_switch")"
+    return 1
+  fi
+}
+
+test_switch_resolves_path_segment() {
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/sep/foo" 2
+  run_autoshpool switch sep
+  assert_status 0
+  assert_switch_file 2
+}
+
+test_switch_requires_whole_segment() {
+  # "sep" must not match the "separate" directory.
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/separate/foo" 5
+  run_autoshpool switch sep
+  assert_status 0
+  assert_switch_file sep
+}
+
+test_switch_numeric_is_session_name() {
+  # A bare number is a session name, even if a shell's path contains it.
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/2/foo" 9
+  run_autoshpool switch 2
+  assert_status 0
+  assert_switch_file 2
+}
+
+test_switch_no_match_uses_arg() {
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/other/foo" 3
+  run_autoshpool switch newname
+  assert_status 0
+  assert_switch_file newname
+}
+
+test_switch_prompts_on_multiple_matches() {
+  add_shpool 1000
+  add_shell 2001 1000 "/home/a/sep/foo" 2
+  add_shell 2002 1000 "/home/b/sep/bar" 7
+  # Choosing option 2 selects the second shell's session (7).
+  run_autoshpool_input 2 switch sep
+  assert_status 0
+  assert_output_contains "Multiple shells match 'sep'"
+  assert_switch_file 7
+}
+
+test_switch_cancel_does_not_switch() {
+  add_shpool 1000
+  add_shell 2001 1000 "/home/a/sep/foo" 2
+  add_shell 2002 1000 "/home/b/sep/bar" 7
+  # No valid selection (EOF) cancels: non-zero exit and no switch file.
+  run_autoshpool switch sep
+  [ "$status" -ne 0 ] || { echo "  FAIL: expected non-zero exit"; return 1; }
+  assert_no_switch_file
+}
+
 # --- run ---
 
 run_test "switch writes session name to switch file" test_switch_writes_file
@@ -235,6 +361,12 @@ run_test "preserves specific exit code from shpool attach" test_preserves_exit_c
 run_test "loop handles switch request after session ends" test_loop_handles_switch
 run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
 run_test "skips existing sessions when creating" test_skips_existing_sessions
+run_test "switch resolves a path segment to its session" test_switch_resolves_path_segment
+run_test "switch matches whole path segments only" test_switch_requires_whole_segment
+run_test "switch treats a bare number as a session name" test_switch_numeric_is_session_name
+run_test "switch falls back to the argument when nothing matches" test_switch_no_match_uses_arg
+run_test "switch prompts when several shells match" test_switch_prompts_on_multiple_matches
+run_test "switch does not switch when the prompt is cancelled" test_switch_cancel_does_not_switch
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
