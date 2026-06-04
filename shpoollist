@@ -1,0 +1,17 @@
+#!/bin/bash
+# shpoollist - list shpool sessions with useful details
+#
+# Prints one line per shell (treating every child of an shpool process as a
+# shell), using the same format as autoshpool's switch disambiguation prompt:
+# the session name, its status, the basename of its vcs root and working
+# directory, a one-line process-tree summary, and any vcs unmerged items.
+
+# Reuse the shell-enumeration and formatting helpers from autoshpool.
+source "$(dirname "$0")/autoshpool"
+
+listing="$(shpool list 2>/dev/null)"
+while IFS=$'\t' read -r pid session cwd; do
+  status="$(session_status "$session" "$listing")"
+  describe_shell "$pid" "$session" "$cwd" "$status"
+  echo
+done < <(list_shpool_shells)

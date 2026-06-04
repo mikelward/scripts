@@ -126,6 +126,33 @@ dir_vcs_root_name() {
   test -n "$root" && basename "$root"
 }
 
+dir_vcs_unmerged() {
+  # The unmerged items vcs reports for a directory, or empty. Best-effort: we
+  # don't require vcs to be working.
+  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
+}
+
+session_status() {
+  # The status column shpool reports for a session ($1), given the output of
+  # `shpool list` ($2). Empty if the session isn't listed.
+  awk -v name="$1" 'NR > 1 && $1 == name { print $NF }' <<<"$2"
+}
+
+describe_shell() {
+  # Render a one-line, multi-field description of a shell, shared by the switch
+  # disambiguation prompt and shpoollist so both use the same format. Fields:
+  # session name, status, the basename of the vcs root and of the working
+  # directory, a one-line process-tree summary, and the vcs unmerged items
+  # (flattened onto a single line).
+  local pid="$1" session="$2" cwd="$3" status="$4"
+  local unmerged
+  unmerged="$(dir_vcs_unmerged "$cwd")"
+  printf '%s  %s  %s  %s  %s  %s' \
+    "$session" "${status:-unknown}" \
+    "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
+    "$(shell_summary "$pid")" "${unmerged//$'\n'/; }"
+}
+
 resolve_switch_target() {
   # Resolve the switch argument to a session name, printing it on stdout.
   # A bare number, or the name of an existing session, is used as-is. Otherwise
@@ -171,20 +198,17 @@ resolve_switch_target() {
     return
   fi
 
-  # Several shells match: ask the user which one to switch to. Each option shows
-  # the session name, its attached/detached status, the last component of its
-  # version-control root and of the shell's directory, and a one-line process
-  # summary, so the user can tell similar shells apart.
-  local i sel listing status dir
+  # Several shells match: ask the user which one to switch to. Each option is
+  # rendered with describe_shell (the same format as shpoollist) so the user can
+  # tell similar shells apart.
+  local i sel listing status
   listing="$(shpool list 2>/dev/null)"
   {
     echo "Multiple shells match '$arg':"
     for i in "${!match_sessions[@]}"; do
-      status="$(awk -v name="${match_sessions[$i]}" 'NR > 1 && $1 == name { print $NF }' <<<"$listing")"
-      dir="${match_cwds[$i]}"
-      printf '  %d) %s  %s  %s  %s  %s\n' "$((i + 1))" "${match_sessions[$i]}" \
-        "${status:-unknown}" "$(dir_vcs_root_name "$dir")" "$(basename "$dir")" \
-        "$(shell_summary "${match_pids[$i]}")"
+      status="$(session_status "${match_sessions[$i]}" "$listing")"
+      printf '  %d) %s\n' "$((i + 1))" \
+        "$(describe_shell "${match_pids[$i]}" "${match_sessions[$i]}" "${match_cwds[$i]}" "$status")"
     done
     printf 'Switch to which? [1-%d] ' "$n"
   } >&2
