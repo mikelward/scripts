@@ -89,7 +89,9 @@ TIMEOUT
   unset SHPOOL_SESSION_NAME
   unset SHPOOL_PREFIX
   unset SHPOOL_ATTACH_EXIT
+  unset SHPOOL_INITIAL_PWD
   rm -f "$TEST_TMPDIR/.autoshpool_switch"
+  rm -f "$TEST_TMPDIR/.autoshpool_switch_pwd"
   rm -f "$TEST_TMPDIR/.shpool_calls"
   rm -f "$TEST_TMPDIR/.shpool_sessions"
   rm -f "$TEST_TMPDIR/.fake_shpool_pids"
@@ -268,6 +270,58 @@ EOF
   assert_switch_file "myproject:3"
 }
 
+test_attached_mismatch_records_pwd() {
+  # The prefix-mismatch switch records the current directory so the new session
+  # opens where the user already is.
+  export SHPOOL_PREFIX="myproject:"
+  export SHPOOL_SESSION_NAME="other:1"
+  run_autoshpool
+  assert_status 0
+  assert_switch_file "myproject:1"
+  assert_switch_pwd "$PWD"
+}
+
+test_plain_switch_records_no_pwd() {
+  # switchshpool to an existing session keeps the target's own directory, so it
+  # leaves no recorded pwd.
+  run_autoshpool switch mysession
+  assert_status 0
+  assert_switch_file "mysession"
+  assert_no_switch_pwd
+}
+
+test_loop_switch_exports_recorded_pwd() {
+  # When the loop services a switch that carries a pwd, it exports
+  # SHPOOL_INITIAL_PWD so the freshly created session starts there.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    echo "INITIAL_PWD=$SHPOOL_INITIAL_PWD" >> "$HOME/.shpool_env"
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  echo "myproject:1" > "$HOME/.autoshpool_switch"
+  echo "/home/u/proj" > "$HOME/.autoshpool_switch_pwd"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach myproject:1"
+  if ! grep -qx "INITIAL_PWD=/home/u/proj" "$HOME/.shpool_env"; then
+    echo "  FAIL: expected SHPOOL_INITIAL_PWD=/home/u/proj on attach"
+    echo "  env: $(cat "$HOME/.shpool_env" 2>/dev/null)"
+    return 1
+  fi
+}
+
 test_creates_session_1() {
   run_autoshpool
   assert_status 0
@@ -358,6 +412,24 @@ assert_switch_file() {
 assert_no_switch_file() {
   if [ -e "$HOME/.autoshpool_switch" ]; then
     echo "  FAIL: expected no switch file, but it exists: $(cat "$HOME/.autoshpool_switch")"
+    return 1
+  fi
+}
+
+assert_switch_pwd() {
+  local expected="$1"
+  local actual
+  actual="$(cat "$HOME/.autoshpool_switch_pwd" 2>/dev/null)"
+  if [ "$actual" != "$expected" ]; then
+    echo "  FAIL: expected switch pwd '$expected', got '$actual'"
+    echo "  output: $output"
+    return 1
+  fi
+}
+
+assert_no_switch_pwd() {
+  if [ -e "$HOME/.autoshpool_switch_pwd" ]; then
+    echo "  FAIL: expected no switch pwd file, but it exists: $(cat "$HOME/.autoshpool_switch_pwd")"
     return 1
   fi
 }
@@ -517,6 +589,9 @@ run_test "stays put when the session matches the prefix" test_attached_matching_
 run_test "treats a separatorless name as matching the prefix" test_attached_exact_name_matches_prefix
 run_test "switches to a new prefixed session on mismatch" test_attached_mismatch_switches_to_new
 run_test "reuses a disconnected prefixed session on mismatch" test_attached_mismatch_reuses_disconnected
+run_test "records the current directory for a prefix-mismatch switch" test_attached_mismatch_records_pwd
+run_test "records no directory for a plain switch" test_plain_switch_records_no_pwd
+run_test "loop exports the recorded directory when servicing a switch" test_loop_switch_exports_recorded_pwd
 run_test "creates session 1 when no sessions exist" test_creates_session_1
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
 run_test "returns non-zero when shpool attach fails" test_returns_nonzero_on_failure

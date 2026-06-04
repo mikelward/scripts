@@ -15,6 +15,7 @@
 #   switchshpool() { autoshpool switch "$1" && exit; }
 
 switch_session_file="$HOME/.autoshpool_switch"
+switch_pwd_file="$HOME/.autoshpool_switch_pwd"
 
 get_current_shpool_session() {
   echo "$SHPOOL_SESSION_NAME"
@@ -81,7 +82,9 @@ handle_already_attached() {
     exit 1
   }
   echo "Session $session does not match prefix '$SHPOOL_PREFIX'; switching to $target"
-  request_switch "$target"
+  # Carry the current directory across the switch so the prefix-matched session
+  # opens where the user already is, instead of wherever the servicing loop sits.
+  request_switch "$target" "$PWD"
 }
 
 abort_if_hung() {
@@ -354,13 +357,25 @@ get_switch_session() {
   cat "$switch_session_file" 2>/dev/null
 }
 
+get_switch_pwd() {
+  cat "$switch_pwd_file" 2>/dev/null
+}
+
 request_switch() {
+  # Record the target session and, optionally, the directory to open it in. A
+  # bare request (e.g. switchshpool to an existing session) leaves the pwd file
+  # absent so the target keeps its own working directory.
   echo "$1" > "$switch_session_file"
+  if test -n "$2"; then
+    echo "$2" > "$switch_pwd_file"
+  else
+    rm -f "$switch_pwd_file"
+  fi
   exit 0
 }
 
 clear_switch() {
-  rm -f "$switch_session_file"
+  rm -f "$switch_session_file" "$switch_pwd_file"
 }
 
 # Start an shpool session with a useful session name.
@@ -381,7 +396,15 @@ autoshpool_loop() {
   while true; do
     switch_session="$(get_switch_session)"
     if test -n "$switch_session"; then
+      switch_pwd="$(get_switch_pwd)"
       clear_switch
+      # A recorded pwd (a prefix-mismatch switch) opens the session there; a
+      # bare switch keeps the target's own directory, so drop any stale value.
+      if test -n "$switch_pwd"; then
+        export SHPOOL_INITIAL_PWD="$switch_pwd"
+      else
+        unset SHPOOL_INITIAL_PWD
+      fi
       shpool attach "$switch_session"
     else
       attach_first_disconnected || create_and_attach_next
