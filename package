@@ -98,6 +98,13 @@ shift
 
 case "$PACKAGE_BACKEND" in
     dnf|yum)
+        # Pin metadata to the snapshot from the last "update" (makecache) for
+        # commands that download packages, so they install/upgrade only what
+        # "update" saw and never silently refresh the cache to pull in newer
+        # packages. Unlike -C (cache-only), this still allows the package
+        # files themselves to be downloaded. Pure-query commands use -C and
+        # pure-removal commands download nothing, so neither needs this.
+        pin_metadata="--setopt=*.metadata_expire=never"
         case "$command" in
             update)
                 run_as_root "$PACKAGE_BACKEND" makecache "$@"
@@ -106,7 +113,7 @@ case "$PACKAGE_BACKEND" in
                 "$PACKAGE_BACKEND" -C search "$@"
                 ;;
             install)
-                run_as_root "$PACKAGE_BACKEND" install "$@"
+                run_as_root "$PACKAGE_BACKEND" "$pin_metadata" install "$@"
                 ;;
             installed)
                 rpm -qa "$@"
@@ -115,13 +122,13 @@ case "$PACKAGE_BACKEND" in
                 run_as_root "$PACKAGE_BACKEND" -C erase "$@"
                 ;;
             reinstall)
-                run_as_root "$PACKAGE_BACKEND" reinstall "$@"
+                run_as_root "$PACKAGE_BACKEND" "$pin_metadata" reinstall "$@"
                 ;;
             autoremove)
                 run_as_root "$PACKAGE_BACKEND" -C autoremove "$@"
                 ;;
             upgrade)
-                run_as_root "$PACKAGE_BACKEND" upgrade "$@"
+                run_as_root "$PACKAGE_BACKEND" "$pin_metadata" upgrade "$@"
                 ;;
             versions)
                 "$PACKAGE_BACKEND" -C list "$@"
