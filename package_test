@@ -221,7 +221,7 @@ test_dnf_search() {
 
 test_dnf_install() {
     PACKAGE_BACKEND=dnf run_package install vim
-    assert_called "root dnf -C install vim"
+    assert_called "root dnf install vim"
 }
 
 test_dnf_installed() {
@@ -236,7 +236,7 @@ test_dnf_uninstall() {
 
 test_dnf_reinstall() {
     PACKAGE_BACKEND=dnf run_package reinstall vim
-    assert_called "root dnf -C reinstall vim"
+    assert_called "root dnf reinstall vim"
 }
 
 test_dnf_autoremove() {
@@ -246,7 +246,7 @@ test_dnf_autoremove() {
 
 test_dnf_upgrade() {
     PACKAGE_BACKEND=dnf run_package upgrade
-    assert_called "root dnf -C upgrade"
+    assert_called "root dnf upgrade"
 }
 
 test_dnf_versions() {
@@ -292,7 +292,7 @@ test_yum_search() {
 
 test_yum_install() {
     PACKAGE_BACKEND=yum run_package install vim
-    assert_called "root yum -C install vim"
+    assert_called "root yum install vim"
 }
 
 test_yum_uninstall() {
