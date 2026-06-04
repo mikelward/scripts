@@ -106,7 +106,7 @@ case "$PACKAGE_BACKEND" in
                 "$PACKAGE_BACKEND" -C search "$@"
                 ;;
             install)
-                run_as_root "$PACKAGE_BACKEND" -C install "$@"
+                run_as_root "$PACKAGE_BACKEND" install "$@"
                 ;;
             installed)
                 rpm -qa "$@"
@@ -115,13 +115,13 @@ case "$PACKAGE_BACKEND" in
                 run_as_root "$PACKAGE_BACKEND" -C erase "$@"
                 ;;
             reinstall)
-                run_as_root "$PACKAGE_BACKEND" -C reinstall "$@"
+                run_as_root "$PACKAGE_BACKEND" reinstall "$@"
                 ;;
             autoremove)
                 run_as_root "$PACKAGE_BACKEND" -C autoremove "$@"
                 ;;
             upgrade)
-                run_as_root "$PACKAGE_BACKEND" -C upgrade "$@"
+                run_as_root "$PACKAGE_BACKEND" upgrade "$@"
                 ;;
             versions)
                 "$PACKAGE_BACKEND" -C list "$@"
