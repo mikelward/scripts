@@ -149,18 +149,17 @@ session_status() {
 }
 
 describe_shell() {
-  # Render a one-line, multi-field description of a shell, shared by the switch
-  # disambiguation prompt and shpoollist so both use the same format. Fields:
-  # session name, status, the basename of the vcs root and of the working
-  # directory, a one-line process-tree summary, and the vcs unmerged items
-  # (flattened onto a single line).
+  # Render a multi-line description of a shell, shared by the switch
+  # disambiguation prompt and shpoollist so both use the same format:
+  #   line 1: session name, status, vcs root basename, working directory basename
+  #   line 2: a one-line process-tree summary
+  #   remaining lines: the vcs unmerged output, unchanged
   local pid="$1" session="$2" cwd="$3" state="$4"
-  local unmerged
-  unmerged="$(dir_vcs_unmerged "$cwd")"
-  printf '%s  %s  %s  %s  %s  %s' \
+  printf '%s  %s  %s  %s\n' \
     "$session" "${state:-unknown}" \
-    "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
-    "$(shell_summary "$pid")" "${unmerged//$'\n'/; }"
+    "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")"
+  printf '%s\n' "$(shell_summary "$pid")"
+  dir_vcs_unmerged "$cwd"
 }
 
 shell_matches() {
@@ -227,8 +226,8 @@ resolve_switch_target() {
     echo "Multiple shells match '$arg':"
     for i in "${!match_sessions[@]}"; do
       state="$(session_status "${match_sessions[$i]}" "$listing")"
-      printf '  %d) %s\n' "$((i + 1))" \
-        "$(describe_shell "${match_pids[$i]}" "${match_sessions[$i]}" "${match_cwds[$i]}" "$state")"
+      printf '%d) ' "$((i + 1))"
+      describe_shell "${match_pids[$i]}" "${match_sessions[$i]}" "${match_cwds[$i]}" "$state"
     done
     printf 'Switch to which? [1-%d] ' "$n"
   } >&2
