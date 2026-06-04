@@ -188,15 +188,27 @@ session_status() {
   awk -v name="$1" 'NR > 1 && $1 == name { print $NF }' <<<"$2"
 }
 
+status_icon() {
+  # A compact icon for a session status ($1), so listings stay narrow:
+  #   attached -> matching white circle, detached -> empty circle.
+  # Anything else (including an empty/unknown status) falls back to a question
+  # mark so unexpected statuses are still visible.
+  case "$1" in
+    attached) printf '%s' '●' ;;
+    detached) printf '%s' '○' ;;
+    *)        printf '%s' '?' ;;
+  esac
+}
+
 describe_shell() {
   # Render a description of a shell, shared by the switch disambiguation prompt
   # and shpoollist so both use the same format:
-  #   line 1: session name, status, vcs root basename, working directory
+  #   line 1: status icon, session name, vcs root basename, working directory
   #           basename, and a cut-down process-tree chain
   #   remaining lines: the vcs unmerged output, unchanged
   local pid="$1" session="$2" cwd="$3" state="$4"
   printf '%s  %s  %s  %s  %s\n' \
-    "$session" "${state:-unknown}" \
+    "$(status_icon "$state")" "$session" \
     "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
     "$(shell_chain "$pid")"
   dir_vcs_unmerged "$cwd"
