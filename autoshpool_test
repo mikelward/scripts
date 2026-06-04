@@ -74,6 +74,19 @@ exit 0
 ENVGREP
   chmod +x "$TEST_TMPDIR/bin/envgrep"
 
+  # Fake vcs that reads per-directory marker files in the current directory:
+  #   .vcsroot  - printed by "vcs rootdir"
+  #   .unmerged - printed by "vcs unmerged"
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
+#!/bin/bash
+case "$1" in
+  rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
+
   # Create a fake timeout that just runs the command
   cat > "$TEST_TMPDIR/bin/timeout" <<'TIMEOUT'
 #!/bin/bash
@@ -122,6 +135,13 @@ run_autoshpool_input() {
   local input="$1"; shift
   set +e
   output="$(printf '%s\n' "$input" | "$SCRIPT_DIR/autoshpool" "$@" 2>&1)"
+  status=$?
+  set -e
+}
+
+run_shpoollist() {
+  set +e
+  output="$("$SCRIPT_DIR/shpoollist" "$@" </dev/null 2>&1)"
   status=$?
   set -e
 }
@@ -359,6 +379,33 @@ test_switch_cancel_does_not_switch() {
   assert_no_switch_file
 }
 
+test_shpoollist_lists_sessions() {
+  local d="$TEST_TMPDIR/proj"
+  mkdir -p "$d"
+  echo "$TEST_TMPDIR/proj" > "$d/.vcsroot"
+  printf 'abcdef Something\n' > "$d/.unmerged"
+  cat > "$HOME/.shpool_sessions" <<EOF
+4   2025-01-01T00:00:00Z   connected
+EOF
+  add_shpool 1000
+  add_shell 2001 1000 "$d" 4
+  run_shpoollist
+  assert_status 0
+  assert_output_contains "4"                 # session name
+  assert_output_contains "connected"         # status
+  assert_output_contains "proj"              # basename of vcs root / cwd
+  assert_output_contains "abcdef Something"  # vcs unmerged
+}
+
+test_shpoollist_empty_when_no_shells() {
+  run_shpoollist
+  assert_status 0
+  if [ -n "$output" ]; then
+    echo "  FAIL: expected empty output, got: $output"
+    return 1
+  fi
+}
+
 # --- run ---
 
 run_test "switch writes session name to switch file" test_switch_writes_file
@@ -380,6 +427,8 @@ run_test "switch prefers an existing session name over a path match" test_switch
 run_test "switch falls back to the argument when nothing matches" test_switch_no_match_uses_arg
 run_test "switch prompts when several shells match" test_switch_prompts_on_multiple_matches
 run_test "switch does not switch when the prompt is cancelled" test_switch_cancel_does_not_switch
+run_test "shpoollist lists sessions with details" test_shpoollist_lists_sessions
+run_test "shpoollist prints nothing when there are no shells" test_shpoollist_empty_when_no_shells
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
