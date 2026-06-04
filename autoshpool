@@ -20,12 +20,63 @@ get_current_shpool_session() {
   echo "$SHPOOL_SESSION_NAME"
 }
 
-exit_if_already_attached() {
+session_matches_prefix() {
+  # True if a session name ($1) belongs to the project identified by a prefix
+  # ($2). With no prefix (e.g. outside any version-controlled directory) we
+  # never force a switch, so every session matches.
+  local session="$1" prefix="$2"
+  test -z "$prefix" && return 0
+  case "$session" in
+    "$prefix"*) return 0 ;;       # already carries the prefix (e.g. "proj:3")
+  esac
+  # Also accept an exact match with the separator stripped, so a session named
+  # "proj" counts as matching the prefix "proj:".
+  test "$session" = "${prefix%:}"
+}
+
+pick_prefixed_session() {
+  # Print the session to switch to for the current SHPOOL_PREFIX: reuse the
+  # first disconnected session that already matches, otherwise the next free
+  # numbered name. Mirrors the selection the main loop makes for a new shell.
+  declare -a disconnected=( $(get_disconnected_shpool_sessions) )
+  if test "${#disconnected[@]}" -gt 0; then
+    printf '%s\n' "${disconnected[0]}"
+    return
+  fi
+  declare -A sessions
+  for session in $(get_shpool_sessions); do
+    sessions[$session]=1
+  done
+  for num in $(seq 1 100); do
+    declare session="$SHPOOL_PREFIX$num"
+    if test -z "${sessions[$session]}"; then
+      printf '%s\n' "$session"
+      return
+    fi
+  done
+  return 2
+}
+
+handle_already_attached() {
+  # When this shell is already inside a session, either stay put (the session
+  # belongs to this directory's project) or request a switch to a session that
+  # does. Switching here lets the outer loop service it like switchshpool, so a
+  # shell started in a project whose prefix differs from its session name lands
+  # in a correctly named session instead.
   session=$(get_current_shpool_session)
-  if test -n "$session"; then
+  test -n "$session" || return 0
+
+  if session_matches_prefix "$session" "$SHPOOL_PREFIX"; then
     echo "Already connected to shpool session $session"
     exit 1
   fi
+
+  target="$(pick_prefixed_session)" || {
+    echo "Already connected to shpool session $session"
+    exit 1
+  }
+  echo "Session $session does not match prefix '$SHPOOL_PREFIX'; switching to $target"
+  request_switch "$target"
 }
 
 abort_if_hung() {
@@ -314,11 +365,11 @@ clear_switch() {
 autoshpool_loop() {
   #exec >>"$HOME/.autoshpool.log" 2>>"$HOME/.autoshpool.log"
 
-  exit_if_already_attached
-
   source "$HOME/.shrc.vcs"
 
   SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
+
+  handle_already_attached
 
   abort_if_hung
 
