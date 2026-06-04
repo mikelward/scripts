@@ -391,7 +391,11 @@ request_switch() {
   # detach, the caller's `&& exit` (startup/switchshpool) still services the
   # request, so this never regresses the existing flow.
   if test -n "$SHPOOL_SESSION_NAME"; then
-    shpool detach "$SHPOOL_SESSION_NAME" 2>/dev/null
+    # Bound the detach the way abort_if_hung/session_exists bound their shpool
+    # calls: a wedged daemon or stuck detach RPC must not hang us here, or we'd
+    # never reach the exit below and would strand the caller's `&& exit` fallback
+    # -- the shell would sit in the old session and never service the queue.
+    timeout 2 shpool detach "$SHPOOL_SESSION_NAME" 2>/dev/null
   fi
   exit 0
 }
