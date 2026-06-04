@@ -318,6 +318,18 @@ test_switch_numeric_is_session_name() {
   assert_switch_file 2
 }
 
+test_switch_existing_session_name_wins() {
+  # An existing named session is honored even if its name is also a path segment.
+  cat > "$HOME/.shpool_sessions" <<EOF
+work   2025-01-01T00:00:00Z   disconnected
+EOF
+  add_shpool 1000
+  add_shell 2001 1000 "/home/u/work/foo" 5
+  run_autoshpool switch work
+  assert_status 0
+  assert_switch_file work
+}
+
 test_switch_no_match_uses_arg() {
   add_shpool 1000
   add_shell 2001 1000 "/home/u/other/foo" 3
@@ -364,6 +376,7 @@ run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "switch resolves a path segment to its session" test_switch_resolves_path_segment
 run_test "switch matches whole path segments only" test_switch_requires_whole_segment
 run_test "switch treats a bare number as a session name" test_switch_numeric_is_session_name
+run_test "switch prefers an existing session name over a path match" test_switch_existing_session_name_wins
 run_test "switch falls back to the argument when nothing matches" test_switch_no_match_uses_arg
 run_test "switch prompts when several shells match" test_switch_prompts_on_multiple_matches
 run_test "switch does not switch when the prompt is cancelled" test_switch_cancel_does_not_switch
