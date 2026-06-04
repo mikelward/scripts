@@ -71,6 +71,11 @@ handle_already_attached() {
     exit 1
   fi
 
+  # Only the mismatch path lists sessions, so guard it against a hung shpool
+  # here -- otherwise a stuck daemon hangs shell startup instead of reporting
+  # "shpool not responding". Matching sessions still exit without listing.
+  abort_if_hung
+
   target="$(pick_prefixed_session)" || {
     echo "Already connected to shpool session $session"
     exit 1
