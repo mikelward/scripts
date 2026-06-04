@@ -205,13 +205,13 @@ describe_shell() {
   # and shpoollist so both use the same format:
   #   line 1: status icon, session name, vcs root basename, working directory
   #           basename, and a cut-down process-tree chain
-  #   remaining lines: the vcs unmerged output, unchanged
+  #   remaining lines: the vcs unmerged output, indented by two spaces
   local pid="$1" session="$2" cwd="$3" state="$4"
   printf '%s  %s  %s  %s  %s\n' \
     "$(status_icon "$state")" "$session" \
     "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
     "$(shell_chain "$pid")"
-  dir_vcs_unmerged "$cwd"
+  dir_vcs_unmerged "$cwd" | sed 's/^/  /'
 }
 
 shell_matches() {
