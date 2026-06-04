@@ -9,9 +9,12 @@
 # Reuse the shell-enumeration and formatting helpers from autoshpool.
 source "$(dirname "$0")/autoshpool"
 
+# Load the user's vcs helper (best-effort) for the vcs root/unmerged fields.
+test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+
 listing="$(shpool list 2>/dev/null)"
 while IFS=$'\t' read -r pid session cwd; do
-  status="$(session_status "$session" "$listing")"
-  describe_shell "$pid" "$session" "$cwd" "$status"
+  state="$(session_status "$session" "$listing")"
+  describe_shell "$pid" "$session" "$cwd" "$state"
   echo
 done < <(list_shpool_shells)
