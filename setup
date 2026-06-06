@@ -127,6 +127,7 @@ install_packages() {
                 kwin-dev \
                 make \
                 mercurial \
+                micro \
                 npm \
                 p7zip-full \
                 plasma-sdk \
@@ -158,6 +159,7 @@ install_packages() {
                 kwin-devel \
                 make \
                 mercurial \
+                micro \
                 npm \
                 p7zip \
                 p7zip-plugins \
@@ -185,6 +187,7 @@ install_packages() {
                 jq \
                 kitty \
                 mercurial \
+                micro \
                 node \
                 p7zip \
                 python3 \
