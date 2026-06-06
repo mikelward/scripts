@@ -311,6 +311,18 @@ install_shpool() {
     cargo install --locked shpool
 }
 
+# --- Install Helix editor ---
+
+install_helix() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "cargo not found, skipping helix installation"
+        return
+    fi
+
+    info "Installing/updating helix via cargo"
+    cargo install --locked helix-term
+}
+
 # --- Install Nushell ---
 
 install_nushell() {
@@ -494,6 +506,7 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
 fi
 
 install_rust
+install_helix
 install_jj
 install_shpool
 install_nushell
