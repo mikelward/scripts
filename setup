@@ -94,35 +94,39 @@ install_packages() {
             info "Updating package lists"
             sudo apt-get update -qq
             info "Installing system packages"
-            sudo apt-get install -y \
+            sudo apt-get install -y --install-recommends \
                 adb \
                 bat \
                 build-essential \
                 curl \
                 fd-find \
                 fzf \
+                gh \
                 git \
                 git-delta \
                 golang \
                 jq \
+                kde-standard \
                 kitty \
+                plasma-desktop \
                 kwin-dev \
                 make \
                 mercurial \
                 npm \
                 p7zip-full \
-                plasma-desktop \
                 plasma-sdk \
                 python3 \
                 python3-pip \
                 python3-venv \
                 ripgrep \
                 shellcheck \
+                vim \
                 zsh
             ;;
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
+                '@kde-desktop-environment' \
                 android-tools \
                 bat \
                 curl \
@@ -130,6 +134,7 @@ install_packages() {
                 fzf \
                 gcc \
                 gcc-c++ \
+                gh \
                 git \
                 git-delta \
                 golang \
@@ -147,6 +152,7 @@ install_packages() {
                 python3-pip \
                 ripgrep \
                 ShellCheck \
+                vim \
                 zsh
             ;;
         macos)
@@ -157,6 +163,7 @@ install_packages() {
                 curl \
                 fd \
                 fzf \
+                gh \
                 git \
                 git-delta \
                 go \
@@ -168,6 +175,7 @@ install_packages() {
                 python3 \
                 ripgrep \
                 shellcheck \
+                vim \
                 zsh
             info "Installing macOS applications"
             brew install --cask \
@@ -306,6 +314,25 @@ install_shpool() {
 
     info "Installing/updating shpool via cargo"
     cargo install --locked shpool
+}
+
+# --- Install Helix editor ---
+
+install_helix() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        warn "cargo not found, skipping helix installation"
+        return
+    fi
+
+    helix_dir="$SRC_DIR/helix"
+    clone_or_pull "https://github.com/helix-editor/helix" "$helix_dir"
+    info "Installing/updating helix via cargo"
+    cargo install --path "$helix_dir/helix-term" --locked
+
+    # Link runtime files so hx can find grammars and queries
+    helix_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
+    mkdir -p "$helix_config_dir"
+    ln -sfn "$helix_dir/runtime" "$helix_config_dir/runtime"
 }
 
 # --- Install Nushell ---
@@ -491,6 +518,7 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
 fi
 
 install_rust
+install_helix
 install_jj
 install_shpool
 install_nushell

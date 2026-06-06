@@ -320,7 +320,7 @@ configure_keybindings() {
     set_shortcut "Krohnkite: Cycle Layout" "Meta+."
 
     # Krohnkite: set master
-    set_shortcut "Krohnkite: Set Master" "Meta+Return"
+    set_shortcut "Krohnkite: Set master" "Meta+Return"
 }
 
 # --- Reload KWin ---
