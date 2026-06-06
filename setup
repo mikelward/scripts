@@ -101,6 +101,7 @@ install_packages() {
                 curl \
                 fd-find \
                 fzf \
+                gh \
                 git \
                 git-delta \
                 golang \
@@ -133,6 +134,7 @@ install_packages() {
                 fzf \
                 gcc \
                 gcc-c++ \
+                gh \
                 git \
                 git-delta \
                 golang \
@@ -161,6 +163,7 @@ install_packages() {
                 curl \
                 fd \
                 fzf \
+                gh \
                 git \
                 git-delta \
                 go \
