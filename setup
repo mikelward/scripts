@@ -226,20 +226,6 @@ install_fonts() {
         done
     fi
 
-    # Ubuntu Mono Nerd Font
-    if font_installed "UbuntuMono Nerd Font" || ls "$font_dir"/UbuntuMonoNerdFont*.ttf >/dev/null 2>&1; then
-        info "Ubuntu Mono Nerd Font already installed"
-    else
-        info "Installing Ubuntu Mono Nerd Font"
-        nerd_url="https://github.com/ryanoasis/nerd-fonts/releases/latest/download/UbuntuMono.tar.xz"
-        nerd_tmp="${TMPDIR:-/tmp}/nerd-fonts-$$"
-        mkdir -p "$nerd_tmp"
-        curl -fsSL "$nerd_url" | tar -xJ -C "$nerd_tmp"
-        # Install only .ttf files, skip Windows-compatible ones
-        find "$nerd_tmp" -name '*.ttf' ! -name '*Windows*' -exec cp {} "$font_dir/" \;
-        rm -rf "$nerd_tmp"
-    fi
-
     # Refresh font cache on Linux
     if command -v fc-cache >/dev/null 2>&1; then
         info "Refreshing font cache"
