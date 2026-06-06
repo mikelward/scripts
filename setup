@@ -196,6 +196,13 @@ install_packages() {
 
 # --- Install fonts ---
 
+# Returns true if the given font family is already known to fontconfig.
+# Falls back to false if fc-list is unavailable (caller should do a file check).
+font_installed() {
+    family="$1"
+    command -v fc-list >/dev/null 2>&1 && fc-list | grep -qi "$family"
+}
+
 install_fonts() {
     case "$OS" in
         macos)
@@ -208,7 +215,7 @@ install_fonts() {
     mkdir -p "$font_dir"
 
     # Ubuntu Mono
-    if ls "$font_dir"/UbuntuMono*.ttf >/dev/null 2>&1; then
+    if font_installed "Ubuntu Mono" || ls "$font_dir"/UbuntuMono*.ttf >/dev/null 2>&1; then
         info "Ubuntu Mono already installed"
     else
         info "Installing Ubuntu Mono"
@@ -220,7 +227,7 @@ install_fonts() {
     fi
 
     # Ubuntu Mono Nerd Font
-    if ls "$font_dir"/UbuntuMonoNerdFont*.ttf >/dev/null 2>&1; then
+    if font_installed "UbuntuMono Nerd Font" || ls "$font_dir"/UbuntuMonoNerdFont*.ttf >/dev/null 2>&1; then
         info "Ubuntu Mono Nerd Font already installed"
     else
         info "Installing Ubuntu Mono Nerd Font"
