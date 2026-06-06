@@ -86,11 +86,26 @@ install_homebrew() {
     fi
 }
 
+# --- Add GitHub CLI apt repo (official, avoids broken Ubuntu universe package) ---
+
+add_gh_apt_repo() {
+    if [ -f /etc/apt/sources.list.d/github-cli.list ]; then
+        return
+    fi
+    info "Adding GitHub CLI apt repository"
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+        | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+        | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+}
+
 # --- Install system packages ---
 
 install_packages() {
     case "$OS" in
         debian)
+            add_gh_apt_repo
             info "Updating package lists"
             sudo apt-get update -qq
             info "Installing system packages"
