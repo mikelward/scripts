@@ -118,6 +118,7 @@ install_packages() {
                 python3-venv \
                 ripgrep \
                 shellcheck \
+                vim \
                 zsh
             ;;
         redhat)
@@ -147,6 +148,7 @@ install_packages() {
                 python3-pip \
                 ripgrep \
                 ShellCheck \
+                vim \
                 zsh
             ;;
         macos)
@@ -168,6 +170,7 @@ install_packages() {
                 python3 \
                 ripgrep \
                 shellcheck \
+                vim \
                 zsh
             info "Installing macOS applications"
             brew install --cask \
