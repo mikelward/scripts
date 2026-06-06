@@ -214,6 +214,13 @@ install_fonts() {
     esac
     mkdir -p "$font_dir"
 
+    # Remove any previously installed Ubuntu Mono Nerd Font files; they alter
+    # font metrics and cause kitty to render bold text smaller than regular.
+    if ls "$font_dir"/UbuntuMonoNerdFont*.ttf >/dev/null 2>&1; then
+        info "Removing Ubuntu Mono Nerd Font (caused bold rendering issues in kitty)"
+        rm -f "$font_dir"/UbuntuMonoNerdFont*.ttf
+    fi
+
     # Ubuntu Mono
     if font_installed "Ubuntu Mono" || ls "$font_dir"/UbuntuMono*.ttf >/dev/null 2>&1; then
         info "Ubuntu Mono already installed"
