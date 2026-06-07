@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+# mdp - normalize markdown that has unwanted leading indentation and/or
+# unicode bullet glyphs into valid markdown
+import argparse
+import re
+import sys
+import textwrap
+
+scriptname = "mdp"
+
+# Unicode glyphs commonly used as bullets that we rewrite to a markdown marker.
+# ASCII '*', '-' and '+' are deliberately excluded so existing valid markdown
+# lists pass through untouched.
+BULLETS = "•◦▪‣⁃●○■·–—"
+BULLET_RE = re.compile(r"^([ \t]*)[" + BULLETS + r"][ \t]+(.*)$")
+
+
+def normalize(text, marker):
+    """Strip common leading whitespace and convert unicode bullets to marker."""
+    # Remove the leading whitespace shared by every non-blank line, preserving
+    # relative (nested) indentation.
+    text = textwrap.dedent(text)
+
+    out = []
+    for line in text.split("\n"):
+        m = BULLET_RE.match(line)
+        if m:
+            indent, rest = m.group(1), m.group(2)
+            out.append("{}{} {}".format(indent, marker, rest))
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog=scriptname,
+        description="Strip common leading whitespace and convert unicode "
+        "bullets to standard markdown list markers.")
+    parser.add_argument(
+        "file", nargs="?",
+        help="input file (reads standard input if omitted)")
+    parser.add_argument(
+        "-m", "--marker", default="*",
+        help="list marker to emit for converted bullets (default: *)")
+    args = parser.parse_args(argv)
+
+    if args.file is None:
+        text = sys.stdin.read()
+    else:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            print("{}: {}: {}".format(scriptname, args.file, e.strerror),
+                  file=sys.stderr)
+            return 1
+
+    sys.stdout.write(normalize(text, args.marker))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

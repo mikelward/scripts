@@ -1,0 +1,207 @@
+#!/bin/sh
+# Tests for mdp
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MDP="$SCRIPT_DIR/mdp"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_mdp <input> [args...]: feed <input> on stdin, capture stdout and status.
+# Note: command substitution strips trailing newlines from both the captured
+# output and the expected value, so comparisons stay consistent.
+run_mdp() {
+    input="$1"
+    shift
+    set +e
+    output="$(printf '%s' "$input" | "$MDP" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        return 1
+    fi
+}
+
+assert_output_equals() {
+    expected="$1"
+    if test "$output" != "$expected"; then
+        echo "  FAIL: output mismatch"
+        echo "  expected: $(printf '%s' "$expected" | sed -n l)"
+        echo "  actual:   $(printf '%s' "$output" | sed -n l)"
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            return 1
+            ;;
+    esac
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if "$func"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# --- dedent tests ---
+
+test_dedent_strips_common_prefix() {
+    run_mdp "    hello
+    world"
+    assert_status 0 &&
+    assert_output_equals "hello
+world"
+}
+
+test_dedent_preserves_nesting() {
+    run_mdp "    one
+      nested
+    two"
+    assert_status 0 &&
+    assert_output_equals "one
+  nested
+two"
+}
+
+test_dedent_leaves_unindented_alone() {
+    run_mdp "no indent
+here"
+    assert_status 0 &&
+    assert_output_equals "no indent
+here"
+}
+
+# --- bullet conversion tests ---
+
+test_converts_dot_bullet() {
+    run_mdp "• one
+• two"
+    assert_status 0 &&
+    assert_output_equals "* one
+* two"
+}
+
+test_converts_various_glyphs() {
+    run_mdp "◦ circle
+▪ square
+– en dash
+— em dash"
+    assert_status 0 &&
+    assert_output_equals "* circle
+* square
+* en dash
+* em dash"
+}
+
+test_dedent_and_bullets_together() {
+    run_mdp "    • one
+    • two
+      ◦ nested"
+    assert_status 0 &&
+    assert_output_equals "* one
+* two
+  * nested"
+}
+
+test_existing_markers_untouched() {
+    run_mdp "- dash
+* star
++ plus"
+    assert_status 0 &&
+    assert_output_equals "- dash
+* star
++ plus"
+}
+
+test_midline_glyph_not_touched() {
+    run_mdp "this — is an aside
+a•b joined"
+    assert_status 0 &&
+    assert_output_equals "this — is an aside
+a•b joined"
+}
+
+test_blank_lines_preserved() {
+    run_mdp "• one
+
+• two"
+    assert_status 0 &&
+    assert_output_equals "* one
+
+* two"
+}
+
+test_custom_marker() {
+    run_mdp "• one" --marker -
+    assert_status 0 &&
+    assert_output_equals "- one"
+}
+
+# --- cli tests ---
+
+test_help_exits_zero() {
+    run_mdp "" -h
+    assert_status 0 &&
+    assert_output_contains "usage"
+}
+
+test_missing_file_errors() {
+    set +e
+    output="$("$MDP" /no/such/file 2>&1)"
+    status=$?
+    set -e
+    assert_status 1 &&
+    assert_output_contains "mdp:"
+}
+
+test_reads_file_argument() {
+    tmp="$(mktemp)"
+    printf '    • from file' > "$tmp"
+    set +e
+    output="$("$MDP" "$tmp" 2>&1)"
+    status=$?
+    set -e
+    rm -f "$tmp"
+    assert_status 0 &&
+    assert_output_equals "* from file"
+}
+
+# --- run ---
+
+run_test "dedent strips common prefix" test_dedent_strips_common_prefix
+run_test "dedent preserves nesting" test_dedent_preserves_nesting
+run_test "dedent leaves unindented text alone" test_dedent_leaves_unindented_alone
+run_test "converts bullet dot" test_converts_dot_bullet
+run_test "converts various glyphs" test_converts_various_glyphs
+run_test "dedent and bullets together" test_dedent_and_bullets_together
+run_test "existing markers untouched" test_existing_markers_untouched
+run_test "mid-line glyph not touched" test_midline_glyph_not_touched
+run_test "blank lines preserved" test_blank_lines_preserved
+run_test "custom marker" test_custom_marker
+run_test "help exits zero" test_help_exits_zero
+run_test "missing file errors" test_missing_file_errors
+run_test "reads file argument" test_reads_file_argument
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
