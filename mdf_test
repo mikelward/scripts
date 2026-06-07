@@ -1,22 +1,22 @@
 #!/bin/sh
-# Tests for mdp
+# Tests for mdf
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MDP="$SCRIPT_DIR/mdp"
+MDF="$SCRIPT_DIR/mdf"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
 
-# run_mdp <input> [args...]: feed <input> on stdin, capture stdout and status.
+# run_mdf <input> [args...]: feed <input> on stdin, capture stdout and status.
 # Note: command substitution strips trailing newlines from both the captured
 # output and the expected value, so comparisons stay consistent.
-run_mdp() {
+run_mdf() {
     input="$1"
     shift
     set +e
-    output="$(printf '%s' "$input" | "$MDP" "$@" 2>&1)"
+    output="$(printf '%s' "$input" | "$MDF" "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -66,7 +66,7 @@ run_test() {
 # --- dedent tests ---
 
 test_dedent_strips_common_prefix() {
-    run_mdp "    hello
+    run_mdf "    hello
     world"
     assert_status 0 &&
     assert_output_equals "hello
@@ -74,7 +74,7 @@ world"
 }
 
 test_dedent_preserves_nesting() {
-    run_mdp "    one
+    run_mdf "    one
       nested
     two"
     assert_status 0 &&
@@ -84,7 +84,7 @@ two"
 }
 
 test_dedent_leaves_unindented_alone() {
-    run_mdp "no indent
+    run_mdf "no indent
 here"
     assert_status 0 &&
     assert_output_equals "no indent
@@ -94,7 +94,7 @@ here"
 # --- bullet conversion tests ---
 
 test_converts_dot_bullet() {
-    run_mdp "• one
+    run_mdf "• one
 • two"
     assert_status 0 &&
     assert_output_equals "* one
@@ -102,7 +102,7 @@ test_converts_dot_bullet() {
 }
 
 test_converts_various_glyphs() {
-    run_mdp "◦ circle
+    run_mdf "◦ circle
 ▪ square
 – en dash
 — em dash"
@@ -114,7 +114,7 @@ test_converts_various_glyphs() {
 }
 
 test_dedent_and_bullets_together() {
-    run_mdp "    • one
+    run_mdf "    • one
     • two
       ◦ nested"
     assert_status 0 &&
@@ -124,7 +124,7 @@ test_dedent_and_bullets_together() {
 }
 
 test_existing_markers_untouched() {
-    run_mdp "- dash
+    run_mdf "- dash
 * star
 + plus"
     assert_status 0 &&
@@ -134,7 +134,7 @@ test_existing_markers_untouched() {
 }
 
 test_midline_glyph_not_touched() {
-    run_mdp "this — is an aside
+    run_mdf "this — is an aside
 a•b joined"
     assert_status 0 &&
     assert_output_equals "this — is an aside
@@ -142,7 +142,7 @@ a•b joined"
 }
 
 test_blank_lines_preserved() {
-    run_mdp "• one
+    run_mdf "• one
 
 • two"
     assert_status 0 &&
@@ -152,7 +152,7 @@ test_blank_lines_preserved() {
 }
 
 test_custom_marker() {
-    run_mdp "• one" --marker -
+    run_mdf "• one" --marker -
     assert_status 0 &&
     assert_output_equals "- one"
 }
@@ -160,25 +160,25 @@ test_custom_marker() {
 # --- cli tests ---
 
 test_help_exits_zero() {
-    run_mdp "" -h
+    run_mdf "" -h
     assert_status 0 &&
     assert_output_contains "usage"
 }
 
 test_missing_file_errors() {
     set +e
-    output="$("$MDP" /no/such/file 2>&1)"
+    output="$("$MDF" /no/such/file 2>&1)"
     status=$?
     set -e
     assert_status 1 &&
-    assert_output_contains "mdp:"
+    assert_output_contains "mdf:"
 }
 
 test_reads_file_argument() {
     tmp="$(mktemp)"
     printf '    • from file' > "$tmp"
     set +e
-    output="$("$MDP" "$tmp" 2>&1)"
+    output="$("$MDF" "$tmp" 2>&1)"
     status=$?
     set -e
     rm -f "$tmp"

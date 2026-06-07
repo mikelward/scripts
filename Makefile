@@ -1,3 +1,3 @@
 test:
 	./autoshpool_test
-	./mdp_test
+	./mdf_test
