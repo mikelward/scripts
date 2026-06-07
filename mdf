@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# mdp - normalize markdown that has unwanted leading indentation and/or
+# mdf - normalize markdown that has unwanted leading indentation and/or
 # unicode bullet glyphs into valid markdown
 import argparse
 import re
 import sys
 import textwrap
 
-scriptname = "mdp"
+scriptname = "mdf"
 
 # Unicode glyphs commonly used as bullets that we rewrite to a markdown marker.
 # ASCII '*', '-' and '+' are deliberately excluded so existing valid markdown
