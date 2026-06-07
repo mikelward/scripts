@@ -104,13 +104,13 @@ install_packages() {
                 gh \
                 git \
                 git-delta \
+                git-email \
                 golang \
                 jq \
                 kde-standard \
                 kitty \
                 plasma-desktop \
                 kwin-dev \
-                make \
                 mercurial \
                 micro \
                 npm \
@@ -127,22 +127,21 @@ install_packages() {
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
+                '@development-tools' \
                 '@kde-desktop-environment' \
                 android-tools \
                 bat \
                 curl \
                 fd-find \
                 fzf \
-                gcc \
-                gcc-c++ \
                 gh \
                 git \
                 git-delta \
+                git-email \
                 golang \
                 jq \
                 kitty \
                 kwin-devel \
-                make \
                 mercurial \
                 micro \
                 npm \
@@ -161,6 +160,8 @@ install_packages() {
             install_homebrew
             info "Installing system packages"
             brew install \
+                autoconf \
+                automake \
                 bat \
                 curl \
                 fd \
