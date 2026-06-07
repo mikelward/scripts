@@ -157,6 +157,13 @@ test_custom_marker() {
     assert_output_equals "- one"
 }
 
+test_converts_nbsp_separator() {
+    # bullet followed by a non-breaking space (common in rich-text paste)
+    run_mdf "$(printf '\342\200\242\302\240item')"
+    assert_status 0 &&
+    assert_output_equals "* item"
+}
+
 # --- cli tests ---
 
 test_help_exits_zero() {
@@ -198,6 +205,7 @@ run_test "existing markers untouched" test_existing_markers_untouched
 run_test "mid-line glyph not touched" test_midline_glyph_not_touched
 run_test "blank lines preserved" test_blank_lines_preserved
 run_test "custom marker" test_custom_marker
+run_test "converts nbsp separator" test_converts_nbsp_separator
 run_test "help exits zero" test_help_exits_zero
 run_test "missing file errors" test_missing_file_errors
 run_test "reads file argument" test_reads_file_argument

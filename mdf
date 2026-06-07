@@ -12,7 +12,10 @@ scriptname = "mdf"
 # ASCII '*', '-' and '+' are deliberately excluded so existing valid markdown
 # lists pass through untouched.
 BULLETS = "•◦▪‣⁃●○■·–—"
-BULLET_RE = re.compile(r"^([ \t]*)[" + BULLETS + r"][ \t]+(.*)$")
+# The separator after the glyph is \s+ rather than just [ \t]+ so bullets
+# pasted from rich text (where the separator is often a non-breaking space)
+# are still recognized; the normalized output always uses a regular space.
+BULLET_RE = re.compile(r"^([ \t]*)[" + BULLETS + r"]\s+(.*)$")
 
 
 def normalize(text, marker):
