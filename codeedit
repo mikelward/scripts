@@ -16,6 +16,9 @@ args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
     arg="${args[i]}"
     case "$arg" in +*)
+        # only convert when a filename precedes; args[-1] would clobber
+        # the last element
+        test "$i" -gt 0 || continue
         file="${args[i-1]}"
         line="${arg#+}"
         args[i-1]="--goto"

@@ -483,9 +483,11 @@ KEYBOARD
             return
             ;;
     esac
-    # Apply to current X/Wayland session if running
+    # Apply to current X/Wayland session if running. Don't let a failure
+    # (e.g. Wayland without Xwayland) abort the whole bootstrap under set -e.
     if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-${WAYLAND_DISPLAY:-}}"; then
-        setxkbmap -layout us -variant dvorak -option "" -option compose:caps
+        setxkbmap -layout us -variant dvorak -option "" -option compose:caps \
+            || warn "setxkbmap failed; keyboard layout not applied to this session"
     fi
 }
 

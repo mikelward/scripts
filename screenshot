@@ -15,6 +15,11 @@ window=false
 while test $# -gt 0; do
   case "$1" in
   -d|--delay)
+    if test $# -lt 2; then
+      echo "Option $1 requires an argument" 1>&2
+      usage
+      exit 2
+    fi
     delay=$2
     shift
     ;;
@@ -44,7 +49,7 @@ while test $# -gt 0; do
   shift
 done
 
-cd "$HOME/Pictures"
+cd "$HOME/Pictures" || exit 1
 
 sleep $delay
 

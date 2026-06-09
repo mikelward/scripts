@@ -1,12 +1,19 @@
 #!/bin/bash
 declare -a args
 for arg in "$@"; do
-    file="${arg%:[0-9]*}"
-    file="$(realpath "$file")"
-    args+=("$file")
-    case "$arg" in *:*)
-        num="${arg##*:}"
-        args+=("+$num")
+    num="${arg##*:}"
+    case "$num" in
+    ''|*[!0-9]*)
+        # no numeric :line suffix (the whole arg when there is no colon)
+        args+=("$(realpath "$arg")")
+        ;;
+    *)
+        if test "$num" = "$arg"; then
+            # no colon at all
+            args+=("$(realpath "$arg")")
+        else
+            args+=("$(realpath "${arg%:*}")" "+$num")
+        fi
         ;;
     esac
 done

@@ -14,17 +14,13 @@ my $subject = shift @ARGV;
 if (!eof(STDIN))
 {
 
-    my $command = '/usr/bin/mail';
-    if (defined($subject))
-    {
-        $command .= sprintf ' -s "%s"', $subject;
-    }
-    if (defined($address))
-    {
-        $command .= sprintf ' "%s"', $address;
-    }
-    open(PIPE, "|$command")
-        or die "Cannot invoke $command";
+    # list form so quotes/$/backticks in the subject or address can't be
+    # interpreted by a shell
+    my @command = ('/usr/bin/mail');
+    push @command, '-s', $subject if defined($subject);
+    push @command, $address;
+    open(PIPE, '|-', @command)
+        or die "Cannot invoke @command";
 
     while ($line = <STDIN>)
     {

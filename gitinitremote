@@ -50,7 +50,7 @@ EOF
 
 # defaults
 remotename=origin	# what to call the remote
-refspec=master		# refspec ("branch") to push - can't be changed yet
+refspec=			# refspec ("branch") to push - taken from HEAD after the initial commit
 local=$PWD			# local directory to create the repository out of
 simulate=false
 
@@ -165,13 +165,16 @@ if ! $localalreadyrepo; then
 	run git commit --quiet --message "Initial commit" "$local"                  || die "git commit failed"
 fi
 
+# the initial branch may be master or main depending on init.defaultBranch
+refspec=$(git symbolic-ref --short HEAD)                                        || die "cannot determine current branch"
+
 # git push does not accept --quiet option
 run git push "$remotename" "$refspec"                                           || die "git push failed"
 
 # make the new remote the "upstream" (make "pull" without args work)
 # in git >= 1.7, this can be done by adding the "-u" flag to "push"
-run git config branch.master.remote "$remotename"
-run git config branch.master.merge refs/heads/"$refspec"
+run git config branch."$refspec".remote "$remotename"
+run git config branch."$refspec".merge refs/heads/"$refspec"
 
 notice "Successfully created remote $remote as $remotename"
 

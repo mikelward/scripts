@@ -39,7 +39,7 @@ configure_keyboard() {
     # This adds Dvorak; the user may still need to remove other layouts in System Settings
     defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID \
         "com.apple.keylayout.Dvorak"
-    defaults write com.apple.HIToolbox AppleEnabledInputSources -array \
+    defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
         '<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>16300</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>'
 
     # Disable auto-correct, auto-capitalize, smart quotes/dashes
@@ -206,7 +206,7 @@ configure_app_shortcuts() {
             <key>NSMenuItem</key>
             <dict>
                 <key>default</key>
-                <string>Launch WORKFLOWNAME</string>
+                <string>WORKFLOWNAME</string>
             </dict>
             <key>NSMessage</key>
             <string>runWorkflowAsService</string>
