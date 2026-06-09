@@ -10,8 +10,10 @@ pgrep -U "$(whoami)" -f -- '^-(bash|zsh)$' | while read pid; do
   shpool) ;;
   *) continue;;
   esac
-  # Get the shpool session name.
-  shpool_session_name=$(envgrep 'SHPOOL_SESSION_NAME=.*' $pid | tr -d '\0')
+  # Get the shpool session name. Anchor the pattern so variables like
+  # OLD_SHPOOL_SESSION_NAME don't match, and take only the first match so
+  # multiple matches can't be concatenated into one garbage string.
+  shpool_session_name=$(envgrep '^SHPOOL_SESSION_NAME=.*' $pid | tr '\0' '\n' | head -n 1)
   if test -n "$shpool_session_name"; then
     shpool_session_name=$(cut -f 2- -d = <<<"$shpool_session_name")
     # Get a one-line list of the children.
