@@ -22,7 +22,8 @@ def get_active_port(output):
           ports = True
       if line.startswith(b'	active port: '):
           active_port = line.split(b':', 1)[1].strip().strip(b'<>')
-          return port_names[active_port].decode('utf-8')
+          # Fall back to the raw port id if it wasn't seen in the ports list.
+          return port_names.get(active_port, active_port).decode('utf-8')
       if not ports:
           continue
       if m := port_re.match(line):
