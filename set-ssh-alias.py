@@ -16,33 +16,51 @@ def update_ssh_config(config_path, alias, fqdn, username):
         with open(config_path, 'r') as f:
             lines = f.readlines()
 
-    new_lines = []
-    skip_block = False
-
+    # Parse into a preamble and Host blocks so a whole block can be examined
+    # before deciding what to do with it. The Host keyword is case-insensitive
+    # and may be followed by any whitespace (e.g. "host\talias").
+    preamble = []
+    blocks = []  # [original Host line, host names, body lines]
     for line in lines:
-        # The Host keyword is case-insensitive and may be followed by any
-        # whitespace (e.g. "host\talias").
         parts = line.split()
         if parts and parts[0].lower() == 'host':
-            hosts = parts[1:]
-            if alias in hosts:
-                # Drop the alias (and the fqdn the new block will cover). If
-                # other hosts share this block, keep it for them rather than
-                # deleting their configuration.
-                remaining = [h for h in hosts if h not in (alias, fqdn)]
-                if remaining:
-                    new_lines.append('%s %s\n' % (parts[0], ' '.join(remaining)))
-                    skip_block = False
-                else:
-                    skip_block = True
+            blocks.append([line, parts[1:], []])
+        elif blocks:
+            blocks[-1][2].append(line)
+        else:
+            preamble.append(line)
+
+    def looks_generated(body, host):
+        """Whether a block has the shape this script writes for `host`:
+        only User and HostName lines, with HostName naming the host."""
+        hostname = None
+        for line in body:
+            parts = line.split()
+            if not parts:
                 continue
-            else:
-                skip_block = False
+            key = parts[0].lower()
+            if key == 'hostname' and len(parts) == 2:
+                hostname = parts[1]
+            elif key != 'user':
+                return False
+        return hostname == host
 
-        if skip_block:
+    new_lines = list(preamble)
+    for host_line, hosts, body in blocks:
+        if alias not in hosts:
+            new_lines.append(host_line)
+            new_lines.extend(body)
             continue
-
-        new_lines.append(line)
+        # Drop the alias (and the fqdn the new block will cover). Drop the
+        # whole block when nothing else remains, or when it is just this
+        # script's old block for a previous fqdn; keep hand-written blocks
+        # the alias merely shared.
+        remaining = [h for h in hosts if h not in (alias, fqdn)]
+        if not remaining or (
+                len(remaining) == 1 and looks_generated(body, remaining[0])):
+            continue
+        new_lines.append('Host %s\n' % ' '.join(remaining))
+        new_lines.extend(body)
 
     # Clean up trailing empty lines to avoid compounding them.
     while new_lines and new_lines[-1].strip() == '':
