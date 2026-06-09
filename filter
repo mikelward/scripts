@@ -10,13 +10,15 @@ fi
 # Decorate, sort, then undecorate lines to ensure line order is preserved, even
 # if the command uses different buffering (e.g. only produces output after
 # reading all input).
-# Undecorate using whitespace rather than just tabs so we can use "column" as
-# the command (column converts the tab separator into spaces).
+# Undecorate by removing the tab separator when it survived (preserving the
+# line's own leading whitespace), falling back to removing any whitespace so we
+# can use "column" as the command (column converts the tab separator into
+# spaces).
 pattern=$1
 shift
 i=0
 {
-while read -r line; do
+while IFS= read -r line || test -n "$line"; do
     i=$((i+1))
     if [[ "$line" =~ $pattern ]]; then
         printf "%d\t%s\n" "$i" "$line" >&3
@@ -26,4 +28,4 @@ while read -r line; do
 done 3> >("$@")
 } |
 sort -k1n |
-sed 's/^[0-9][0-9]*[[:space:]]*//'
+sed -e 's/^[0-9][0-9]*	//' -e t -e 's/^[0-9][0-9]*[[:space:]]*//'

@@ -273,6 +273,8 @@ get_mapped_directory()
 # determine where each file (program, man page, etc.)
 # should be installed to and build the command line args to
 # update-alternatives --install...
+install=
+slaves=
 files=$(for subdir in $subdirs; do find $basedir/$subdir -type f -print; done)
 for file in $files; do
   
@@ -327,6 +329,11 @@ for file in $files; do
 		notice "Skipping $file: already in use"
 	fi
 done
+
+if test -z "$install"; then
+	error "No bin/java found under $basedir; not running update-alternatives"
+	exit 1
+fi
 
 # TODO: bin/java should honor $dirmap too
 # $slaves already has a newline before it, so don't add one here too

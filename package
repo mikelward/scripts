@@ -89,8 +89,12 @@ case "$1" in
         ;;
 esac
 
-# Use cached backend or detect it.
-PACKAGE_BACKEND="${PACKAGE_BACKEND:-$(detect_backend)}"
+# Use cached backend or detect it. The || exit matters: detect_backend's
+# "exit 1" only exits the command-substitution subshell, so the failure has to
+# be propagated here.
+if test -z "$PACKAGE_BACKEND"; then
+    PACKAGE_BACKEND="$(detect_backend)" || exit 1
+fi
 export PACKAGE_BACKEND
 
 command="$1"

@@ -57,6 +57,10 @@ foreach my $extension (keys %flags_for_extension) {
 	}
 }
 
+if (!$known_extension) {
+	die "untar: Cannot untar $tarfile: unknown file extension\n";
+}
+
 my $tempdir;
 if ($safe) {
 	$tempdir = tempdir $tarfile_without_extension . ".XXXX", DIR => "."
@@ -70,10 +74,6 @@ else {
 	print STDERR "untar: Unsafe mode, expanding into current directory\n";
 }
 
-if (!$known_extension) {
-	die "untar: Cannot untar $tarfile: unknown file extension\n";
-}
-
 push @flags, "-f", $tarfile;
 
 my $status = system $tar, @flags;
@@ -83,6 +83,7 @@ if ($status != 0) {
 		print STDERR "untar: Removing temporary directory $tempdir\n";
 		remove_tree($tempdir);
 	}
+	exit 1;
 }
 
 sub file_description {

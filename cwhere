@@ -39,8 +39,12 @@ get_cpp_output()
     if test $? -ne 0; then
         cat "$sourcefile"
         echo "Error: Cannot run cpp" 1>&2
+        rm -f "$sourcefile"
         exit 1
     fi
+    # This function runs in a pipeline subshell, so the parent's EXIT trap
+    # never sees $sourcefile; clean it up here.
+    rm -f "$sourcefile"
 }
 
 # Print the definition of <identifier> and which header file it appears in

@@ -99,6 +99,7 @@ run()
         if test "$logfile"
         then
             "$@" 2>&1 | tee -a "$logfile"
+            return "${PIPESTATUS[0]}"
         else
             "$@"
         fi
@@ -153,14 +154,16 @@ get_size_of_file_or_directory()
 get_free_space_on_filesystem()
 {
 	(
+    local path
     local tmpdir
     local dfout
 
+    path="$1"
     tmpdir=$(get_temporary_directory)
     dfout="$tmpdir"/df.$$
 	trap 'test -n "$dfout" && rm "$dfout"' EXIT
 
-    df -Pk "$tmpdir" > "$dfout"
+    df -Pk "$path" > "$dfout"
     if test $? -ne 0
     then
         error "Cannot determine free disk space"
@@ -180,7 +183,7 @@ get_free_space_on_filesystem()
 
         i=$((i + 1))
     done < "$dfout"
-    error "Cannot determine free space on $filesystem"
+    error "Cannot determine free space on $path"
     exit 1
 	)
 	return $?
@@ -191,7 +194,7 @@ get_filename_part()
 {
     local location
     location=$(get_location_part "$1")
-    echo "${location##/*/}"
+    echo "${location##*/}"
     return 0
 }
 
@@ -353,6 +356,7 @@ append()
 get_address_helper()
 {
     local host
+    local name
     local type
     local address
     local nameserver
@@ -372,7 +376,7 @@ get_address_helper()
         then
             # read lines of the form
             # endbracket.net          A       203.214.81.131
-            while read host type address
+            while read name type address
             do
                 if test "${type}" = "A"
                 then
@@ -384,7 +388,7 @@ get_address_helper()
         fi
         tries=$(($tries - 1))
     done
-    error "Cannot resolve $host using $nameserver"
+    error "Cannot resolve $host using ${nameserver:-default nameservers}"
 	rm "${tmpfile}"
     return 1
 }
@@ -451,7 +455,6 @@ interface_up()
     i=0
 
     netstat -i > "$_temp"
-    cat $_temp
     if test $? -eq 0
     then
         i=0
@@ -483,7 +486,7 @@ interface_up()
             fi
         done < "$_temp"
     else
-        warning "Cannot run netstat -i, falling back to less reliable ifconfig test"
+        warn "Cannot run netstat -i, falling back to less reliable ifconfig test"
     fi
     rm "$_temp"
 
@@ -520,7 +523,7 @@ internet_reachable()
 # get_script_name
 get_script_name()
 {
-    echo "${0##/*/}"
+    echo "${0##*/}"
 }
 
 ###

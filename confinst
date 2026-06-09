@@ -23,7 +23,9 @@ extract()
 	local confdir
 
 	for confball in "$HOME"/conf*.tar.gz; do
-		confdir="$(basename "$confball" .tar.gz)"
+		test -f "$confball" || continue
+		# Anchor at $HOME so extraction works regardless of the current directory.
+		confdir="$HOME/$(basename "$confball" .tar.gz)"
 
 		if $simulate
 		then

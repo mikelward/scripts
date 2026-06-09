@@ -7,12 +7,19 @@ source ~/.shrc.vcs
 allknown
 
 rootdir="$PWD"
-while IFS=$'\n' read path; do
+tested=""
+while IFS= read -r path; do
+    test -n "$path" || continue
     cd "$rootdir"
     cd "$(dirname "$path")"
     while test "$PWD" != "/"; do
       test -f .Makefile && break
       cd ..
     done
+    # No .Makefile anywhere up the tree: nothing to test for this path.
+    test -f .Makefile || continue
+    # Run the tests once per project, not once per changed file.
+    case "$tested" in *"|$PWD|"*) continue ;; esac
+    tested="$tested|$PWD|"
+    make -f .Makefile test
 done <<<"$(changed)"
-make -f .Makefile test

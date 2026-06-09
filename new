@@ -12,4 +12,5 @@ if test -f "$template"; then
 	cp "$template" "$filename"
 else
 	echo "There is no template for .$extension files, creating empty file"
+	touch "$filename"
 fi

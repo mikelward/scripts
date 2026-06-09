@@ -106,7 +106,10 @@ if args.current_app and args.filename:
 if args.current_app:
   system_dump_command = base_adb_command + ["shell", "dumpsys", "activity", "activities"]
   system_dump = subprocess.Popen(system_dump_command, stdout=PIPE, stderr=PIPE).communicate()[0]
-  running_package_name = re.search(".*TaskRecord.*A[= ]([^ ^}]*)", str(system_dump)).group(1)
+  match = re.search(".*TaskRecord.*A[= ]([^ ^}]*)", system_dump.decode('utf-8', 'replace'))
+  if match is None:
+    parser.error('Could not find the current app in the dumpsys output; is a device connected?')
+  running_package_name = match.group(1)
   package.append(running_package_name)
 
 if len(package) == 0:
@@ -145,7 +148,9 @@ def colorize(message, fg=None, bg=None):
   return termcolor(fg, bg) + message + RESET if stdout_isatty else message
 
 def indent_wrap(message):
-  if width == -1:
+  # No wrapping if the terminal is narrower than the header, otherwise the
+  # loop below cannot make progress.
+  if width == -1 or width <= header_size:
     return message
   message = message.replace('\t', '    ')
   wrap_area = width - header_size

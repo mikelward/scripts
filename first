@@ -15,6 +15,9 @@ git bisect good $oldest
 git bisect bad $newest
 git bisect run not "$@" >/dev/null
 
-first=$(git_rev)
+# refs/bisect/bad is the first "bad" (here: first succeeding) commit; HEAD is
+# merely the last commit bisect happened to test.
+first=$(git rev-parse refs/bisect/bad)
+git bisect reset >/dev/null
 echo "First revision where $* succeeds:"
 git log -1 $first

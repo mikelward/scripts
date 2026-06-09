@@ -15,9 +15,21 @@ sed -n '
   s/.*versionName=\([^ ]*\).*/(\1)/
   H
 }
+$ {
+  x
+  /./ {
+    s/\n/ /g
+    p
+  }
+}
 b
 :print
 s/\n/ /g
 p
+$ {
+  x
+  s/\n/ /g
+  p
+}
 b
 ' "$1"

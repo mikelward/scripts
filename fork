@@ -1,9 +1,11 @@
 #!/bin/bash
 url="$1"
-git clone "$url"
+git clone "$url" || exit 1
 dir=${url##*/}
 dir=${dir%.git}
-cd "$dir"
+# Guard the cd: rewriting remotes in whatever repository encloses the current
+# directory would be destructive.
+cd "$dir" || exit 1
 git remote add upstream "$url"
 case "$url" in
 "git@github.com:"*)

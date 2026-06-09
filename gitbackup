@@ -123,7 +123,7 @@ fi
 #   /srv/git/proj1.git
 #   /srv/git/proj2/proj2a.git
 #   /srv/git/proj2/proj2b.git
-for srcdir in $(find "$srcroot" -type d -name "*.git")
+while IFS= read -r srcdir
 do
     info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
 
@@ -236,7 +236,7 @@ do
     )
 
     info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
-done
+done < <(find "$srcroot" -type d -name "*.git")
 
 info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
 

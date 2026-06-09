@@ -161,11 +161,11 @@ sub process_dir
 				print STDERR "Skipping $path (not found)\n" if ! $quiet;
 				next;
 			}
-			if (my $alias = $seen{$dev . $ino}) {
+			if (my $alias = $seen{"$dev:$ino"}) {
 				print STDERR "Skipping $path (same as $alias - dev=$dev ino=$ino)\n" if $debug;
 				next;
 			}
-			$seen{$dev . $ino} = $path;
+			$seen{"$dev:$ino"} = $path;
 
 			if (-d _) {
 				if ($singledevice && $dev != $dirdev) {
@@ -236,6 +236,10 @@ sub bytes_to_units
 	elsif ($units eq "T" || $units eq "TB") {
 		$divider = (1024 * 1024 * 1024 * 1024);
 	}
+	else {
+		print STDERR "Unrecognised size unit $units\n";
+		return $size;
+	}
 
 	return int($size / $divider) . " " . $units;
 }
@@ -274,7 +278,7 @@ sub units_to_bytes
 		$size *= (1024 * 1024 * 1024 * 1024);
 	}
 	else {
-		print STDERR "Unrecognised size unit $sizeunits\n";
+		print STDERR "Unrecognised size unit $units\n";
 		return undef;
 	}
 

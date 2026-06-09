@@ -1,6 +1,6 @@
 #!/bin/bash
 tildepwd() {
-    echo "$PWD" | sed "s#^$HOME/#~/#;s#^$HOME$/#~#"
+    echo "$PWD" | sed "s#^$HOME/#~/#;s#^$HOME"'$#~#'
 }
 cd ~/src
 echo "Creating $(tildepwd)/$1"

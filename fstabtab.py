@@ -37,4 +37,9 @@ for line in lines:
         print(line, end='')
     else:
         fields = line.split()
-        print(format % tuple(fields))
+        if not fields:
+            print()
+            continue
+        # pad entries with fewer fields (e.g. no dump/pass columns)
+        fields.extend([''] * (len(fieldlens) - len(fields)))
+        print((format % tuple(fields)).rstrip())

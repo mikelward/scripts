@@ -164,6 +164,7 @@ assert_status() {
   if [ "$status" -ne "$expected" ]; then
     echo "  FAIL: expected exit status $expected, got $status"
     echo "  output: $output"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -172,6 +173,7 @@ assert_output_contains() {
   if [[ "$output" != *"$1"* ]]; then
     echo "  FAIL: output does not contain '$1'"
     echo "  output: $output"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -180,6 +182,7 @@ assert_called() {
   if ! grep -q "$1" "$HOME/.shpool_calls" 2>/dev/null; then
     echo "  FAIL: expected call '$1' not found"
     echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -189,7 +192,11 @@ run_test() {
   local func="$2"
   TESTS_RUN=$((TESTS_RUN + 1))
   setup
-  if "$func"; then
+  # TEST_FAILED catches asserts that fail mid-test: running "$func" as an `if`
+  # condition disables `set -e` inside it, so a failed assert that isn't the
+  # last statement would otherwise be ignored.
+  TEST_FAILED=
+  if "$func" && test -z "$TEST_FAILED"; then
     echo "ok $TESTS_RUN $name"
     TESTS_PASSED=$((TESTS_PASSED + 1))
   else
@@ -381,13 +388,30 @@ test_creates_session_1() {
 
 test_attaches_disconnected_first() {
   cat > "$HOME/.shpool_sessions" <<EOF
-2      2025-01-01T00:00:00Z   connected
+2      2025-01-01T00:00:00Z   attached
 3      2025-01-01T00:00:00Z   disconnected
 EOF
   run_autoshpool
   assert_status 0
   assert_called "shpool attach 3"
   assert_output_contains "Attaching shpool session 3"
+}
+
+test_failed_attach_does_not_create_new_session() {
+  # A failed attach to an existing disconnected session must report the error,
+  # not fall through and silently create a brand-new session.
+  cat > "$HOME/.shpool_sessions" <<EOF
+3      2025-01-01T00:00:00Z   disconnected
+EOF
+  export SHPOOL_ATTACH_EXIT=7
+  run_autoshpool
+  assert_status 7
+  assert_called "shpool attach 3"
+  if grep -q "shpool attach 1" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: created a new session after a failed attach"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
 }
 
 test_returns_nonzero_on_failure() {
@@ -439,8 +463,8 @@ test_uses_prefix() {
 test_skips_existing_sessions() {
   export SHPOOL_PREFIX=""
   cat > "$HOME/.shpool_sessions" <<EOF
-1      2025-01-01T00:00:00Z   connected
-2      2025-01-01T00:00:00Z   connected
+1      2025-01-01T00:00:00Z   attached
+2      2025-01-01T00:00:00Z   attached
 EOF
   run_autoshpool
   assert_status 0
@@ -455,6 +479,7 @@ assert_switch_file() {
   if [ "$actual" != "$expected" ]; then
     echo "  FAIL: expected switch file '$expected', got '$actual'"
     echo "  output: $output"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -462,6 +487,7 @@ assert_switch_file() {
 assert_no_switch_file() {
   if [ -e "$HOME/.autoshpool_switch" ]; then
     echo "  FAIL: expected no switch file, but it exists: $(cat "$HOME/.autoshpool_switch")"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -473,6 +499,7 @@ assert_switch_pwd() {
   if [ "$actual" != "$expected" ]; then
     echo "  FAIL: expected switch pwd '$expected', got '$actual'"
     echo "  output: $output"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -480,6 +507,7 @@ assert_switch_pwd() {
 assert_no_switch_pwd() {
   if [ -e "$HOME/.autoshpool_switch_pwd" ]; then
     echo "  FAIL: expected no switch pwd file, but it exists: $(cat "$HOME/.autoshpool_switch_pwd")"
+    TEST_FAILED=1
     return 1
   fi
 }
@@ -581,14 +609,14 @@ test_shpoollist_lists_sessions() {
   echo "$TEST_TMPDIR/proj" > "$d/.vcsroot"
   printf 'abcdef Something\n' > "$d/.unmerged"
   cat > "$HOME/.shpool_sessions" <<EOF
-4   2025-01-01T00:00:00Z   connected
+4   2025-01-01T00:00:00Z   attached
 EOF
   add_shpool 1000
   add_shell 2001 1000 "$d" 4
   run_shpoollist
   assert_status 0
   assert_output_contains "4"                 # session name
-  assert_output_contains "connected"         # status
+  assert_output_contains "●"                 # attached status icon
   assert_output_contains "proj"              # basename of vcs root / cwd
   assert_output_contains "abcdef Something"  # vcs unmerged
 }
@@ -649,6 +677,7 @@ run_test "records no directory for a plain switch" test_plain_switch_records_no_
 run_test "loop exports the recorded directory when servicing a switch" test_loop_switch_exports_recorded_pwd
 run_test "creates session 1 when no sessions exist" test_creates_session_1
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
+run_test "failed attach does not create a new session" test_failed_attach_does_not_create_new_session
 run_test "returns non-zero when shpool attach fails" test_returns_nonzero_on_failure
 run_test "preserves specific exit code from shpool attach" test_preserves_exit_code
 run_test "loop handles switch request after session ends" test_loop_handles_switch
