@@ -63,7 +63,7 @@ foreach my $line (@output)
         write;
     }
     # both -t and -m specified
-    if (defined($threshold) && defined($minimum))
+    elsif (defined($threshold) && defined($minimum))
     {
         if ($percent >= $threshold &&
             $avail < $minimum)

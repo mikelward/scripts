@@ -18,5 +18,6 @@ $dest = "${filename}.${suffix}";
 die "Backup file $dest already exists" if (-e $dest);
 
 # do the move
-rename($filename, $dest);
+rename($filename, $dest)
+    or die "Cannot rename $filename to $dest: $!\n";
 

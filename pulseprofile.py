@@ -31,12 +31,14 @@ def next_profile(output, card_index):
     profiles = []
     profile_nums = {}
     profile_num = 0
-    want = ('    index: %d' % card_index).encode()
     for line in output.splitlines():
-        if line.startswith(want):
-            in_card = True
-        elif line.startswith(b'    index: '):
-            in_card = False
+        # Card headers look like "    index: 1" ("  * index: 1" for the
+        # default card). Compare the parsed number, not a string prefix, so
+        # card 1 does not match cards 10, 11, ...
+        stripped = line.lstrip(b' *')
+        if stripped.startswith(b'index: '):
+            index = int(stripped.split(b':', 1)[1].strip().split()[0])
+            in_card = index == card_index
         if not in_card:
             continue
         if line == (b'\tprofiles:'):
@@ -46,7 +48,9 @@ def next_profile(output, card_index):
             in_profiles = False
             active_profile = line.split(b':', 1)[1].strip().strip(b'<>')
             logger.debug('active profile = %s', active_profile)
-            active_index = profile_nums[active_profile]
+            # The active profile may not be in the dict (e.g. "off" is
+            # skipped); fall back to -1 so the next profile is the first one.
+            active_index = profile_nums.get(active_profile, -1)
             next_index = active_index + 1
             if next_index >= len(profiles):
                 next_index = 0
@@ -77,8 +81,12 @@ def main():
 
     sinks = subprocess.run(['pacmd', 'list-sinks'], capture_output=True)
     card_index = get_active_card_index(sinks.stdout)
+    if card_index is None:
+        sys.exit('pulseprofile: cannot find the default sink\'s card')
     cards = subprocess.run(['pacmd', 'list-cards'], capture_output=True)
     profile = next_profile(cards.stdout, card_index)
+    if profile is None:
+        sys.exit('pulseprofile: cannot find a profile for card %d' % card_index)
     logger.info('Setting profile to %s', profile)
     subprocess.run(['pacmd', 'set-card-profile', str(card_index), profile])
 

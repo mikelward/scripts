@@ -25,6 +25,7 @@ assert_status() {
     if test "$status" -ne "$1"; then
         echo "  FAIL: expected exit status $1, got $status"
         echo "  output: $output"
+        TEST_FAILED=1
         return 1
     fi
 }
@@ -35,6 +36,7 @@ assert_output_equals() {
         echo "  FAIL: output mismatch"
         echo "  expected: $(printf '%s' "$expected" | sed -n l)"
         echo "  actual:   $(printf '%s' "$output" | sed -n l)"
+        TEST_FAILED=1
         return 1
     fi
 }
@@ -45,6 +47,7 @@ assert_output_contains() {
         *)
             echo "  FAIL: output does not contain '$1'"
             echo "  output: $output"
+            TEST_FAILED=1
             return 1
             ;;
     esac
@@ -54,7 +57,11 @@ run_test() {
     name="$1"
     func="$2"
     TESTS_RUN=$((TESTS_RUN + 1))
-    if "$func"; then
+    # TEST_FAILED catches asserts that fail mid-test: running "$func" as an
+    # `if` condition disables `set -e` inside it, so a failed assert that is
+    # not the last statement would otherwise be ignored.
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
         echo "ok $TESTS_RUN $name"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else

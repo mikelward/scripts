@@ -39,9 +39,12 @@ teardown() {
     rm -rf "$TEST_TMPDIR"
 }
 
+# Runs package with PACKAGE_TEST_PATH (when set) as the PATH, so backend
+# detection tests can hide the host's real package managers without
+# disturbing the PATH this test script itself runs under.
 run_package() {
     set +e
-    output="$("$SCRIPT_DIR/package" "$@" 2>&1)"
+    output="$(PATH="${PACKAGE_TEST_PATH:-$PATH}" "$SCRIPT_DIR/package" "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -51,6 +54,7 @@ assert_status() {
     if test "$status" -ne "$expected"; then
         echo "  FAIL: expected exit status $expected, got $status"
         echo "  output: $output"
+        TEST_FAILED=1
         return 1
     fi
 }
@@ -61,6 +65,7 @@ assert_output_contains() {
         *)
             echo "  FAIL: output does not contain '$1'"
             echo "  output: $output"
+            TEST_FAILED=1
             return 1
             ;;
     esac
@@ -71,6 +76,7 @@ assert_output_not_contains() {
         *"$1"*)
             echo "  FAIL: output should not contain '$1'"
             echo "  output: $output"
+            TEST_FAILED=1
             return 1
             ;;
         *) ;;
@@ -81,6 +87,7 @@ assert_called() {
     if ! grep -q "$1" "$TEST_TMPDIR/calls" 2>/dev/null; then
         echo "  FAIL: expected call '$1' not found"
         echo "  calls: $(cat "$TEST_TMPDIR/calls" 2>/dev/null)"
+        TEST_FAILED=1
         return 1
     fi
 }
@@ -89,6 +96,7 @@ assert_not_called() {
     if grep -q "$1" "$TEST_TMPDIR/calls" 2>/dev/null; then
         echo "  FAIL: unexpected call '$1' found"
         echo "  calls: $(cat "$TEST_TMPDIR/calls" 2>/dev/null)"
+        TEST_FAILED=1
         return 1
     fi
 }
@@ -98,7 +106,12 @@ run_test() {
     func="$2"
     TESTS_RUN=$((TESTS_RUN + 1))
     setup
-    if "$func"; then
+    # TEST_FAILED catches asserts that fail mid-test: running "$func" as an
+    # `if` condition disables `set -e` inside it, so a failed assert that is
+    # not the last statement would otherwise be ignored.
+    TEST_FAILED=
+    PACKAGE_TEST_PATH=
+    if "$func" && test -z "$TEST_FAILED"; then
         echo "ok $TESTS_RUN $name"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
@@ -148,7 +161,7 @@ test_list_commands() {
 
 test_list_commands_one_per_line() {
     run_package --list-commands
-    assert_status 0
+    assert_status 0 || return 1
     count=$(echo "$output" | wc -l)
     if test "$count" -ne 14; then
         echo "  FAIL: expected 14 lines, got $count"
@@ -172,14 +185,18 @@ test_detects_dnf_first() {
 }
 
 test_detects_yum_without_dnf() {
+    # Restrict PATH to the mock dir so the host's real dnf is not found.
     rm "$TEST_TMPDIR/bin/dnf"
+    PACKAGE_TEST_PATH="$TEST_TMPDIR/bin"
     run_package search foo
     assert_status 0 &&
     assert_called "yum"
 }
 
 test_detects_apt_get_without_dnf_or_yum() {
+    # Restrict PATH to the mock dir so the host's real dnf/yum are not found.
     rm "$TEST_TMPDIR/bin/dnf" "$TEST_TMPDIR/bin/yum"
+    PACKAGE_TEST_PATH="$TEST_TMPDIR/bin"
     run_package search foo
     assert_status 0 &&
     assert_called "apt-cache"
@@ -188,7 +205,8 @@ test_detects_apt_get_without_dnf_or_yum() {
 test_error_no_package_manager() {
     # Use empty PATH so no real system package managers are found either
     mkdir -p "$TEST_TMPDIR/empty"
-    PATH="$TEST_TMPDIR/empty" run_package search foo
+    PACKAGE_TEST_PATH="$TEST_TMPDIR/empty"
+    run_package search foo
     assert_status 1 &&
     assert_output_contains "no supported package manager found"
 }

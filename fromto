@@ -7,11 +7,11 @@ use warnings;
 use Getopt::Long;
 
 my $invert;
-my $skip;
+my $skip_boundary;
 my $help;
 my $result = GetOptions(
   "invert|v" => \$invert,
-  "skip|s" => \$skip,
+  "skip|s" => \$skip_boundary,
   "help|h" => \$help);
 
 sub usage
@@ -40,7 +40,6 @@ my $from = shift @ARGV;
 my $to = shift @ARGV;
 
 my $started = 0;
-my $skip_boundary = 0;
 
 sub print_boundary {
   if ($invert) {
