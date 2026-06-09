@@ -170,6 +170,18 @@ configure_desktops() {
 
 # --- Configure keybindings ---
 
+# TODO: verify the "Meta+\\" (Grow Width) and "Meta+," (Previous Layout)
+# shortcuts actually bind. kglobalaccel reads each entry back as a
+# comma-separated list, while this writes a plain string, so whether
+# backslashes/commas need escaping here depends on KConfig's write-time
+# escaping. Check on a KDE machine with:
+#   grep -A1 'Grow Width\|Previous Layout' ~/.config/kglobalshortcutsrc
+# If Grow Width shows "Meta+\\,none,..." (single escaped backslash) and the
+# shortcuts work, the current values are right; if it shows "Meta+\\\\,..."
+# the value below should be "Meta+\\". If Previous Layout shows
+# "Meta+,,none,..." (two bare commas) the comma likely needs writing as
+# "Meta+\," -- possibly by editing the file directly instead of via
+# kwriteconfig6.
 set_shortcut() {
     action="$1"
     shortcut="$2"
