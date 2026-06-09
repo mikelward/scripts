@@ -52,14 +52,16 @@ install_krohnkite() {
     cd "$KROHNKITE_DIR"
 
     # Build using go-task (preferred) or make (fallback). The binary is
-    # named "task" when installed via go install (see setup), "go-task" when
-    # installed from Fedora's package.
-    if command -v task >/dev/null 2>&1; then
-        info "Building Krohnkite with task"
-        task package
-    elif command -v go-task >/dev/null 2>&1; then
+    # named "go-task" from Fedora's package, or "task" when installed via
+    # go install (see setup) -- but "task" can also be Taskwarrior, so
+    # check the version banner before trusting it.
+    if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
         go-task package
+    elif command -v task >/dev/null 2>&1 \
+            && task --version 2>/dev/null | grep -q '^Task version'; then
+        info "Building Krohnkite with task"
+        task package
     elif test -f Makefile; then
         info "Building Krohnkite with make"
         make

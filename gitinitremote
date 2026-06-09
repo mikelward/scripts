@@ -166,7 +166,15 @@ if ! $localalreadyrepo; then
 fi
 
 # the initial branch may be master or main depending on init.defaultBranch
-refspec=$(git symbolic-ref --short HEAD)                                        || die "cannot determine current branch"
+if ! refspec=$(git symbolic-ref --short HEAD 2>/dev/null); then
+	if $simulate; then
+		# in simulate mode the repo may not actually have been created;
+		# use the branch git init would create
+		refspec=$(git config --get init.defaultBranch) || refspec=master
+	else
+		die "cannot determine current branch"
+	fi
+fi
 
 # git push does not accept --quiet option
 run git push "$remotename" "$refspec"                                           || die "git push failed"
