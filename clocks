@@ -5,6 +5,12 @@ format="%a %H:%M"
 when="$1"
 localzone=${2:-$(date -d "$when" '+%z')}
 
+# GNU date rejects a date-only string followed by a zone offset
+# (e.g. "2026-06-10 +0000"); add an explicit midnight time.
+if test -n "$when" && ! date -d "$when $localzone" >/dev/null 2>&1; then
+	when="$when 00:00"
+fi
+
 IFS='|'
 while read timezone description
 do

@@ -541,10 +541,14 @@ split()
 
     delim="$1"
     shift
-    local IFS="$delim"
-    local word
-    for word in $1; do
-        echo "$word"
-    done
+    # Subshell so disabling globbing (a word like "*" must not expand to
+    # filenames) and changing IFS don't leak to the caller.
+    (
+        set -f
+        IFS="$delim"
+        for word in $1; do
+            echo "$word"
+        done
+    )
 }
 

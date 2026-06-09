@@ -20,12 +20,21 @@ def update_ssh_config(config_path, alias, fqdn, username):
     skip_block = False
 
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('Host '):
-            # Extract hosts following 'Host'.
-            hosts = stripped[5:].split()
+        # The Host keyword is case-insensitive and may be followed by any
+        # whitespace (e.g. "host\talias").
+        parts = line.split()
+        if parts and parts[0].lower() == 'host':
+            hosts = parts[1:]
             if alias in hosts:
-                skip_block = True
+                # Drop the alias (and the fqdn the new block will cover). If
+                # other hosts share this block, keep it for them rather than
+                # deleting their configuration.
+                remaining = [h for h in hosts if h not in (alias, fqdn)]
+                if remaining:
+                    new_lines.append('%s %s\n' % (parts[0], ' '.join(remaining)))
+                    skip_block = False
+                else:
+                    skip_block = True
                 continue
             else:
                 skip_block = False

@@ -1,2 +1,8 @@
 #!/bin/sh
-google-chrome "$@" || google-chrome-beta "$@"
+# Fall back to the beta only when stable isn't installed, not whenever it
+# exits non-zero (a crash or bad flag shouldn't relaunch everything in beta).
+if command -v google-chrome >/dev/null 2>&1; then
+	exec google-chrome "$@"
+else
+	exec google-chrome-beta "$@"
+fi
