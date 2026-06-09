@@ -172,7 +172,7 @@ sub process_dir
 					print STDERR "Skipping $path (different device)\n" if $debug;
 					next;
 				}
-				process_dir ($path, \@fileinfo);
+				process_dir ($path, $fileinforef);
 				if ($subdirsize) {
 					$dirsize{$dir} += $dirsize{$path};
 				}
@@ -198,12 +198,11 @@ sub process_dir
 				}
 			}
 		}
+		closedir($dirhandle);
 	}
 	else {
 		print STDERR "Can't open $dir: $!\n";
 	}
-
-	closedir($dirhandle);
 }
 
 # given a size in bytes and a unit, return a string describing that size in those units
@@ -360,10 +359,14 @@ if ($quiet) {
 
 if ($maxage =~ /(\d*)(\D+)/) {
 	$maxage = units_to_seconds($1, $2);
+	# don't run with the age filter silently disabled
+	defined($maxage) or exit 2;
 }
 
 if ($minsize =~ /(\d*)([A-Za-z]+)$/) {
 	$minsize = units_to_bytes($1, $2);
+	# don't run with the size filter silently disabled
+	defined($minsize) or exit 2;
 }
 
 # TODO get file system device id, skip files on other devices

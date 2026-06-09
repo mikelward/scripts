@@ -22,12 +22,21 @@ if test $# -eq 0; then
     "$EDITOR"
 else
     line=${1##*:}
-    if test "$line" != "$1"; then
-      file=${1%:$line}
-    else
+    case "$line" in
+    *[!0-9]*|'')
+      # not a pure line number (or no colon suffix at all)
       file=$1
       line=
-    fi
+      ;;
+    *)
+      if test "$line" != "$1"; then
+        file=${1%:$line}
+      else
+        file=$1
+        line=
+      fi
+      ;;
+    esac
 
     set -- "$file" ${line:++$line}
 

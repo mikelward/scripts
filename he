@@ -6,7 +6,7 @@
 # he bash continue
 # he rsync -v
 
-scriptname=he
+scriptname=${0##*/}
 
 usage()
 {
@@ -27,8 +27,13 @@ if test $# -lt 1; then
 fi
 
 manpage="$1"
-# show the SYNOPSIS section if no section or option was given
-option="${2:-SYNOPSIS}"
+# with no section or option given, show the section matching the name this
+# script was invoked as: desc shows DESCRIPTION, he/syn show SYNOPSIS
+case $scriptname in
+desc) default_section=DESCRIPTION;;
+*)    default_section=SYNOPSIS;;
+esac
+option="${2:-$default_section}"
 
 # handle manpage(number)
 case $manpage in *\(*\))
@@ -41,9 +46,11 @@ case $manpage in *\(*\))
 esac
 
 he() {
-perl -n -e '
+# the option is passed via the environment so quotes, $, @, spaces, etc. in
+# it can't break the shell quoting or interpolate in the perl string
+OPTION="$option" perl -n -e '
 BEGIN {
-    $option = "'$option'";
+    $option = $ENV{OPTION};
     $inside_option = 0;
 }
 if (!$inside_option) {

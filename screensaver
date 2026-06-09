@@ -56,4 +56,12 @@ maybe_xscreensaver() {
   esac
 }
 
+case "${1:-}" in
+  init|lock) ;;
+  *)
+    echo "Usage: ${0##*/} init|lock" 1>&2
+    exit 2
+    ;;
+esac
+
 maybe_xsecurelock "$@" || maybe_xscreensaver "$@" || maybe_xfce4_screensaver "$@" || exit 1

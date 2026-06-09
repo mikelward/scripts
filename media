@@ -1,3 +1,4 @@
+#!/bin/sh
 # Control media playback.
 
 send_key() {
@@ -20,5 +21,6 @@ up)
 stop)
     send_key XF86AudioStop;;
 *)
-    printf 'media: Unknown command %s\n' "$1" >&2;;
+    printf 'media: Unknown command %s\n' "$1" >&2
+    exit 2;;
 esac

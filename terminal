@@ -6,7 +6,16 @@ exec_dash_e() {
   program=$1
   shift
   test $# -eq 0 && exec "$program"
-  exec "$program" -e "$*"
+  # -e takes a single string the terminal re-parses with shell-style
+  # splitting, so quote each argument to preserve the word boundaries.
+  exec "$program" -e "$(printf '%q ' "$@")"
+}
+exec_dash_e_args() {
+  program=$1
+  shift
+  test $# -eq 0 && exec "$program"
+  # xterm-style -e: the command and its arguments follow as separate words.
+  exec "$program" -e "$@"
 }
 exec_positional() {
   program=$1
@@ -22,4 +31,4 @@ exists mate-terminal && exec_dash_e mate-terminal "$@"
 exists gnome-terminal && exec_positional gnome-terminal "$@"
 exists terminator && exec_dash_e terminator "$@"
 exists sakura && exec_dash_e sakura "$@"
-exists xterm && exec_dash_e xterm "$@"
+exists xterm && exec_dash_e_args xterm "$@"
