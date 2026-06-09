@@ -13,13 +13,11 @@ done
 declare -a editors=(
     codeedit vim
 )
-# Optional extra arguments per editor, e.g. editor_args[vim]="-p".
-declare -A editor_args=()
 for editor in "${editors[@]}"; do
     type "$editor" >/dev/null 2>&1 || continue
     # exit status is 127 if a command is not found
     # codeedit returns 127 if it wants to be skipped
-    "$editor" ${editor_args[$editor]} "${args[@]}"
+    "$editor" "${args[@]}"
     status=$?
     test $status -ne 127 && exit $status
 done
