@@ -334,9 +334,9 @@ configure_keybindings() {
     set_shortcut "Krohnkite: Shrink Width" "Meta+/"
 
     # Krohnkite: layouts
-    set_shortcut "Krohnkite: Monocle Layout" "Meta+\`"
+    set_shortcut "Krohnkite: Select Layout - Monocle" "Meta+\`"
     set_shortcut "Krohnkite: Previous Layout" "Meta+,"
-    set_shortcut "Krohnkite: Cycle Layout" "Meta+."
+    set_shortcut "Krohnkite: Next Layout" "Meta+."
 
     # Krohnkite: set master
     set_shortcut "Krohnkite: Set master" "Meta+Return"
