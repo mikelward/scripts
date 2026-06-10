@@ -333,8 +333,16 @@ configure_keybindings() {
     set_shortcut "Krohnkite: Grow Width" "Meta+\\\\"
     set_shortcut "Krohnkite: Shrink Width" "Meta+/"
 
-    # Krohnkite: layouts
+    # Krohnkite: layouts. Upstream (codeberg anametologin, #23 "group all
+    # layouts together", 2026-03) renamed the layout-selection actions from
+    # "<Layout> Layout" to "Select Layout - <Layout>". KDE never removes stale
+    # shortcut entries, and a given machine may be running either the pre- or
+    # post-rename build, so bind both names for Monocle: whichever the running
+    # build registers takes effect, and the other is an inert orphan (KDE only
+    # acts on names a loaded component actually registers). The cycle actions
+    # (Next/Previous Layout) predate #23 and were not renamed.
     set_shortcut "Krohnkite: Select Layout - Monocle" "Meta+\`"
+    set_shortcut "Krohnkite: Monocle Layout" "Meta+\`"
     set_shortcut "Krohnkite: Previous Layout" "Meta+,"
     set_shortcut "Krohnkite: Next Layout" "Meta+."
 
