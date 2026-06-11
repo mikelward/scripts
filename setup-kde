@@ -181,23 +181,17 @@ configure_desktops() {
 
 # --- Configure keybindings ---
 
-# TODO: verify the "Meta+\\" (Grow Width) and "Meta+," (Previous Layout)
-# shortcuts actually bind. kglobalaccel reads each entry back as a
-# comma-separated list, while this writes a plain string, so whether
-# backslashes/commas need escaping here depends on KConfig's write-time
-# escaping. Check on a KDE machine with:
-#   grep -A1 'Grow Width\|Previous Layout' ~/.config/kglobalshortcutsrc
-# If Grow Width shows "Meta+\\,none,..." (single escaped backslash) and the
-# shortcuts work, the current values are right; if it shows "Meta+\\\\,..."
-# the value below should be "Meta+\\". If Previous Layout shows
-# "Meta+,,none,..." (two bare commas) the comma likely needs writing as
-# "Meta+\," -- possibly by editing the file directly instead of via
-# kwriteconfig6.
+# Third arg is the human-readable label written into the value's third
+# comma-separated field. It defaults to $action for KDE-native shortcuts
+# whose action ID is the same as the display name (e.g. "Window Close").
+# Krohnkite's newer action IDs (KrohnkitegrowWidth, ...) differ from
+# their labels ("Krohnkite: Grow Width"), so pass the label explicitly.
 set_shortcut() {
     action="$1"
     shortcut="$2"
+    label="${3:-$action}"
     kwriteconfig6 --file kglobalshortcutsrc --group kwin \
-        --key "$action" "$shortcut,none,$action"
+        --key "$action" "$shortcut,none,$label"
 }
 
 unbind_shortcut() {
@@ -228,8 +222,10 @@ unbind_all_krohnkite_shortcuts() {
                 ;;
             *)
                 if $in_kwin; then
+                    # Matches both the older "Krohnkite: Foo Bar=..." keys
+                    # and the newer "KrohnkiteFooBar=..." keys.
                     case "$line" in
-                        "Krohnkite: "*)
+                        "Krohnkite"*=*)
                             action="${line%%=*}"
                             unbind_shortcut "$action"
                             ;;
@@ -333,25 +329,26 @@ configure_keybindings() {
     # Unbind all Krohnkite shortcuts, then set only the ones we want
     unbind_all_krohnkite_shortcuts
 
-    # Krohnkite: resize
-    set_shortcut "Krohnkite: Grow Width" "Meta+\\\\"
-    set_shortcut "Krohnkite: Shrink Width" "Meta+/"
+    # Krohnkite shortcuts. The upstream codeberg fork renamed the
+    # kglobalshortcutsrc keys: the action ID is now "Krohnkite" plus the
+    # action's camelCase id from res/shortcuts.qml, with no spaces or
+    # "Krohnkite: " prefix in the key itself. Casing is whatever the QML
+    # uses -- note "KrohnkitegrowWidth" really is lowercase 'g'. The third
+    # comma-separated field is the human-readable label as shown in System
+    # Settings. Stale "Krohnkite: ..."-keyed entries from older builds are
+    # cleared by unbind_all_krohnkite_shortcuts above.
 
-    # Krohnkite: layouts. Upstream (codeberg anametologin, #23 "group all
-    # layouts together", 2026-03) renamed the layout-selection actions from
-    # "<Layout> Layout" to "Select Layout - <Layout>". KDE never removes stale
-    # shortcut entries, and a given machine may be running either the pre- or
-    # post-rename build, so bind both names for Monocle: whichever the running
-    # build registers takes effect, and the other is an inert orphan (KDE only
-    # acts on names a loaded component actually registers). The cycle actions
-    # (Next/Previous Layout) predate #23 and were not renamed.
-    set_shortcut "Krohnkite: Select Layout - Monocle" "Meta+\`"
-    set_shortcut "Krohnkite: Monocle Layout" "Meta+\`"
-    set_shortcut "Krohnkite: Previous Layout" "Meta+,"
-    set_shortcut "Krohnkite: Next Layout" "Meta+."
+    # Resize
+    set_shortcut KrohnkitegrowWidth "Meta+\\\\" "Krohnkite: Grow Width"
+    set_shortcut KrohnkiteShrinkWidth "Meta+/" "Krohnkite: Shrink Width"
 
-    # Krohnkite: set master
-    set_shortcut "Krohnkite: Set master" "Meta+Return"
+    # Layouts
+    set_shortcut KrohnkiteMonocleLayout "Meta+\`" "Krohnkite: Select Layout - Monocle"
+    set_shortcut KrohnkitePreviousLayout "Meta+," "Krohnkite: Previous Layout"
+    set_shortcut KrohnkiteNextLayout "Meta+." "Krohnkite: Next Layout"
+
+    # Set master
+    set_shortcut KrohnkiteSetMaster "Meta+Return" "Krohnkite: Set master"
 }
 
 # --- Reload KWin ---
