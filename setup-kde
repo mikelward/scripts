@@ -31,6 +31,10 @@ error() {
     exit 1
 }
 
+is_command() {
+    test -x "$(command -v "$1")"
+}
+
 cleanup() {
     rm -rf "$KROHNKITE_DIR"
 }
@@ -416,5 +420,9 @@ reload_kwin
 reload_krohnkite
 reload_diminactive_effect
 reload_kglobalaccel
+
+if is_command setup-kde.local; then
+  info "Running setup-kde.local"
+fi
 
 info "KDE configured successfully"
