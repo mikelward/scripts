@@ -1,0 +1,18 @@
+#!/bin/bash
+. "$HOME"/.shrc
+set -eu
+destination="$1"
+if test -z "$destination"; then
+  echo "Usage: $0 hostname" >&2
+  exit 2
+fi
+# We need to run several steps all in the same terminal.
+# - Explicitly start an interactive shell, so we can use the need_auth and
+#   auth_functions from .shrc, and can run multiple commands
+# - Run ssh -n to start an ssh ControlMaster, if possible
+# - Actually do the ssh
+if command -v rw >/dev/null 2>&1; then
+  terminal rw -r "$destination"
+else
+  terminal bash -i -c 'need_auth && auth; ssh -n "$destination" true; ssh "$destination"'
+fi
