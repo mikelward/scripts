@@ -472,6 +472,38 @@ EOF
   assert_output_contains "Creating shpool session 3"
 }
 
+test_retries_when_session_already_attached() {
+  # Simulate a stale list: `shpool list` does not show session "1", so
+  # autoshpool tries to attach it, but `shpool attach 1` reports it is already
+  # attached. Autoshpool should fall through to the next number.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    if grep -Fxq "$2" "$HOME/.shpool_already_attached" 2>/dev/null; then
+      echo "session '$2' already has a terminal attached" >&2
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+  echo "1" > "$HOME/.shpool_already_attached"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 1"
+  assert_called "shpool attach 2"
+  assert_output_contains "Creating shpool session 2"
+  assert_output_contains "already has a terminal attached"
+}
+
 assert_switch_file() {
   local expected="$1"
   local actual
@@ -683,6 +715,7 @@ run_test "preserves specific exit code from shpool attach" test_preserves_exit_c
 run_test "loop handles switch request after session ends" test_loop_handles_switch
 run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
 run_test "skips existing sessions when creating" test_skips_existing_sessions
+run_test "retries with the next number when a session is already attached" test_retries_when_session_already_attached
 run_test "switch resolves a path segment to its session" test_switch_resolves_path_segment
 run_test "switch matches whole path segments only" test_switch_requires_whole_segment
 run_test "switch treats a bare number as a session name" test_switch_numeric_is_session_name

@@ -139,14 +139,32 @@ create_and_attach_next() {
   for session in $(get_shpool_session_names); do
     sessions[$session]=1
   done
+  declare errfile
+  errfile=$(mktemp) || return 2
+  # shellcheck disable=SC2064  # expand errfile now, not on trap fire
+  trap "rm -f '$errfile'" RETURN
   for num in $(seq 1 100); do
     declare session="$SHPOOL_PREFIX$num"
-    export SHPOOL_INITIAL_PWD="$PWD"
-    if test -z "${sessions[$session]}"; then
-      echo "Creating shpool session $session"
-      shpool attach "$session"
-      return
+    if test -n "${sessions[$session]}"; then
+      continue
     fi
+    export SHPOOL_INITIAL_PWD="$PWD"
+    echo "Creating shpool session $session"
+    shpool attach "$session" 2>"$errfile"
+    rc=$?
+    cat "$errfile" >&2
+    if test $rc -eq 0; then
+      return 0
+    fi
+    # A "session 'X' already has a terminal attached" failure means our local
+    # name set was stale (shpool's list omitted the row, or another shell raced
+    # us). Mark the name as taken and try the next number rather than
+    # reporting failure. Other errors (shrc broken, daemon gone) propagate.
+    if grep -q "already has a terminal attached" "$errfile"; then
+      sessions[$session]=1
+      continue
+    fi
+    return $rc
   done
   echo "You already have more than 100 sessions??" >&2
   return 2
