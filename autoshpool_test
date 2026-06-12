@@ -473,10 +473,10 @@ EOF
 }
 
 test_retries_when_session_already_attached() {
-  # Simulate a stale list: `shpool list` initially does not show session "1",
-  # so autoshpool tries to attach it. The attach fails, and on the next list
-  # the session shows up as "attached" -- meaning it really was taken.
-  # Autoshpool should fall through to attaching "2".
+  # shpool refuses a busy session by printing the message to stderr and
+  # exiting 0 (upstream BusyError -> AttachResult::Done). autoshpool must
+  # detect the message and try the next number rather than treating the
+  # zero exit as success.
   cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
 #!/bin/bash
 echo "shpool $*" >> "$HOME/.shpool_calls"
@@ -488,12 +488,7 @@ case "$1" in
     ;;
   attach)
     if grep -Fxq "$2" "$HOME/.shpool_already_attached" 2>/dev/null; then
-      # Reveal the hidden row in subsequent list output, the way a real
-      # "already attached" failure would.
-      printf '%s      2025-01-01T00:00:00Z   attached\n' "$2" \
-        >> "$HOME/.shpool_sessions"
       echo "session '$2' already has a terminal attached" >&2
-      exit 1
     fi
     exit 0
     ;;
@@ -506,29 +501,13 @@ SHPOOL
   assert_called "shpool attach 1"
   assert_called "shpool attach 2"
   assert_output_contains "Creating shpool session 2"
+  assert_output_contains "already has a terminal attached"
 }
 
 test_propagates_real_attach_failure() {
-  # A non-zero attach exit where shpool does not report the session as
-  # attached (e.g. shrc broke and the session ended up disconnected) must
-  # propagate the error, not silently try the next number.
-  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
-#!/bin/bash
-echo "shpool $*" >> "$HOME/.shpool_calls"
-case "$1" in
-  list)
-    echo "name                           started_at                         status"
-    cat "$HOME/.shpool_sessions" 2>/dev/null
-    exit 0
-    ;;
-  attach)
-    printf '%s      2025-01-01T00:00:00Z   disconnected\n' "$2" \
-      >> "$HOME/.shpool_sessions"
-    exit 7
-    ;;
-esac
-SHPOOL
-  chmod +x "$TEST_TMPDIR/bin/shpool"
+  # A non-zero attach exit with no busy-session message must propagate the
+  # error, not silently try the next number.
+  export SHPOOL_ATTACH_EXIT=7
   run_autoshpool
   assert_status 7
   assert_called "shpool attach 1"
