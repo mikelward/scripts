@@ -279,8 +279,10 @@ status_icon() {
 
 session_commands() {
   # A one-line summary of the commands running in a session's panes, so similar
-  # sessions can be told apart (e.g. "zsh vim").
-  tmux list-panes -t "=$1" -F '#{pane_current_command}' 2>/dev/null \
+  # sessions can be told apart (e.g. "zsh vim"). `-s` makes `-t` a session target
+  # so every window's panes are listed; without it, `-t` is a window target and
+  # only one window's panes would show.
+  tmux list-panes -s -t "=$1" -F '#{pane_current_command}' 2>/dev/null \
     | sort -u | paste -sd' ' -
 }
 
