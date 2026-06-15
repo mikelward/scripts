@@ -15,9 +15,12 @@ test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 status_icon() {
   # A compact icon for a session's attached state, matching shpoollist:
   #   attached -> filled circle, detached -> empty circle.
+  # session_attached is the *number* of clients attached, so it can be 2, 3,
+  # ... for a session shared by multiple clients; treat any nonzero count as
+  # attached.
   case "$1" in
-    1) printf '%s' '●' ;;
-    *) printf '%s' '○' ;;
+    ''|0) printf '%s' '○' ;;
+    *)    printf '%s' '●' ;;
   esac
 }
 
