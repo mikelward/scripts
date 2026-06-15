@@ -116,7 +116,7 @@ copy_to()
 		printf "success\n"
 
 		case "$confname" in
-		scripts*.tar.gz)
+		scripts.tar.gz)
 			dir=${confname%.tar.gz}
 			printf "Extracting $confname on $host... "
 			ssh $host "mkdir -p $dir && tar -C $dir -xzf $confname"
@@ -150,10 +150,26 @@ distribute_from()
 	ssh $host confdist
 }
 
+# Refuse early when either base archive is missing: scripts.tar.gz carries
+# confinst, conf.tar.gz carries the dotfiles confinst installs, and a missing
+# one would silently fail at the install step instead of installing. The
+# numbered conf.* / scripts.* variants are optional add-ons.
+require_tarballs()
+{
+	local f
+	for f in conf.tar.gz scripts.tar.gz; do
+		if test ! -f "$HOME/$f"; then
+			error "No $f in $HOME. Run confback first."
+			exit 1
+		fi
+	done
+}
+
 trap "exit" INT TERM QUIT
 
 read_defaults
 read_options "$@"
+require_tarballs
 
 for host in $hosts
 do
