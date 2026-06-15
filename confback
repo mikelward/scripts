@@ -15,6 +15,6 @@ for dir in conf/ conf.*/ scripts/ scripts.*/; do
   # '.?*' rather than '.*' so the start directory '.' itself is not pruned
   # (which would make every tarball empty).
   find . '(' -name '.?*' ')' -prune -o '(' -type f -o -type l ')' -print0 |
-  pax -w -z -L -0 -f "$HOME/$tarball"
+  pax -w -z -0 -f "$HOME/$tarball"
   cd "$OLDPWD"
 done
