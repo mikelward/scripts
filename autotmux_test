@@ -239,6 +239,28 @@ test_skips_existing_sessions() {
   assert_output_contains "Creating tmux session 3"
 }
 
+test_attaches_disconnected_with_space_in_name() {
+  # autotmux derives the prefix from the project basename, which may contain a
+  # space, so a generated name like "my project/1" must round-trip whole rather
+  # than splitting into "my" and "project/1".
+  export TMUX_PREFIX="my project/"
+  add_session "my project/1" 0
+  run_autotmux
+  assert_status 0
+  assert_called "tmux attach-session -t my project/1"
+  assert_output_contains "Attaching tmux session my project/1"
+}
+
+test_creates_next_number_with_space_in_name() {
+  # Building the set of taken names must keep whitespace names intact, or the
+  # attached "my project/1" wouldn't be recognised and would be recreated.
+  export TMUX_PREFIX="my project/"
+  add_session "my project/1" 1   # attached: can't reuse, must pick next number
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s my project/2"
+}
+
 test_uses_prefix() {
   export TMUX_PREFIX="myproject/"
   run_autotmux
@@ -548,6 +570,8 @@ run_test "passthrough preserves all arguments" test_passthrough_preserves_args
 run_test "creates session 1 when no sessions exist" test_creates_session_1
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
 run_test "skips existing sessions when creating" test_skips_existing_sessions
+run_test "attaches to a disconnected session whose name has a space" test_attaches_disconnected_with_space_in_name
+run_test "creates the next number when a space-named session is attached" test_creates_next_number_with_space_in_name
 run_test "uses TMUX_PREFIX for session names" test_uses_prefix
 run_test "returns non-zero when tmux attach fails" test_returns_nonzero_on_attach_failure
 run_test "preserves specific exit code from tmux attach" test_preserves_attach_exit_code
