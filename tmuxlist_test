@@ -124,6 +124,21 @@ test_detached_icon() {
   assert_output_contains "spare"
 }
 
+test_multi_client_counts_as_attached() {
+  # session_attached is a client count; 2+ clients must still show attached.
+  local d="$TEST_TMPDIR/proj"
+  mkdir -p "$d"
+  add_pane "shared" 3 "$d" "vim"
+  run_tmuxlist
+  assert_status 0
+  assert_output_contains "●"                 # attached, not detached
+  if [[ "$output" == *"○"* ]]; then
+    echo "  FAIL: multi-client session showed the detached icon"
+    echo "  output: $output"
+    return 1
+  fi
+}
+
 test_lists_multiple_sessions() {
   local a="$TEST_TMPDIR/a" b="$TEST_TMPDIR/b"
   mkdir -p "$a" "$b"
@@ -148,6 +163,7 @@ test_empty_when_no_sessions() {
 
 run_test "lists a session with vcs-aware details" test_lists_session_details
 run_test "shows the detached icon for unattached sessions" test_detached_icon
+run_test "treats a multi-client session as attached" test_multi_client_counts_as_attached
 run_test "lists multiple sessions" test_lists_multiple_sessions
 run_test "prints nothing when there are no sessions" test_empty_when_no_sessions
 
