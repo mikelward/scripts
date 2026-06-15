@@ -27,17 +27,16 @@ extract()
 		# Anchor at $HOME so extraction works regardless of the current directory.
 		confdir="$HOME/$(basename "$confball" .tar.gz)"
 
-		if $simulate
-		then
-			info "Would extract $confball into $confdir"
-			continue
-		fi
-
-
 		if test -L "$confdir"
 		then
 			info "Removing symlink $confdir"
 			run rm "$confdir"
+		fi
+
+		if $simulate
+		then
+			info "Would extract $confball into $confdir"
+			continue
 		fi
 
 		create_dir "$confdir"
