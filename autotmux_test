@@ -1,0 +1,216 @@
+#!/bin/bash
+# Tests for autotmux
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  export HOME="$TEST_TMPDIR"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+
+  mkdir -p "$TEST_TMPDIR/bin"
+
+  # Create a fake tmux that records its calls. has-session reports "missing"
+  # (exit 1) unless the session name is listed in .tmux_sessions, so the
+  # switch-inside-tmux path exercises the create-then-switch branch.
+  cat > "$TEST_TMPDIR/bin/tmux" <<'TMUX'
+#!/bin/bash
+echo "tmux $*" >> "$HOME/.tmux_calls"
+case "$1" in
+  has-session)
+    name="$3"
+    grep -Fxq "$name" "$HOME/.tmux_sessions" 2>/dev/null
+    exit $?
+    ;;
+  new-session)
+    exit "${TMUX_NEW_SESSION_EXIT:-0}"
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+TMUX
+  chmod +x "$TEST_TMPDIR/bin/tmux"
+
+  # Create a fake rootdir that prints the contents of .vcsroot, so tests can
+  # control whether we look "inside a project".
+  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+#!/bin/bash
+cat "$HOME/.vcsroot" 2>/dev/null
+ROOTDIR
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+
+  # Stub .shrc.vcs so autotmux's best-effort `source` is a no-op (the rootdir
+  # binary above is used instead of a shell function).
+  touch "$TEST_TMPDIR/.shrc.vcs"
+
+  # Clean state
+  unset TMUX
+  unset TMUX_NEW_SESSION_EXIT
+  export HOSTNAME="laptop"
+  export USER="mikel"
+  rm -f "$TEST_TMPDIR/.tmux_calls"
+  rm -f "$TEST_TMPDIR/.tmux_sessions"
+  rm -f "$TEST_TMPDIR/.vcsroot"
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run_autotmux() {
+  set +e
+  output="$("$SCRIPT_DIR/autotmux" "$@" </dev/null 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_status() {
+  local expected=$1
+  if [ "$status" -ne "$expected" ]; then
+    echo "  FAIL: expected exit status $expected, got $status"
+    echo "  output: $output"
+    TEST_FAILED=1
+    return 1
+  fi
+}
+
+assert_called() {
+  if ! grep -qx "$1" "$HOME/.tmux_calls" 2>/dev/null; then
+    echo "  FAIL: expected call '$1' not found"
+    echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
+    TEST_FAILED=1
+    return 1
+  fi
+}
+
+assert_not_called() {
+  if grep -q "$1" "$HOME/.tmux_calls" 2>/dev/null; then
+    echo "  FAIL: did not expect call matching '$1'"
+    echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
+    TEST_FAILED=1
+    return 1
+  fi
+}
+
+run_test() {
+  local name="$1"
+  local func="$2"
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$func" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $name"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $name"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- tests ---
+
+test_bare_creates_project_session() {
+  # Inside a project, bare autotmux attaches to a session named after the root.
+  echo "/home/u/myproject" > "$HOME/.vcsroot"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -A -s myproject"
+}
+
+test_bare_uses_hostname_outside_project() {
+  # Outside any project, the session is named after the short hostname.
+  : > "$HOME/.vcsroot"      # rootdir prints nothing
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -A -s laptop"
+}
+
+test_short_hostname_strips_user_prefix() {
+  # short_hostname drops a leading "$USER-" and any domain suffix.
+  : > "$HOME/.vcsroot"
+  export HOSTNAME="mikel-box.example.com"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -A -s box"
+}
+
+test_switch_outside_tmux_creates_session() {
+  # With no $TMUX, switch behaves like a bare attach to the named session.
+  run_autotmux switch work
+  assert_status 0
+  assert_called "tmux new-session -A -s work"
+  assert_not_called "switch-client"
+}
+
+test_switch_inside_tmux_switches_client() {
+  # Inside tmux, switch creates the target detached (it doesn't exist yet) and
+  # switches the current client to it instead of nesting a new-session.
+  export TMUX="/tmp/tmux-1000/default,1234,0"
+  run_autotmux switch work
+  assert_status 0
+  assert_called "tmux new-session -d -s work"
+  assert_called "tmux switch-client -t work"
+  assert_not_called "new-session -A"
+}
+
+test_switch_inside_tmux_existing_session() {
+  # When the target already exists, switch goes straight to switch-client.
+  export TMUX="/tmp/tmux-1000/default,1234,0"
+  echo "work" > "$HOME/.tmux_sessions"
+  run_autotmux switch work
+  assert_status 0
+  assert_called "tmux switch-client -t work"
+  assert_not_called "new-session"
+}
+
+test_switch_no_arg_uses_project_session() {
+  # `autotmux switch` with no target derives this directory's session name.
+  echo "/home/u/myproject" > "$HOME/.vcsroot"
+  run_autotmux switch
+  assert_status 0
+  assert_called "tmux new-session -A -s myproject"
+}
+
+test_passthrough_to_tmux() {
+  # An unknown subcommand passes through to tmux unchanged.
+  run_autotmux list-sessions
+  assert_status 0
+  assert_called "tmux list-sessions"
+}
+
+test_passthrough_preserves_args() {
+  run_autotmux kill-session -t work
+  assert_status 0
+  assert_called "tmux kill-session -t work"
+}
+
+test_preserves_exit_code() {
+  echo "/home/u/myproject" > "$HOME/.vcsroot"
+  export TMUX_NEW_SESSION_EXIT=42
+  run_autotmux
+  assert_status 42
+}
+
+# --- run ---
+
+run_test "bare invocation attaches to the project session" test_bare_creates_project_session
+run_test "bare invocation uses the hostname outside a project" test_bare_uses_hostname_outside_project
+run_test "short_hostname strips a user prefix and domain" test_short_hostname_strips_user_prefix
+run_test "switch outside tmux attaches to the named session" test_switch_outside_tmux_creates_session
+run_test "switch inside tmux creates then switches the client" test_switch_inside_tmux_switches_client
+run_test "switch inside tmux to an existing session just switches" test_switch_inside_tmux_existing_session
+run_test "switch with no argument uses the project session" test_switch_no_arg_uses_project_session
+run_test "unknown subcommand passes through to tmux" test_passthrough_to_tmux
+run_test "passthrough preserves all arguments" test_passthrough_preserves_args
+run_test "preserves the exit code from tmux" test_preserves_exit_code
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
