@@ -23,7 +23,8 @@ setup() {
 echo "tmux $*" >> "$HOME/.tmux_calls"
 case "$1" in
   has-session)
-    name="$3"
+    # Strip the leading "=" exact-match marker autotmux passes (-t =name).
+    name="${3#=}"
     grep -Fxq "$name" "$HOME/.tmux_sessions" 2>/dev/null
     exit $?
     ;;
@@ -156,7 +157,7 @@ test_switch_inside_tmux_switches_client() {
   run_autotmux switch work
   assert_status 0
   assert_called "tmux new-session -d -s work"
-  assert_called "tmux switch-client -t work"
+  assert_called "tmux switch-client -t =work"
   assert_not_called "new-session -A"
 }
 
@@ -166,8 +167,19 @@ test_switch_inside_tmux_existing_session() {
   echo "work" > "$HOME/.tmux_sessions"
   run_autotmux switch work
   assert_status 0
-  assert_called "tmux switch-client -t work"
+  assert_called "tmux switch-client -t =work"
   assert_not_called "new-session"
+}
+
+test_switch_inside_tmux_does_not_prefix_match() {
+  # A target ("api") that is only a prefix of an existing session
+  # ("api-server") must create its own session, not switch to the other.
+  export TMUX="/tmp/tmux-1000/default,1234,0"
+  echo "api-server" > "$HOME/.tmux_sessions"
+  run_autotmux switch api
+  assert_status 0
+  assert_called "tmux new-session -d -s api"
+  assert_called "tmux switch-client -t =api"
 }
 
 test_switch_no_arg_uses_project_session() {
@@ -206,6 +218,7 @@ run_test "short_hostname strips a user prefix and domain" test_short_hostname_st
 run_test "switch outside tmux attaches to the named session" test_switch_outside_tmux_creates_session
 run_test "switch inside tmux creates then switches the client" test_switch_inside_tmux_switches_client
 run_test "switch inside tmux to an existing session just switches" test_switch_inside_tmux_existing_session
+run_test "switch inside tmux does not prefix-match another session" test_switch_inside_tmux_does_not_prefix_match
 run_test "switch with no argument uses the project session" test_switch_no_arg_uses_project_session
 run_test "unknown subcommand passes through to tmux" test_passthrough_to_tmux
 run_test "passthrough preserves all arguments" test_passthrough_preserves_args
