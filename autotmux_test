@@ -542,13 +542,34 @@ test_switch_outside_tmux_normalizes_target() {
   assert_called "tmux new-session -s a_b"
 }
 
-test_switch_normalizes_hash_in_fallback_target() {
-  # '#' is normalized in a generated fallback name too.
+test_switch_normalizes_hash_in_fallback_target() {  # '#' is normalized in a generated fallback name too.
   export TMUX="/tmp/fake,1,0"
   export TMUX_S="other/1"
   run_autotmux switch 'foo#bar'
   assert_status 0
   assert_called "tmux switch-client -t foo_bar"
+}
+
+test_switch_normalizes_leading_equals() {
+  # A leading '=' is tmux's exact-match modifier, so a generated "=foo" target
+  # would resolve to "foo"; it must be normalized to "_foo".
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch '=foo'
+  assert_status 0
+  assert_called "tmux switch-client -t _foo"
+}
+
+test_sanitizes_leading_equals_prefix() {
+  # A project basename starting with '=' must not produce a "=name/1" session.
+  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+#!/bin/bash
+echo "/home/u/=api"
+ROOTDIR
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s _api/1"
 }
 
 test_switch_existing_hash_name_not_normalized() {
@@ -689,6 +710,8 @@ run_test "switch unmerged matching is whole-word" test_switch_unmerged_matches_w
 run_test "switch normalizes '.'/':' in a fallback target" test_switch_normalizes_target_metacharacters
 run_test "switch outside tmux normalizes '.'/':' in a fallback target" test_switch_outside_tmux_normalizes_target
 run_test "switch normalizes '#' in a fallback target" test_switch_normalizes_hash_in_fallback_target
+run_test "switch normalizes a leading '=' in a fallback target" test_switch_normalizes_leading_equals
+run_test "normalizes a leading '=' in the project prefix" test_sanitizes_leading_equals_prefix
 run_test "switch to an existing '#' session is not normalized" test_switch_existing_hash_name_not_normalized
 run_test "a failed auto-switch propagates its status" test_auto_switch_failure_propagates
 run_test "switch outside tmux attaches the resolved session" test_switch_outside_tmux_attaches

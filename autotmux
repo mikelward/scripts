@@ -40,10 +40,13 @@ sanitize_session_name() {
   # *create* round-trips: '.' and ':' are target metacharacters (session:window
   # .pane) that tmux rewrites to '_' and parses as selectors, and '#' is its
   # format-expansion character that newer tmux also rewrites via clean_name().
-  # Only applied to names we generate (project prefix, or a switch argument with
-  # no existing-session/path match) -- never to a resolved existing name, which
-  # already reflects exactly what tmux stored.
-  printf '%s' "${1//[#.:]/_}"
+  # A leading '=' is tmux's exact-match target modifier ("-t =api" targets "api",
+  # not the literal "=api"), so rewrite that too. Only applied to names we
+  # generate (project prefix, or a switch argument with no existing-session/path
+  # match) -- never to a resolved existing name, which already reflects exactly
+  # what tmux stored.
+  local name="${1//[#.:]/_}"
+  printf '%s' "${name/#=/_}"
 }
 
 in_tmux() {
