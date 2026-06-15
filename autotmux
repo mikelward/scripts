@@ -27,9 +27,11 @@
 # loop: a switch happens instantly and in place. Outside tmux there is no client
 # to switch, so a switch there just attaches (or creates) the resolved session.
 #
-# tmux session names may not contain ':' (it silently becomes '_') so the
-# project prefix is joined with '/' instead of the ':' autoshpool uses. A
-# project basename can never contain '/', so prefix matching stays unambiguous.
+# tmux session names may not contain ':' or '.' (it silently rewrites them to
+# '_', and they are target metacharacters), so the project prefix is joined with
+# '/' instead of the ':' autoshpool uses, and any '.'/':' in the project name is
+# normalized to '_'. A project basename can never contain '/', so prefix
+# matching stays unambiguous.
 
 TMUX_SEP="${TMUX_SEP:-/}"
 
@@ -59,10 +61,17 @@ session_matches_prefix() {
 get_prefix() {
   # The current project name with the separator appended, or empty string when
   # we're not under version control (we don't force a prefix then).
-  local root
+  local root name
   root="$(rootdir 2>/dev/null)"
   test -n "$root" || return 0
-  printf '%s%s' "$(basename "$root")" "$TMUX_SEP"
+  name="$(basename "$root")"
+  # tmux silently rewrites '.' and ':' in session names to '_' -- they are
+  # target metacharacters (session:window.pane), so a basename containing them
+  # would otherwise produce a prefix that never matches the names tmux actually
+  # stores, and a switch target like "my.proj/1" would be parsed as a pane
+  # target. Normalize them up front so the prefix equals the stored session name.
+  name="${name//[.:]/_}"
+  printf '%s%s' "$name" "$TMUX_SEP"
 }
 
 list_tmux_sessions() {

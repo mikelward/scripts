@@ -261,6 +261,20 @@ test_creates_next_number_with_space_in_name() {
   assert_called "tmux new-session -s my project/2"
 }
 
+test_sanitizes_prefix_metacharacters() {
+  # A project basename with '.' or ':' must be normalized to '_' when building
+  # the prefix, since tmux rewrites those characters in stored session names and
+  # treats them as target metacharacters when switching.
+  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+#!/bin/bash
+echo "/home/u/a.b:c"
+ROOTDIR
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s a_b_c/1"
+}
+
 test_uses_prefix() {
   export TMUX_PREFIX="myproject/"
   run_autotmux
@@ -572,6 +586,7 @@ run_test "attaches to disconnected session before creating new one" test_attache
 run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "attaches to a disconnected session whose name has a space" test_attaches_disconnected_with_space_in_name
 run_test "creates the next number when a space-named session is attached" test_creates_next_number_with_space_in_name
+run_test "normalizes '.' and ':' in the project prefix" test_sanitizes_prefix_metacharacters
 run_test "uses TMUX_PREFIX for session names" test_uses_prefix
 run_test "returns non-zero when tmux attach fails" test_returns_nonzero_on_attach_failure
 run_test "preserves specific exit code from tmux attach" test_preserves_attach_exit_code
