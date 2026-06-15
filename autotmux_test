@@ -227,7 +227,7 @@ test_attaches_disconnected_first() {
   add_session 3 0   # disconnected
   run_autotmux
   assert_status 0
-  assert_called "tmux attach-session -t 3"
+  assert_called "tmux attach-session -t =3"
   assert_output_contains "Attaching tmux session 3"
 }
 
@@ -248,7 +248,7 @@ test_attaches_disconnected_with_space_in_name() {
   add_session "my project/1" 0
   run_autotmux
   assert_status 0
-  assert_called "tmux attach-session -t my project/1"
+  assert_called "tmux attach-session -t =my project/1"
   assert_output_contains "Attaching tmux session my project/1"
 }
 
@@ -283,7 +283,7 @@ test_reuses_separatorless_session() {
   add_session "myproject" 0
   run_autotmux
   assert_status 0
-  assert_called "tmux attach-session -t myproject"
+  assert_called "tmux attach-session -t =myproject"
   assert_output_contains "Attaching tmux session myproject"
   assert_not_called "tmux new-session"
 }
@@ -297,7 +297,7 @@ test_mismatch_switch_reuses_separatorless_session() {
   add_session "myproject" 0
   run_autotmux
   assert_status 0
-  assert_called "tmux switch-client -t myproject"
+  assert_called "tmux switch-client -t =myproject"
 }
 
 test_uses_prefix() {
@@ -370,7 +370,7 @@ test_already_attached_mismatch_switches_to_new() {
   run_autotmux
   assert_status 0
   assert_output_contains "does not match prefix"
-  assert_called "tmux switch-client -t myproject/1"
+  assert_called "tmux switch-client -t =myproject/1"
 }
 
 test_already_attached_mismatch_reuses_disconnected() {
@@ -381,7 +381,7 @@ test_already_attached_mismatch_reuses_disconnected() {
   add_session "myproject/3" 0
   run_autotmux
   assert_status 0
-  assert_called "tmux switch-client -t myproject/3"
+  assert_called "tmux switch-client -t =myproject/3"
 }
 
 # --- switch ---
@@ -391,7 +391,7 @@ test_switch_switches_client() {
   export TMUX_S="other/1"
   run_autotmux switch foo
   assert_status 0
-  assert_called "tmux switch-client -t foo"
+  assert_called "tmux switch-client -t =foo"
 }
 
 test_switch_creates_missing_target() {
@@ -401,7 +401,7 @@ test_switch_creates_missing_target() {
   run_autotmux switch foo
   assert_status 0
   assert_called "tmux new-session -d -s foo"
-  assert_called "tmux switch-client -t foo"
+  assert_called "tmux switch-client -t =foo"
 }
 
 test_switch_does_not_recreate_existing_target() {
@@ -411,7 +411,7 @@ test_switch_does_not_recreate_existing_target() {
   run_autotmux switch foo
   assert_status 0
   assert_not_called "tmux new-session"
-  assert_called "tmux switch-client -t foo"
+  assert_called "tmux switch-client -t =foo"
 }
 
 test_switch_resolves_path_segment() {
@@ -421,7 +421,7 @@ test_switch_resolves_path_segment() {
   add_pane "work/2" "/home/u/sep/foo"
   run_autotmux switch sep
   assert_status 0
-  assert_called "tmux switch-client -t work/2"
+  assert_called "tmux switch-client -t =work/2"
 }
 
 test_switch_requires_whole_segment() {
@@ -433,7 +433,7 @@ test_switch_requires_whole_segment() {
   add_pane "work/2" "/home/u/separate/foo"
   run_autotmux switch sep
   assert_status 0
-  assert_called "tmux switch-client -t sep"
+  assert_called "tmux switch-client -t =sep"
 }
 
 test_switch_numeric_is_session_name() {
@@ -444,7 +444,7 @@ test_switch_numeric_is_session_name() {
   add_pane "work/2" "/home/u/2/foo"
   run_autotmux switch 2
   assert_status 0
-  assert_called "tmux switch-client -t 2"
+  assert_called "tmux switch-client -t =2"
 }
 
 test_switch_existing_session_name_wins() {
@@ -455,7 +455,7 @@ test_switch_existing_session_name_wins() {
   add_pane "five" "/home/u/work/foo"
   run_autotmux switch work
   assert_status 0
-  assert_called "tmux switch-client -t work"
+  assert_called "tmux switch-client -t =work"
 }
 
 test_switch_no_match_uses_arg() {
@@ -465,7 +465,7 @@ test_switch_no_match_uses_arg() {
   add_pane "work/2" "/home/u/other/foo"
   run_autotmux switch newname
   assert_status 0
-  assert_called "tmux switch-client -t newname"
+  assert_called "tmux switch-client -t =newname"
 }
 
 test_switch_prompts_on_multiple_matches() {
@@ -479,7 +479,7 @@ test_switch_prompts_on_multiple_matches() {
   run_autotmux_input 2 switch sep
   assert_status 0
   assert_output_contains "Multiple sessions match 'sep'"
-  assert_called "tmux switch-client -t b/7"
+  assert_called "tmux switch-client -t =b/7"
 }
 
 test_switch_cancel_does_not_switch() {
@@ -506,7 +506,7 @@ test_switch_matches_vcs_unmerged() {
   add_pane "work/7" "$d"
   run_autotmux switch abcdef
   assert_status 0
-  assert_called "tmux switch-client -t work/7"
+  assert_called "tmux switch-client -t =work/7"
 }
 
 test_switch_unmerged_matches_whole_word() {
@@ -520,7 +520,7 @@ test_switch_unmerged_matches_whole_word() {
   add_pane "work/7" "$d"
   run_autotmux switch abc
   assert_status 0
-  assert_called "tmux switch-client -t abc"
+  assert_called "tmux switch-client -t =abc"
 }
 
 test_switch_normalizes_target_metacharacters() {
@@ -532,8 +532,8 @@ test_switch_normalizes_target_metacharacters() {
   run_autotmux switch my.proj
   assert_status 0
   assert_called "tmux new-session -d -s my_proj"
-  assert_called "tmux switch-client -t my_proj"
-  assert_not_called "switch-client -t my\.proj"   # escape '.' (grep regex)
+  assert_called "tmux switch-client -t =my_proj"
+  assert_not_called "switch-client -t =my\.proj"   # escape '.' (grep regex)
 }
 
 test_switch_outside_tmux_normalizes_target() {
@@ -547,21 +547,34 @@ test_switch_normalizes_hash_in_fallback_target() {  # '#' is normalized in a gen
   export TMUX_S="other/1"
   run_autotmux switch 'foo#bar'
   assert_status 0
-  assert_called "tmux switch-client -t foo_bar"
+  assert_called "tmux switch-client -t =foo_bar"
 }
 
 test_switch_normalizes_leading_equals() {
-  # A leading '=' is tmux's exact-match modifier, so a generated "=foo" target
-  # would resolve to "foo"; it must be normalized to "_foo".
+  # A leading '=' is the exact-match modifier; tmux resolves it before exact
+  # names even inside "=name", so a generated "=foo" must be normalized to "_foo".
   export TMUX="/tmp/fake,1,0"
   export TMUX_S="other/1"
   run_autotmux switch '=foo'
   assert_status 0
-  assert_called "tmux switch-client -t _foo"
+  assert_called "tmux new-session -d -s _foo"
+  assert_called "tmux switch-client -t =_foo"
 }
 
-test_sanitizes_leading_equals_prefix() {
-  # A project basename starting with '=' must not produce a "=name/1" session.
+test_switch_normalizes_leading_dollar() {
+  # A leading '$' is tmux session-id syntax; "=\$0" resolves session id $0, not a
+  # session named "$0", so a generated "$0" must be normalized to "_0".
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch '$0'
+  assert_status 0
+  assert_called "tmux new-session -d -s _0"
+  assert_called "tmux switch-client -t =_0"
+}
+
+test_normalizes_leading_equals_prefix() {
+  # A project basename starting with a sigil is normalized when building the
+  # prefix, so it can't be mis-resolved as id/exact-match target syntax.
   cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
 #!/bin/bash
 echo "/home/u/=api"
@@ -580,8 +593,8 @@ test_switch_existing_hash_name_not_normalized() {
   add_session 'foo#bar' 0
   run_autotmux switch 'foo#bar'
   assert_status 0
-  assert_called "tmux switch-client -t foo#bar"
-  assert_not_called "switch-client -t foo_bar"
+  assert_called "tmux switch-client -t =foo#bar"
+  assert_not_called "switch-client -t =foo_bar"
 }
 
 test_auto_switch_failure_propagates() {
@@ -600,7 +613,7 @@ test_switch_outside_tmux_attaches() {
   add_session foo 0
   run_autotmux switch foo
   assert_status 0
-  assert_called "tmux attach-session -t foo"
+  assert_called "tmux attach-session -t =foo"
   assert_not_called "tmux switch-client"
 }
 
@@ -620,7 +633,7 @@ test_switch_no_arg_switches_on_mismatch() {
   run_autotmux switch
   assert_status 0
   assert_output_contains "does not match prefix"
-  assert_called "tmux switch-client -t myproject/1"
+  assert_called "tmux switch-client -t =myproject/1"
 }
 
 test_switch_no_arg_stays_when_matching() {
@@ -711,7 +724,8 @@ run_test "switch normalizes '.'/':' in a fallback target" test_switch_normalizes
 run_test "switch outside tmux normalizes '.'/':' in a fallback target" test_switch_outside_tmux_normalizes_target
 run_test "switch normalizes '#' in a fallback target" test_switch_normalizes_hash_in_fallback_target
 run_test "switch normalizes a leading '=' in a fallback target" test_switch_normalizes_leading_equals
-run_test "normalizes a leading '=' in the project prefix" test_sanitizes_leading_equals_prefix
+run_test "switch normalizes a leading '\$' in a fallback target" test_switch_normalizes_leading_dollar
+run_test "normalizes a leading sigil in the project prefix" test_normalizes_leading_equals_prefix
 run_test "switch to an existing '#' session is not normalized" test_switch_existing_hash_name_not_normalized
 run_test "a failed auto-switch propagates its status" test_auto_switch_failure_propagates
 run_test "switch outside tmux attaches the resolved session" test_switch_outside_tmux_attaches

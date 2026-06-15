@@ -27,26 +27,35 @@
 # loop: a switch happens instantly and in place. Outside tmux there is no client
 # to switch, so a switch there just attaches (or creates) the resolved session.
 #
-# tmux treats ':' '.' (target metacharacters) and '#' (format expansion)
-# specially in session names and rewrites them to '_', so the project prefix is
-# joined with '/' instead of the ':' autoshpool uses, and any of those
-# characters in a generated name is normalized to '_' (see sanitize_session_name).
-# A project basename can never contain '/', so prefix matching stays unambiguous.
+# tmux name handling has two parts (see sanitize_session_name and do_switch):
+# every session target is passed in tmux's exact-match "=name" form so a bare
+# name can't match a different session that merely starts with it; and a name we
+# generate is normalized first -- tmux rewrites ':' '.' '#' out of names at
+# creation, and a leading '$' '%' '=' is id/exact-match syntax that tmux resolves
+# before exact names even inside "=name" -- so the prefix is joined with '/'
+# (which a project basename can never contain, keeping prefix matching
+# unambiguous) and those characters become '_'.
 
 TMUX_SEP="${TMUX_SEP:-/}"
 
 sanitize_session_name() {
-  # Normalize the characters tmux treats specially in session names so a name we
-  # *create* round-trips: '.' and ':' are target metacharacters (session:window
-  # .pane) that tmux rewrites to '_' and parses as selectors, and '#' is its
-  # format-expansion character that newer tmux also rewrites via clean_name().
-  # A leading '=' is tmux's exact-match target modifier ("-t =api" targets "api",
-  # not the literal "=api"), so rewrite that too. Only applied to names we
-  # generate (project prefix, or a switch argument with no existing-session/path
-  # match) -- never to a resolved existing name, which already reflects exactly
-  # what tmux stored.
+  # Make a name we *generate* safe to both create and target:
+  #  - tmux rewrites '#', ':' and '.' out of names at creation (`new-session -s
+  #    foo.com` actually stores "foo_com"), so normalize them or the stored name
+  #    won't match what we look up or target.
+  #  - a leading '$' or '%' is tmux session/pane *id* syntax and a leading '=' is
+  #    the exact-match modifier; tmux resolves these before exact session names,
+  #    even inside the "=name" target form (e.g. "=$0" resolves session id $0,
+  #    not a session literally named "$0"), so rewrite a leading one to '_'.
+  # Targets still use the "=name" form for the separate problem that a bare name
+  # matches any session whose name merely *starts with* it. Only applied to
+  # generated names, never to a resolved existing name (which already reflects
+  # exactly what tmux stored).
   local name="${1//[#.:]/_}"
-  printf '%s' "${name/#=/_}"
+  case "$name" in
+    ['$%=']*) name="_${name#?}" ;;
+  esac
+  printf '%s' "$name"
 }
 
 in_tmux() {
@@ -153,7 +162,9 @@ pick_prefixed_session() {
 do_switch() {
   # Switch the current client to session $1, creating it (optionally rooted at
   # the directory $2) if it doesn't exist yet. This is tmux's native in-place
-  # switch, so no detach/re-attach dance is needed.
+  # switch, so no detach/re-attach dance is needed. The switch target uses the
+  # exact-match "=name" form so a bare name can't match a different session that
+  # merely starts with it, and so names with target metacharacters still resolve.
   local target="$1" dir="$2"
   if ! session_exists "$target"; then
     # Fail fast if creation fails (e.g. a deleted working directory) rather than
@@ -164,7 +175,7 @@ do_switch() {
       tmux new-session -d -s "$target" || return
     fi
   fi
-  tmux switch-client -t "$target"
+  tmux switch-client -t "=$target"
 }
 
 handle_already_attached() {
@@ -236,7 +247,7 @@ attach_or_create() {
   session="$(first_disconnected_session)"
   if test -n "$session"; then
     echo "Attaching tmux session $session"
-    tmux attach-session -t "$session"
+    tmux attach-session -t "=$session"
     return $?
   fi
   create_and_attach_next
@@ -269,7 +280,7 @@ status_icon() {
 session_commands() {
   # A one-line summary of the commands running in a session's panes, so similar
   # sessions can be told apart (e.g. "zsh vim").
-  tmux list-panes -t "$1" -F '#{pane_current_command}' 2>/dev/null \
+  tmux list-panes -t "=$1" -F '#{pane_current_command}' 2>/dev/null \
     | sort -u | paste -sd' ' -
 }
 
@@ -451,7 +462,7 @@ case "$1" in
     else
       # No client to switch: attach to (or create) the resolved session instead.
       if session_exists "$target"; then
-        tmux attach-session -t "$target"
+        tmux attach-session -t "=$target"
       else
         tmux new-session -s "$target"
       fi
