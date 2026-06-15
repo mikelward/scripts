@@ -84,9 +84,14 @@ get_disconnected_sessions() {
 }
 
 first_disconnected_session() {
-  declare -a disconnected=( $(get_disconnected_sessions) )
-  test "${#disconnected[@]}" -gt 0 || return 1
-  printf '%s\n' "${disconnected[0]}"
+  # Read the first row rather than splitting the command substitution into an
+  # array: autotmux derives the prefix from the project basename, which can
+  # contain whitespace, so a generated name like "my project/1" must round-trip
+  # whole instead of splitting into "my" and "project/1".
+  local first
+  IFS= read -r first < <(get_disconnected_sessions) || true
+  test -n "$first" || return 1
+  printf '%s\n' "$first"
 }
 
 session_exists() {
@@ -99,17 +104,19 @@ session_exists() {
 pick_prefixed_session() {
   # Print the session to switch to for the current TMUX_PREFIX: reuse the first
   # detached session that already matches, otherwise the next free numbered name.
-  # Mirrors the selection the startup path makes for a new shell.
-  declare -a disconnected=( $(get_disconnected_sessions) )
-  if test "${#disconnected[@]}" -gt 0; then
-    printf '%s\n' "${disconnected[0]}"
+  # Mirrors the selection the startup path makes for a new shell. Reads rows
+  # line by line so session names containing whitespace round-trip whole.
+  local first
+  IFS= read -r first < <(get_disconnected_sessions) || true
+  if test -n "$first"; then
+    printf '%s\n' "$first"
     return
   fi
   declare -A taken
   local s num
-  for s in $(get_all_session_names); do
-    taken[$s]=1
-  done
+  while IFS= read -r s; do
+    test -n "$s" && taken[$s]=1
+  done < <(get_all_session_names)
   for num in $(seq 1 100); do
     s="$TMUX_PREFIX$num"
     if test -z "${taken[$s]}"; then
@@ -163,9 +170,10 @@ handle_already_attached() {
 create_and_attach_next() {
   declare -A taken
   local s
-  for s in $(get_all_session_names); do
-    taken[$s]=1
-  done
+  # Read line by line so existing names with whitespace are matched whole.
+  while IFS= read -r s; do
+    test -n "$s" && taken[$s]=1
+  done < <(get_all_session_names)
   local errfile
   errfile=$(mktemp) || return 2
   # shellcheck disable=SC2064  # expand the path now, not on trap fire
