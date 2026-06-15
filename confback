@@ -3,9 +3,9 @@
 
 trap "exit" INT TERM QUIT
 
-# One tarball per ~/conf.* directory.
+# One tarball per ~/conf.* and ~/scripts.* directory.
 cd
-for dir in conf/ conf.*/; do
+for dir in conf/ conf.*/ scripts/ scripts.*/; do
   test -d "$dir" || continue
 
   tarball="${dir%/}.tar.gz"

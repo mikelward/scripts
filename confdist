@@ -98,8 +98,11 @@ copy_to()
 	local host=$1
 	local conffile
 	local confname
+	local dir
 
-	for conffile in "$HOME"/conf*.tar.gz; do
+	# scripts first so confinst lands on the remote via the tarball, with no
+	# separate scp needed.
+	for conffile in "$HOME"/scripts*.tar.gz "$HOME"/conf*.tar.gz; do
 		test -f "$conffile" || continue
 		confname=$(basename "$conffile")
 		info "Copying $confname to $host"
@@ -111,6 +114,20 @@ copy_to()
 			continue
 		fi
 		printf "success\n"
+
+		case "$confname" in
+		scripts*.tar.gz)
+			dir=${confname%.tar.gz}
+			printf "Extracting $confname on $host... "
+			ssh $host "mkdir -p $dir && tar -C $dir -xzf $confname"
+			if test $? -ne 0
+			then
+				printf "failure\n"
+				continue
+			fi
+			printf "success\n"
+			;;
+		esac
 	done
 }
 
@@ -118,14 +135,6 @@ install_on()
 {
 	local host=$1
 	printf "Installing on $host... "
-	ssh $host "test -d scripts || mkdir scripts"
-	scp "$(dirname "$0")/confinst" $host:scripts
-	if test $? -ne 0
-	then
-		printf "failure copying install script to $host:scripts\n"
-		return 1
-	fi
-
 	ssh $host "scripts/confinst" -e
 	if test $? -ne 0
 	then

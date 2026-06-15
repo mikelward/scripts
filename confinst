@@ -22,7 +22,7 @@ extract()
 	local confball
 	local confdir
 
-	for confball in "$HOME"/conf*.tar.gz; do
+	for confball in "$HOME"/conf*.tar.gz "$HOME"/scripts*.tar.gz; do
 		test -f "$confball" || continue
 		# Anchor at $HOME so extraction works regardless of the current directory.
 		confdir="$HOME/$(basename "$confball" .tar.gz)"
