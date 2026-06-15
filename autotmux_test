@@ -678,6 +678,16 @@ test_tmuxlist_shows_disconnected_icon() {
   assert_output_contains "○"
 }
 
+test_tmuxlist_summarizes_whole_session() {
+  # session_commands must list panes across all of a session's windows, which
+  # requires `-s` (a session target) -- without it `-t` is a window target.
+  add_session "6" 1
+  add_pane "6" "/home/u/work"
+  run_tmuxlist
+  assert_status 0
+  assert_called "tmux list-panes -s -t =6"
+}
+
 test_tmuxlist_empty_when_no_sessions() {
   run_tmuxlist
   assert_status 0
@@ -735,6 +745,7 @@ run_test "switch with no arg stays put when already matching" test_switch_no_arg
 run_test "switch with no arg errors when not in a session" test_switch_no_arg_errors_when_not_in_tmux
 run_test "tmuxlist lists sessions with details" test_tmuxlist_lists_sessions
 run_test "tmuxlist shows the disconnected icon" test_tmuxlist_shows_disconnected_icon
+run_test "tmuxlist summarizes panes across the whole session" test_tmuxlist_summarizes_whole_session
 run_test "tmuxlist prints nothing when there are no sessions" test_tmuxlist_empty_when_no_sessions
 
 echo
