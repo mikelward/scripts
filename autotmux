@@ -41,11 +41,21 @@ tmux_session_name() {
   fi
 }
 
+normalize_name() {
+  # tmux cleans "#", ":" and "." out of session names (they are target-syntax
+  # metacharacters), so `new-session -s foo.com` actually creates "foo_com".
+  # Normalize up front so the name we create and the exact "=name" target we
+  # later switch to agree -- otherwise switching to "=foo.com" can't find the
+  # "foo_com" session tmux really made.
+  printf '%s' "$1" | tr '#:.' '___'
+}
+
 attach_or_switch() {
   # Attach to the named session, creating it if necessary. Inside an existing
   # tmux client, switch that client (creating a detached session first if the
   # target doesn't exist); a nested `new-session` would otherwise fail.
-  local name="$1"
+  local name
+  name="$(normalize_name "$1")"
   if test -n "$TMUX"; then
     # Use exact targets ("=name"): a bare -t target matches any session whose
     # name *starts with* "name", so without "=" a project "api" would attach to
