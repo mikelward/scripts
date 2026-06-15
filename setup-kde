@@ -291,11 +291,11 @@ configure_app_shortcuts() {
 
     remove_stale_app_shortcut_groups
 
-    add_app_shortcut "Browser 1" "browser1" "Meta+G" "scripts-browser1.desktop"
-    add_app_shortcut "Browser 2" "gbrowser2" "Meta+H" "scripts-browser2.desktop"
-    add_app_shortcut "Terminal" "gterminal" "Meta+T" "scripts-terminal.desktop"
-    add_app_shortcut "Terminal on Workstation" "gterminal_on_workstation" "Meta+W" "scripts-terminal-workstation.desktop"
-    add_app_shortcut "Music" "gmusic" "Meta+Y" "scripts-music.desktop"
+    add_app_shortcut "browser1" "Meta+G"
+    add_app_shortcut "browser2" "Meta+H"
+    add_app_shortcut "terminal" "Meta+T"
+    add_app_shortcut "terminal_on_workstation" "Meta+W"
+    add_app_shortcut "music" "Meta+Y"
 }
 
 configure_keybindings() {
@@ -419,7 +419,7 @@ reload_kglobalaccel
 
 if is_command setup-kde.local; then
   source setup-kde.local
-  info "Running setup-kde.local"
+  info "Sourcing setup-kde.local"
 fi
 
 info "KDE configured successfully"
