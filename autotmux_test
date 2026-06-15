@@ -60,7 +60,7 @@ case "$cmd" in
     exit "${TMUX_NEW_EXIT:-0}"
     ;;
   switch-client)
-    exit 0
+    exit "${TMUX_SWITCH_EXIT:-0}"
     ;;
   *)
     exit 0
@@ -98,6 +98,7 @@ VCS
   unset TMUX_PREFIX
   unset TMUX_ATTACH_EXIT
   unset TMUX_NEW_EXIT
+  unset TMUX_SWITCH_EXIT
   rm -f "$TEST_TMPDIR/.tmux_calls"
   rm -f "$TEST_TMPDIR/.tmux_sessions"
   rm -f "$TEST_TMPDIR/.tmux_panes"
@@ -262,17 +263,17 @@ test_creates_next_number_with_space_in_name() {
 }
 
 test_sanitizes_prefix_metacharacters() {
-  # A project basename with '.' or ':' must be normalized to '_' when building
-  # the prefix, since tmux rewrites those characters in stored session names and
-  # treats them as target metacharacters when switching.
+  # A project basename with '.', ':' or '#' must be normalized to '_' when
+  # building the prefix, since tmux rewrites those characters in stored session
+  # names and treats them specially (target metacharacters / format expansion).
   cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
 #!/bin/bash
-echo "/home/u/a.b:c"
+echo "/home/u/a.b:c#d"
 ROOTDIR
   chmod +x "$TEST_TMPDIR/bin/rootdir"
   run_autotmux
   assert_status 0
-  assert_called "tmux new-session -s a_b_c/1"
+  assert_called "tmux new-session -s a_b_c_d/1"
 }
 
 test_reuses_separatorless_session() {
@@ -541,6 +542,38 @@ test_switch_outside_tmux_normalizes_target() {
   assert_called "tmux new-session -s a_b"
 }
 
+test_switch_normalizes_hash_in_fallback_target() {
+  # '#' is normalized in a generated fallback name too.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch 'foo#bar'
+  assert_status 0
+  assert_called "tmux switch-client -t foo_bar"
+}
+
+test_switch_existing_hash_name_not_normalized() {
+  # tmux keeps '#' in names it stores, so an existing "foo#bar" session must be
+  # switched to verbatim -- normalization applies only to generated names.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session 'foo#bar' 0
+  run_autotmux switch 'foo#bar'
+  assert_status 0
+  assert_called "tmux switch-client -t foo#bar"
+  assert_not_called "switch-client -t foo_bar"
+}
+
+test_auto_switch_failure_propagates() {
+  # A failed in-place switch must not be masked: with `autotmux && exit` the
+  # shell would otherwise exit without having moved to the intended session.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  export TMUX_PREFIX="myproject/"
+  export TMUX_SWITCH_EXIT=3
+  run_autotmux
+  assert_status 3
+}
+
 test_switch_outside_tmux_attaches() {
   # With no client to switch, a switch attaches the resolved session.
   add_session foo 0
@@ -655,6 +688,9 @@ run_test "switch matches a session by vcs unmerged output" test_switch_matches_v
 run_test "switch unmerged matching is whole-word" test_switch_unmerged_matches_whole_word
 run_test "switch normalizes '.'/':' in a fallback target" test_switch_normalizes_target_metacharacters
 run_test "switch outside tmux normalizes '.'/':' in a fallback target" test_switch_outside_tmux_normalizes_target
+run_test "switch normalizes '#' in a fallback target" test_switch_normalizes_hash_in_fallback_target
+run_test "switch to an existing '#' session is not normalized" test_switch_existing_hash_name_not_normalized
+run_test "a failed auto-switch propagates its status" test_auto_switch_failure_propagates
 run_test "switch outside tmux attaches the resolved session" test_switch_outside_tmux_attaches
 run_test "switch outside tmux creates a missing session" test_switch_outside_tmux_creates_when_missing
 run_test "switch with no arg switches to the prefix session" test_switch_no_arg_switches_on_mismatch
