@@ -30,9 +30,9 @@ scp()
 	local scpflags=-Bq
 	if test "$verbose" -gt 0
 	then
-		command scp $scpflags "$@"
+		command scp $ssh_mux_opts $scpflags "$@"
 	else
-		command scp $scpflags "$@" 2>/dev/null
+		command scp $ssh_mux_opts $scpflags "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -41,11 +41,38 @@ ssh()
 {
 	if test "$verbose" -gt 0
 	then
-		command ssh "$@"
+		command ssh $ssh_mux_opts "$@"
 	else
-		command ssh "$@" 2>/dev/null
+		command ssh $ssh_mux_opts "$@" 2>/dev/null
 	fi
 	return $?
+}
+
+# Multiplex ssh/scp through a per-run control socket so each host authenticates
+# once: the first ssh/scp call opens a master, the rest reuse it, and
+# ControlPersist keeps it alive between the scp + ssh calls for one host.
+setup_ssh_mux()
+{
+	ssh_mux_dir=$(mktemp -d "${TMPDIR:-/tmp}/confdist-XXXXXX") || return
+	ssh_mux_opts="-o ControlMaster=auto -o ControlPath=$ssh_mux_dir/%C -o ControlPersist=60"
+	trap 'teardown_ssh_mux' EXIT
+}
+
+teardown_ssh_mux()
+{
+	# Best-effort: ask any live masters to exit so the sockets close cleanly
+	# before we remove their directory. Stale sockets would otherwise linger
+	# until ControlPersist fires.
+	local sock
+	if test -n "$ssh_mux_dir" && test -d "$ssh_mux_dir"
+	then
+		for sock in "$ssh_mux_dir"/*
+		do
+			test -S "$sock" || continue
+			command ssh -o ControlPath="$sock" -O exit . 2>/dev/null
+		done
+		rm -rf "$ssh_mux_dir"
+	fi
 }
 
 read_defaults()
@@ -170,6 +197,7 @@ trap "exit" INT TERM QUIT
 read_defaults
 read_options "$@"
 require_tarballs
+setup_ssh_mux
 
 for host in $hosts
 do
