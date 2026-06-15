@@ -1,0 +1,67 @@
+#!/bin/bash
+# autotmux - attach to or create a per-project tmux session
+#
+# Usage:
+#   autotmux                 - attach to (or create) this project's tmux session
+#   autotmux switch <name>   - switch to (or create) session <name>
+#   autotmux switch          - switch to (or create) this project's session
+#   autotmux <tmux args...>  - pass through to tmux
+#
+# The session name mirrors autoshpool's naming: inside a VCS workspace it is the
+# basename of the project root; outside one, it is the short hostname. So
+# `cd repo && autotmux` attaches-or-creates a tmux session named after the repo.
+#
+# Outside tmux we `exec tmux new-session -A -s <name>`, which replaces the shell
+# with the session and attaches to it (creating it if necessary). Inside tmux
+# we instead switch the current client to the target session, creating it
+# detached first if it doesn't exist yet, so a nested `tmux new-session` is never
+# attempted.
+
+short_hostname() {
+  # Mirror shrc's short_hostname: the first dot-delimited component of the
+  # hostname, with a leading "$USER-" stripped.
+  local hostname="${HOSTNAME:-$(hostname 2>/dev/null)}"
+  hostname="${hostname%%.*}"
+  hostname="${hostname#${USER:-$USERNAME}-}"
+  printf '%s' "$hostname"
+}
+
+tmux_session_name() {
+  # The tmux session name for the current directory: the basename of the VCS
+  # project root, or the short hostname when not inside a workspace. Load the
+  # user's vcs helper (best-effort) so rootdir works without sourcing the full
+  # shell rc.
+  test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+  local root
+  root="$(rootdir 2>/dev/null)"
+  if test -n "$root"; then
+    basename "$root"
+  else
+    short_hostname
+  fi
+}
+
+attach_or_switch() {
+  # Attach to the named session, creating it if necessary. Inside an existing
+  # tmux client, switch that client (creating a detached session first if the
+  # target doesn't exist); a nested `new-session` would otherwise fail.
+  local name="$1"
+  if test -n "$TMUX"; then
+    tmux has-session -t "$name" 2>/dev/null || tmux new-session -d -s "$name"
+    tmux switch-client -t "$name"
+  else
+    exec tmux new-session -A -s "$name"
+  fi
+}
+
+case "$1" in
+  switch)
+    attach_or_switch "${2:-$(tmux_session_name)}"
+    ;;
+  "")
+    attach_or_switch "$(tmux_session_name)"
+    ;;
+  *)
+    exec tmux "$@"
+    ;;
+esac
