@@ -301,12 +301,13 @@ configure_app_shortcuts() {
 configure_keybindings() {
     info "Configuring keybindings"
 
-    # Switch to desktop 1-9
-    n=1
-    while test "$n" -le 9; do
+    # Switch to desktop 1..N. KDE records the shifted variant as the
+    # character produced (Meta+! rather than Meta+Shift+1); writing it
+    # as "Meta+Shift+1" leaves the binding inactive.
+    shifted=('!' '@' '#' '$' '%' '^' '&' '*' '(')
+    for n in $(seq 1 ${#shifted[@]}); do
         set_shortcut "Switch to Desktop $n" "Meta+$n"
-        set_shortcut "Window to Desktop $n" "Meta+Shift+$n"
-        n=$((n + 1))
+        set_shortcut "Window to Desktop $n" "Meta+${shifted[n-1]}"
     done
 
     # Window management
