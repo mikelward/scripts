@@ -1,0 +1,47 @@
+#!/bin/bash
+# tmuxlist - list tmux sessions with useful details (vcs-aware)
+#
+# Prints one line per session, using the same shape as shpoollist so the two
+# backends look the same in `sessionlist`: a status icon (attached/detached),
+# the session name, the basename of the active pane's vcs root and working
+# directory, the pane's foreground command, and any vcs unmerged items.
+#
+# One row per session is produced by listing only the active pane of each
+# session's active window.
+
+# Load the user's vcs helper (best-effort) for the vcs root/unmerged fields.
+test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+
+status_icon() {
+  # A compact icon for a session's attached state, matching shpoollist:
+  #   attached -> filled circle, detached -> empty circle.
+  case "$1" in
+    1) printf '%s' '●' ;;
+    *) printf '%s' '○' ;;
+  esac
+}
+
+dir_vcs_root_name() {
+  # The last component of the version-control root for a directory, or empty if
+  # the directory isn't under version control (we don't require vcs to work).
+  local root
+  root="$(cd "$1" 2>/dev/null && vcs rootdir 2>/dev/null)"
+  test -n "$root" && basename "$root"
+}
+
+dir_vcs_unmerged() {
+  # The unmerged items vcs reports for a directory, or empty. Best-effort.
+  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
+}
+
+# List the active pane of each session's active window, one row per session.
+tmux list-panes -a \
+  -f '#{&&:#{window_active},#{pane_active}}' \
+  -F '#{session_name}	#{session_attached}	#{pane_current_path}	#{pane_current_command}' \
+  2>/dev/null \
+| while IFS=$'\t' read -r session attached cwd command; do
+    printf '%s  %s  %s  %s  %s\n' \
+      "$(status_icon "$attached")" "$session" \
+      "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" "$command"
+    dir_vcs_unmerged "$cwd" | sed 's/^/  /'
+  done
