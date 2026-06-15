@@ -192,6 +192,15 @@ require_tarballs()
 	done
 }
 
+# Open the multiplexed control master eagerly with an ssh call so the first
+# scp -- run with -B (batch mode, no prompts) -- doesn't refuse to ask for a
+# password or passphrase on hosts that need interactive auth.
+open_ssh_master()
+{
+	local host=$1
+	ssh "$host" true
+}
+
 trap "exit" INT TERM QUIT
 
 read_defaults
@@ -201,7 +210,7 @@ setup_ssh_mux
 
 for host in $hosts
 do
-	copy_to $host && install_on $host && distribute_from $host || true
+	open_ssh_master $host && copy_to $host && install_on $host && distribute_from $host || true
 done
 
 # vim: set ts=4 sw=4 tw=0 noet:
