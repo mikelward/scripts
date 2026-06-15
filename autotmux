@@ -35,6 +35,15 @@
 
 TMUX_SEP="${TMUX_SEP:-/}"
 
+sanitize_session_name() {
+  # tmux silently rewrites '.' and ':' (target metacharacters: session:window.pane)
+  # in stored session names to '_', and parses a target containing them as a
+  # window/pane selector. Mirror that rewrite so any name we create or target --
+  # whether built from a project prefix or supplied verbatim as a switch
+  # argument -- round-trips and stays switchable.
+  printf '%s' "${1//[.:]/_}"
+}
+
 in_tmux() {
   test -n "$TMUX"
 }
@@ -64,13 +73,9 @@ get_prefix() {
   local root name
   root="$(rootdir 2>/dev/null)"
   test -n "$root" || return 0
-  name="$(basename "$root")"
-  # tmux silently rewrites '.' and ':' in session names to '_' -- they are
-  # target metacharacters (session:window.pane), so a basename containing them
-  # would otherwise produce a prefix that never matches the names tmux actually
-  # stores, and a switch target like "my.proj/1" would be parsed as a pane
-  # target. Normalize them up front so the prefix equals the stored session name.
-  name="${name//[.:]/_}"
+  # Normalize '.'/':' (see sanitize_session_name) so the prefix equals the name
+  # tmux actually stores and the resulting targets stay switchable.
+  name="$(sanitize_session_name "$(basename "$root")")"
   printf '%s%s' "$name" "$TMUX_SEP"
 }
 
@@ -422,6 +427,10 @@ case "$1" in
       exit 1
     fi
     target="$(resolve_switch_target "$2")" || exit 1
+    # A target that fell back to the raw argument may carry '.'/':'; normalize it
+    # so the session we create or attach to matches the name tmux stores and the
+    # switch target stays switchable. Resolved existing names are already clean.
+    target="$(sanitize_session_name "$target")"
     if in_tmux; then
       do_switch "$target"
     else

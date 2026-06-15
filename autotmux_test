@@ -498,6 +498,25 @@ test_switch_unmerged_matches_whole_word() {
   assert_called "tmux switch-client -t abc"
 }
 
+test_switch_normalizes_target_metacharacters() {
+  # An explicit target that falls back to the raw argument must have '.'/':'
+  # normalized to '_', or tmux creates "my_proj" but the switch-client target
+  # "my.proj" is parsed as a pane selector and the switch fails.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch my.proj
+  assert_status 0
+  assert_called "tmux new-session -d -s my_proj"
+  assert_called "tmux switch-client -t my_proj"
+  assert_not_called "switch-client -t my\.proj"   # escape '.' (grep regex)
+}
+
+test_switch_outside_tmux_normalizes_target() {
+  run_autotmux switch a:b
+  assert_status 0
+  assert_called "tmux new-session -s a_b"
+}
+
 test_switch_outside_tmux_attaches() {
   # With no client to switch, a switch attaches the resolved session.
   add_session foo 0
@@ -608,6 +627,8 @@ run_test "switch prompts when several sessions match" test_switch_prompts_on_mul
 run_test "switch does not switch when the prompt is cancelled" test_switch_cancel_does_not_switch
 run_test "switch matches a session by vcs unmerged output" test_switch_matches_vcs_unmerged
 run_test "switch unmerged matching is whole-word" test_switch_unmerged_matches_whole_word
+run_test "switch normalizes '.'/':' in a fallback target" test_switch_normalizes_target_metacharacters
+run_test "switch outside tmux normalizes '.'/':' in a fallback target" test_switch_outside_tmux_normalizes_target
 run_test "switch outside tmux attaches the resolved session" test_switch_outside_tmux_attaches
 run_test "switch outside tmux creates a missing session" test_switch_outside_tmux_creates_when_missing
 run_test "switch with no arg switches to the prefix session" test_switch_no_arg_switches_on_mismatch
