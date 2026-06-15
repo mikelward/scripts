@@ -275,6 +275,30 @@ ROOTDIR
   assert_called "tmux new-session -s a_b_c/1"
 }
 
+test_reuses_separatorless_session() {
+  # A detached session named exactly like the bare prefix (no separator) belongs
+  # to the project, so startup reuses it instead of creating "myproject/1".
+  export TMUX_PREFIX="myproject/"
+  add_session "myproject" 0
+  run_autotmux
+  assert_status 0
+  assert_called "tmux attach-session -t myproject"
+  assert_output_contains "Attaching tmux session myproject"
+  assert_not_called "tmux new-session"
+}
+
+test_mismatch_switch_reuses_separatorless_session() {
+  # The no-arg/mismatch switch path reuses the separatorless session too.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  export TMUX_PREFIX="myproject/"
+  add_session "other/1" 1
+  add_session "myproject" 0
+  run_autotmux
+  assert_status 0
+  assert_called "tmux switch-client -t myproject"
+}
+
 test_uses_prefix() {
   export TMUX_PREFIX="myproject/"
   run_autotmux
@@ -606,6 +630,8 @@ run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "attaches to a disconnected session whose name has a space" test_attaches_disconnected_with_space_in_name
 run_test "creates the next number when a space-named session is attached" test_creates_next_number_with_space_in_name
 run_test "normalizes '.' and ':' in the project prefix" test_sanitizes_prefix_metacharacters
+run_test "reuses a detached separatorless session at startup" test_reuses_separatorless_session
+run_test "reuses a detached separatorless session on mismatch switch" test_mismatch_switch_reuses_separatorless_session
 run_test "uses TMUX_PREFIX for session names" test_uses_prefix
 run_test "returns non-zero when tmux attach fails" test_returns_nonzero_on_attach_failure
 run_test "preserves specific exit code from tmux attach" test_preserves_attach_exit_code
