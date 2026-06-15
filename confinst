@@ -34,6 +34,12 @@ extract()
 		fi
 
 
+		if test -L "$confdir"
+		then
+			info "Removing symlink $confdir"
+			run rm "$confdir"
+		fi
+
 		create_dir "$confdir"
 
 		info "Extracting $confball into $confdir"
