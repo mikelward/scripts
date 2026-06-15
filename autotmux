@@ -27,21 +27,23 @@
 # loop: a switch happens instantly and in place. Outside tmux there is no client
 # to switch, so a switch there just attaches (or creates) the resolved session.
 #
-# tmux session names may not contain ':' or '.' (it silently rewrites them to
-# '_', and they are target metacharacters), so the project prefix is joined with
-# '/' instead of the ':' autoshpool uses, and any '.'/':' in the project name is
-# normalized to '_'. A project basename can never contain '/', so prefix
-# matching stays unambiguous.
+# tmux treats ':' '.' (target metacharacters) and '#' (format expansion)
+# specially in session names and rewrites them to '_', so the project prefix is
+# joined with '/' instead of the ':' autoshpool uses, and any of those
+# characters in a generated name is normalized to '_' (see sanitize_session_name).
+# A project basename can never contain '/', so prefix matching stays unambiguous.
 
 TMUX_SEP="${TMUX_SEP:-/}"
 
 sanitize_session_name() {
-  # tmux silently rewrites '.' and ':' (target metacharacters: session:window.pane)
-  # in stored session names to '_', and parses a target containing them as a
-  # window/pane selector. Mirror that rewrite so any name we create or target --
-  # whether built from a project prefix or supplied verbatim as a switch
-  # argument -- round-trips and stays switchable.
-  printf '%s' "${1//[.:]/_}"
+  # Normalize the characters tmux treats specially in session names so a name we
+  # *create* round-trips: '.' and ':' are target metacharacters (session:window
+  # .pane) that tmux rewrites to '_' and parses as selectors, and '#' is its
+  # format-expansion character that newer tmux also rewrites via clean_name().
+  # Only applied to names we generate (project prefix, or a switch argument with
+  # no existing-session/path match) -- never to a resolved existing name, which
+  # already reflects exactly what tmux stored.
+  printf '%s' "${1//[#.:]/_}"
 }
 
 in_tmux() {
@@ -151,10 +153,12 @@ do_switch() {
   # switch, so no detach/re-attach dance is needed.
   local target="$1" dir="$2"
   if ! session_exists "$target"; then
+    # Fail fast if creation fails (e.g. a deleted working directory) rather than
+    # falling through to a switch-client that can't find the target.
     if test -n "$dir"; then
-      tmux new-session -d -s "$target" -c "$dir"
+      tmux new-session -d -s "$target" -c "$dir" || return
     else
-      tmux new-session -d -s "$target"
+      tmux new-session -d -s "$target" || return
     fi
   fi
   tmux switch-client -t "$target"
@@ -180,9 +184,11 @@ handle_already_attached() {
   }
   echo "Session $session does not match prefix '$TMUX_PREFIX'; switching to $target"
   # Carry the current directory across so a freshly created session opens where
-  # the user already is.
+  # the user already is. Propagate the switch result: with the `autotmux && exit`
+  # startup hook, masking a failed switch would exit the shell without having
+  # moved the user to the intended session.
   do_switch "$target" "$PWD"
-  exit 0
+  exit $?
 }
 
 create_and_attach_next() {
@@ -341,7 +347,10 @@ resolve_switch_target() {
 
   local n="${#names[@]}"
   if test "$n" -eq 0; then
-    printf '%s\n' "$arg"          # no match: treat arg as a session name
+    # No match: treat arg as a new session name. This is the one path that
+    # creates a fresh name, so normalize it here (the existing-name and path
+    # match paths above already return exactly what tmux stored).
+    printf '%s\n' "$(sanitize_session_name "$arg")"
     return
   fi
   if test "$n" -eq 1; then
@@ -430,11 +439,10 @@ case "$1" in
       echo "Not in a tmux session; nothing to switch to" >&2
       exit 1
     fi
+    # resolve_switch_target normalizes a generated fallback name itself, and
+    # leaves resolved existing names untouched, so we target exactly what tmux
+    # stored (important for names that legally contain '#', which tmux keeps).
     target="$(resolve_switch_target "$2")" || exit 1
-    # A target that fell back to the raw argument may carry '.'/':'; normalize it
-    # so the session we create or attach to matches the name tmux stores and the
-    # switch target stays switchable. Resolved existing names are already clean.
-    target="$(sanitize_session_name "$target")"
     if in_tmux; then
       do_switch "$target"
     else
