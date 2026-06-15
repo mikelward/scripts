@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Configure KDE Plasma 6 desktop environment.
 #
 # Sets up:
@@ -419,6 +419,7 @@ reload_diminactive_effect
 reload_kglobalaccel
 
 if is_command setup-kde.local; then
+  source setup-kde.local
   info "Running setup-kde.local"
 fi
 
