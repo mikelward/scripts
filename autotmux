@@ -92,9 +92,13 @@ get_all_session_names() {
 get_disconnected_sessions() {
   # Detached sessions whose name belongs to the current project prefix. The
   # prefix is compared as a literal string, not a regex, since project names can
-  # contain regex metacharacters (e.g. "my.proj").
-  list_tmux_sessions | awk -F'\t' -v p="$TMUX_PREFIX" \
-    '(p == "" || index($1, p) == 1) && $2 == 0 { print $1 }'
+  # contain regex metacharacters (e.g. "my.proj"). A session named exactly like
+  # the prefix with its separator stripped (e.g. "myproject" for "myproject/")
+  # also belongs to the project, matching session_matches_prefix, so it stays
+  # reusable instead of being stranded in favour of a fresh "myproject/1".
+  local bare="${TMUX_PREFIX%"$TMUX_SEP"}"
+  list_tmux_sessions | awk -F'\t' -v p="$TMUX_PREFIX" -v bare="$bare" \
+    '(p == "" || index($1, p) == 1 || $1 == bare) && $2 == 0 { print $1 }'
 }
 
 first_disconnected_session() {
