@@ -90,7 +90,7 @@ handle_already_attached() {
   abort_if_hung
 
   target="$(pick_prefixed_session)" || {
-    echo "Already connected to shpool session $session"
+    echo "No free session number under prefix '$SHPOOL_PREFIX'; staying in $session" >&2
     exit 1
   }
   echo "Session $session does not match prefix '$SHPOOL_PREFIX'; switching to $target"
@@ -438,7 +438,7 @@ clear_switch() {
 autoshpool_loop() {
   #exec >>"$HOME/.autoshpool.log" 2>>"$HOME/.autoshpool.log"
 
-  source "$HOME/.shrc.vcs"
+  test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
   SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
 
@@ -491,7 +491,10 @@ autoshpool_loop() {
 
 is_sourced() {
   if test -n "$ZSH_VERSION"; then
-    case $ZSH_EVAL_CONTEXT in *:file:*)
+    # ZSH_EVAL_CONTEXT is a colon-separated list whose last component is "file"
+    # when the script is being sourced (e.g. "toplevel:file"). Match either an
+    # internal ":file:" segment or a trailing ":file".
+    case $ZSH_EVAL_CONTEXT in *:file:*|*:file)
       return 0;;
     esac
   elif test -n "$BASH_VERSION"; then
