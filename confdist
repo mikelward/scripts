@@ -198,7 +198,14 @@ require_tarballs()
 open_ssh_master()
 {
 	local host=$1
-	ssh "$host" true
+	printf "Connecting to $host... "
+	if ssh "$host" true
+	then
+		printf "success\n"
+	else
+		printf "failure\n"
+		return 1
+	fi
 }
 
 trap "exit" INT TERM QUIT
