@@ -1,78 +1,424 @@
 #!/bin/bash
-# autotmux - attach to or create a per-project tmux session
+# autotmux - connect to first existing tmux session or start a new one
+#
+# A tmux counterpart to autoshpool. Same idea: at shell startup, attach to a
+# session that fits the current project (reusing a detached one, never stealing
+# an attached one), or create the next numbered session for the project.
 #
 # Usage:
-#   autotmux                 - attach to (or create) this project's tmux session
-#   autotmux switch <name>   - switch to (or create) session <name>
-#   autotmux switch          - switch to (or create) this project's session
-#   autotmux <tmux args...>  - pass through to tmux
+#   autotmux                  - attach to or create a tmux session
+#   autotmux switch <target>  - switch the current client to a session
+#   autotmux switch           - switch to the session that fits the current
+#                               directory's project (same choice the startup
+#                               auto-switch makes)
+#   autotmux <tmux args...>   - pass through to tmux
 #
-# The session name mirrors autoshpool's naming: inside a VCS workspace it is the
-# basename of the project root; outside one, it is the short hostname. So
-# `cd repo && autotmux` attaches-or-creates a tmux session named after the repo.
+# <target> is a session name (e.g. "2"), or any word matching a path segment of
+# a session's working directory. For example, "switch sep" finds the session
+# whose cwd is something like /blah/username/sep/foo and switches to it.
 #
-# Outside tmux we `exec tmux new-session -A -s <name>`, which replaces the shell
-# with the session and attaches to it (creating it if necessary). Inside tmux
-# we instead switch the current client to the target session, creating it
-# detached first if it doesn't exist yet, so a nested `tmux new-session` is never
-# attempted.
+# In shrc, run at startup:
+#   autotmux && exit
+# And define a switch helper:
+#   switchtmux() { autotmux switch "$1"; }
+#
+# Unlike shpool, tmux can switch a live client between sessions on its own
+# (switch-client), so there is no switch-request file and no outer re-attach
+# loop: a switch happens instantly and in place. Outside tmux there is no client
+# to switch, so a switch there just attaches (or creates) the resolved session.
+#
+# tmux session names may not contain ':' (it silently becomes '_') so the
+# project prefix is joined with '/' instead of the ':' autoshpool uses. A
+# project basename can never contain '/', so prefix matching stays unambiguous.
 
-short_hostname() {
-  # Mirror shrc's short_hostname: the first dot-delimited component of the
-  # hostname, with a leading "$USER-" stripped.
-  local hostname="${HOSTNAME:-$(hostname 2>/dev/null)}"
-  hostname="${hostname%%.*}"
-  hostname="${hostname#${USER:-$USERNAME}-}"
-  printf '%s' "$hostname"
+TMUX_SEP="${TMUX_SEP:-/}"
+
+in_tmux() {
+  test -n "$TMUX"
 }
 
-tmux_session_name() {
-  # The tmux session name for the current directory: the basename of the VCS
-  # project root, or the short hostname when not inside a workspace. Load the
-  # user's vcs helper (best-effort) so rootdir works without sourcing the full
-  # shell rc.
-  test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+get_current_tmux_session() {
+  test -n "$TMUX" || return 0
+  tmux display-message -p '#S' 2>/dev/null
+}
+
+session_matches_prefix() {
+  # True if a session name ($1) belongs to the project identified by a prefix
+  # ($2). With no prefix (e.g. outside any version-controlled directory) we
+  # never force a switch, so every session matches.
+  local session="$1" prefix="$2"
+  test -z "$prefix" && return 0
+  case "$session" in
+    "$prefix"*) return 0 ;;       # already carries the prefix (e.g. "proj/3")
+  esac
+  # Also accept an exact match with the separator stripped, so a session named
+  # "proj" counts as matching the prefix "proj/".
+  test "$session" = "${prefix%"$TMUX_SEP"}"
+}
+
+get_prefix() {
+  # The current project name with the separator appended, or empty string when
+  # we're not under version control (we don't force a prefix then).
   local root
   root="$(rootdir 2>/dev/null)"
-  if test -n "$root"; then
-    basename "$root"
-  else
-    short_hostname
+  test -n "$root" || return 0
+  printf '%s%s' "$(basename "$root")" "$TMUX_SEP"
+}
+
+list_tmux_sessions() {
+  # One "name<TAB>attached" row per session. "attached" is tmux's client count
+  # (0 means detached). Empty output when no server is running.
+  tmux list-sessions -F "#{session_name}"$'\t'"#{session_attached}" 2>/dev/null
+}
+
+get_all_session_names() {
+  list_tmux_sessions | cut -f1
+}
+
+get_disconnected_sessions() {
+  # Detached sessions whose name belongs to the current project prefix. The
+  # prefix is compared as a literal string, not a regex, since project names can
+  # contain regex metacharacters (e.g. "my.proj").
+  list_tmux_sessions | awk -F'\t' -v p="$TMUX_PREFIX" \
+    '(p == "" || index($1, p) == 1) && $2 == 0 { print $1 }'
+}
+
+first_disconnected_session() {
+  declare -a disconnected=( $(get_disconnected_sessions) )
+  test "${#disconnected[@]}" -gt 0 || return 1
+  printf '%s\n' "${disconnected[0]}"
+}
+
+session_exists() {
+  # True if a session with exactly this name exists. Exact match (rather than
+  # tmux's looser target matching) so a name that is a prefix of another doesn't
+  # falsely report as existing.
+  get_all_session_names | grep -Fxq -- "$1"
+}
+
+pick_prefixed_session() {
+  # Print the session to switch to for the current TMUX_PREFIX: reuse the first
+  # detached session that already matches, otherwise the next free numbered name.
+  # Mirrors the selection the startup path makes for a new shell.
+  declare -a disconnected=( $(get_disconnected_sessions) )
+  if test "${#disconnected[@]}" -gt 0; then
+    printf '%s\n' "${disconnected[0]}"
+    return
   fi
+  declare -A taken
+  local s num
+  for s in $(get_all_session_names); do
+    taken[$s]=1
+  done
+  for num in $(seq 1 100); do
+    s="$TMUX_PREFIX$num"
+    if test -z "${taken[$s]}"; then
+      printf '%s\n' "$s"
+      return
+    fi
+  done
+  return 2
 }
 
-normalize_name() {
-  # tmux cleans "#", ":" and "." out of session names (they are target-syntax
-  # metacharacters), so `new-session -s foo.com` actually creates "foo_com".
-  # Normalize up front so the name we create and the exact "=name" target we
-  # later switch to agree -- otherwise switching to "=foo.com" can't find the
-  # "foo_com" session tmux really made.
-  printf '%s' "$1" | tr '#:.' '___'
-}
-
-attach_or_switch() {
-  # Attach to the named session, creating it if necessary. Inside an existing
-  # tmux client, switch that client (creating a detached session first if the
-  # target doesn't exist); a nested `new-session` would otherwise fail.
-  local name
-  name="$(normalize_name "$1")"
-  if test -n "$TMUX"; then
-    # Use exact targets ("=name"): a bare -t target matches any session whose
-    # name *starts with* "name", so without "=" a project "api" would attach to
-    # an existing "api-server" instead of creating its own session.
-    tmux has-session -t "=$name" 2>/dev/null || tmux new-session -d -s "$name"
-    tmux switch-client -t "=$name"
-  else
-    exec tmux new-session -A -s "$name"
+do_switch() {
+  # Switch the current client to session $1, creating it (optionally rooted at
+  # the directory $2) if it doesn't exist yet. This is tmux's native in-place
+  # switch, so no detach/re-attach dance is needed.
+  local target="$1" dir="$2"
+  if ! session_exists "$target"; then
+    if test -n "$dir"; then
+      tmux new-session -d -s "$target" -c "$dir"
+    else
+      tmux new-session -d -s "$target"
+    fi
   fi
+  tmux switch-client -t "$target"
 }
 
+handle_already_attached() {
+  # When this shell is already inside a session, either stay put (the session
+  # belongs to this directory's project) or switch to one that does. This guards
+  # against an accidental nested tmux when a shell started in a project whose
+  # prefix differs from its session lands here at startup.
+  local session target
+  session="$(get_current_tmux_session)"
+  test -n "$session" || return 0
+
+  if session_matches_prefix "$session" "$TMUX_PREFIX"; then
+    echo "Already in tmux session $session"
+    exit 1
+  fi
+
+  target="$(pick_prefixed_session)" || {
+    echo "No free session number under prefix '$TMUX_PREFIX'; staying in $session" >&2
+    exit 1
+  }
+  echo "Session $session does not match prefix '$TMUX_PREFIX'; switching to $target"
+  # Carry the current directory across so a freshly created session opens where
+  # the user already is.
+  do_switch "$target" "$PWD"
+  exit 0
+}
+
+create_and_attach_next() {
+  declare -A taken
+  local s
+  for s in $(get_all_session_names); do
+    taken[$s]=1
+  done
+  local errfile
+  errfile=$(mktemp) || return 2
+  # shellcheck disable=SC2064  # expand the path now, not on trap fire
+  trap "rm -f '$errfile'" RETURN
+  local num session rc
+  for num in $(seq 1 100); do
+    session="$TMUX_PREFIX$num"
+    if test -n "${taken[$session]}"; then
+      continue
+    fi
+    echo "Creating tmux session $session"
+    : >"$errfile"
+    # A successful new-session runs interactively and returns when the client
+    # detaches. A name collision (someone created it since we listed) returns
+    # immediately with "duplicate session"; treat that like autoshpool's
+    # already-attached retry and try the next number instead.
+    tmux new-session -s "$session" -c "$PWD" 2>"$errfile"
+    rc=$?
+    if grep -q "duplicate session" "$errfile"; then
+      cat "$errfile" >&2
+      taken[$session]=1
+      continue
+    fi
+    test -s "$errfile" && cat "$errfile" >&2
+    return $rc
+  done
+  echo "You already have more than 100 sessions??" >&2
+  return 2
+}
+
+attach_or_create() {
+  local session
+  session="$(first_disconnected_session)"
+  if test -n "$session"; then
+    echo "Attaching tmux session $session"
+    tmux attach-session -t "$session"
+    return $?
+  fi
+  create_and_attach_next
+}
+
+list_tmux_panes() {
+  # One "session<TAB>path" row per pane, for resolving a switch target to the
+  # session whose working directory matches.
+  tmux list-panes -a -F "#{session_name}"$'\t'"#{pane_current_path}" 2>/dev/null
+}
+
+session_state() {
+  # "attached" or "disconnected" for a session ($1), or empty if it isn't listed.
+  list_tmux_sessions | awk -F'\t' -v n="$1" \
+    '$1 == n { print ($2 + 0 > 0) ? "attached" : "disconnected"; exit }'
+}
+
+status_icon() {
+  # A compact icon for a session status ($1), so listings stay narrow:
+  #   attached -> filled circle, disconnected -> empty circle.
+  # Anything else (including an empty/unknown status) falls back to a question
+  # mark so unexpected statuses are still visible.
+  case "$1" in
+    attached)     printf '%s' '●' ;;
+    disconnected) printf '%s' '○' ;;
+    *)            printf '%s' '?' ;;
+  esac
+}
+
+session_commands() {
+  # A one-line summary of the commands running in a session's panes, so similar
+  # sessions can be told apart (e.g. "zsh vim").
+  tmux list-panes -t "$1" -F '#{pane_current_command}' 2>/dev/null \
+    | sort -u | paste -sd' ' -
+}
+
+dir_vcs_root_name() {
+  # The last component of the version-control root for a directory, or empty if
+  # the directory isn't under version control (we don't require vcs to work).
+  local root
+  root="$(cd "$1" 2>/dev/null && vcs rootdir 2>/dev/null)"
+  test -n "$root" && basename "$root"
+}
+
+dir_vcs_unmerged() {
+  # The unmerged items vcs reports for a directory, or empty. Best-effort: we
+  # don't require vcs to be working.
+  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
+}
+
+describe_session() {
+  # Render a description of a session, shared by the switch disambiguation prompt
+  # and tmuxlist so both use the same format:
+  #   line 1: status icon, session name, vcs root basename, working directory
+  #           basename, and the commands running in the session
+  #   remaining lines: the vcs unmerged output, indented by two spaces
+  local session="$1" path="$2" state="$3"
+  printf '%s  %s  %s  %s  %s\n' \
+    "$(status_icon "$state")" "$session" \
+    "$(dir_vcs_root_name "$path")" "$(basename "$path")" \
+    "$(session_commands "$session")"
+  dir_vcs_unmerged "$path" | sed 's/^/  /'
+}
+
+shell_matches() {
+  # True if a working directory ($1) matches the argument ($2), either as a full
+  # path segment of the directory or as a whole word in the directory's vcs
+  # unmerged output.
+  local cwd="$1" arg="$2"
+  case "$cwd/" in
+    */"$arg"/*) return 0 ;;
+  esac
+  dir_vcs_unmerged "$cwd" | grep -Fwq -- "$arg"
+}
+
+resolve_switch_target() {
+  # Resolve the switch argument to a session name, printing it on stdout.
+  # A bare number, or the name of an existing session, is used as-is. Otherwise
+  # look for sessions whose working directory matches the argument -- either it
+  # contains the argument as a path segment, or the argument is a whole word in
+  # that directory's vcs unmerged output -- and reuse the matching session:
+  # switch directly when there is a single match, prompt to disambiguate when
+  # there are several, and fall back to using the argument as-is when there are
+  # none (so new session names still work). Returns non-zero (without printing)
+  # if the user cancels a prompt.
+  local arg="$1"
+  case "$arg" in
+    ''|*[!0-9]*) ;;                      # not a bare number: try path matching
+    *) printf '%s\n' "$arg"; return ;;   # bare number: use as session name
+  esac
+
+  # An exact existing session name always wins, so switching to a named session
+  # keeps working even when that name also appears in some session's path.
+  if session_exists "$arg"; then
+    printf '%s\n' "$arg"
+    return
+  fi
+
+  local session path
+  local -a names=() paths=()
+  declare -A seen
+  while IFS=$'\t' read -r session path; do
+    test -n "$session" || continue
+    test -n "$path" || continue
+    shell_matches "$path" "$arg" || continue
+    test -n "${seen[$session]}" && continue   # one row per session
+    seen[$session]=1
+    names+=("$session")
+    paths+=("$path")
+  done < <(list_tmux_panes)
+
+  local n="${#names[@]}"
+  if test "$n" -eq 0; then
+    printf '%s\n' "$arg"          # no match: treat arg as a session name
+    return
+  fi
+  if test "$n" -eq 1; then
+    printf '%s\n' "${names[0]}"
+    return
+  fi
+
+  # Several sessions match: ask the user which one to switch to. Each option is
+  # rendered with describe_session (the same format as tmuxlist) so the user can
+  # tell similar sessions apart.
+  local i sel
+  {
+    echo "Multiple sessions match '$arg':"
+    for i in "${!names[@]}"; do
+      printf '%d) ' "$((i + 1))"
+      describe_session "${names[$i]}" "${paths[$i]}" "$(session_state "${names[$i]}")"
+    done
+    printf 'Switch to which? [1-%d] ' "$n"
+  } >&2
+  read -r sel || { echo "Not switching." >&2; return 1; }
+  case "$sel" in
+    ''|*[!0-9]*) echo "Not switching." >&2; return 1 ;;
+  esac
+  if test "$sel" -lt 1 || test "$sel" -gt "$n"; then
+    echo "Not switching." >&2
+    return 1
+  fi
+  printf '%s\n' "${names[$((sel - 1))]}"
+}
+
+# Start a tmux session with a useful session name.
+# Detach if the user cleanly exited; stay if there was an error so the user can
+# see and fix it (autotmux returns non-zero, so the caller's `&& exit` won't fire).
+autotmux_main() {
+  test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+
+  TMUX_PREFIX="${TMUX_PREFIX:-$(get_prefix)}"
+
+  if in_tmux; then
+    handle_already_attached
+  fi
+
+  attach_or_create
+}
+
+is_sourced() {
+  if test -n "$ZSH_VERSION"; then
+    # ZSH_EVAL_CONTEXT is a colon-separated list whose last component is "file"
+    # when the script is being sourced (e.g. "toplevel:file"). Match either an
+    # internal ":file:" segment or a trailing ":file".
+    case $ZSH_EVAL_CONTEXT in *:file:*|*:file)
+      return 0;;
+    esac
+  elif test -n "$BASH_VERSION"; then
+    test "${BASH_SOURCE[0]}" != "$0" && return 0
+  else
+    case ${0##*/} in dash|-dash|ksh|-ksh|sh|-sh)
+      return 0;;
+    esac
+  fi
+  return 1
+}
+
+if is_sourced; then
+  return
+fi
+
+# autotmux switch <session> - switch the current client to the named session
+# autotmux switch           - switch to this directory's session
+# autotmux <tmux args...>   - pass through to tmux
+# autotmux (no args)        - attach to or create a session
 case "$1" in
   switch)
-    attach_or_switch "${2:-$(tmux_session_name)}"
+    # Load the user's vcs helper (best-effort) so vcs rootdir/unmerged work when
+    # matching and describing sessions.
+    test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+    if test -z "$2"; then
+      # No target: switch to the session that fits this directory's project --
+      # the same selection the startup auto-switch makes. handle_already_attached
+      # keeps the "already matches, stay put" and "mismatch, switch" choices in
+      # one place; it only returns here when we aren't inside a session.
+      TMUX_PREFIX="${TMUX_PREFIX:-$(get_prefix)}"
+      if in_tmux; then
+        handle_already_attached
+      fi
+      echo "Not in a tmux session; nothing to switch to" >&2
+      exit 1
+    fi
+    target="$(resolve_switch_target "$2")" || exit 1
+    if in_tmux; then
+      do_switch "$target"
+    else
+      # No client to switch: attach to (or create) the resolved session instead.
+      if session_exists "$target"; then
+        tmux attach-session -t "$target"
+      else
+        tmux new-session -s "$target"
+      fi
+    fi
+    exit $?
     ;;
   "")
-    attach_or_switch "$(tmux_session_name)"
+    autotmux_main
     ;;
   *)
     exec tmux "$@"

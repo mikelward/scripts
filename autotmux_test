@@ -15,21 +15,52 @@ setup() {
 
   mkdir -p "$TEST_TMPDIR/bin"
 
-  # Create a fake tmux that records its calls. has-session reports "missing"
-  # (exit 1) unless the session name is listed in .tmux_sessions, so the
-  # switch-inside-tmux path exercises the create-then-switch branch.
+  # Create a fake tmux that records its calls and is backed by fixture files:
+  #   .tmux_sessions - one "name<TAB>attached" row per session (for list-sessions)
+  #   .tmux_panes    - one "session<TAB>path" row per pane (for list-panes -a)
+  #   .tmux_dup      - session names that new-session should reject as duplicates
+  #   $TMUX_S        - the current session name (for display-message -p '#S')
   cat > "$TEST_TMPDIR/bin/tmux" <<'TMUX'
 #!/bin/bash
 echo "tmux $*" >> "$HOME/.tmux_calls"
-case "$1" in
-  has-session)
-    # Strip the leading "=" exact-match marker autotmux passes (-t =name).
-    name="${3#=}"
-    grep -Fxq "$name" "$HOME/.tmux_sessions" 2>/dev/null
-    exit $?
+cmd="$1"; shift
+case "$cmd" in
+  list-sessions)
+    cat "$HOME/.tmux_sessions" 2>/dev/null
+    test -s "$HOME/.tmux_sessions" || { echo "no server running" >&2; exit 1; }
+    exit 0
+    ;;
+  list-panes)
+    if printf '%s\n' "$@" | grep -qx -- '-a'; then
+      cat "$HOME/.tmux_panes" 2>/dev/null
+    else
+      # list-panes -t NAME -F '#{pane_current_command}': serve a generic list.
+      cat "$HOME/.tmux_cmds" 2>/dev/null
+    fi
+    exit 0
+    ;;
+  display-message)
+    printf '%s\n' "$TMUX_S"
+    exit 0
+    ;;
+  attach-session)
+    exit "${TMUX_ATTACH_EXIT:-0}"
     ;;
   new-session)
-    exit "${TMUX_NEW_SESSION_EXIT:-0}"
+    # Find the -s NAME argument.
+    name=
+    while [ $# -gt 0 ]; do
+      [ "$1" = -s ] && { name="$2"; break; }
+      shift
+    done
+    if grep -Fxq "$name" "$HOME/.tmux_dup" 2>/dev/null; then
+      echo "duplicate session: $name" >&2
+      exit 1
+    fi
+    exit "${TMUX_NEW_EXIT:-0}"
+    ;;
+  switch-client)
+    exit 0
     ;;
   *)
     exit 0
@@ -38,26 +69,50 @@ esac
 TMUX
   chmod +x "$TEST_TMPDIR/bin/tmux"
 
-  # Create a fake rootdir that prints the contents of .vcsroot, so tests can
-  # control whether we look "inside a project".
+  # Fake rootdir that prints nothing by default (no project prefix).
   cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
 #!/bin/bash
-cat "$HOME/.vcsroot" 2>/dev/null
+echo ""
 ROOTDIR
   chmod +x "$TEST_TMPDIR/bin/rootdir"
 
-  # Stub .shrc.vcs so autotmux's best-effort `source` is a no-op (the rootdir
-  # binary above is used instead of a shell function).
+  # Fake vcs that reads per-directory marker files in the current directory:
+  #   .vcsroot  - printed by "vcs rootdir"
+  #   .unmerged - printed by "vcs unmerged"
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
+#!/bin/bash
+case "$1" in
+  rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
+
+  # Create stub .shrc.vcs
   touch "$TEST_TMPDIR/.shrc.vcs"
 
   # Clean state
   unset TMUX
-  unset TMUX_NEW_SESSION_EXIT
-  export HOSTNAME="laptop"
-  export USER="mikel"
+  unset TMUX_S
+  unset TMUX_PREFIX
+  unset TMUX_ATTACH_EXIT
+  unset TMUX_NEW_EXIT
   rm -f "$TEST_TMPDIR/.tmux_calls"
   rm -f "$TEST_TMPDIR/.tmux_sessions"
-  rm -f "$TEST_TMPDIR/.vcsroot"
+  rm -f "$TEST_TMPDIR/.tmux_panes"
+  rm -f "$TEST_TMPDIR/.tmux_dup"
+  rm -f "$TEST_TMPDIR/.tmux_cmds"
+}
+
+# Add a session row: name and attached count (default 0 = detached).
+add_session() {
+  printf '%s\t%s\n' "$1" "${2:-0}" >> "$HOME/.tmux_sessions"
+}
+
+# Add a pane row: session name and working directory.
+add_pane() {
+  printf '%s\t%s\n' "$1" "$2" >> "$HOME/.tmux_panes"
 }
 
 teardown() {
@@ -67,6 +122,22 @@ teardown() {
 run_autotmux() {
   set +e
   output="$("$SCRIPT_DIR/autotmux" "$@" </dev/null 2>&1)"
+  status=$?
+  set -e
+}
+
+# Like run_autotmux, but feeds the first argument to the script on stdin.
+run_autotmux_input() {
+  local input="$1"; shift
+  set +e
+  output="$(printf '%s\n' "$input" | "$SCRIPT_DIR/autotmux" "$@" 2>&1)"
+  status=$?
+  set -e
+}
+
+run_tmuxlist() {
+  set +e
+  output="$("$SCRIPT_DIR/tmuxlist" "$@" </dev/null 2>&1)"
   status=$?
   set -e
 }
@@ -81,8 +152,17 @@ assert_status() {
   fi
 }
 
+assert_output_contains() {
+  if [[ "$output" != *"$1"* ]]; then
+    echo "  FAIL: output does not contain '$1'"
+    echo "  output: $output"
+    TEST_FAILED=1
+    return 1
+  fi
+}
+
 assert_called() {
-  if ! grep -qx "$1" "$HOME/.tmux_calls" 2>/dev/null; then
+  if ! grep -q "$1" "$HOME/.tmux_calls" 2>/dev/null; then
     echo "  FAIL: expected call '$1' not found"
     echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
     TEST_FAILED=1
@@ -92,7 +172,7 @@ assert_called() {
 
 assert_not_called() {
   if grep -q "$1" "$HOME/.tmux_calls" 2>/dev/null; then
-    echo "  FAIL: did not expect call matching '$1'"
+    echo "  FAIL: did not expect call '$1'"
     echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
     TEST_FAILED=1
     return 1
@@ -104,6 +184,9 @@ run_test() {
   local func="$2"
   TESTS_RUN=$((TESTS_RUN + 1))
   setup
+  # TEST_FAILED catches asserts that fail mid-test: running "$func" as an `if`
+  # condition disables `set -e` inside it, so a failed assert that isn't the
+  # last statement would otherwise be ignored.
   TEST_FAILED=
   if "$func" && test -z "$TEST_FAILED"; then
     echo "ok $TESTS_RUN $name"
@@ -115,133 +198,385 @@ run_test() {
   teardown
 }
 
-# --- tests ---
-
-test_bare_creates_project_session() {
-  # Inside a project, bare autotmux attaches to a session named after the root.
-  echo "/home/u/myproject" > "$HOME/.vcsroot"
-  run_autotmux
-  assert_status 0
-  assert_called "tmux new-session -A -s myproject"
-}
-
-test_bare_uses_hostname_outside_project() {
-  # Outside any project, the session is named after the short hostname.
-  : > "$HOME/.vcsroot"      # rootdir prints nothing
-  run_autotmux
-  assert_status 0
-  assert_called "tmux new-session -A -s laptop"
-}
-
-test_short_hostname_strips_user_prefix() {
-  # short_hostname drops a leading "$USER-" and any domain suffix.
-  : > "$HOME/.vcsroot"
-  export HOSTNAME="mikel-box.example.com"
-  run_autotmux
-  assert_status 0
-  assert_called "tmux new-session -A -s box"
-}
-
-test_switch_outside_tmux_creates_session() {
-  # With no $TMUX, switch behaves like a bare attach to the named session.
-  run_autotmux switch work
-  assert_status 0
-  assert_called "tmux new-session -A -s work"
-  assert_not_called "switch-client"
-}
-
-test_switch_inside_tmux_switches_client() {
-  # Inside tmux, switch creates the target detached (it doesn't exist yet) and
-  # switches the current client to it instead of nesting a new-session.
-  export TMUX="/tmp/tmux-1000/default,1234,0"
-  run_autotmux switch work
-  assert_status 0
-  assert_called "tmux new-session -d -s work"
-  assert_called "tmux switch-client -t =work"
-  assert_not_called "new-session -A"
-}
-
-test_switch_inside_tmux_existing_session() {
-  # When the target already exists, switch goes straight to switch-client.
-  export TMUX="/tmp/tmux-1000/default,1234,0"
-  echo "work" > "$HOME/.tmux_sessions"
-  run_autotmux switch work
-  assert_status 0
-  assert_called "tmux switch-client -t =work"
-  assert_not_called "new-session"
-}
-
-test_switch_inside_tmux_does_not_prefix_match() {
-  # A target ("api") that is only a prefix of an existing session
-  # ("api-server") must create its own session, not switch to the other.
-  export TMUX="/tmp/tmux-1000/default,1234,0"
-  echo "api-server" > "$HOME/.tmux_sessions"
-  run_autotmux switch api
-  assert_status 0
-  assert_called "tmux new-session -d -s api"
-  assert_called "tmux switch-client -t =api"
-}
-
-test_normalizes_dotted_name_outside_tmux() {
-  # A project like "foo.com" must become "foo_com" so the created session and
-  # any later "=name" target agree (tmux strips #:. from session names).
-  echo "/home/u/foo.com" > "$HOME/.vcsroot"
-  run_autotmux
-  assert_status 0
-  assert_called "tmux new-session -A -s foo_com"
-}
-
-test_normalizes_dotted_name_inside_tmux() {
-  export TMUX="/tmp/tmux-1000/default,1234,0"
-  run_autotmux switch api.server
-  assert_status 0
-  assert_called "tmux new-session -d -s api_server"
-  assert_called "tmux switch-client -t =api_server"
-}
-
-test_switch_no_arg_uses_project_session() {
-  # `autotmux switch` with no target derives this directory's session name.
-  echo "/home/u/myproject" > "$HOME/.vcsroot"
-  run_autotmux switch
-  assert_status 0
-  assert_called "tmux new-session -A -s myproject"
-}
+# --- passthrough ---
 
 test_passthrough_to_tmux() {
-  # An unknown subcommand passes through to tmux unchanged.
-  run_autotmux list-sessions
+  run_autotmux list-keys
   assert_status 0
-  assert_called "tmux list-sessions"
+  assert_called "tmux list-keys"
 }
 
 test_passthrough_preserves_args() {
-  run_autotmux kill-session -t work
+  run_autotmux kill-session -t foo
   assert_status 0
-  assert_called "tmux kill-session -t work"
+  assert_called "tmux kill-session -t foo"
 }
 
-test_preserves_exit_code() {
-  echo "/home/u/myproject" > "$HOME/.vcsroot"
-  export TMUX_NEW_SESSION_EXIT=42
+# --- startup: attach / create ---
+
+test_creates_session_1() {
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s 1"
+  assert_output_contains "Creating tmux session 1"
+}
+
+test_attaches_disconnected_first() {
+  add_session 2 1   # attached
+  add_session 3 0   # disconnected
+  run_autotmux
+  assert_status 0
+  assert_called "tmux attach-session -t 3"
+  assert_output_contains "Attaching tmux session 3"
+}
+
+test_skips_existing_sessions() {
+  add_session 1 1
+  add_session 2 1
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s 3"
+  assert_output_contains "Creating tmux session 3"
+}
+
+test_uses_prefix() {
+  export TMUX_PREFIX="myproject/"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s myproject/1"
+}
+
+test_returns_nonzero_on_attach_failure() {
+  add_session 3 0
+  export TMUX_ATTACH_EXIT=1
+  run_autotmux
+  assert_status 1
+}
+
+test_preserves_attach_exit_code() {
+  add_session 3 0
+  export TMUX_ATTACH_EXIT=42
   run_autotmux
   assert_status 42
 }
 
+test_retries_on_duplicate_session() {
+  # new-session for "1" reports a duplicate, so autotmux tries "2".
+  echo "1" > "$HOME/.tmux_dup"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s 1"
+  assert_called "tmux new-session -s 2"
+  assert_output_contains "Creating tmux session 2"
+  assert_output_contains "duplicate session"
+}
+
+test_propagates_real_new_session_failure() {
+  # A non-zero new-session exit with no duplicate message must propagate.
+  export TMUX_NEW_EXIT=7
+  run_autotmux
+  assert_status 7
+  assert_called "tmux new-session -s 1"
+  assert_not_called "tmux new-session -s 2"
+}
+
+# --- startup: already inside tmux ---
+
+test_already_attached_matching_prefix_stays() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="myproject/2"
+  export TMUX_PREFIX="myproject/"
+  run_autotmux
+  assert_status 1
+  assert_output_contains "Already in tmux session"
+  assert_not_called "tmux switch-client"
+}
+
+test_already_attached_exact_name_matches_prefix() {
+  # A session named "myproject" (no separator) belongs to prefix "myproject/".
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="myproject"
+  export TMUX_PREFIX="myproject/"
+  run_autotmux
+  assert_status 1
+  assert_output_contains "Already in tmux session"
+}
+
+test_already_attached_mismatch_switches_to_new() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  export TMUX_PREFIX="myproject/"
+  run_autotmux
+  assert_status 0
+  assert_output_contains "does not match prefix"
+  assert_called "tmux switch-client -t myproject/1"
+}
+
+test_already_attached_mismatch_reuses_disconnected() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  export TMUX_PREFIX="myproject/"
+  add_session "other/1" 1
+  add_session "myproject/3" 0
+  run_autotmux
+  assert_status 0
+  assert_called "tmux switch-client -t myproject/3"
+}
+
+# --- switch ---
+
+test_switch_switches_client() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch foo
+  assert_status 0
+  assert_called "tmux switch-client -t foo"
+}
+
+test_switch_creates_missing_target() {
+  # Switching to a session that doesn't exist creates it (detached) first.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  run_autotmux switch foo
+  assert_status 0
+  assert_called "tmux new-session -d -s foo"
+  assert_called "tmux switch-client -t foo"
+}
+
+test_switch_does_not_recreate_existing_target() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session foo 0
+  run_autotmux switch foo
+  assert_status 0
+  assert_not_called "tmux new-session"
+  assert_called "tmux switch-client -t foo"
+}
+
+test_switch_resolves_path_segment() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "work/2" 0
+  add_pane "work/2" "/home/u/sep/foo"
+  run_autotmux switch sep
+  assert_status 0
+  assert_called "tmux switch-client -t work/2"
+}
+
+test_switch_requires_whole_segment() {
+  # "sep" must not match the "separate" directory; it falls back to a new
+  # session literally named "sep".
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "work/2" 0
+  add_pane "work/2" "/home/u/separate/foo"
+  run_autotmux switch sep
+  assert_status 0
+  assert_called "tmux switch-client -t sep"
+}
+
+test_switch_numeric_is_session_name() {
+  # A bare number is a session name, even if a session's path contains it.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "work/2" 0
+  add_pane "work/2" "/home/u/2/foo"
+  run_autotmux switch 2
+  assert_status 0
+  assert_called "tmux switch-client -t 2"
+}
+
+test_switch_existing_session_name_wins() {
+  # An existing named session is honored even if its name is also a path segment.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "work" 0
+  add_pane "five" "/home/u/work/foo"
+  run_autotmux switch work
+  assert_status 0
+  assert_called "tmux switch-client -t work"
+}
+
+test_switch_no_match_uses_arg() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "work/2" 0
+  add_pane "work/2" "/home/u/other/foo"
+  run_autotmux switch newname
+  assert_status 0
+  assert_called "tmux switch-client -t newname"
+}
+
+test_switch_prompts_on_multiple_matches() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "a/2" 0
+  add_session "b/7" 0
+  add_pane "a/2" "/home/a/sep/foo"
+  add_pane "b/7" "/home/b/sep/bar"
+  # Choosing option 2 selects the second session (b/7).
+  run_autotmux_input 2 switch sep
+  assert_status 0
+  assert_output_contains "Multiple sessions match 'sep'"
+  assert_called "tmux switch-client -t b/7"
+}
+
+test_switch_cancel_does_not_switch() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  add_session "a/2" 0
+  add_session "b/7" 0
+  add_pane "a/2" "/home/a/sep/foo"
+  add_pane "b/7" "/home/b/sep/bar"
+  # No valid selection (EOF) cancels: non-zero exit and no switch.
+  run_autotmux switch sep
+  [ "$status" -ne 0 ] || { echo "  FAIL: expected non-zero exit"; return 1; }
+  assert_not_called "tmux switch-client"
+}
+
+test_switch_matches_vcs_unmerged() {
+  # "switch abcdef" finds the session whose `vcs unmerged` lists abcdef.
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  local d="$TEST_TMPDIR/proj"
+  mkdir -p "$d"
+  printf 'abcdef Something\n123456 Other\n' > "$d/.unmerged"
+  add_session "work/7" 0
+  add_pane "work/7" "$d"
+  run_autotmux switch abcdef
+  assert_status 0
+  assert_called "tmux switch-client -t work/7"
+}
+
+test_switch_unmerged_matches_whole_word() {
+  # "abc" must not match the unmerged item "abcdef".
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  local d="$TEST_TMPDIR/proj"
+  mkdir -p "$d"
+  printf 'abcdef Something\n' > "$d/.unmerged"
+  add_session "work/7" 0
+  add_pane "work/7" "$d"
+  run_autotmux switch abc
+  assert_status 0
+  assert_called "tmux switch-client -t abc"
+}
+
+test_switch_outside_tmux_attaches() {
+  # With no client to switch, a switch attaches the resolved session.
+  add_session foo 0
+  run_autotmux switch foo
+  assert_status 0
+  assert_called "tmux attach-session -t foo"
+  assert_not_called "tmux switch-client"
+}
+
+test_switch_outside_tmux_creates_when_missing() {
+  run_autotmux switch foo
+  assert_status 0
+  assert_called "tmux new-session -s foo"
+  assert_not_called "tmux switch-client"
+}
+
+# --- switch with no argument ---
+
+test_switch_no_arg_switches_on_mismatch() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="other/1"
+  export TMUX_PREFIX="myproject/"
+  run_autotmux switch
+  assert_status 0
+  assert_output_contains "does not match prefix"
+  assert_called "tmux switch-client -t myproject/1"
+}
+
+test_switch_no_arg_stays_when_matching() {
+  export TMUX="/tmp/fake,1,0"
+  export TMUX_S="myproject/2"
+  export TMUX_PREFIX="myproject/"
+  run_autotmux switch
+  assert_status 1
+  assert_output_contains "Already in tmux session"
+  assert_not_called "tmux switch-client"
+}
+
+test_switch_no_arg_errors_when_not_in_tmux() {
+  export TMUX_PREFIX="myproject/"
+  run_autotmux switch
+  assert_status 1
+  assert_output_contains "Not in a tmux session"
+}
+
+# --- tmuxlist ---
+
+test_tmuxlist_lists_sessions() {
+  local d="$TEST_TMPDIR/proj"
+  mkdir -p "$d"
+  echo "$TEST_TMPDIR/proj" > "$d/.vcsroot"
+  printf 'abcdef Something\n' > "$d/.unmerged"
+  add_session "4" 1
+  add_pane "4" "$d"
+  run_tmuxlist
+  assert_status 0
+  assert_output_contains "4"                 # session name
+  assert_output_contains "●"                 # attached status icon
+  assert_output_contains "proj"              # basename of vcs root / cwd
+  assert_output_contains "abcdef Something"  # vcs unmerged
+}
+
+test_tmuxlist_shows_disconnected_icon() {
+  add_session "5" 0
+  add_pane "5" "/home/u/work"
+  run_tmuxlist
+  assert_status 0
+  assert_output_contains "○"
+}
+
+test_tmuxlist_empty_when_no_sessions() {
+  run_tmuxlist
+  assert_status 0
+  if [ -n "$output" ]; then
+    echo "  FAIL: expected empty output, got: $output"
+    return 1
+  fi
+}
+
 # --- run ---
 
-run_test "bare invocation attaches to the project session" test_bare_creates_project_session
-run_test "bare invocation uses the hostname outside a project" test_bare_uses_hostname_outside_project
-run_test "short_hostname strips a user prefix and domain" test_short_hostname_strips_user_prefix
-run_test "switch outside tmux attaches to the named session" test_switch_outside_tmux_creates_session
-run_test "switch inside tmux creates then switches the client" test_switch_inside_tmux_switches_client
-run_test "switch inside tmux to an existing session just switches" test_switch_inside_tmux_existing_session
-run_test "switch inside tmux does not prefix-match another session" test_switch_inside_tmux_does_not_prefix_match
-run_test "normalizes a dotted session name outside tmux" test_normalizes_dotted_name_outside_tmux
-run_test "normalizes a dotted session name inside tmux" test_normalizes_dotted_name_inside_tmux
-run_test "switch with no argument uses the project session" test_switch_no_arg_uses_project_session
 run_test "unknown subcommand passes through to tmux" test_passthrough_to_tmux
 run_test "passthrough preserves all arguments" test_passthrough_preserves_args
-run_test "preserves the exit code from tmux" test_preserves_exit_code
+run_test "creates session 1 when no sessions exist" test_creates_session_1
+run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
+run_test "skips existing sessions when creating" test_skips_existing_sessions
+run_test "uses TMUX_PREFIX for session names" test_uses_prefix
+run_test "returns non-zero when tmux attach fails" test_returns_nonzero_on_attach_failure
+run_test "preserves specific exit code from tmux attach" test_preserves_attach_exit_code
+run_test "retries with the next number on a duplicate session" test_retries_on_duplicate_session
+run_test "propagates a real new-session failure" test_propagates_real_new_session_failure
+run_test "stays put when the session matches the prefix" test_already_attached_matching_prefix_stays
+run_test "treats a separatorless name as matching the prefix" test_already_attached_exact_name_matches_prefix
+run_test "switches to a new prefixed session on mismatch" test_already_attached_mismatch_switches_to_new
+run_test "reuses a disconnected prefixed session on mismatch" test_already_attached_mismatch_reuses_disconnected
+run_test "switch switches the current client" test_switch_switches_client
+run_test "switch creates a missing target before switching" test_switch_creates_missing_target
+run_test "switch does not recreate an existing target" test_switch_does_not_recreate_existing_target
+run_test "switch resolves a path segment to its session" test_switch_resolves_path_segment
+run_test "switch matches whole path segments only" test_switch_requires_whole_segment
+run_test "switch treats a bare number as a session name" test_switch_numeric_is_session_name
+run_test "switch prefers an existing session name over a path match" test_switch_existing_session_name_wins
+run_test "switch falls back to the argument when nothing matches" test_switch_no_match_uses_arg
+run_test "switch prompts when several sessions match" test_switch_prompts_on_multiple_matches
+run_test "switch does not switch when the prompt is cancelled" test_switch_cancel_does_not_switch
+run_test "switch matches a session by vcs unmerged output" test_switch_matches_vcs_unmerged
+run_test "switch unmerged matching is whole-word" test_switch_unmerged_matches_whole_word
+run_test "switch outside tmux attaches the resolved session" test_switch_outside_tmux_attaches
+run_test "switch outside tmux creates a missing session" test_switch_outside_tmux_creates_when_missing
+run_test "switch with no arg switches to the prefix session" test_switch_no_arg_switches_on_mismatch
+run_test "switch with no arg stays put when already matching" test_switch_no_arg_stays_when_matching
+run_test "switch with no arg errors when not in a session" test_switch_no_arg_errors_when_not_in_tmux
+run_test "tmuxlist lists sessions with details" test_tmuxlist_lists_sessions
+run_test "tmuxlist shows the disconnected icon" test_tmuxlist_shows_disconnected_icon
+run_test "tmuxlist prints nothing when there are no sessions" test_tmuxlist_empty_when_no_sessions
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
