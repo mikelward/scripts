@@ -215,18 +215,26 @@ test_list_create_entry_first() {
 
 test_existing_auto_session_not_listed_twice() {
   # When the auto name reuses an existing (disconnected) session, that session
-  # must appear once -- as a normal switch row -- never also as a "+" entry.
+  # must appear once -- as a normal switch row -- never also as a "+" entry, and
+  # stay the first (default) row even though an attached sibling is listed first
+  # by the backend. proj:1 is attached so the picker reuses disconnected proj:2.
   export SHPOOL_PREFIX="proj:"
-  add_full proj:1 disconnected
+  add_full proj:1 attached
+  add_full proj:2 disconnected
   run_cs --list
-  local creates rows
+  local creates rows r1 r2
   creates="$(printf '%s\n' "$output" | cut -f1 | grep -c '^create' || true)"
-  rows="$(printf '%s\n' "$output" | grep -c 'proj:1' || true)"
+  rows="$(printf '%s\n' "$output" | cut -f2 | grep -cxF 'proj:2' || true)"
+  r1="$(printf '%s\n' "$output" | sed -n '1p' | cut -f2)"
+  r2="$(printf '%s\n' "$output" | sed -n '2p' | cut -f2)"
   if [ "$creates" -ne 0 ]; then
     echo "  FAIL: create entry emitted for an existing auto session"; echo "$output"; TEST_FAILED=1
   fi
   if [ "$rows" -ne 1 ]; then
-    echo "  FAIL: proj:1 listed $rows times, expected 1"; echo "$output"; TEST_FAILED=1
+    echo "  FAIL: proj:2 listed $rows times, expected 1"; echo "$output"; TEST_FAILED=1
+  fi
+  if [ "$r1" != proj:2 ] || [ "$r2" != proj:1 ]; then
+    echo "  FAIL: auto target not pinned first (r1=$r1 r2=$r2)"; echo "$output"; TEST_FAILED=1
   fi
 }
 

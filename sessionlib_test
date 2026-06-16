@@ -55,10 +55,13 @@ count_create_rows() { build_list | cut -f1 | grep -cxF create || true; }
 
 # --- de-dup: an existing auto session must appear once, as a switch row ------
 
+# The session name (field 2) of the Nth --list row.
+nth_session() { build_list | sed -n "${1}p" | cut -f2; }
+
 test_existing_attached_auto_session_listed_once() {
   # The case actually observed: the auto name is a live, *attached* session. It
   # must show up once (its switch row with the attached icon), never also as a
-  # separate "+" create entry.
+  # separate "+" create entry, and stay the first (default) row.
   STUB_AUTONAME="proj/1"
   STUB_EXISTS="proj/1"
   STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\n')"
@@ -67,6 +70,7 @@ test_existing_attached_auto_session_listed_once() {
   creates="$(count_create_rows)"
   test "$rows" -eq 1   || { echo "  FAIL: proj/1 listed $rows times, expected 1"; TEST_FAILED=1; }
   test "$creates" -eq 0 || { echo "  FAIL: a create entry was emitted for an existing session"; TEST_FAILED=1; }
+  test "$(nth_session 1)" = proj/1 || { echo "  FAIL: existing auto session is not the first row"; TEST_FAILED=1; }
 }
 
 test_existing_disconnected_auto_session_listed_once() {
@@ -78,6 +82,23 @@ test_existing_disconnected_auto_session_listed_once() {
   creates="$(count_create_rows)"
   test "$rows" -eq 1   || { echo "  FAIL: proj/1 listed $rows times, expected 1"; TEST_FAILED=1; }
   test "$creates" -eq 0 || { echo "  FAIL: a create entry was emitted for an existing session"; TEST_FAILED=1; }
+  test "$(nth_session 1)" = proj/1 || { echo "  FAIL: existing auto session is not the first row"; TEST_FAILED=1; }
+}
+
+test_reused_auto_target_stays_default_row() {
+  # Codex's scenario: an older attached proj/1 plus a reusable disconnected
+  # proj/2 that the picker auto-targets. proj/2 must be the first (default) row
+  # so Enter reuses the detached auto session rather than stealing attached
+  # proj/1 -- even though the backend lists proj/1 first.
+  STUB_AUTONAME="proj/2"
+  STUB_EXISTS="proj/1 proj/2"
+  STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\nproj/2\tdisconnected\t/home/u/proj\tbash\n')"
+  local creates
+  creates="$(count_create_rows)"
+  test "$creates" -eq 0 || { echo "  FAIL: a create entry was emitted for an existing session"; TEST_FAILED=1; }
+  test "$(nth_session 1)" = proj/2 || { echo "  FAIL: row 1 is '$(nth_session 1)', expected the auto target proj/2"; TEST_FAILED=1; }
+  test "$(nth_session 2)" = proj/1 || { echo "  FAIL: row 2 is '$(nth_session 2)', expected proj/1"; TEST_FAILED=1; }
+  test "$(count_session_rows proj/2)" -eq 1 || { echo "  FAIL: proj/2 not listed exactly once"; TEST_FAILED=1; }
 }
 
 test_fresh_auto_name_shows_create_entry() {
@@ -96,6 +117,8 @@ run_test test_existing_attached_auto_session_listed_once \
   "build_list: an attached auto session is not listed twice"
 run_test test_existing_disconnected_auto_session_listed_once \
   "build_list: a disconnected auto session is not listed twice"
+run_test test_reused_auto_target_stays_default_row \
+  "build_list: a reused auto target stays the first/default row"
 run_test test_fresh_auto_name_shows_create_entry \
   "build_list: a fresh auto name still shows the create entry first"
 
