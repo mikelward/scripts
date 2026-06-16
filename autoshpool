@@ -154,10 +154,34 @@ create_and_attach_next() {
     # buffering) splattered escape sequences onto the user's terminal at
     # unpredictable moments.
     if test $rc -eq 0; then
+      # A switch queued while we held this session means the detach that ended
+      # the attach was deliberate (changeshpool/switchshpool detaches us to hand
+      # the switch to this loop). We owned the session, so hand straight back to
+      # the loop to service the switch instead of running the busy-race check
+      # below -- otherwise the not-yet-settled "attached" status (see the poll)
+      # is mistaken for a lost race and a brand-new numbered session is created.
+      if test -n "$(get_switch_session)"; then
+        return 0
+      fi
       if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
         echo "shpool list failed after attach; cannot confirm session state" >&2
         return 2
       fi
+      # A session we owned and just detached from still shows as "attached" for
+      # a moment before the daemon settles the status (the same lag changeshpool
+      # polls around when stealing). A session we genuinely lost the race for is
+      # owned by another live client and stays "attached". Poll briefly so the
+      # status can settle: ours leaves "attached" (we return to the loop), a lost
+      # race stays "attached" for the whole window (we try the next number).
+      local i
+      for i in 1 2 3 4 5 6 7 8 9 10; do
+        test "$(session_status "$session" "$listing")" = attached || break
+        sleep 0.1
+        if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
+          echo "shpool list failed after attach; cannot confirm session state" >&2
+          return 2
+        fi
+      done
       if test "$(session_status "$session" "$listing")" = "attached"; then
         sessions[$session]=1
         continue
