@@ -1,0 +1,104 @@
+#!/bin/bash
+# Tests for sessionlib's shared picker engine (build_list / run_picker).
+#
+# These drive sessionlib directly with stub backend_* hooks, so they can cover
+# cases the per-backend scripts can't easily reach -- in particular an auto-name
+# that already exists as an *attached* session (changeshpool/changetmux only
+# ever auto-name a disconnected reuse or a fresh number, so a sessionlib-level
+# stub is the only way to prove the de-dup is status-agnostic).
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# --- harness ---------------------------------------------------------------
+
+setup() {
+  SESSION_SEP="/"
+  # Defaults the stubs read; each test overrides what it needs.
+  STUB_PREFIX="proj/"
+  STUB_AUTONAME="proj/1"
+  STUB_EXISTS=""          # space-separated list of "existing" session names
+  STUB_ROWS=""            # name<TAB>state<TAB>cwd<TAB>command lines
+  # Pull in the engine under test (idempotent guard means a fresh shell per test
+  # is unnecessary, but we re-source for clarity/isolation of the stubs above).
+  unset _SESSIONLIB_SOURCED
+  source "$SCRIPT_DIR/sessionlib"
+}
+
+# Backend hooks the engine calls, backed by the STUB_* fixtures.
+backend_prefix()         { printf '%s' "$STUB_PREFIX"; }
+backend_autoname()       { printf '%s' "$STUB_AUTONAME"; }
+backend_session_exists() { case " $STUB_EXISTS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+backend_session_rows()   { test -n "$STUB_ROWS" && printf '%s\n' "$STUB_ROWS"; }
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$1" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $2"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $2"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+}
+
+# Count how many --list rows name $1 in the session (field 2) column.
+count_session_rows() {
+  build_list | cut -f2 | grep -cxF -- "$1" || true
+}
+# Count create ("+") rows.
+count_create_rows() { build_list | cut -f1 | grep -cxF create || true; }
+
+# --- de-dup: an existing auto session must appear once, as a switch row ------
+
+test_existing_attached_auto_session_listed_once() {
+  # The case actually observed: the auto name is a live, *attached* session. It
+  # must show up once (its switch row with the attached icon), never also as a
+  # separate "+" create entry.
+  STUB_AUTONAME="proj/1"
+  STUB_EXISTS="proj/1"
+  STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\n')"
+  local rows creates
+  rows="$(count_session_rows proj/1)"
+  creates="$(count_create_rows)"
+  test "$rows" -eq 1   || { echo "  FAIL: proj/1 listed $rows times, expected 1"; TEST_FAILED=1; }
+  test "$creates" -eq 0 || { echo "  FAIL: a create entry was emitted for an existing session"; TEST_FAILED=1; }
+}
+
+test_existing_disconnected_auto_session_listed_once() {
+  STUB_AUTONAME="proj/1"
+  STUB_EXISTS="proj/1"
+  STUB_ROWS="$(printf 'proj/1\tdisconnected\t/home/u/proj\tbash\n')"
+  local rows creates
+  rows="$(count_session_rows proj/1)"
+  creates="$(count_create_rows)"
+  test "$rows" -eq 1   || { echo "  FAIL: proj/1 listed $rows times, expected 1"; TEST_FAILED=1; }
+  test "$creates" -eq 0 || { echo "  FAIL: a create entry was emitted for an existing session"; TEST_FAILED=1; }
+}
+
+test_fresh_auto_name_shows_create_entry() {
+  # When the auto name doesn't exist yet, the "+" create entry is shown, first.
+  STUB_AUTONAME="proj/2"
+  STUB_EXISTS="proj/1"
+  STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\n')"
+  local first creates
+  first="$(build_list | sed -n '1p' | cut -f1)"
+  creates="$(count_create_rows)"
+  test "$first" = create || { echo "  FAIL: first row is '$first', expected create"; TEST_FAILED=1; }
+  test "$creates" -eq 1  || { echo "  FAIL: expected exactly one create entry, got $creates"; TEST_FAILED=1; }
+}
+
+run_test test_existing_attached_auto_session_listed_once \
+  "build_list: an attached auto session is not listed twice"
+run_test test_existing_disconnected_auto_session_listed_once \
+  "build_list: a disconnected auto session is not listed twice"
+run_test test_fresh_auto_name_shows_create_entry \
+  "build_list: a fresh auto name still shows the create entry first"
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

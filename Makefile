@@ -1,6 +1,9 @@
 test:
 	./autoshpool_test
 	./autotmux_test
+	./sessionlib_test
+	./changeshpool_test
+	./changetmux_test
 	./detachsession_test
 	./makesession_test
 	./mdf_test

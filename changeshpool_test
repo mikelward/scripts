@@ -204,9 +204,29 @@ run_test() {
 # --- --list ---
 
 test_list_create_entry_first() {
-  add_full a disconnected
+  # An attached session for the prefix is skipped by the auto-name picker, so the
+  # auto name is a fresh (non-existent) "proj:1" and the create entry is shown.
+  export SHPOOL_PREFIX="proj:"
+  add_full proj:9 attached
   if [ "$(list_action 1)" != create ]; then
     echo "  FAIL: first row is not the create entry"; echo "  output: $output"; TEST_FAILED=1
+  fi
+}
+
+test_existing_auto_session_not_listed_twice() {
+  # When the auto name reuses an existing (disconnected) session, that session
+  # must appear once -- as a normal switch row -- never also as a "+" entry.
+  export SHPOOL_PREFIX="proj:"
+  add_full proj:1 disconnected
+  run_cs --list
+  local creates rows
+  creates="$(printf '%s\n' "$output" | cut -f1 | grep -c '^create' || true)"
+  rows="$(printf '%s\n' "$output" | grep -c 'proj:1' || true)"
+  if [ "$creates" -ne 0 ]; then
+    echo "  FAIL: create entry emitted for an existing auto session"; echo "$output"; TEST_FAILED=1
+  fi
+  if [ "$rows" -ne 1 ]; then
+    echo "  FAIL: proj:1 listed $rows times, expected 1"; echo "$output"; TEST_FAILED=1
   fi
 }
 
@@ -295,9 +315,11 @@ test_outside_session_steals_attached_target() {
 }
 
 test_esc_cancels_cleanly() {
+  # ESC must return non-zero (not 0) so the cs/csp shell wrappers don't mistake a
+  # cancel for a performed switch and exit the shell -- it should stay put.
   add_full a disconnected
   FZF_EXIT=130 run_cs
-  assert_status 0
+  assert_status 130
   assert_no_switch_file
   assert_not_called 'shpool attach'
 }
@@ -313,6 +335,7 @@ test_picker_error_propagates() {
 }
 
 run_test "list: create entry is first" test_list_create_entry_first
+run_test "list: existing auto session is not listed twice" test_existing_auto_session_not_listed_twice
 run_test "list: attached session shows filled icon" test_list_attached_icon
 run_test "list: detached session shows empty icon" test_list_disconnected_icon
 run_test "list: prefix group sorts under the create entry" test_list_prefix_group_first
