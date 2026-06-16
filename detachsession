@@ -6,7 +6,7 @@
 #   * inside tmux  ($TMUX set)                 -> detachtmux
 #   * inside shpool ($SHPOOL_SESSION_NAME set) -> detachshpool
 #   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (tmux first).
+#     whichever of shpool/tmux is installed (shpool first).
 #
 # All arguments are passed through to the chosen script.
 #
@@ -31,11 +31,11 @@ case "${SESSION_BACKEND:-}" in
   shpool) run detachshpool "$@" ;;
 esac
 
-if command -v tmux >/dev/null 2>&1; then
-  run detachtmux "$@"
-fi
 if command -v shpool >/dev/null 2>&1; then
   run detachshpool "$@"
+fi
+if command -v tmux >/dev/null 2>&1; then
+  run detachtmux "$@"
 fi
 
 echo "detachsession: no tmux or shpool backend available" >&2

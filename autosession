@@ -6,7 +6,7 @@
 #   * inside tmux  ($TMUX set)                 -> autotmux
 #   * inside shpool ($SHPOOL_SESSION_NAME set) -> autoshpool
 #   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (tmux first).
+#     whichever of shpool/tmux is installed (shpool first).
 #
 # All arguments are passed through to the chosen script, so "autosession",
 # "autosession switch <target>", and pass-through commands all work. In shrc:
@@ -33,11 +33,11 @@ case "${SESSION_BACKEND:-}" in
   shpool) run autoshpool "$@" ;;
 esac
 
-if command -v tmux >/dev/null 2>&1; then
-  run autotmux "$@"
-fi
 if command -v shpool >/dev/null 2>&1; then
   run autoshpool "$@"
+fi
+if command -v tmux >/dev/null 2>&1; then
+  run autotmux "$@"
 fi
 
 echo "autosession: no tmux or shpool backend available" >&2

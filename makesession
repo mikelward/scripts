@@ -6,7 +6,7 @@
 #   * inside tmux  ($TMUX set)                 -> maketmux
 #   * inside shpool ($SHPOOL_SESSION_NAME set) -> makeshpool
 #   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (tmux first).
+#     whichever of shpool/tmux is installed (shpool first).
 #
 # All arguments (the session name, and any further pass-through) are forwarded.
 #
@@ -31,11 +31,11 @@ case "${SESSION_BACKEND:-}" in
   shpool) run makeshpool "$@" ;;
 esac
 
-if command -v tmux >/dev/null 2>&1; then
-  run maketmux "$@"
-fi
 if command -v shpool >/dev/null 2>&1; then
   run makeshpool "$@"
+fi
+if command -v tmux >/dev/null 2>&1; then
+  run maketmux "$@"
 fi
 
 echo "makesession: no tmux or shpool backend available" >&2
