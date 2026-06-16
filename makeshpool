@@ -23,6 +23,15 @@
 source "$(dirname "$0")/autoshpool"
 
 if test -n "$SHPOOL_SESSION_NAME"; then
+  # The switch handoff carries only a session name (the outer loop just runs
+  # `shpool attach "$name"`), so extra `shpool attach` options -- e.g. --ttl,
+  # --cmd -- have nowhere to go on this path. Refuse rather than silently drop
+  # them (the outside-session path below still forwards "$@"); detach first to
+  # create the session with options.
+  if test "$#" -gt 1; then
+    echo "makeshpool: can't forward options (${*:2}) when creating a session from inside another; detach first" >&2
+    exit 2
+  fi
   request_switch "$1" "$PWD"   # records target, detaches us, and exits
 fi
 
