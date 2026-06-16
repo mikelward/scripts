@@ -1,0 +1,209 @@
+# sessionlib - shared helpers for the tmux/shpool session scripts
+#
+# Sourced by autotmux/autoshpool (the backend modules) and, through them, by
+# tmuxlist/shpoollist and changetmux/changeshpool. Holds the parts that don't
+# depend on which multiplexer is in use:
+#
+#   * small formatting/matching helpers (status_icon, dir_vcs_*, shell_matches,
+#     session_matches_prefix), and
+#   * the whole fzf picker engine (compact_line/emit_line/build_list/
+#     preview_entry/run_picker), which is identical for tmux and shpool.
+#
+# The picker engine calls back into a few backend hooks that each backend
+# module / change* script defines:
+#
+#   backend_prefix          - echo this directory's project prefix (with sep)
+#   backend_autoname        - echo the session auto* would create here
+#   backend_session_rows    - emit "name<TAB>state<TAB>cwd<TAB>command" per
+#                             session (state is attached|disconnected)
+#   backend_session_exists  - succeed if a session named $1 exists
+#   backend_describe <name> - render the rich (vcs-aware) description of $1
+#   backend_sanitize_name   - echo $1 made safe to create/target as a new name
+#   backend_perform_switch <action> <target>
+#                           - switch/attach to <target> (action: switch|create)
+#
+# It also expects $SESSION_SEP to be set to the backend's name separator.
+
+test -n "${_SESSIONLIB_SOURCED:-}" && return
+_SESSIONLIB_SOURCED=1
+
+# --- formatting / matching helpers (shared verbatim by both backends) ---
+
+status_icon() {
+  # A compact icon for a session status ($1), so listings stay narrow:
+  #   attached -> filled circle, disconnected -> empty circle.
+  # Anything else (including an empty/unknown status) falls back to a question
+  # mark so unexpected statuses are still visible.
+  case "$1" in
+    attached)     printf '%s' '●' ;;
+    disconnected) printf '%s' '○' ;;
+    *)            printf '%s' '?' ;;
+  esac
+}
+
+dir_vcs_root_name() {
+  # The last component of the version-control root for a directory, or empty if
+  # the directory isn't under version control (we don't require vcs to work).
+  local root
+  root="$(cd "$1" 2>/dev/null && vcs rootdir 2>/dev/null)"
+  test -n "$root" && basename "$root"
+}
+
+dir_vcs_unmerged() {
+  # The unmerged items vcs reports for a directory, or empty. Best-effort: we
+  # don't require vcs to be working.
+  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
+}
+
+shell_matches() {
+  # True if a working directory ($1) matches the argument ($2), either as a full
+  # path segment of the directory or as a whole word in the directory's vcs
+  # unmerged output.
+  local cwd="$1" arg="$2"
+  case "$cwd/" in
+    */"$arg"/*) return 0 ;;
+  esac
+  dir_vcs_unmerged "$cwd" | grep -Fwq -- "$arg"
+}
+
+session_matches_prefix() {
+  # True if a session name ($1) belongs to the project identified by a prefix
+  # ($2). With no prefix (e.g. outside any version-controlled directory) we
+  # never force a switch, so every session matches. The prefix is compared as a
+  # literal string (project names can contain regex metacharacters).
+  local session="$1" prefix="$2"
+  test -z "$prefix" && return 0
+  case "$session" in
+    "$prefix"*) return 0 ;;       # already carries the prefix (e.g. "proj/3")
+  esac
+  # Also accept an exact match with the separator stripped, so a session named
+  # "proj" counts as matching the prefix "proj/".
+  test "$session" = "${prefix%"$SESSION_SEP"}"
+}
+
+# --- fzf picker engine (shared by changetmux/changeshpool) ---
+
+compact_line() {
+  # The display column for a session: state icon, name, cwd basename, command.
+  # All cheap -- no vcs. A missing path/command just renders blank.
+  local session="$1" cwd="$2" cmd="$3" state="$4"
+  printf '%s  %-20s  %-14s  %s' \
+    "$(status_icon "$state")" "$session" "${cwd##*/}" "$cmd"
+}
+
+emit_line() {
+  # One tab-separated picker row: action<TAB>session<TAB>display. fzf shows and
+  # searches only the display field; the action and session travel along so the
+  # selection handler and the preview ({2}) can use them.
+  printf '%s\t%s\t%s\n' "$1" "$2" "$3"
+}
+
+build_list() {
+  # Print the picker rows in display order: the create entry, then sessions for
+  # this project's prefix, then the rest.
+  local prefix autoname
+  prefix="$(backend_prefix)"
+  autoname="$(backend_autoname)" || autoname=""
+
+  # The create entry. Showing the auto name (and whether it's new vs a reused
+  # detached session) makes the default action obvious.
+  if test -n "$autoname"; then
+    local verb="create"
+    backend_session_exists "$autoname" && verb="attach"
+    emit_line create "$autoname" \
+      "$(printf '+  %-20s  %s' "$autoname" "($verb auto session for this directory)")"
+  fi
+
+  # Partition sessions into this project's prefix group and everything else,
+  # preserving the backend's listing order within each group.
+  local s state cwd cmd line
+  local -a group_rest=()
+  while IFS=$'\t' read -r s state cwd cmd; do
+    test -n "$s" || continue
+    line="$(emit_line switch "$s" "$(compact_line "$s" "$cwd" "$cmd" "$state")")"
+    if session_matches_prefix "$s" "$prefix"; then
+      printf '%s\n' "$line"
+    else
+      group_rest+=("$line")
+    fi
+  done < <(backend_session_rows)
+
+  local r
+  for r in "${group_rest[@]}"; do
+    printf '%s\n' "$r"
+  done
+}
+
+preview_entry() {
+  # Render the preview for the highlighted row. For an existing session this is
+  # the backend's rich, vcs-aware description; for the not-yet-created auto name
+  # it explains what selecting it will do. The expensive vcs work happens here,
+  # lazily, only for the highlighted row.
+  local name="$1"
+  test -n "$name" || return 0
+  if backend_session_exists "$name"; then
+    backend_describe "$name"
+    return 0
+  fi
+  printf 'New session: %s\n' "$name"
+  printf 'Working directory: %s\n' "$PWD"
+  local root
+  root="$(dir_vcs_root_name "$PWD")"
+  test -n "$root" && printf 'Project: %s\n' "$root"
+  dir_vcs_unmerged "$PWD" | sed 's/^/  /'
+}
+
+run_picker() {
+  local list
+  list="$(build_list)"
+  if test -z "$list"; then
+    echo "No sessions and no project to create one for." >&2
+    return 1
+  fi
+
+  # --print-query lets a typed-but-unmatched name become a new session. The
+  # preview calls back into this script for the highlighted row's field 2.
+  local out query selection
+  out="$(printf '%s\n' "$list" | "${CHANGESESSION_FZF:-fzf}" \
+    --ansi \
+    --delimiter='\t' --with-nth=3 --nth=3 \
+    --print-query \
+    --header='Enter: switch/create   type: filter or new name   ESC: cancel' \
+    --preview="$SESSION_SELF --preview {2}" \
+    --preview-window='down:40%:wrap')"
+  local rc=$?
+  # fzf exit codes: 0 selected, 1 no match, 130 ESC/Ctrl-C. 0 and 1 are normal
+  # (1 is the typed-new-name/empty case, handled below via --print-query); 130
+  # is a clean cancel. Anything else -- 2 (fzf error), 127 (fzf not installed),
+  # etc. -- is a real picker failure: propagate it so callers and keybindings
+  # can tell the picker never ran, instead of silently returning success.
+  case $rc in
+    0|1) ;;
+    130) return 0 ;;
+    *)
+      echo "picker failed: ${CHANGESESSION_FZF:-fzf} exited $rc" >&2
+      return "$rc"
+      ;;
+  esac
+
+  # With --print-query the first output line is the query; the second (if any)
+  # is the selected row.
+  query="$(printf '%s\n' "$out" | sed -n '1p')"
+  selection="$(printf '%s\n' "$out" | sed -n '2p')"
+
+  if test -n "$selection"; then
+    local action target
+    action="$(printf '%s' "$selection" | cut -f1)"
+    target="$(printf '%s' "$selection" | cut -f2)"
+    backend_perform_switch "$action" "$target"
+    return $?
+  fi
+
+  # No row selected but a query was typed: create a new session with that name.
+  if test -n "$query"; then
+    backend_perform_switch create "$(backend_sanitize_name "$query")"
+    return $?
+  fi
+
+  return 0
+}

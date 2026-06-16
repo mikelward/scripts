@@ -26,13 +26,18 @@ echo "tmux $*" >> "$HOME/.tmux_calls"
 cmd="$1"; shift
 case "$cmd" in
   list-sessions)
-    cat "$HOME/.tmux_sessions" 2>/dev/null
+    # Real tmux can't put a TAB in -F output (a literal tab becomes '_'); the
+    # code separates columns with US (0x1f), which tmux emits as the escape
+    # '\037'. Mimic that here so the suite exercises the '\037'->TAB translation
+    # in list_tmux_sessions: the fixtures store real tabs, so rewrite them.
+    sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
     test -s "$HOME/.tmux_sessions" || { echo "no server running" >&2; exit 1; }
     exit 0
     ;;
   list-panes)
     if printf '%s\n' "$@" | grep -qx -- '-a'; then
-      cat "$HOME/.tmux_panes" 2>/dev/null
+      # Same '\037' escaping as list-sessions (list_tmux_panes uses 0x1f too).
+      sed 's/\t/\\037/g' "$HOME/.tmux_panes" 2>/dev/null
     else
       # list-panes -t NAME -F '#{pane_current_command}': serve a generic list.
       cat "$HOME/.tmux_cmds" 2>/dev/null
