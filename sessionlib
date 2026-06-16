@@ -105,13 +105,13 @@ build_list() {
   prefix="$(backend_prefix)"
   autoname="$(backend_autoname)" || autoname=""
 
-  # The create entry. Showing the auto name (and whether it's new vs a reused
-  # detached session) makes the default action obvious.
-  if test -n "$autoname"; then
-    local verb="create"
-    backend_session_exists "$autoname" && verb="attach"
+  # The create entry, shown only when the auto session doesn't exist yet. When it
+  # already exists (e.g. backend_autoname reused a disconnected session), it shows
+  # up below as a normal switch row; emitting a "+" entry for it too would list
+  # the same session twice -- once with a "+", once with its status icon.
+  if test -n "$autoname" && ! backend_session_exists "$autoname"; then
     emit_line create "$autoname" \
-      "$(printf '+  %-20s  %s' "$autoname" "($verb auto session for this directory)")"
+      "$(printf '+  %-20s  %s' "$autoname" "(create auto session for this directory)")"
   fi
 
   # Partition sessions into this project's prefix group and everything else,
@@ -154,6 +154,14 @@ preview_entry() {
 }
 
 run_picker() {
+  # Exit-status contract (the cs/csp wrappers rely on it to decide whether to
+  # exit a parked shell): a zero status means a switch was actually performed or
+  # queued, and the ONLY way to return zero is to fall through
+  # backend_perform_switch (which itself exits via request_switch on the
+  # shpool-inside case, or returns its attach/switch status otherwise). Every
+  # other path -- empty list, ESC/cancel, picker error, nothing selected -- must
+  # return non-zero. Keep that invariant when adding paths here: a no-op that
+  # returns zero would make the wrapper exit the shell without a switch.
   local list
   list="$(build_list)"
   if test -z "$list"; then
@@ -174,12 +182,14 @@ run_picker() {
   local rc=$?
   # fzf exit codes: 0 selected, 1 no match, 130 ESC/Ctrl-C. 0 and 1 are normal
   # (1 is the typed-new-name/empty case, handled below via --print-query); 130
-  # is a clean cancel. Anything else -- 2 (fzf error), 127 (fzf not installed),
-  # etc. -- is a real picker failure: propagate it so callers and keybindings
-  # can tell the picker never ran, instead of silently returning success.
+  # is a clean cancel -- propagate it (non-zero) so the cs/csp wrappers don't
+  # mistake a cancel for a performed switch and exit the shell (a real switch
+  # exits via the backend's request_switch/attach, never through this return).
+  # Anything else -- 2 (fzf error), 127 (fzf not installed), etc. -- is a real
+  # picker failure: propagate it too so callers can tell the picker never ran.
   case $rc in
     0|1) ;;
-    130) return 0 ;;
+    130) return 130 ;;
     *)
       echo "picker failed: ${CHANGESESSION_FZF:-fzf} exited $rc" >&2
       return "$rc"
@@ -205,5 +215,7 @@ run_picker() {
     return $?
   fi
 
-  return 0
+  # Nothing selected and nothing typed: like a cancel, no switch happened, so
+  # return non-zero to keep the cs/csp wrappers from exiting the shell.
+  return 130
 }
