@@ -7,7 +7,8 @@
 #   * small formatting/matching helpers (status_icon, dir_vcs_*, shell_matches,
 #     session_matches_prefix), and
 #   * the whole fzf picker engine (compact_line/emit_line/build_list/
-#     preview_entry/run_picker), which is identical for tmux and shpool.
+#     preview_entry/choose_session/perform_switch_to/run_picker), which is
+#     identical for tmux and shpool.
 #
 # The picker engine calls back into a few backend hooks that each backend
 # module / change* script defines:
@@ -167,15 +168,18 @@ preview_entry() {
   dir_vcs_unmerged "$PWD" | sed 's/^/  /'
 }
 
-run_picker() {
-  # Exit-status contract (the cs/csp wrappers rely on it to decide whether to
-  # exit a parked shell): a zero status means a switch was actually performed or
-  # queued, and the ONLY way to return zero is to fall through
-  # backend_perform_switch (which itself exits via request_switch on the
-  # shpool-inside case, or returns its attach/switch status otherwise). Every
-  # other path -- empty list, ESC/cancel, picker error, nothing selected -- must
-  # return non-zero. Keep that invariant when adding paths here: a no-op that
-  # returns zero would make the wrapper exit the shell without a switch.
+choose_session() {
+  # The "choose" layer: run the fzf picker and print the chosen session name on
+  # stdout (an existing session to switch to, or a new name to create). The exit
+  # status says whether a name was chosen, and ONLY a zero status comes with
+  # non-empty output, so callers gate on both before switching:
+  #   0   -> a name was printed.
+  #   1   -> nothing to pick (empty list).
+  #   130 -> the picker was cancelled (ESC/Ctrl-C) or nothing selected/typed.
+  #   *   -> the picker itself failed (e.g. fzf missing -> 127); propagated.
+  # Picking never switches, so this layer can be used on its own (choosesession)
+  # to ask "which session?" without moving -- the switch is perform_switch_to's
+  # job, composed back together in run_picker / changesession.
   local list
   list="$(build_list)"
   if test -z "$list"; then
@@ -196,11 +200,10 @@ run_picker() {
   local rc=$?
   # fzf exit codes: 0 selected, 1 no match, 130 ESC/Ctrl-C. 0 and 1 are normal
   # (1 is the typed-new-name/empty case, handled below via --print-query); 130
-  # is a clean cancel -- propagate it (non-zero) so the cs/csp wrappers don't
-  # mistake a cancel for a performed switch and exit the shell (a real switch
-  # exits via the backend's request_switch/attach, never through this return).
-  # Anything else -- 2 (fzf error), 127 (fzf not installed), etc. -- is a real
-  # picker failure: propagate it too so callers can tell the picker never ran.
+  # is a clean cancel -- propagate it (non-zero) so the caller doesn't mistake a
+  # cancel for a chosen session. Anything else -- 2 (fzf error), 127 (fzf not
+  # installed), etc. -- is a real picker failure: propagate it too so callers
+  # can tell the picker never ran.
   case $rc in
     0|1) ;;
     130) return 130 ;;
@@ -215,21 +218,66 @@ run_picker() {
   query="$(printf '%s\n' "$out" | sed -n '1p')"
   selection="$(printf '%s\n' "$out" | sed -n '2p')"
 
+  # A highlighted row: print its session name (field 2). Whether reaching it
+  # means "switch" or "create" is decided later by existence, so the name is all
+  # this layer needs to emit.
   if test -n "$selection"; then
-    local action target
-    action="$(printf '%s' "$selection" | cut -f1)"
-    target="$(printf '%s' "$selection" | cut -f2)"
-    backend_perform_switch "$action" "$target"
-    return $?
+    printf '%s' "$selection" | cut -f2
+    return 0
   fi
 
-  # No row selected but a query was typed: create a new session with that name.
+  # No row selected but a query was typed: a new session by that (sanitized)
+  # name.
   if test -n "$query"; then
-    backend_perform_switch create "$(backend_sanitize_name "$query")"
-    return $?
+    backend_sanitize_name "$query"
+    return 0
   fi
 
-  # Nothing selected and nothing typed: like a cancel, no switch happened, so
-  # return non-zero to keep the cs/csp wrappers from exiting the shell.
+  # Nothing selected and nothing typed: like a cancel, nothing was chosen.
   return 130
+}
+
+perform_switch_to() {
+  # The "change" layer: switch to the session named $1, creating it first when
+  # it doesn't exist yet. The action is derived from existence -- an existing
+  # name switches, a new one creates -- so callers only supply the name. A name
+  # we're about to create is a *generated* name, so sanitize it (backends rewrite
+  # characters they can't store, e.g. tmux maps '.'/':' to '_'); an existing name
+  # is left exactly as the backend stored it. This keeps the direct --switch
+  # entry point as safe as the interactive typed-name path. An empty target is
+  # rejected (status 2) rather than passed on: the shpool create branch would
+  # otherwise request_switch to "" and detach into nothing. Returns
+  # backend_perform_switch's status (and, for the shpool-inside case, does not
+  # return: it exits via request_switch).
+  local target="$1" action
+  if test -z "$target"; then
+    echo "perform_switch_to: no session name given" >&2
+    return 2
+  fi
+  if backend_session_exists "$target"; then
+    action=switch
+  else
+    action=create
+    target="$(backend_sanitize_name "$target")"
+  fi
+  backend_perform_switch "$action" "$target"
+}
+
+run_picker() {
+  # Compose the two layers: choose a session name, then -- only when the choose
+  # layer printed a name AND succeeded -- switch to it. This is the exit-status
+  # contract the cs/csp wrappers rely on to decide whether to exit a parked
+  # shell: a zero status means a switch was actually performed or queued (the
+  # only zero-returning path runs through backend_perform_switch, which itself
+  # exits via request_switch on the shpool-inside case, or returns its
+  # attach/switch status otherwise). Every other path -- empty list, cancel,
+  # picker error, nothing chosen -- returns non-zero, so the wrapper never exits
+  # a shell that did not move. (changesession composes the same two layers
+  # across processes, via choosesession + the backends' --switch.)
+  local target rc
+  target="$(choose_session)"
+  rc=$?
+  test "$rc" -eq 0 || return "$rc"
+  test -n "$target" || return 130
+  perform_switch_to "$target"
 }

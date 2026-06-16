@@ -1,0 +1,231 @@
+#!/bin/bash
+# Tests for the change* session dispatchers: choosesession (the "choose" layer)
+# and changesession (choose, then switch when something was picked).
+#
+# These exercise the dispatcher seams only -- backend selection and the
+# choose/switch composition -- with fake changetmux/changeshpool backends and a
+# fake choosesession in an isolated PATH, so no real multiplexer is needed. The
+# real picker -> name -> switch behaviour lives in changetmux_test /
+# changeshpool_test / sessionlib_test.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  # The dispatchers need only `dirname` as an external. Isolating PATH to $BIN
+  # lets each test control tmux/shpool "installed" detection precisely.
+  ln -s "$(command -v dirname)" "$BIN/dirname"
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+# A fake command in $BIN that records "name args" to $CALLS.
+fake() {
+  cat > "$BIN/$1" <<EOF
+#!/bin/bash
+echo "$1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$BIN/$1"
+}
+
+# A fake choosesession that records its call, prints $1 on stdout, and exits $2
+# (default 0). Used to drive changesession's gate without a real picker.
+fake_choosesession() {
+  local out="$1" rc="${2:-0}"
+  cat > "$BIN/choosesession" <<EOF
+#!/bin/bash
+echo "choosesession \$*" >> "$CALLS"
+printf '%s' "$out"
+exit $rc
+EOF
+  chmod +x "$BIN/choosesession"
+}
+
+install_script() {
+  cp "$SCRIPT_DIR/$1" "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+# Run $BIN/<script> in an isolated env. Usage: run <script> [VAR=val ...] [-- args]
+run() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$@" "$BIN/$script" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_called() {
+  if ! grep -qx -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_not_called() {
+  if grep -q -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: unexpected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_status() {
+  if test "$status" -ne "$1"; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1
+  fi
+}
+assert_output_contains() {
+  case "$output" in
+    *"$1"*) ;;
+    *) echo "  FAIL: output missing '$1'"; echo "  output: $output"; TEST_FAILED=1 ;;
+  esac
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- choosesession: backend selection + --choose dispatch ---
+
+test_choose_inside_tmux_picks_changetmux() {
+  install_script choosesession; fake changetmux; fake changeshpool; fake tmux; fake shpool
+  run choosesession TMUX=/tmp/sock
+  assert_called "changetmux --choose"
+}
+test_choose_inside_shpool_picks_changeshpool() {
+  install_script choosesession; fake changetmux; fake changeshpool; fake tmux; fake shpool
+  run choosesession SHPOOL_SESSION_NAME=work
+  assert_called "changeshpool --choose"
+}
+test_choose_session_backend_tmux() {
+  install_script choosesession; fake changetmux; fake changeshpool
+  run choosesession SESSION_BACKEND=tmux
+  assert_called "changetmux --choose"
+}
+test_choose_session_backend_shpool() {
+  install_script choosesession; fake changetmux; fake changeshpool
+  run choosesession SESSION_BACKEND=shpool
+  assert_called "changeshpool --choose"
+}
+test_choose_fallback_tmux_installed() {
+  install_script choosesession; fake changetmux; fake changeshpool; fake tmux
+  run choosesession
+  assert_called "changetmux --choose"
+}
+test_choose_fallback_shpool_installed() {
+  install_script choosesession; fake changetmux; fake changeshpool; fake shpool
+  run choosesession
+  assert_called "changeshpool --choose"
+}
+test_choose_no_backend_errors() {
+  install_script choosesession; fake changetmux; fake changeshpool
+  run choosesession
+  assert_status 1
+  assert_output_contains "no tmux or shpool backend available"
+}
+test_choose_args_pass_through() {
+  install_script choosesession; fake changetmux; fake changeshpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/choosesession" --extra arg 2>&1)"
+  status=$?
+  set -e
+  assert_called "changetmux --choose --extra arg"
+}
+
+# --- changesession: choose, then switch only when something was picked ---
+
+test_change_switches_to_chosen_name() {
+  # choosesession prints a name and succeeds -> switch to it via the backend.
+  install_script changesession; fake_choosesession "work" 0
+  fake changetmux; fake changeshpool
+  run changesession SESSION_BACKEND=tmux
+  assert_called "choosesession "
+  assert_called "changetmux --switch work"
+}
+test_change_inside_shpool_switches_via_changeshpool() {
+  install_script changesession; fake_choosesession "work" 0
+  fake changetmux; fake changeshpool; fake tmux; fake shpool
+  run changesession SHPOOL_SESSION_NAME=cur
+  assert_called "changeshpool --switch work"
+}
+test_change_cancel_does_not_switch() {
+  # A cancelled pick (non-zero, no output): no switch, status propagated.
+  install_script changesession; fake_choosesession "" 130
+  fake changetmux; fake changeshpool
+  run changesession SESSION_BACKEND=tmux
+  assert_status 130
+  assert_not_called "changetmux --switch"
+}
+test_change_empty_name_does_not_switch() {
+  # Zero exit but empty output (defensive): still no switch.
+  install_script changesession; fake_choosesession "" 0
+  fake changetmux; fake changeshpool
+  run changesession SESSION_BACKEND=tmux
+  assert_not_called "changetmux --switch"
+}
+test_change_no_backend_errors() {
+  install_script changesession; fake_choosesession "work" 0
+  fake changetmux; fake changeshpool
+  run changesession
+  assert_status 1
+  assert_output_contains "no tmux or shpool backend available"
+}
+test_change_list_passes_through_without_choosing() {
+  # Informational subcommands print via the backend and never choose or switch,
+  # so cs/csp can run `changesession --list` to just list sessions.
+  install_script changesession; fake changetmux; fake changeshpool; fake_choosesession "work" 0
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/changesession" --list 2>&1)"
+  status=$?
+  set -e
+  assert_called "changetmux --list"
+  assert_not_called "choosesession"
+  assert_not_called "changetmux --switch"
+}
+test_change_explicit_switch_is_non_interactive() {
+  # An explicit `changesession --switch <name>` must forward to the backend's
+  # --switch (a non-interactive switch), never fall through to the picker.
+  install_script changesession; fake changetmux; fake changeshpool; fake_choosesession "picked" 0
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/changesession" --switch work 2>&1)"
+  status=$?
+  set -e
+  assert_called "changetmux --switch work"
+  assert_not_called "choosesession"
+}
+
+run_test "choose: inside tmux picks changetmux --choose" test_choose_inside_tmux_picks_changetmux
+run_test "choose: inside shpool picks changeshpool --choose" test_choose_inside_shpool_picks_changeshpool
+run_test "choose: SESSION_BACKEND=tmux picks changetmux" test_choose_session_backend_tmux
+run_test "choose: SESSION_BACKEND=shpool picks changeshpool" test_choose_session_backend_shpool
+run_test "choose: falls back to installed tmux" test_choose_fallback_tmux_installed
+run_test "choose: falls back to installed shpool" test_choose_fallback_shpool_installed
+run_test "choose: no backend errors out" test_choose_no_backend_errors
+run_test "choose: args pass through to the backend" test_choose_args_pass_through
+run_test "change: switches to the chosen name" test_change_switches_to_chosen_name
+run_test "change: inside shpool switches via changeshpool" test_change_inside_shpool_switches_via_changeshpool
+run_test "change: a cancelled pick does not switch" test_change_cancel_does_not_switch
+run_test "change: an empty name does not switch" test_change_empty_name_does_not_switch
+run_test "change: no backend errors out" test_change_no_backend_errors
+run_test "change: --list prints via the backend without choosing" test_change_list_passes_through_without_choosing
+run_test "change: explicit --switch is non-interactive" test_change_explicit_switch_is_non_interactive
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

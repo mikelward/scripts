@@ -12,9 +12,11 @@
 # terminal and attach it ourselves (stealing it). See sessionlib for the engine
 # and the backend_* hooks this script fills in.
 #
-# Internal subcommands (used by fzf, handy for testing):
+# Internal subcommands (used by fzf, the choose/change layers, and testing):
 #   changeshpool --list           - print the tab-separated picker lines
 #   changeshpool --preview <name> - render the preview for one session/auto name
+#   changeshpool --choose         - run the picker and print the chosen name
+#   changeshpool --switch <name>  - switch to (or create) the named session
 #
 # Override the picker with CHANGESESSION_FZF (e.g. for tests).
 
@@ -119,6 +121,8 @@ backend_perform_switch() {
 case "$1" in
   --list)    build_list ;;
   --preview) shift; preview_entry "$1" ;;
+  --choose)  choose_session ;;
+  --switch)  shift; perform_switch_to "$1" ;;
   -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//' ;;
   "")        run_picker ;;
   *)         echo "changeshpool: unknown argument '$1'" >&2; exit 2 ;;

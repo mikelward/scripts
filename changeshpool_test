@@ -151,6 +151,11 @@ assert_output_contains() {
     TEST_FAILED=1; return 1
   fi
 }
+assert_output_equals() {
+  if [ "$output" != "$1" ]; then
+    echo "  FAIL: output '$output' != '$1'"; TEST_FAILED=1; return 1
+  fi
+}
 assert_called() {
   if ! grep -q -- "$1" "$HOME/.shpool_calls" 2>/dev/null; then
     echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
@@ -342,6 +347,65 @@ test_picker_error_propagates() {
   assert_not_called 'shpool attach'
 }
 
+# --- --choose: pick a name, never switch ---
+
+test_choose_prints_name_only() {
+  # --choose runs the picker but prints the chosen session name instead of
+  # switching, so the choose layer can be used on its own (choosesession).
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  add_full target:1 disconnected
+  FZF_PICK=$'^switch\ttarget:1\t' run_cs --choose
+  assert_status 0
+  assert_output_equals 'target:1'
+  assert_no_switch_file
+  assert_not_called 'shpool attach'
+}
+
+test_choose_create_prints_autoname() {
+  export SHPOOL_PREFIX="proj:"
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  FZF_PICK='^create' run_cs --choose
+  assert_output_equals 'proj:1'
+  assert_no_switch_file
+}
+
+test_choose_typed_prints_name() {
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  FZF_QUERY='newsesh' run_cs --choose
+  assert_output_equals 'newsesh'
+  assert_no_switch_file
+}
+
+test_choose_esc_is_empty() {
+  add_full a disconnected
+  FZF_EXIT=130 run_cs --choose
+  assert_status 130
+  assert_output_equals ''
+}
+
+# --- --switch: switch to a named session (action derived from existence) ---
+
+test_switch_existing_inside_requests_switch() {
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  add_full target:1 disconnected
+  run_cs --switch target:1
+  assert_switch_file "target:1"
+  assert_no_switch_pwd            # switching to an existing session keeps its dir
+}
+
+test_switch_missing_name_inside_requests_with_pwd() {
+  # A name that doesn't exist yet is a create: requested with the current dir.
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  run_cs --switch newsesh
+  assert_switch_file "newsesh"
+  assert_switch_pwd "$PWD"
+}
+
 run_test "list: create entry is first" test_list_create_entry_first
 run_test "list: existing auto session is not listed twice" test_existing_auto_session_not_listed_twice
 run_test "list: attached session shows filled icon" test_list_attached_icon
@@ -356,6 +420,24 @@ run_test "pick: outside a session attaches with steal" test_outside_session_atta
 run_test "pick: outside a session steals an attached target" test_outside_session_steals_attached_target
 run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
 run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
+run_test "choose: prints the chosen name without switching" test_choose_prints_name_only
+run_test "choose: create row prints the auto name" test_choose_create_prints_autoname
+run_test "choose: typed new name is printed" test_choose_typed_prints_name
+run_test "choose: ESC prints nothing and fails" test_choose_esc_is_empty
+test_switch_empty_name_is_rejected() {
+  # A missing --switch target must error before touching the backend, or the
+  # shpool create branch would request_switch to "" and detach into nothing.
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  run_cs --switch
+  assert_status 2
+  assert_no_switch_file
+  assert_not_called 'shpool attach'
+}
+
+run_test "switch: existing name requests a switch (no pwd)" test_switch_existing_inside_requests_switch
+run_test "switch: missing name requests a switch with pwd" test_switch_missing_name_inside_requests_with_pwd
+run_test "switch: an empty target is rejected" test_switch_empty_name_is_rejected
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
