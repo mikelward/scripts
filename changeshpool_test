@@ -19,8 +19,10 @@ setup() {
   export PATH="$TEST_TMPDIR/bin:$PATH"
   mkdir -p "$TEST_TMPDIR/bin"
 
-  # Fake shpool: list serves the header plus .shpool_sessions rows; attach/detach
-  # just record the call (and attach honours $SHPOOL_ATTACH_EXIT).
+  # Fake shpool: list serves the header plus .shpool_sessions rows; attach
+  # records the call (and honours $SHPOOL_ATTACH_EXIT); detach records the call
+  # and rewrites the named session's row to "disconnected" so the steal-then-
+  # poll path in changeshpool sees the session leave the "attached" state.
   cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
 #!/bin/bash
 echo "shpool $*" >> "$HOME/.shpool_calls"
@@ -31,6 +33,14 @@ case "$1" in
     exit 0
     ;;
   attach) exit "${SHPOOL_ATTACH_EXIT:-0}" ;;
+  detach)
+    if test -n "$2" && test -f "$HOME/.shpool_sessions"; then
+      awk -v name="$2" '$1 == name { $NF = "disconnected"; printf "%-30s %-33s %s\n", $1, $2, $NF; next } { print }' \
+        "$HOME/.shpool_sessions" > "$HOME/.shpool_sessions.new" \
+        && mv "$HOME/.shpool_sessions.new" "$HOME/.shpool_sessions"
+    fi
+    exit 0
+    ;;
   *) exit 0 ;;
 esac
 SHPOOL
@@ -274,6 +284,16 @@ test_outside_session_attaches_with_steal() {
   assert_no_switch_file                     # no loop to service: attach directly
 }
 
+test_outside_session_steals_attached_target() {
+  # When the target is currently attached elsewhere, the steal still lands:
+  # detach asks the other client to release, and the poll waits for the
+  # session to leave the "attached" state before attach runs.
+  add_full target:1 attached
+  FZF_PICK=$'^switch\ttarget:1\t' run_cs
+  assert_called 'shpool detach target:1'
+  assert_called 'shpool attach target:1'
+}
+
 test_esc_cancels_cleanly() {
   add_full a disconnected
   FZF_EXIT=130 run_cs
@@ -302,6 +322,7 @@ run_test "pick: existing session requests a switch (no pwd)" test_pick_existing_
 run_test "pick: create entry requests the auto name with pwd" test_pick_create_entry_requests_auto_with_pwd
 run_test "pick: typed new name requests a switch with pwd" test_typed_new_name_requests_switch
 run_test "pick: outside a session attaches with steal" test_outside_session_attaches_with_steal
+run_test "pick: outside a session steals an attached target" test_outside_session_steals_attached_target
 run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
 run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
 
