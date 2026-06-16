@@ -1,0 +1,6 @@
+#!/bin/bash
+# detachtmux - detach the current tmux client
+#
+# Thin wrapper over `tmux detach`, the tmux twin of detachshpool, dispatched by
+# detachsession. All arguments pass through to tmux.
+exec tmux detach "$@"

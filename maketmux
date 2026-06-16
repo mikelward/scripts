@@ -1,0 +1,8 @@
+#!/bin/bash
+# maketmux - create (and attach to) a named tmux session
+#
+# Thin wrapper over `tmux new-session -s`, the tmux twin of makeshpool,
+# dispatched by makesession. tmux opens the new session in the caller's PWD
+# natively, so (unlike makeshpool) there is nothing to stamp. All arguments
+# pass through (the first is the session name).
+exec tmux new-session -s "$@"

@@ -1,0 +1,6 @@
+#!/bin/bash
+# detachshpool - detach the current shpool session
+#
+# Thin wrapper over `shpool detach`, the shpool twin of detachtmux, dispatched
+# by detachsession. All arguments pass through to shpool.
+exec shpool detach "$@"

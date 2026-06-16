@@ -1,0 +1,12 @@
+#!/bin/bash
+# makeshpool - create (and attach to) a named shpool session
+#
+# Thin wrapper over `shpool attach` (which creates the session when it doesn't
+# exist yet), the shpool twin of maketmux, dispatched by makesession. All
+# arguments pass through (the first is the session name).
+#
+# Stamp SHPOOL_INITIAL_PWD so the new session's shell cd's to the caller's
+# directory rather than the outer shell's startup dir -- the same reason the
+# autoshpool wrapper stamps it. tmux needs no equivalent (see maketmux).
+export SHPOOL_INITIAL_PWD="$PWD"
+exec shpool attach "$@"

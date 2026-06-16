@@ -1,0 +1,180 @@
+#!/bin/bash
+# Tests for the make* session scripts: the makesession dispatcher and its
+# maketmux / makeshpool backends.
+#
+# Two seams are exercised:
+#   * dispatcher selection - the real makesession is run with fake maketmux /
+#     makeshpool backends in an isolated PATH, asserting which backend it picks
+#     for each ($TMUX / $SHPOOL_SESSION_NAME / $SESSION_BACKEND / installed)
+#     case without a real multiplexer.
+#   * backend behaviour - the real maketmux / makeshpool are run with a fake
+#     tmux / shpool, asserting the exact command each forwards and that
+#     makeshpool stamps SHPOOL_INITIAL_PWD with the caller's directory.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  ln -s "$(command -v dirname)" "$BIN/dirname"
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+fake() {
+  cat > "$BIN/$1" <<EOF
+#!/bin/bash
+echo "$1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$BIN/$1"
+}
+
+install_script() {
+  cp "$SCRIPT_DIR/$1" "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+run() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$@" "$BIN/$script" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_called() {
+  if ! grep -qx -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_status() {
+  if test "$status" -ne "$1"; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1
+  fi
+}
+assert_output_contains() {
+  case "$output" in
+    *"$1"*) ;;
+    *) echo "  FAIL: output missing '$1'"; echo "  output: $output"; TEST_FAILED=1 ;;
+  esac
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- dispatcher selection ---
+
+test_inside_tmux_picks_maketmux() {
+  install_script makesession; fake maketmux; fake makeshpool; fake tmux; fake shpool
+  run makesession TMUX=/tmp/sock
+  assert_called "maketmux "
+}
+test_inside_shpool_picks_makeshpool() {
+  install_script makesession; fake maketmux; fake makeshpool; fake tmux; fake shpool
+  run makesession SHPOOL_SESSION_NAME=work
+  assert_called "makeshpool "
+}
+test_session_backend_tmux() {
+  install_script makesession; fake maketmux; fake makeshpool
+  run makesession SESSION_BACKEND=tmux
+  assert_called "maketmux "
+}
+test_session_backend_shpool() {
+  install_script makesession; fake maketmux; fake makeshpool
+  run makesession SESSION_BACKEND=shpool
+  assert_called "makeshpool "
+}
+test_fallback_tmux_installed() {
+  install_script makesession; fake maketmux; fake makeshpool; fake tmux
+  run makesession
+  assert_called "maketmux "
+}
+test_fallback_shpool_installed() {
+  install_script makesession; fake maketmux; fake makeshpool; fake shpool
+  run makesession
+  assert_called "makeshpool "
+}
+test_no_backend_errors() {
+  install_script makesession; fake maketmux; fake makeshpool
+  run makesession
+  assert_status 1
+  assert_output_contains "no tmux or shpool backend available"
+}
+test_name_passes_through() {
+  install_script makesession; fake maketmux; fake makeshpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/makesession" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "maketmux work"
+}
+
+# --- backend behaviour ---
+
+test_maketmux_runs_new_session() {
+  install_script maketmux; fake tmux
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux new-session -s work"
+}
+test_makeshpool_runs_shpool_attach() {
+  install_script makeshpool; fake shpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "shpool attach work"
+}
+test_makeshpool_stamps_initial_pwd() {
+  install_script makeshpool
+  # record the stamped SHPOOL_INITIAL_PWD: a freshly created shpool session
+  # must open in the caller's dir, not the outer shell's startup dir.
+  cat > "$BIN/shpool" <<EOF
+#!/bin/bash
+echo "shpool \$* pwd=\$SHPOOL_INITIAL_PWD" >> "$CALLS"
+EOF
+  chmod +x "$BIN/shpool"
+  # run with the caller's cwd set to $TEST_TMPDIR so \$PWD is deterministic.
+  set +e
+  ( cd "$TEST_TMPDIR" && env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work )
+  set -e
+  assert_called "shpool attach work pwd=$TEST_TMPDIR"
+}
+
+run_test "dispatch: inside tmux picks maketmux" test_inside_tmux_picks_maketmux
+run_test "dispatch: inside shpool picks makeshpool" test_inside_shpool_picks_makeshpool
+run_test "dispatch: SESSION_BACKEND=tmux picks maketmux" test_session_backend_tmux
+run_test "dispatch: SESSION_BACKEND=shpool picks makeshpool" test_session_backend_shpool
+run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
+run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: no backend errors out" test_no_backend_errors
+run_test "dispatch: session name passes through" test_name_passes_through
+run_test "backend: maketmux runs tmux new-session -s" test_maketmux_runs_new_session
+run_test "backend: makeshpool runs shpool attach" test_makeshpool_runs_shpool_attach
+run_test "backend: makeshpool stamps SHPOOL_INITIAL_PWD" test_makeshpool_stamps_initial_pwd
+
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
