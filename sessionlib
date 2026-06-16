@@ -99,36 +99,50 @@ emit_line() {
 }
 
 build_list() {
-  # Print the picker rows in display order: the create entry, then sessions for
-  # this project's prefix, then the rest.
+  # Print the picker rows in display order: the auto session first (so Enter's
+  # default is this directory's auto session), then the rest of this project's
+  # prefix group, then everything else.
   local prefix autoname
   prefix="$(backend_prefix)"
   autoname="$(backend_autoname)" || autoname=""
 
-  # The create entry, shown only when the auto session doesn't exist yet. When it
-  # already exists (e.g. backend_autoname reused a disconnected session), it shows
-  # up below as a normal switch row; emitting a "+" entry for it too would list
-  # the same session twice -- once with a "+", once with its status icon.
-  if test -n "$autoname" && ! backend_session_exists "$autoname"; then
-    emit_line create "$autoname" \
-      "$(printf '+  %-20s  %s' "$autoname" "(create auto session for this directory)")"
+  # When the auto session doesn't exist yet, lead with a "+" create entry. When
+  # it already exists (e.g. backend_autoname reused a disconnected session), it
+  # is listed below as a normal switch row, so we pin THAT row to the top (see
+  # the partition loop) instead: emitting a "+" entry too would list it twice,
+  # and simply dropping it would hand the default row to an unrelated session.
+  local auto_exists=""
+  if test -n "$autoname"; then
+    if backend_session_exists "$autoname"; then
+      auto_exists=1
+    else
+      emit_line create "$autoname" \
+        "$(printf '+  %-20s  %s' "$autoname" "(create auto session for this directory)")"
+    fi
   fi
 
   # Partition sessions into this project's prefix group and everything else,
-  # preserving the backend's listing order within each group.
-  local s state cwd cmd line
-  local -a group_rest=()
+  # preserving the backend's listing order within each group. An existing auto
+  # session is held aside and emitted first, in place of the "+" entry.
+  local s state cwd cmd line auto_line=""
+  local -a group_prefix=() group_rest=()
   while IFS=$'\t' read -r s state cwd cmd; do
     test -n "$s" || continue
     line="$(emit_line switch "$s" "$(compact_line "$s" "$cwd" "$cmd" "$state")")"
-    if session_matches_prefix "$s" "$prefix"; then
-      printf '%s\n' "$line"
+    if test -n "$auto_exists" && test "$s" = "$autoname"; then
+      auto_line="$line"
+    elif session_matches_prefix "$s" "$prefix"; then
+      group_prefix+=("$line")
     else
       group_rest+=("$line")
     fi
   done < <(backend_session_rows)
 
   local r
+  test -n "$auto_line" && printf '%s\n' "$auto_line"
+  for r in "${group_prefix[@]}"; do
+    printf '%s\n' "$r"
+  done
   for r in "${group_rest[@]}"; do
     printf '%s\n' "$r"
   done
