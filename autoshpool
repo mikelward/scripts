@@ -145,12 +145,19 @@ create_and_attach_next() {
     # Re-check the listing: if our session still shows as "attached", we lost
     # a race against another shell and should try the next number. A session
     # we just exited from is either gone or "disconnected" by now.
+    # Bound the list the way abort_if_hung does -- if it hangs or errors we
+    # cannot tell a real attach from a busy refusal, so report failure
+    # rather than letting `autoshpool && exit` silently exit the shell with
+    # no session attached.
     # Capturing stderr to disambiguate the busy message was tried and rolled
     # back because routing shpool's interactive stderr through a pipe (tee
     # buffering) splattered escape sequences onto the user's terminal at
     # unpredictable moments.
     if test $rc -eq 0; then
-      listing="$(shpool list 2>/dev/null)"
+      if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
+        echo "shpool list failed after attach; cannot confirm session state" >&2
+        return 2
+      fi
       if test "$(session_status "$session" "$listing")" = "attached"; then
         sessions[$session]=1
         continue

@@ -507,6 +507,40 @@ SHPOOL
   assert_output_contains "already has a terminal attached"
 }
 
+test_post_attach_list_failure_propagates() {
+  # If the post-attach `shpool list` fails or hangs, we cannot tell a real
+  # attach from a busy refusal. autoshpool must report failure rather than
+  # letting the .shrc pattern `autoshpool && exit` silently exit the shell
+  # with no session attached.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    if [ -e "$HOME/.shpool_attached" ]; then
+      exit 1
+    fi
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    touch "$HOME/.shpool_attached"
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+  run_autoshpool
+  if [ "$status" -eq 0 ]; then
+    echo "  FAIL: expected non-zero exit when post-attach list fails"
+    echo "  output: $output"
+    return 1
+  fi
+  assert_called "shpool attach 1"
+  assert_output_contains "cannot confirm session state"
+}
+
 test_propagates_real_attach_failure() {
   # A non-zero attach exit with no busy-session message must propagate the
   # error, not silently try the next number.
@@ -733,6 +767,7 @@ run_test "loop handles switch request after session ends" test_loop_handles_swit
 run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
 run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "retries with the next number when a session is already attached" test_retries_when_session_already_attached
+run_test "reports failure when the post-attach list check fails" test_post_attach_list_failure_propagates
 run_test "propagates a real attach failure rather than trying the next number" test_propagates_real_attach_failure
 run_test "switch resolves a path segment to its session" test_switch_resolves_path_segment
 run_test "switch matches whole path segments only" test_switch_requires_whole_segment
