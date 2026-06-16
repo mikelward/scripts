@@ -453,6 +453,95 @@ SHPOOL
   assert_called "shpool attach other"
 }
 
+test_create_path_services_queued_switch() {
+  # Regression: while the loop is still inside create_and_attach_next holding a
+  # freshly created session, switching via the picker writes a switch file and
+  # detaches us. The detach has not settled in `shpool list` yet, so the session
+  # still shows "attached" -- which must NOT be mistaken for a lost busy race and
+  # trigger creation of a brand-new numbered session. The queued switch must be
+  # serviced instead.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    call_count=$(grep -c "shpool attach" "$HOME/.shpool_calls" 2>/dev/null || echo 0)
+    if [ "$call_count" -le 1 ]; then
+      # First attach (session 1): the user picks a switch target while the
+      # daemon still reports our just-detached session as attached.
+      echo "target:9" > "$HOME/.autoshpool_switch"
+      printf '%-30s %-33s %s\n' "1" "2025-01-01T00:00:00Z" "attached" \
+        >> "$HOME/.shpool_sessions"
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 1"
+  assert_called "shpool attach target:9"
+  if grep -q "shpool attach 2" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: created a new numbered session instead of servicing the switch"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
+test_create_path_waits_for_unsettled_status() {
+  # A session we owned and just detached can still show "attached" on the first
+  # post-attach listing before the daemon settles it to "disconnected". Even with
+  # no switch queued, the busy-race check must poll for the status to settle
+  # rather than immediately treating the stale "attached" as a lost race and
+  # creating the next numbered session.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    if [ -f "$HOME/.shpool_sessions" ]; then
+      if [ -f "$HOME/.list_seen_attached" ]; then
+        # A later list: the status has now settled to disconnected.
+        awk '$1 == "1" && $NF == "attached" { $NF = "disconnected"; printf "%-30s %-33s %s\n", $1, $2, $NF; next } { print }' \
+          "$HOME/.shpool_sessions" > "$HOME/.shpool_sessions.new" \
+          && mv "$HOME/.shpool_sessions.new" "$HOME/.shpool_sessions"
+      elif awk '$1 == "1" && $NF == "attached" { f = 1 } END { exit !f }' "$HOME/.shpool_sessions"; then
+        touch "$HOME/.list_seen_attached"
+      fi
+      cat "$HOME/.shpool_sessions"
+    fi
+    exit 0
+    ;;
+  attach)
+    call_count=$(grep -c "shpool attach" "$HOME/.shpool_calls" 2>/dev/null || echo 0)
+    if [ "$call_count" -le 1 ]; then
+      printf '%-30s %-33s %s\n' "1" "2025-01-01T00:00:00Z" "attached" \
+        >> "$HOME/.shpool_sessions"
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 1"
+  if grep -q "shpool attach 2" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: created a new session despite the status settling to disconnected"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
 test_uses_prefix() {
   export SHPOOL_PREFIX="myproject:"
   run_autoshpool
@@ -764,6 +853,8 @@ run_test "failed attach does not create a new session" test_failed_attach_does_n
 run_test "returns non-zero when shpool attach fails" test_returns_nonzero_on_failure
 run_test "preserves specific exit code from shpool attach" test_preserves_exit_code
 run_test "loop handles switch request after session ends" test_loop_handles_switch
+run_test "create path services a switch queued before the status settles" test_create_path_services_queued_switch
+run_test "create path waits for an unsettled attached status to settle" test_create_path_waits_for_unsettled_status
 run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
 run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "retries with the next number when a session is already attached" test_retries_when_session_already_attached
