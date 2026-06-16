@@ -1,0 +1,42 @@
+#!/bin/bash
+# detachsession - dispatch to detachtmux or detachshpool for the active backend
+#
+# Detaches the current session whichever multiplexer it belongs to, so one
+# command/keybinding works in either world:
+#   * inside tmux  ($TMUX set)                 -> detachtmux
+#   * inside shpool ($SHPOOL_SESSION_NAME set) -> detachshpool
+#   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
+#     whichever of tmux/shpool is installed (tmux first).
+#
+# All arguments are passed through to the chosen script.
+#
+# Shares its backend selection with autosession/changesession/makesession, so
+# $SESSION_BACKEND picks the multiplexer for the whole family.
+
+dir="$(cd "$(dirname "$0")" && pwd)"
+
+run() {
+  exec "$dir/$1" "${@:2}"
+}
+
+if test -n "$TMUX"; then
+  run detachtmux "$@"
+fi
+if test -n "$SHPOOL_SESSION_NAME"; then
+  run detachshpool "$@"
+fi
+
+case "${SESSION_BACKEND:-}" in
+  tmux)   run detachtmux "$@" ;;
+  shpool) run detachshpool "$@" ;;
+esac
+
+if command -v tmux >/dev/null 2>&1; then
+  run detachtmux "$@"
+fi
+if command -v shpool >/dev/null 2>&1; then
+  run detachshpool "$@"
+fi
+
+echo "detachsession: no tmux or shpool backend available" >&2
+exit 1

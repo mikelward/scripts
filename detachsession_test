@@ -1,0 +1,165 @@
+#!/bin/bash
+# Tests for the detach* session scripts: the detachsession dispatcher and its
+# detachtmux / detachshpool backends.
+#
+# Two seams are exercised:
+#   * dispatcher selection - the real detachsession is run with fake detachtmux
+#     / detachshpool backends in an isolated PATH, so we can assert which
+#     backend it picks for each ($TMUX / $SHPOOL_SESSION_NAME / $SESSION_BACKEND
+#     / installed) case without a real multiplexer.
+#   * backend behaviour - the real detachtmux / detachshpool are run with a
+#     fake tmux / shpool, asserting the exact command each forwards.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  # The dispatcher needs only `dirname` as an external; everything else it uses
+  # is a bash builtin. Isolating PATH to $BIN lets each test control tmux/shpool
+  # "installed" detection precisely (real tmux on the host won't leak in).
+  ln -s "$(command -v dirname)" "$BIN/dirname"
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+# A fake command in $BIN that records "name args" to $CALLS. Used both for fake
+# backends (detachtmux/detachshpool) and fake externals (tmux/shpool).
+fake() {
+  cat > "$BIN/$1" <<EOF
+#!/bin/bash
+echo "$1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$BIN/$1"
+}
+
+# Copy a real script under test into $BIN so its \$dir resolves there.
+install_script() {
+  cp "$SCRIPT_DIR/$1" "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+# Run $BIN/<script> in an isolated env. Usage: run <script> [VAR=val ...]
+# The VAR=val pairs (if any) are exported for the invocation only.
+run() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$@" "$BIN/$script" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_called() {
+  if ! grep -qx -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_status() {
+  if test "$status" -ne "$1"; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1
+  fi
+}
+assert_output_contains() {
+  case "$output" in
+    *"$1"*) ;;
+    *) echo "  FAIL: output missing '$1'"; echo "  output: $output"; TEST_FAILED=1 ;;
+  esac
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- dispatcher selection ---
+
+test_inside_tmux_picks_detachtmux() {
+  install_script detachsession; fake detachtmux; fake detachshpool; fake tmux; fake shpool
+  run detachsession TMUX=/tmp/sock
+  assert_called "detachtmux "
+}
+test_inside_shpool_picks_detachshpool() {
+  install_script detachsession; fake detachtmux; fake detachshpool; fake tmux; fake shpool
+  run detachsession SHPOOL_SESSION_NAME=work
+  assert_called "detachshpool "
+}
+test_session_backend_tmux() {
+  install_script detachsession; fake detachtmux; fake detachshpool
+  run detachsession SESSION_BACKEND=tmux
+  assert_called "detachtmux "
+}
+test_session_backend_shpool() {
+  install_script detachsession; fake detachtmux; fake detachshpool
+  run detachsession SESSION_BACKEND=shpool
+  assert_called "detachshpool "
+}
+test_fallback_tmux_installed() {
+  install_script detachsession; fake detachtmux; fake detachshpool; fake tmux
+  run detachsession
+  assert_called "detachtmux "
+}
+test_fallback_shpool_installed() {
+  install_script detachsession; fake detachtmux; fake detachshpool; fake shpool
+  run detachsession
+  assert_called "detachshpool "
+}
+test_no_backend_errors() {
+  install_script detachsession; fake detachtmux; fake detachshpool
+  run detachsession
+  assert_status 1
+  assert_output_contains "no tmux or shpool backend available"
+}
+test_args_pass_through() {
+  install_script detachsession; fake detachtmux; fake detachshpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/detachsession" -P extra 2>&1)"
+  status=$?
+  set -e
+  assert_called "detachtmux -P extra"
+}
+
+# --- backend behaviour ---
+
+test_detachtmux_runs_tmux_detach() {
+  install_script detachtmux; fake tmux
+  run detachtmux
+  assert_called "tmux detach"
+}
+test_detachshpool_runs_shpool_detach() {
+  install_script detachshpool; fake shpool
+  run detachshpool
+  assert_called "shpool detach"
+}
+
+run_test "dispatch: inside tmux picks detachtmux" test_inside_tmux_picks_detachtmux
+run_test "dispatch: inside shpool picks detachshpool" test_inside_shpool_picks_detachshpool
+run_test "dispatch: SESSION_BACKEND=tmux picks detachtmux" test_session_backend_tmux
+run_test "dispatch: SESSION_BACKEND=shpool picks detachshpool" test_session_backend_shpool
+run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
+run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: no backend errors out" test_no_backend_errors
+run_test "dispatch: args pass through to backend" test_args_pass_through
+run_test "backend: detachtmux runs tmux detach" test_detachtmux_runs_tmux_detach
+run_test "backend: detachshpool runs shpool detach" test_detachshpool_runs_shpool_detach
+
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
