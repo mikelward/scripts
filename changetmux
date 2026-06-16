@@ -1,0 +1,100 @@
+#!/bin/bash
+# changetmux - interactively switch tmux sessions with an fzf picker
+#
+# The tmux backend for the shared fzf picker in sessionlib (see changeshpool
+# for the shpool twin, and "changesession" to dispatch between them). The picker
+# lists a "create <auto name>" entry first, then this project's sessions, then
+# the rest; j/k or arrows move, Enter selects, and a typed name that matches
+# nothing is created. See sessionlib for the engine and the backend_* hooks this
+# script fills in.
+#
+# Internal subcommands (used by fzf, handy for testing):
+#   changetmux --list           - print the tab-separated picker lines
+#   changetmux --preview <name> - render the preview for one session/auto name
+#
+# Override the picker with CHANGESESSION_FZF (e.g. for tests).
+
+# Pull in the tmux backend helpers (which in turn source sessionlib's engine).
+source "$(dirname "$0")/autotmux"
+test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
+
+# Absolute path to this script, so the fzf preview can call back in regardless
+# of how changetmux was invoked.
+SESSION_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+# Resolve the project prefix once, here, so it persists for both backend_prefix
+# and backend_autoname (a value set inside a hook subshell would not).
+TMUX_PREFIX="${TMUX_PREFIX:-$(get_prefix)}"
+
+active_pane_field() {
+  # "session<TAB>path<TAB>command" for each session's active pane, so the picker
+  # line can show a cwd and command without a vcs call. One list-panes covers
+  # every session; keep the first active pane seen per session (active pane of
+  # the active window). See autotmux's list_tmux_sessions for the '\037'->TAB
+  # translation (tmux mangles a literal TAB in a -F format).
+  tmux list-panes -a \
+    -F "#{session_name}"$'\x1f'"#{window_active}"$'\x1f'"#{pane_active}"$'\x1f'"#{pane_current_path}"$'\x1f'"#{pane_current_command}" \
+    2>/dev/null \
+    | sed 's/\\037/\t/g' \
+    | awk -F'\t' '$2 == 1 && $3 == 1 && !seen[$1]++ { print $1 "\t" $4 "\t" $5 }'
+}
+
+# --- backend hooks for the sessionlib picker engine ---
+
+backend_prefix()         { printf '%s' "$TMUX_PREFIX"; }
+backend_autoname()       { pick_prefixed_session; }
+backend_session_exists() { session_exists "$1"; }
+backend_sanitize_name()  { sanitize_session_name "$1"; }
+
+backend_session_rows() {
+  # "name<TAB>state<TAB>cwd<TAB>command" per session: the session list joined to
+  # each session's active pane.
+  declare -A spath scmd
+  local s path cmd attached state
+  while IFS=$'\t' read -r s path cmd; do
+    test -n "$s" || continue
+    spath[$s]="$path"
+    scmd[$s]="$cmd"
+  done < <(active_pane_field)
+  while IFS=$'\t' read -r s attached; do
+    test -n "$s" || continue
+    test "$((attached + 0))" -gt 0 && state=attached || state=disconnected
+    printf '%s\t%s\t%s\t%s\n' "$s" "$state" "${spath[$s]}" "${scmd[$s]}"
+  done < <(list_tmux_sessions)
+}
+
+backend_describe() {
+  # The rich, vcs-aware description tmuxlist prints, for the highlighted row.
+  local name="$1" path
+  path="$(active_pane_field | awk -F'\t' -v n="$name" '$1 == n { print $2; exit }')"
+  describe_session "$name" "$path" "$(session_state "$name")"
+}
+
+backend_perform_switch() {
+  # Switch (or attach, from outside tmux) to the chosen session, creating it
+  # first for the create action. Inside tmux we share via switch-client; from
+  # outside we attach with -d so the new client steals the terminal from any
+  # other client on that session.
+  local action="$1" target="$2"
+  if test "$action" = create && ! session_exists "$target"; then
+    if in_tmux; then
+      tmux new-session -d -s "$target" -c "$PWD" || return
+    else
+      tmux new-session -s "$target" -c "$PWD"
+      return $?
+    fi
+  fi
+  if in_tmux; then
+    do_switch "$target"
+  else
+    tmux attach-session -d -t "=$target"
+  fi
+}
+
+case "$1" in
+  --list)    build_list ;;
+  --preview) shift; preview_entry "$1" ;;
+  -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//' ;;
+  "")        run_picker ;;
+  *)         echo "changetmux: unknown argument '$1'" >&2; exit 2 ;;
+esac

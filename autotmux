@@ -38,6 +38,11 @@
 
 TMUX_SEP="${TMUX_SEP:-/}"
 
+# Shared helpers and the fzf picker engine. SESSION_SEP tells the library which
+# separator this backend uses (for session_matches_prefix).
+SESSION_SEP="$TMUX_SEP"
+source "$(dirname "$0")/sessionlib"
+
 sanitize_session_name() {
   # Make a name we *generate* safe to both create and target:
   #  - tmux rewrites '#', ':' and '.' out of names at creation (`new-session -s
@@ -67,20 +72,6 @@ get_current_tmux_session() {
   tmux display-message -p '#S' 2>/dev/null
 }
 
-session_matches_prefix() {
-  # True if a session name ($1) belongs to the project identified by a prefix
-  # ($2). With no prefix (e.g. outside any version-controlled directory) we
-  # never force a switch, so every session matches.
-  local session="$1" prefix="$2"
-  test -z "$prefix" && return 0
-  case "$session" in
-    "$prefix"*) return 0 ;;       # already carries the prefix (e.g. "proj/3")
-  esac
-  # Also accept an exact match with the separator stripped, so a session named
-  # "proj" counts as matching the prefix "proj/".
-  test "$session" = "${prefix%"$TMUX_SEP"}"
-}
-
 get_prefix() {
   # The current project name with the separator appended, or empty string when
   # we're not under version control (we don't force a prefix then).
@@ -96,7 +87,14 @@ get_prefix() {
 list_tmux_sessions() {
   # One "name<TAB>attached" row per session. "attached" is tmux's client count
   # (0 means detached). Empty output when no server is running.
-  tmux list-sessions -F "#{session_name}"$'\t'"#{session_attached}" 2>/dev/null
+  #
+  # tmux mangles a literal TAB in a -F format into '_' (and won't emit a real
+  # tab via '\t' either), so the columns would otherwise run together. Separate
+  # them with US (0x1f) instead, which tmux can't have in a session name and
+  # emits as the escape '\037'; translate that back to a real TAB so every
+  # downstream tab-parser keeps working unchanged.
+  tmux list-sessions -F "#{session_name}"$'\x1f'"#{session_attached}" 2>/dev/null \
+    | sed 's/\\037/\t/g'
 }
 
 get_all_session_names() {
@@ -255,26 +253,17 @@ attach_or_create() {
 
 list_tmux_panes() {
   # One "session<TAB>path" row per pane, for resolving a switch target to the
-  # session whose working directory matches.
-  tmux list-panes -a -F "#{session_name}"$'\t'"#{pane_current_path}" 2>/dev/null
+  # session whose working directory matches. Uses the US (0x1f) separator and
+  # '\037'->TAB translation for the same reason as list_tmux_sessions (tmux
+  # mangles a literal TAB in a -F format).
+  tmux list-panes -a -F "#{session_name}"$'\x1f'"#{pane_current_path}" 2>/dev/null \
+    | sed 's/\\037/\t/g'
 }
 
 session_state() {
   # "attached" or "disconnected" for a session ($1), or empty if it isn't listed.
   list_tmux_sessions | awk -F'\t' -v n="$1" \
     '$1 == n { print ($2 + 0 > 0) ? "attached" : "disconnected"; exit }'
-}
-
-status_icon() {
-  # A compact icon for a session status ($1), so listings stay narrow:
-  #   attached -> filled circle, disconnected -> empty circle.
-  # Anything else (including an empty/unknown status) falls back to a question
-  # mark so unexpected statuses are still visible.
-  case "$1" in
-    attached)     printf '%s' '●' ;;
-    disconnected) printf '%s' '○' ;;
-    *)            printf '%s' '?' ;;
-  esac
 }
 
 session_commands() {
@@ -284,20 +273,6 @@ session_commands() {
   # only one window's panes would show.
   tmux list-panes -s -t "=$1" -F '#{pane_current_command}' 2>/dev/null \
     | sort -u | paste -sd' ' -
-}
-
-dir_vcs_root_name() {
-  # The last component of the version-control root for a directory, or empty if
-  # the directory isn't under version control (we don't require vcs to work).
-  local root
-  root="$(cd "$1" 2>/dev/null && vcs rootdir 2>/dev/null)"
-  test -n "$root" && basename "$root"
-}
-
-dir_vcs_unmerged() {
-  # The unmerged items vcs reports for a directory, or empty. Best-effort: we
-  # don't require vcs to be working.
-  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
 }
 
 describe_session() {
@@ -312,17 +287,6 @@ describe_session() {
     "$(dir_vcs_root_name "$path")" "$(basename "$path")" \
     "$(session_commands "$session")"
   dir_vcs_unmerged "$path" | sed 's/^/  /'
-}
-
-shell_matches() {
-  # True if a working directory ($1) matches the argument ($2), either as a full
-  # path segment of the directory or as a whole word in the directory's vcs
-  # unmerged output.
-  local cwd="$1" arg="$2"
-  case "$cwd/" in
-    */"$arg"/*) return 0 ;;
-  esac
-  dir_vcs_unmerged "$cwd" | grep -Fwq -- "$arg"
 }
 
 resolve_switch_target() {

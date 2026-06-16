@@ -1,0 +1,310 @@
+#!/bin/bash
+# Tests for changeshpool (the fzf-driven session switcher).
+#
+# Mirrors changetmux_test, but for shpool: drives the internal --list/--preview
+# subcommands and the full picker path with fzf stubbed via $CHANGESESSION_FZF.
+# A fake shpool, fake pgrep and a fake /proc tree (as in autoshpool_test) back
+# the session enumeration.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  export HOME="$TEST_TMPDIR"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  mkdir -p "$TEST_TMPDIR/bin"
+
+  # Fake shpool: list serves the header plus .shpool_sessions rows; attach/detach
+  # just record the call (and attach honours $SHPOOL_ATTACH_EXIT).
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach) exit "${SHPOOL_ATTACH_EXIT:-0}" ;;
+  *) exit 0 ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  printf '#!/bin/bash\necho ""\n' > "$TEST_TMPDIR/bin/rootdir"
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+
+  # pgrep backed by fixtures: .fake_shpool_pids and .fake_shells (see add_shell).
+  cat > "$TEST_TMPDIR/bin/pgrep" <<'PGREP'
+#!/bin/bash
+case "$1" in
+  -x) [ "$2" = shpool ] && cat "$HOME/.fake_shpool_pids" 2>/dev/null ;;
+  -P) awk -F'\t' -v p="$2" '$2==p{print $1}' "$HOME/.fake_shells" 2>/dev/null ;;
+esac
+exit 0
+PGREP
+  chmod +x "$TEST_TMPDIR/bin/pgrep"
+
+  export SHPOOL_PROC_DIR="$TEST_TMPDIR/proc"
+  mkdir -p "$SHPOOL_PROC_DIR"
+
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
+#!/bin/bash
+case "$1" in
+  rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
+
+  # timeout: run the command without an actual timeout.
+  printf '#!/bin/bash\nshift\n"$@"\n' > "$TEST_TMPDIR/bin/timeout"
+  chmod +x "$TEST_TMPDIR/bin/timeout"
+
+  touch "$TEST_TMPDIR/.shrc.vcs"
+
+  unset SHPOOL_SESSION_NAME SHPOOL_PREFIX SHPOOL_ATTACH_EXIT SHPOOL_INITIAL_PWD
+  unset FZF_QUERY FZF_PICK FZF_EXIT
+  rm -f "$TEST_TMPDIR"/.autoshpool_switch "$TEST_TMPDIR"/.autoshpool_switch_pwd
+  rm -f "$TEST_TMPDIR"/.shpool_calls "$TEST_TMPDIR"/.shpool_sessions
+  rm -f "$TEST_TMPDIR"/.fake_shpool_pids "$TEST_TMPDIR"/.fake_shells
+
+  cat > "$TEST_TMPDIR/bin/fzf" <<'FZF'
+#!/bin/bash
+input="$(cat)"
+test -n "${FZF_EXIT:-}" && exit "$FZF_EXIT"
+printf '%s\n' "${FZF_QUERY:-}"
+if test -n "${FZF_PICK:-}"; then
+  printf '%s\n' "$input" | grep -m1 -- "$FZF_PICK"
+fi
+exit 0
+FZF
+  chmod +x "$TEST_TMPDIR/bin/fzf"
+  export CHANGESESSION_FZF="$TEST_TMPDIR/bin/fzf"
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+add_shpool() { echo "$1" >> "$HOME/.fake_shpool_pids"; }
+
+add_proc() {
+  local pid="$1" comm="$2" ppid="$3"; shift 3
+  mkdir -p "$SHPOOL_PROC_DIR/$pid/task/$pid"
+  printf '%s\n' "$comm" > "$SHPOOL_PROC_DIR/$pid/comm"
+  printf 'Name:\t%s\nPPid:\t%s\n' "$comm" "$ppid" > "$SHPOOL_PROC_DIR/$pid/status"
+  printf '%s ' "$@" > "$SHPOOL_PROC_DIR/$pid/task/$pid/children"
+}
+
+add_shell() {
+  local pid="$1" ppid="$2" cwd="$3" session="$4"
+  printf '%s\t%s\t%s\t%s\n' "$pid" "$ppid" "$cwd" "$session" >> "$HOME/.fake_shells"
+  add_proc "$pid" zsh "$ppid"
+  printf 'PATH=/usr/bin\0SHPOOL_SESSION_NAME=%s\0TERM=xterm\0' "$session" \
+    > "$SHPOOL_PROC_DIR/$pid/environ"
+  ln -sf "$cwd" "$SHPOOL_PROC_DIR/$pid/cwd"
+}
+
+# Register a session as both an shpool-list row and a live shell, so it shows up
+# in the listing and has a cwd/command. Usage: add_full <session> <status> [cwd]
+SHELL_PID=1000
+add_full() {
+  local session="$1" status="${2:-disconnected}" cwd="${3:-/home/u/$1}"
+  printf '%-30s %-33s %s\n' "$session" "2025-01-01T00:00:00Z" "$status" \
+    >> "$HOME/.shpool_sessions"
+  SHELL_PID=$((SHELL_PID + 1))
+  add_shpool 9000
+  add_shell "$SHELL_PID" 9000 "$cwd" "$session"
+}
+
+run_cs() {
+  set +e
+  output="$("$SCRIPT_DIR/changeshpool" "$@" </dev/null 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_status() {
+  if [ "$status" -ne "$1" ]; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_output_contains() {
+  if [[ "$output" != *"$1"* ]]; then
+    echo "  FAIL: output missing '$1'"; echo "  output: $output"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_called() {
+  if ! grep -q -- "$1" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_not_called() {
+  if grep -q -- "$1" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: unexpected call '$1'"; echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_switch_file() {
+  local got; got="$(cat "$HOME/.autoshpool_switch" 2>/dev/null)"
+  if [ "$got" != "$1" ]; then
+    echo "  FAIL: switch file is '$got', expected '$1'"; TEST_FAILED=1; return 1
+  fi
+}
+assert_no_switch_file() {
+  if [ -f "$HOME/.autoshpool_switch" ]; then
+    echo "  FAIL: switch file unexpectedly exists"; TEST_FAILED=1; return 1
+  fi
+}
+assert_switch_pwd() {
+  local got; got="$(cat "$HOME/.autoshpool_switch_pwd" 2>/dev/null)"
+  if [ "$got" != "$1" ]; then
+    echo "  FAIL: switch pwd is '$got', expected '$1'"; TEST_FAILED=1; return 1
+  fi
+}
+assert_no_switch_pwd() {
+  if [ -f "$HOME/.autoshpool_switch_pwd" ]; then
+    echo "  FAIL: switch pwd unexpectedly exists"; TEST_FAILED=1; return 1
+  fi
+}
+
+list_action()  { run_cs --list; printf '%s\n' "$output" | sed -n "${1}p" | cut -f1; }
+list_session() { run_cs --list; printf '%s\n' "$output" | sed -n "${1}p" | cut -f2; }
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- --list ---
+
+test_list_create_entry_first() {
+  add_full a disconnected
+  if [ "$(list_action 1)" != create ]; then
+    echo "  FAIL: first row is not the create entry"; echo "  output: $output"; TEST_FAILED=1
+  fi
+}
+
+test_list_attached_icon() {
+  add_full live attached
+  run_cs --list
+  assert_output_contains '●'
+}
+
+test_list_disconnected_icon() {
+  add_full idle disconnected
+  run_cs --list
+  assert_output_contains '○'
+}
+
+test_list_prefix_group_first() {
+  export SHPOOL_PREFIX="proj:"
+  add_full other:1 disconnected
+  add_full proj:2 attached
+  run_cs --list
+  local r2 r3
+  r2="$(printf '%s\n' "$output" | sed -n '2p' | cut -f2)"
+  r3="$(printf '%s\n' "$output" | sed -n '3p' | cut -f2)"
+  if [ "$r2" != proj:2 ] || [ "$r3" != other:1 ]; then
+    echo "  FAIL: prefix group not first (r2=$r2 r3=$r3)"; echo "$output"; TEST_FAILED=1
+  fi
+}
+
+# --- --preview ---
+
+test_preview_existing_session() {
+  add_full live attached
+  run_cs --preview live
+  assert_output_contains 'live'
+}
+
+test_preview_new_name() {
+  run_cs --preview brandnew
+  assert_output_contains 'New session: brandnew'
+}
+
+# --- picker -> switch dispatch ---
+
+test_pick_existing_inside_requests_switch() {
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  add_full target:1 disconnected
+  FZF_PICK=$'^switch\ttarget:1\t' run_cs
+  assert_switch_file "target:1"
+  assert_no_switch_pwd            # switching to an existing session keeps its dir
+}
+
+test_pick_create_entry_requests_auto_with_pwd() {
+  export SHPOOL_PREFIX="proj:"
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  FZF_PICK='^create' run_cs
+  assert_switch_file "proj:1"
+  assert_switch_pwd "$PWD"        # a created session opens in the current dir
+}
+
+test_typed_new_name_requests_switch() {
+  export SHPOOL_SESSION_NAME="cur:1"
+  add_full cur:1 attached
+  FZF_QUERY='newsesh' run_cs
+  assert_switch_file "newsesh"
+  assert_switch_pwd "$PWD"
+}
+
+test_outside_session_attaches_with_steal() {
+  add_full target:1 disconnected
+  FZF_PICK=$'^switch\ttarget:1\t' run_cs
+  assert_called 'shpool detach target:1'   # steal from any other terminal
+  assert_called 'shpool attach target:1'
+  assert_no_switch_file                     # no loop to service: attach directly
+}
+
+test_esc_cancels_cleanly() {
+  add_full a disconnected
+  FZF_EXIT=130 run_cs
+  assert_status 0
+  assert_no_switch_file
+  assert_not_called 'shpool attach'
+}
+
+test_picker_error_propagates() {
+  # fzf failing to start (e.g. not installed -> 127) or erroring (2) must not be
+  # treated as a clean cancel: surface a nonzero status and switch nothing.
+  add_full a disconnected
+  FZF_EXIT=2 run_cs
+  assert_status 2
+  assert_no_switch_file
+  assert_not_called 'shpool attach'
+}
+
+run_test "list: create entry is first" test_list_create_entry_first
+run_test "list: attached session shows filled icon" test_list_attached_icon
+run_test "list: detached session shows empty icon" test_list_disconnected_icon
+run_test "list: prefix group sorts under the create entry" test_list_prefix_group_first
+run_test "preview: existing session shows its name" test_preview_existing_session
+run_test "preview: new name explains creation" test_preview_new_name
+run_test "pick: existing session requests a switch (no pwd)" test_pick_existing_inside_requests_switch
+run_test "pick: create entry requests the auto name with pwd" test_pick_create_entry_requests_auto_with_pwd
+run_test "pick: typed new name requests a switch with pwd" test_typed_new_name_requests_switch
+run_test "pick: outside a session attaches with steal" test_outside_session_attaches_with_steal
+run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
+run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

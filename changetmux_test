@@ -1,0 +1,307 @@
+#!/bin/bash
+# Tests for changetmux (the fzf-driven session switcher).
+#
+# Drives changetmux through its testable seams: the internal --list and
+# --preview subcommands, and the full picker path with the fzf picker stubbed
+# via $CHANGESESSION_FZF. A fake tmux backs everything with fixture files.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  export HOME="$TEST_TMPDIR"
+  export PATH="$TEST_TMPDIR/bin:$PATH"
+  mkdir -p "$TEST_TMPDIR/bin"
+
+  # Fake tmux backed by fixtures:
+  #   .tmux_sessions - "name<TAB>attached" rows (list-sessions)
+  #   .tmux_active   - "name<TAB>path<TAB>command" rows for each session's
+  #                    active pane (list-panes)
+  #   $TMUX_S        - current session name (display-message -p '#S')
+  # Real tmux can't emit a TAB in -F output, so list-sessions/list-panes escape
+  # the separator as '\037' (US), exactly like tmux 3.4; the script translates
+  # it back. The calls are logged to .tmux_calls.
+  cat > "$TEST_TMPDIR/bin/tmux" <<'TMUX'
+#!/bin/bash
+echo "tmux $*" >> "$HOME/.tmux_calls"
+cmd="$1"; shift
+case "$cmd" in
+  list-sessions)
+    sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
+    test -s "$HOME/.tmux_sessions" || { echo "no server running" >&2; exit 1; }
+    exit 0
+    ;;
+  list-panes)
+    # changetmux asks two ways:
+    #   -a with a window_active field -> active pane of every session
+    #   -s -t =NAME                   -> commands in one session
+    if printf '%s\n' "$@" | grep -q 'window_active'; then
+      # 5 fields: name, window_active(1), pane_active(1), path, command.
+      while IFS=$'\t' read -r name path command; do
+        printf '%s\037%s\037%s\037%s\037%s\n' "$name" 1 1 "$path" "$command"
+      done < "$HOME/.tmux_active" 2>/dev/null
+    else
+      # session_commands: -s -t =NAME -F '#{pane_current_command}'
+      target=
+      while [ $# -gt 0 ]; do
+        [ "$1" = -t ] && { target="${2#=}"; break; }
+        shift
+      done
+      awk -F'\t' -v n="$target" '$1 == n { print $3 }' "$HOME/.tmux_active" 2>/dev/null
+    fi
+    exit 0
+    ;;
+  display-message)
+    printf '%s\n' "$TMUX_S"
+    exit 0
+    ;;
+  attach-session) exit "${TMUX_ATTACH_EXIT:-0}" ;;
+  switch-client)  exit "${TMUX_SWITCH_EXIT:-0}" ;;
+  new-session)
+    name=
+    while [ $# -gt 0 ]; do
+      [ "$1" = -s ] && { name="$2"; break; }
+      shift
+    done
+    exit "${TMUX_NEW_EXIT:-0}"
+    ;;
+  *) exit 0 ;;
+esac
+TMUX
+  chmod +x "$TEST_TMPDIR/bin/tmux"
+
+  # rootdir prints nothing by default (no project prefix).
+  printf '#!/bin/bash\necho ""\n' > "$TEST_TMPDIR/bin/rootdir"
+  chmod +x "$TEST_TMPDIR/bin/rootdir"
+
+  # vcs reads per-directory marker files (.vcsroot/.unmerged).
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
+#!/bin/bash
+case "$1" in
+  rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
+
+  touch "$TEST_TMPDIR/.shrc.vcs"
+
+  unset TMUX TMUX_S TMUX_PREFIX
+  unset TMUX_ATTACH_EXIT TMUX_NEW_EXIT TMUX_SWITCH_EXIT
+  unset FZF_QUERY FZF_PICK FZF_EXIT
+  rm -f "$TEST_TMPDIR"/.tmux_calls "$TEST_TMPDIR"/.tmux_sessions "$TEST_TMPDIR"/.tmux_active
+
+  # Stub fzf: print the query line (--print-query) then, if a pick pattern is
+  # set, the first matching input row. FZF_EXIT forces an exit code (130 = ESC).
+  cat > "$TEST_TMPDIR/bin/fzf" <<'FZF'
+#!/bin/bash
+input="$(cat)"
+test -n "${FZF_EXIT:-}" && exit "$FZF_EXIT"
+printf '%s\n' "${FZF_QUERY:-}"
+if test -n "${FZF_PICK:-}"; then
+  printf '%s\n' "$input" | grep -m1 -- "$FZF_PICK"
+fi
+exit 0
+FZF
+  chmod +x "$TEST_TMPDIR/bin/fzf"
+  export CHANGESESSION_FZF="$TEST_TMPDIR/bin/fzf"
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+add_session() { printf '%s\t%s\n' "$1" "${2:-0}" >> "$HOME/.tmux_sessions"; }
+add_active()  { printf '%s\t%s\t%s\n' "$1" "$2" "${3:-zsh}" >> "$HOME/.tmux_active"; }
+
+run_ct() {
+  set +e
+  output="$("$SCRIPT_DIR/changetmux" "$@" </dev/null 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_status() {
+  if [ "$status" -ne "$1" ]; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_output_contains() {
+  if [[ "$output" != *"$1"* ]]; then
+    echo "  FAIL: output missing '$1'"; echo "  output: $output"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_output_not_contains() {
+  if [[ "$output" == *"$1"* ]]; then
+    echo "  FAIL: output unexpectedly contains '$1'"; echo "  output: $output"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_called() {
+  if ! grep -q -- "$1" "$HOME/.tmux_calls" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
+    TEST_FAILED=1; return 1
+  fi
+}
+assert_not_called() {
+  if grep -q -- "$1" "$HOME/.tmux_calls" 2>/dev/null; then
+    echo "  FAIL: unexpected call '$1'"; echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
+    TEST_FAILED=1; return 1
+  fi
+}
+# The first field (action) of the Nth picker --list row.
+list_action() { run_ct --list; printf '%s\n' "$output" | sed -n "${1}p" | cut -f1; }
+# The second field (session) of the Nth picker --list row.
+list_session() { run_ct --list; printf '%s\n' "$output" | sed -n "${1}p" | cut -f2; }
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+# --- --list ordering and content ---
+
+test_list_create_entry_first() {
+  add_session a 0; add_active a /tmp/a
+  if [ "$(list_action 1)" != create ]; then
+    echo "  FAIL: first row is not the create entry"; echo "  output: $output"; TEST_FAILED=1
+  fi
+}
+
+test_list_session_names_survive_tab_mangle() {
+  # Real tmux mangles a TAB in -F output; the fake mimics that with '\037'. The
+  # session name must come through intact (not "myproj_0").
+  add_session myproj 0; add_active myproj /tmp/myproj
+  run_ct --list
+  assert_output_contains $'\tmyproj\t'
+  assert_output_not_contains 'myproj_0'
+}
+
+test_list_attached_icon() {
+  add_session live 1; add_active live /tmp/live
+  run_ct --list
+  assert_output_contains '●'   # attached marker
+}
+
+test_list_disconnected_icon() {
+  add_session idle 0; add_active idle /tmp/idle
+  run_ct --list
+  assert_output_contains '○'   # detached marker
+}
+
+test_list_prefix_group_first() {
+  # In project "proj", proj/* sessions sort above unrelated ones, just under the
+  # create entry.
+  export TMUX_PREFIX="proj/"
+  add_session other 0;  add_active other /tmp/other
+  add_session proj/2 0; add_active proj/2 /tmp/proj
+  # Row 1 = create, row 2 = the prefixed session, row 3 = the unrelated one.
+  run_ct --list
+  local r2 r3
+  r2="$(printf '%s\n' "$output" | sed -n '2p' | cut -f2)"
+  r3="$(printf '%s\n' "$output" | sed -n '3p' | cut -f2)"
+  if [ "$r2" != proj/2 ] || [ "$r3" != other ]; then
+    echo "  FAIL: prefix group not first (r2=$r2 r3=$r3)"; echo "$output"; TEST_FAILED=1
+  fi
+}
+
+# --- --preview ---
+
+test_preview_existing_session() {
+  add_session live 1; add_active live /tmp/live vim
+  run_ct --preview live
+  assert_output_contains 'live'
+  assert_output_contains 'vim'   # session_commands surfaced
+}
+
+test_preview_new_name() {
+  run_ct --preview brandnew
+  assert_output_contains 'New session: brandnew'
+}
+
+# --- picker -> switch dispatch ---
+
+test_pick_existing_switches_client_inside_tmux() {
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  add_session target 0;  add_active target /tmp/target
+  FZF_PICK=$'^switch\ttarget\t' run_ct
+  assert_called 'switch-client -t =target'
+}
+
+test_pick_create_entry_makes_session() {
+  export TMUX_PREFIX="proj/"
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  # No existing proj/* session, so the auto name is proj/1; selecting the create
+  # row makes it.
+  FZF_PICK='^create' run_ct
+  assert_called 'new-session -d -s proj/1'
+}
+
+test_typed_new_name_creates_sanitized() {
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  # A typed query that matches no row becomes a new session; '.' is normalized.
+  FZF_QUERY='my.proj' run_ct
+  assert_called 'new-session -d -s my_proj'
+}
+
+test_outside_tmux_attaches_with_steal() {
+  # No $TMUX: selecting a session attaches with -d (steals other clients).
+  add_session target 0; add_active target /tmp/target
+  FZF_PICK=$'^switch\ttarget\t' run_ct
+  assert_called 'attach-session -d -t =target'
+  assert_not_called 'switch-client'
+}
+
+test_esc_cancels_cleanly() {
+  add_session a 0; add_active a /tmp/a
+  FZF_EXIT=130 run_ct
+  assert_status 0
+  assert_not_called 'switch-client'
+  assert_not_called 'attach-session'
+}
+
+test_picker_error_propagates() {
+  # fzf failing to start (e.g. not installed -> 127) or erroring (2) must not be
+  # treated as a clean cancel: surface a nonzero status and switch nothing.
+  add_session a 0; add_active a /tmp/a
+  FZF_EXIT=2 run_ct
+  assert_status 2
+  assert_not_called 'switch-client'
+  assert_not_called 'attach-session'
+}
+
+# --- runner ---
+
+run_test "list: create entry is first" test_list_create_entry_first
+run_test "list: session names survive tmux tab mangling" test_list_session_names_survive_tab_mangle
+run_test "list: attached session shows filled icon" test_list_attached_icon
+run_test "list: detached session shows empty icon" test_list_disconnected_icon
+run_test "list: prefix group sorts under the create entry" test_list_prefix_group_first
+run_test "preview: existing session shows name and command" test_preview_existing_session
+run_test "preview: new name explains creation" test_preview_new_name
+run_test "pick: existing session switches client inside tmux" test_pick_existing_switches_client_inside_tmux
+run_test "pick: create entry makes the auto-named session" test_pick_create_entry_makes_session
+run_test "pick: typed new name creates a sanitized session" test_typed_new_name_creates_sanitized
+run_test "pick: outside tmux attaches with steal" test_outside_tmux_attaches_with_steal
+run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
+run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

@@ -29,22 +29,13 @@
 switch_session_file="$HOME/.autoshpool_switch"
 switch_pwd_file="$HOME/.autoshpool_switch_pwd"
 
+# Shared helpers and the fzf picker engine. SESSION_SEP tells the library which
+# separator this backend uses (for session_matches_prefix).
+SESSION_SEP=":"
+source "$(dirname "$0")/sessionlib"
+
 get_current_shpool_session() {
   echo "$SHPOOL_SESSION_NAME"
-}
-
-session_matches_prefix() {
-  # True if a session name ($1) belongs to the project identified by a prefix
-  # ($2). With no prefix (e.g. outside any version-controlled directory) we
-  # never force a switch, so every session matches.
-  local session="$1" prefix="$2"
-  test -z "$prefix" && return 0
-  case "$session" in
-    "$prefix"*) return 0 ;;       # already carries the prefix (e.g. "proj:3")
-  esac
-  # Also accept an exact match with the separator stripped, so a session named
-  # "proj" counts as matching the prefix "proj:".
-  test "$session" = "${prefix%:}"
 }
 
 pick_prefixed_session() {
@@ -266,36 +257,10 @@ shell_chain() {
   printf '%s' "$chain"
 }
 
-dir_vcs_root_name() {
-  # The last component of the version-control root for a directory, or empty if
-  # the directory isn't under version control (we don't require vcs to work).
-  local root
-  root="$(cd "$1" 2>/dev/null && vcs rootdir 2>/dev/null)"
-  test -n "$root" && basename "$root"
-}
-
-dir_vcs_unmerged() {
-  # The unmerged items vcs reports for a directory, or empty. Best-effort: we
-  # don't require vcs to be working.
-  (cd "$1" 2>/dev/null && vcs unmerged 2>/dev/null)
-}
-
 session_status() {
   # The status column shpool reports for a session ($1), given the output of
   # `shpool list` ($2). Empty if the session isn't listed.
   awk -v name="$1" 'NR > 1 && $1 == name { print $NF }' <<<"$2"
-}
-
-status_icon() {
-  # A compact icon for a session status ($1), so listings stay narrow:
-  #   attached -> matching white circle, disconnected -> empty circle.
-  # Anything else (including an empty/unknown status) falls back to a question
-  # mark so unexpected statuses are still visible.
-  case "$1" in
-    attached)     printf '%s' '●' ;;
-    disconnected) printf '%s' '○' ;;
-    *)            printf '%s' '?' ;;
-  esac
 }
 
 describe_shell() {
@@ -310,17 +275,6 @@ describe_shell() {
     "$(dir_vcs_root_name "$cwd")" "$(basename "$cwd")" \
     "$(shell_chain "$pid")"
   dir_vcs_unmerged "$cwd" | sed 's/^/  /'
-}
-
-shell_matches() {
-  # True if a shell's working directory ($1) matches the argument ($2), either
-  # as a full path segment of the directory or as a whole word in the directory's
-  # vcs unmerged output.
-  local cwd="$1" arg="$2"
-  case "$cwd/" in
-    */"$arg"/*) return 0 ;;
-  esac
-  dir_vcs_unmerged "$cwd" | grep -Fwq -- "$arg"
 }
 
 resolve_switch_target() {
