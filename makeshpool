@@ -1,12 +1,30 @@
 #!/bin/bash
 # makeshpool - create (and attach to) a named shpool session
 #
-# Thin wrapper over `shpool attach` (which creates the session when it doesn't
-# exist yet), the shpool twin of maketmux, dispatched by makesession. All
-# arguments pass through (the first is the session name).
+# The shpool twin of maketmux, dispatched by makesession. The first argument is
+# the session name.
 #
-# Stamp SHPOOL_INITIAL_PWD so the new session's shell cd's to the caller's
-# directory rather than the outer shell's startup dir -- the same reason the
-# autoshpool wrapper stamps it. tmux needs no equivalent (see maketmux).
+# Outside any session, create-and-attach directly (shpool attach creates the
+# session when it doesn't exist yet). Stamp SHPOOL_INITIAL_PWD so the new
+# session's shell opens in the caller's directory rather than the outer shell's
+# startup dir -- the same reason the autoshpool wrapper stamps it. tmux needs no
+# equivalent (see maketmux).
+#
+# Inside an existing session shpool can't attach a second session to this
+# terminal without nesting -- and exec'ing `shpool attach` over our shell would
+# tear down the current session. So hand the new session to autoshpool's outer
+# loop the way changeshpool/switchshpool do: request_switch records the target,
+# carries PWD so it opens here, detaches us, and exits; the loop then creates
+# and attaches it as a sibling. This mirrors maketmux's new-session -d /
+# switch-client dance for the nested-tmux case.
+
+# Pull in the shpool backend helpers for request_switch. autoshpool's is_sourced
+# guard makes sourcing it define functions without running the loop.
+source "$(dirname "$0")/autoshpool"
+
+if test -n "$SHPOOL_SESSION_NAME"; then
+  request_switch "$1" "$PWD"   # records target, detaches us, and exits
+fi
+
 export SHPOOL_INITIAL_PWD="$PWD"
 exec shpool attach "$@"

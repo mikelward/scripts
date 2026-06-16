@@ -152,7 +152,8 @@ test_maketmux_inside_tmux_switches_client() {
   assert_called "tmux switch-client -t =work"
 }
 test_makeshpool_runs_shpool_attach() {
-  install_script makeshpool; fake shpool
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
+  fake shpool
   set +e
   output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work 2>&1)"
   status=$?
@@ -160,7 +161,7 @@ test_makeshpool_runs_shpool_attach() {
   assert_called "shpool attach work"
 }
 test_makeshpool_stamps_initial_pwd() {
-  install_script makeshpool
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
   # record the stamped SHPOOL_INITIAL_PWD: a freshly created shpool session
   # must open in the caller's dir, not the outer shell's startup dir.
   cat > "$BIN/shpool" <<EOF
@@ -173,6 +174,40 @@ EOF
   ( cd "$TEST_TMPDIR" && env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work )
   set -e
   assert_called "shpool attach work pwd=$TEST_TMPDIR"
+}
+test_makeshpool_inside_session_requests_switch() {
+  # Inside a session, makeshpool can't attach a second session to this terminal
+  # without nesting, so it hands the new session to autoshpool's loop via
+  # request_switch (records the target + PWD and detaches us) rather than running
+  # shpool attach. Mirrors maketmux's switch-client dance for nested tmux.
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
+  fake shpool
+  # request_switch bounds its detach with timeout; fake it to run the rest.
+  cat > "$BIN/timeout" <<'EOF'
+#!/bin/bash
+shift
+"$@"
+EOF
+  chmod +x "$BIN/timeout"
+  set +e
+  ( cd "$TEST_TMPDIR" && env -i PATH="$BIN" HOME="$TEST_TMPDIR" SHPOOL_SESSION_NAME=work "$BIN/makeshpool" newproj )
+  status=$?
+  set -e
+  assert_status 0
+  assert_called "shpool detach work"
+  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch" 2>/dev/null)" != "newproj"; then
+    echo "  FAIL: switch file should record 'newproj', got '$(cat "$TEST_TMPDIR/.autoshpool_switch" 2>/dev/null)'"
+    TEST_FAILED=1
+  fi
+  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd" 2>/dev/null)" != "$TEST_TMPDIR"; then
+    echo "  FAIL: switch pwd file should record '$TEST_TMPDIR', got '$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd" 2>/dev/null)'"
+    TEST_FAILED=1
+  fi
+  if grep -q "shpool attach" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not attach (would nest) when inside a session"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
 }
 
 run_test "dispatch: inside tmux picks maketmux" test_inside_tmux_picks_maketmux
@@ -187,6 +222,7 @@ run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_out
 run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tmux_switches_client
 run_test "backend: makeshpool runs shpool attach" test_makeshpool_runs_shpool_attach
 run_test "backend: makeshpool stamps SHPOOL_INITIAL_PWD" test_makeshpool_stamps_initial_pwd
+run_test "backend: makeshpool inside a session requests a switch" test_makeshpool_inside_session_requests_switch
 
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
 test "$TESTS_FAILED" -eq 0
