@@ -209,6 +209,34 @@ EOF
     TEST_FAILED=1
   fi
 }
+test_makeshpool_inside_session_rejects_extra_args() {
+  # The switch handoff carries only a name, so extra attach options can't be
+  # forwarded from inside a session: makeshpool must error rather than silently
+  # drop them (and must not record a switch or touch shpool).
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
+  fake shpool
+  cat > "$BIN/timeout" <<'EOF'
+#!/bin/bash
+shift
+"$@"
+EOF
+  chmod +x "$BIN/timeout"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SHPOOL_SESSION_NAME=work "$BIN/makeshpool" newproj --ttl 1h 2>&1)"
+  status=$?
+  set -e
+  assert_status 2
+  assert_output_contains "can't forward options"
+  if test -e "$TEST_TMPDIR/.autoshpool_switch"; then
+    echo "  FAIL: must not record a switch when rejecting"
+    TEST_FAILED=1
+  fi
+  if grep -qE "shpool (attach|detach)" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not touch shpool when rejecting"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
 
 run_test "dispatch: inside tmux picks maketmux" test_inside_tmux_picks_maketmux
 run_test "dispatch: inside shpool picks makeshpool" test_inside_shpool_picks_makeshpool
@@ -223,6 +251,7 @@ run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tm
 run_test "backend: makeshpool runs shpool attach" test_makeshpool_runs_shpool_attach
 run_test "backend: makeshpool stamps SHPOOL_INITIAL_PWD" test_makeshpool_stamps_initial_pwd
 run_test "backend: makeshpool inside a session requests a switch" test_makeshpool_inside_session_requests_switch
+run_test "backend: makeshpool inside a session rejects extra args" test_makeshpool_inside_session_rejects_extra_args
 
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
 test "$TESTS_FAILED" -eq 0
