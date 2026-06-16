@@ -56,7 +56,13 @@ sanitize_session_name() {
   # matches any session whose name merely *starts with* it. Only applied to
   # generated names, never to a resolved existing name (which already reflects
   # exactly what tmux stored).
+  #  - '/' is autotmux's own separator (TMUX_SEP). A branch name often contains
+  #    it (e.g. "feature/foo"); left in, the generated name "feature/foo/1"
+  #    would also match the prefix "feature/", cross-wiring a different
+  #    project's sessions. Fold it to '_' so each name has exactly one
+  #    separator boundary and prefix matching stays unambiguous.
   local name="${1//[#.:]/_}"
+  name="${name//\//_}"
   case "$name" in
     ['$%=']*) name="_${name#?}" ;;
   esac
@@ -73,14 +79,18 @@ get_current_tmux_session() {
 }
 
 get_prefix() {
-  # The current project name with the separator appended, or empty string when
-  # we're not under version control (we don't force a prefix then).
-  local root name
-  root="$(rootdir 2>/dev/null)"
-  test -n "$root" || return 0
-  # Normalize '.'/':' (see sanitize_session_name) so the prefix equals the name
-  # tmux actually stores and the resulting targets stay switchable.
-  name="$(sanitize_session_name "$(basename "$root")")"
+  # The current checkout's session id with the separator appended, or empty
+  # string when we're not under version control (we don't force a prefix then).
+  # `vcs session` is the project name for a citc client, the jj workspace name,
+  # else the branch name -- so sibling branches/worktrees get distinct prefixes.
+  local name
+  name="$(command vcs session 2>/dev/null)"
+  test -n "$name" || return 0
+  # Normalize separators/metacharacters (see sanitize_session_name) so the
+  # prefix equals the name tmux actually stores and the resulting targets stay
+  # switchable. This also folds '/' (common in branch names) to '_' so it can't
+  # be confused with TMUX_SEP and break prefix matching.
+  name="$(sanitize_session_name "$name")"
   printf '%s%s' "$name" "$TMUX_SEP"
 }
 

@@ -98,8 +98,11 @@ abort_if_hung() {
 }
 
 get_prefix() {
-  # Use the current project name with a colon at the end, or empty string.
-  local prefix="$(basename "$(rootdir)")"
+  # The current checkout's session id (vcs session: the project name for a
+  # citc client, the jj workspace name, else the branch name) with a colon at
+  # the end, or empty string when not under version control. A branch name
+  # can't collide with the ':' separator -- git forbids ':' in ref names.
+  local prefix="$(command vcs session 2>/dev/null)"
   test -n "$prefix" && echo "$prefix:"
 }
 
