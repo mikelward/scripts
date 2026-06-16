@@ -473,10 +473,10 @@ EOF
 }
 
 test_retries_when_session_already_attached() {
-  # shpool refuses a busy session by printing the message to stderr and
-  # exiting 0 (upstream BusyError -> AttachResult::Done). autoshpool must
-  # detect the message and try the next number rather than treating the
-  # zero exit as success.
+  # shpool exits 0 even when refusing because the session is already attached
+  # elsewhere (libshpool BusyError -> AttachResult::Done). autoshpool detects
+  # the race by re-listing after attach: if the session still shows as
+  # "attached" we lost a race and try the next number.
   cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
 #!/bin/bash
 echo "shpool $*" >> "$HOME/.shpool_calls"
@@ -488,7 +488,10 @@ case "$1" in
     ;;
   attach)
     if grep -Fxq "$2" "$HOME/.shpool_already_attached" 2>/dev/null; then
+      # Busy: print the upstream message and exit 0. The session shows as
+      # attached in the listing because someone else owns it.
       echo "session '$2' already has a terminal attached" >&2
+      printf '%s   2025-01-01T00:00:00Z   attached\n' "$2" >> "$HOME/.shpool_sessions"
     fi
     exit 0
     ;;

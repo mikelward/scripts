@@ -130,15 +130,6 @@ create_and_attach_next() {
   for session in $(get_shpool_session_names); do
     sessions[$session]=1
   done
-  declare errfile fifo
-  errfile=$(mktemp) || return 2
-  fifo=$(mktemp -u) || { rm -f "$errfile"; return 2; }
-  if ! mkfifo -m 600 "$fifo"; then
-    rm -f "$errfile"
-    return 2
-  fi
-  # shellcheck disable=SC2064  # expand paths now, not on trap fire
-  trap "rm -f '$errfile' '$fifo'" RETURN
   for num in $(seq 1 100); do
     declare session="$SHPOOL_PREFIX$num"
     if test -n "${sessions[$session]}"; then
@@ -146,21 +137,25 @@ create_and_attach_next() {
     fi
     export SHPOOL_INITIAL_PWD="$PWD"
     echo "Creating shpool session $session"
-    : >"$errfile"
-    # Tee shpool's stderr so it stays visible to the user (live, like a normal
-    # attach) while a copy lands in $errfile for the busy-session check below.
-    # shpool exits 0 even when refusing because the session is already
-    # attached elsewhere (libshpool BusyError -> AttachResult::Done), so the
-    # message itself is the only reliable signal that we should try the next
-    # number instead of treating the attach as successful.
-    tee -a "$errfile" >&2 <"$fifo" &
-    declare tee_pid=$!
-    shpool attach "$session" 2>"$fifo"
+    shpool attach "$session"
     rc=$?
-    wait "$tee_pid" 2>/dev/null
-    if grep -q "already has a terminal attached" "$errfile"; then
-      sessions[$session]=1
-      continue
+    # shpool exits 0 even when refusing because the session is already
+    # attached elsewhere (libshpool BusyError -> AttachResult::Done), so a
+    # clean exit alone is not proof that we actually owned the session.
+    # Re-check the listing: if our session still shows as "attached", we lost
+    # a race against another shell and should try the next number. A session
+    # we just exited from is either gone or "disconnected" by now.
+    # Capturing stderr to disambiguate the busy message was tried and rolled
+    # back because routing shpool's interactive stderr through a pipe (tee
+    # buffering) splattered escape sequences onto the user's terminal at
+    # unpredictable moments.
+    if test $rc -eq 0; then
+      listing="$(shpool list 2>/dev/null)"
+      if test "$(session_status "$session" "$listing")" = "attached"; then
+        sessions[$session]=1
+        continue
+      fi
+      return 0
     fi
     return $rc
   done
