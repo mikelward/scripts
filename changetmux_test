@@ -158,6 +158,11 @@ assert_output_not_contains() {
     TEST_FAILED=1; return 1
   fi
 }
+assert_output_equals() {
+  if [ "$output" != "$1" ]; then
+    echo "  FAIL: output '$output' != '$1'"; TEST_FAILED=1; return 1
+  fi
+}
 assert_called() {
   if ! grep -q -- "$1" "$HOME/.tmux_calls" 2>/dev/null; then
     echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$HOME/.tmux_calls" 2>/dev/null)"
@@ -333,6 +338,84 @@ test_picker_error_propagates() {
   assert_not_called 'attach-session'
 }
 
+# --- --choose: pick a name, never switch ---
+
+test_choose_prints_name_only() {
+  # --choose runs the picker but prints the chosen session name instead of
+  # switching, so the choose layer can be used on its own (choosesession).
+  add_session target 0; add_active target /tmp/target
+  FZF_PICK=$'^switch\ttarget\t' run_ct --choose
+  assert_status 0
+  assert_output_equals 'target'
+  assert_not_called 'switch-client'
+  assert_not_called 'attach-session'
+}
+
+test_choose_create_prints_autoname() {
+  # Selecting the create row prints the auto name, still without creating it.
+  export TMUX_PREFIX="proj/"
+  add_session current 1; add_active current /tmp/cur
+  FZF_PICK='^create' run_ct --choose
+  assert_output_equals 'proj/1'
+  assert_not_called 'new-session'
+}
+
+test_choose_typed_prints_sanitized() {
+  # A typed-but-unmatched name is printed sanitized (the create-on-switch name),
+  # again without creating anything.
+  add_session current 1; add_active current /tmp/cur
+  FZF_QUERY='my.proj' run_ct --choose
+  assert_output_equals 'my_proj'
+  assert_not_called 'new-session'
+}
+
+test_choose_esc_is_empty() {
+  # A cancelled pick prints nothing and returns non-zero, so changesession won't
+  # switch.
+  add_session a 0; add_active a /tmp/a
+  FZF_EXIT=130 run_ct --choose
+  assert_status 130
+  assert_output_equals ''
+}
+
+# --- --switch: switch to a named session (action derived from existence) ---
+
+test_switch_existing_switches_client_inside_tmux() {
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  add_session target 0;  add_active target /tmp/target
+  run_ct --switch target
+  assert_called 'switch-client -t =target'
+}
+
+test_switch_missing_name_creates_inside_tmux() {
+  # A name that doesn't exist yet is a create: new-session, then switch.
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  run_ct --switch brandnew
+  assert_called 'new-session -d -s brandnew'
+}
+
+test_switch_empty_name_is_rejected() {
+  # A missing --switch target must error before touching the backend.
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  run_ct --switch
+  assert_status 2
+  assert_not_called 'switch-client'
+  assert_not_called 'new-session'
+}
+
+test_switch_sanitizes_generated_name() {
+  # A name we create is a generated name, so --switch must sanitize it the same
+  # way the interactive typed-name path does ('.' -> '_'), or tmux would store a
+  # normalized session the later "=name" target can't match.
+  export TMUX=fake; export TMUX_S=current
+  add_session current 1; add_active current /tmp/cur
+  run_ct --switch my.proj
+  assert_called 'new-session -d -s my_proj'
+}
+
 # --- runner ---
 
 run_test "list: create entry is first" test_list_create_entry_first
@@ -349,6 +432,14 @@ run_test "pick: typed new name creates a sanitized session" test_typed_new_name_
 run_test "pick: outside tmux attaches with steal" test_outside_tmux_attaches_with_steal
 run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
 run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
+run_test "choose: prints the chosen name without switching" test_choose_prints_name_only
+run_test "choose: create row prints the auto name" test_choose_create_prints_autoname
+run_test "choose: typed new name is printed sanitized" test_choose_typed_prints_sanitized
+run_test "choose: ESC prints nothing and fails" test_choose_esc_is_empty
+run_test "switch: existing name switches the client" test_switch_existing_switches_client_inside_tmux
+run_test "switch: missing name is created then switched" test_switch_missing_name_creates_inside_tmux
+run_test "switch: a generated name is sanitized before create" test_switch_sanitizes_generated_name
+run_test "switch: an empty target is rejected" test_switch_empty_name_is_rejected
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

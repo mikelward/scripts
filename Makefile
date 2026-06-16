@@ -4,6 +4,7 @@ test:
 	./sessionlib_test
 	./changeshpool_test
 	./changetmux_test
+	./changesession_test
 	./detachsession_test
 	./makesession_test
 	./mdf_test
