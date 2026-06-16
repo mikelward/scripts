@@ -32,7 +32,14 @@ echo "tmux $*" >> "$HOME/.tmux_calls"
 cmd="$1"; shift
 case "$cmd" in
   list-sessions)
-    sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
+    # Different tmux versions emit a format-string 0x1f as either the 4-char
+    # escape '\037' or the raw byte; the fixtures store real tabs. Default to
+    # the escape, switch to the raw byte under TMUX_FAKE_RAW_US=1.
+    if test "${TMUX_FAKE_RAW_US:-0}" = 1; then
+      sed $'s/\t/\x1f/g' "$HOME/.tmux_sessions" 2>/dev/null
+    else
+      sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
+    fi
     test -s "$HOME/.tmux_sessions" || { echo "no server running" >&2; exit 1; }
     exit 0
     ;;
@@ -41,10 +48,18 @@ case "$cmd" in
     #   -a with a window_active field -> active pane of every session
     #   -s -t =NAME                   -> commands in one session
     if printf '%s\n' "$@" | grep -q 'window_active'; then
-      # 5 fields: name, window_active(1), pane_active(1), path, command.
+      # 5 fields: name, window_active(1), pane_active(1), path, command. Use
+      # the same US-separator form as list-sessions (raw byte or '\037' escape
+      # depending on TMUX_FAKE_RAW_US) so this fake matches whichever tmux
+      # behavior we're simulating.
       while IFS=$'\t' read -r name path command; do
-        printf '%s\037%s\037%s\037%s\037%s\n' "$name" 1 1 "$path" "$command"
-      done < "$HOME/.tmux_active" 2>/dev/null
+        printf '%s\t%s\t%s\t%s\t%s\n' "$name" 1 1 "$path" "$command"
+      done < "$HOME/.tmux_active" 2>/dev/null \
+        | { if test "${TMUX_FAKE_RAW_US:-0}" = 1; then
+              sed $'s/\t/\x1f/g'
+            else
+              sed 's/\t/\\037/g'
+            fi; }
     else
       # session_commands: -s -t =NAME -F '#{pane_current_command}'
       target=
