@@ -1,8 +1,18 @@
 #!/bin/bash
 # maketmux - create (and attach to) a named tmux session
 #
-# Thin wrapper over `tmux new-session -s`, the tmux twin of makeshpool,
-# dispatched by makesession. tmux opens the new session in the caller's PWD
-# natively, so (unlike makeshpool) there is nothing to stamp. All arguments
-# pass through (the first is the session name).
+# Thin tmux twin of makeshpool, dispatched by makesession. The first argument
+# is the session name; any further arguments are the command to run in it.
+#
+# Inside tmux ($TMUX set) `new-session` can't attach to the current terminal --
+# it would hit tmux's nested-session refusal -- so create the session detached
+# and switch this client to it instead (the new-session -d / switch-client
+# dance autotmux's do_switch uses). Target the switch with tmux's exact "=name"
+# form so a name that is a prefix of another session can't be matched instead.
+# Outside tmux there is no client to switch, so just create-and-attach. tmux
+# opens the session in the caller's PWD natively (no SHPOOL_INITIAL_PWD twin).
+if test -n "$TMUX"; then
+  tmux new-session -d -s "$@" && exec tmux switch-client -t "=$1"
+  exit $?
+fi
 exec tmux new-session -s "$@"
