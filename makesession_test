@@ -132,13 +132,24 @@ test_name_passes_through() {
 
 # --- backend behaviour ---
 
-test_maketmux_runs_new_session() {
+test_maketmux_outside_tmux_creates_and_attaches() {
   install_script maketmux; fake tmux
   set +e
   output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" work 2>&1)"
   status=$?
   set -e
   assert_called "tmux new-session -s work"
+}
+test_maketmux_inside_tmux_switches_client() {
+  # Inside tmux, new-session can't attach to the current terminal, so maketmux
+  # creates the session detached and switches the existing client to it.
+  install_script maketmux; fake tmux
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" TMUX=/tmp/sock,1,0 "$BIN/maketmux" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux new-session -d -s work"
+  assert_called "tmux switch-client -t =work"
 }
 test_makeshpool_runs_shpool_attach() {
   install_script makeshpool; fake shpool
@@ -172,7 +183,8 @@ run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
 run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
 run_test "dispatch: no backend errors out" test_no_backend_errors
 run_test "dispatch: session name passes through" test_name_passes_through
-run_test "backend: maketmux runs tmux new-session -s" test_maketmux_runs_new_session
+run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_outside_tmux_creates_and_attaches
+run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tmux_switches_client
 run_test "backend: makeshpool runs shpool attach" test_makeshpool_runs_shpool_attach
 run_test "backend: makeshpool stamps SHPOOL_INITIAL_PWD" test_makeshpool_stamps_initial_pwd
 
