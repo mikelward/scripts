@@ -42,17 +42,23 @@ pick_prefixed_session() {
   # Print the session to switch to for the current SHPOOL_PREFIX: reuse the
   # first disconnected session that already matches, otherwise the next free
   # numbered name. Mirrors the selection the main loop makes for a new shell.
-  declare -a disconnected=( $(get_disconnected_shpool_sessions) )
-  if test "${#disconnected[@]}" -gt 0; then
-    printf '%s\n' "${disconnected[0]}"
+  # Read line by line rather than splitting an unquoted command substitution:
+  # the prefix comes from the project basename, which can contain glob
+  # metacharacters (e.g. "a*b"), and an unquoted $() would glob-expand or
+  # IFS-split such a name instead of passing it through whole.
+  local first
+  IFS= read -r first < <(get_disconnected_shpool_sessions) || true
+  if test -n "$first"; then
+    printf '%s\n' "$first"
     return
   fi
   declare -A sessions
-  for session in $(get_shpool_session_names); do
-    sessions[$session]=1
-  done
+  local session num
+  while IFS= read -r session; do
+    test -n "$session" && sessions[$session]=1
+  done < <(get_shpool_session_names)
   for num in $(seq 1 100); do
-    declare session="$SHPOOL_PREFIX$num"
+    session="$SHPOOL_PREFIX$num"
     if test -z "${sessions[$session]}"; then
       printf '%s\n' "$session"
       return
@@ -106,9 +112,14 @@ get_prefix() {
 get_shpool_sessions() {
   # Session names can be empty, so need handle rows with only 2 columns specially.
   # The prefix is compared as a literal string, not a regex, since project names
-  # can contain regex metacharacters (e.g. "my.proj").
-  shpool list | awk -v prefix="$SHPOOL_PREFIX" \
-    'NR > 1 && NF == 3 && (prefix == "" || index($1, prefix) == 1) { print }'
+  # can contain regex metacharacters (e.g. "my.proj"). A session named exactly
+  # like the prefix with its separator stripped (e.g. "myproject" for
+  # "myproject:") also belongs to the project -- matching session_matches_prefix
+  # and autotmux's get_disconnected_sessions -- so it stays reusable instead of
+  # being stranded in favour of a fresh "myproject:1".
+  local bare="${SHPOOL_PREFIX%"$SESSION_SEP"}"
+  shpool list | awk -v prefix="$SHPOOL_PREFIX" -v bare="$bare" \
+    'NR > 1 && NF == 3 && (prefix == "" || index($1, prefix) == 1 || $1 == bare) { print }'
 }
 
 get_shpool_session_names() {
@@ -120,16 +131,25 @@ get_disconnected_shpool_sessions() {
 }
 
 first_disconnected_session() {
-  declare -a disconnected=( $(get_disconnected_shpool_sessions) )
-  test "${#disconnected[@]}" -gt 0 || return 1
-  printf '%s\n' "${disconnected[0]}"
+  # Read the first row rather than splitting an unquoted command substitution
+  # into an array: the prefix comes from the project basename, which can contain
+  # glob metacharacters (e.g. "a*b"), and an unquoted $() would glob-expand or
+  # IFS-split such a name instead of passing it through whole.
+  local first
+  IFS= read -r first < <(get_disconnected_shpool_sessions) || true
+  test -n "$first" || return 1
+  printf '%s\n' "$first"
 }
 
 create_and_attach_next() {
   declare -A sessions
-  for session in $(get_shpool_session_names); do
-    sessions[$session]=1
-  done
+  local session
+  # Read line by line so existing names are matched whole: the prefix comes from
+  # the project basename, which can contain glob metacharacters (e.g. "a*b"),
+  # and an unquoted $() would glob-expand or IFS-split such a name.
+  while IFS= read -r session; do
+    test -n "$session" && sessions[$session]=1
+  done < <(get_shpool_session_names)
   for num in $(seq 1 100); do
     declare session="$SHPOOL_PREFIX$num"
     if test -n "${sessions[$session]}"; then

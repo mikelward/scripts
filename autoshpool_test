@@ -397,6 +397,54 @@ EOF
   assert_output_contains "Attaching shpool session 3"
 }
 
+test_reuses_separatorless_session() {
+  # A disconnected session named exactly like the bare prefix (no separator)
+  # belongs to the project, so startup reuses it instead of creating
+  # "myproject:1". Mirrors autotmux's separatorless reuse and the bare-name
+  # case in the shared session_matches_prefix.
+  export SHPOOL_PREFIX="myproject:"
+  cat > "$HOME/.shpool_sessions" <<EOF
+myproject   2025-01-01T00:00:00Z   disconnected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach myproject"
+  assert_output_contains "Attaching shpool session myproject"
+}
+
+test_mismatch_switch_reuses_separatorless_session() {
+  # The prefix-mismatch switch path (pick_prefixed_session) reuses the
+  # separatorless session too, rather than queueing a fresh "myproject:1".
+  export SHPOOL_PREFIX="myproject:"
+  export SHPOOL_SESSION_NAME="other:1"
+  cat > "$HOME/.shpool_sessions" <<EOF
+myproject   2025-01-01T00:00:00Z   disconnected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_output_contains "does not match prefix"
+  assert_switch_file "myproject"
+}
+
+test_reuses_glob_metachar_session() {
+  # A session name containing a glob metacharacter (the project basename can
+  # contain one, e.g. "a*b") must round-trip whole. An unquoted command
+  # substitution would glob-expand it against the cwd; reading line by line
+  # passes it through verbatim. Run from a dir holding a decoy file the glob
+  # would match so the old breakage would be deterministic.
+  export SHPOOL_PREFIX="a*b:"
+  cat > "$HOME/.shpool_sessions" <<EOF
+a*b:3   2025-01-01T00:00:00Z   disconnected
+EOF
+  local oldpwd="$PWD"
+  cd "$TEST_TMPDIR"
+  : > 'aXb:3'
+  run_autoshpool
+  cd "$oldpwd"
+  assert_status 0
+  assert_output_contains "Attaching shpool session a*b:3"
+}
+
 test_failed_attach_does_not_create_new_session() {
   # A failed attach to an existing disconnected session must report the error,
   # not fall through and silently create a brand-new session.
@@ -849,6 +897,9 @@ run_test "records no directory for a plain switch" test_plain_switch_records_no_
 run_test "loop exports the recorded directory when servicing a switch" test_loop_switch_exports_recorded_pwd
 run_test "creates session 1 when no sessions exist" test_creates_session_1
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
+run_test "reuses a disconnected separatorless session on startup" test_reuses_separatorless_session
+run_test "reuses a separatorless session on a prefix-mismatch switch" test_mismatch_switch_reuses_separatorless_session
+run_test "round-trips a session name containing a glob metacharacter" test_reuses_glob_metachar_session
 run_test "failed attach does not create a new session" test_failed_attach_does_not_create_new_session
 run_test "returns non-zero when shpool attach fails" test_returns_nonzero_on_failure
 run_test "preserves specific exit code from shpool attach" test_preserves_exit_code
