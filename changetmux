@@ -30,12 +30,13 @@ active_pane_field() {
   # "session<TAB>path<TAB>command" for each session's active pane, so the picker
   # line can show a cwd and command without a vcs call. One list-panes covers
   # every session; keep the first active pane seen per session (active pane of
-  # the active window). See autotmux's list_tmux_sessions for the '\037'->TAB
-  # translation (tmux mangles a literal TAB in a -F format).
+  # the active window). See autotmux's list_tmux_sessions for why we translate
+  # both the raw 0x1f and the 4-char '\037' escape back to TAB (tmux mangles a
+  # literal TAB in -F, and different versions emit 0x1f either way).
   tmux list-panes -a \
     -F "#{session_name}"$'\x1f'"#{window_active}"$'\x1f'"#{pane_active}"$'\x1f'"#{pane_current_path}"$'\x1f'"#{pane_current_command}" \
     2>/dev/null \
-    | sed 's/\\037/\t/g' \
+    | sed $'s/\x1f/\t/g; s/\\\\037/\t/g' \
     | awk -F'\t' '$2 == 1 && $3 == 1 && !seen[$1]++ { print $1 "\t" $4 "\t" $5 }'
 }
 

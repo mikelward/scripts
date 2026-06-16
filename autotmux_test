@@ -27,17 +27,27 @@ cmd="$1"; shift
 case "$cmd" in
   list-sessions)
     # Real tmux can't put a TAB in -F output (a literal tab becomes '_'); the
-    # code separates columns with US (0x1f), which tmux emits as the escape
-    # '\037'. Mimic that here so the suite exercises the '\037'->TAB translation
-    # in list_tmux_sessions: the fixtures store real tabs, so rewrite them.
-    sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
+    # code separates columns with US (0x1f). Different tmux versions emit a
+    # format-string 0x1f either as the 4-char escape '\037' (3.4) or as the raw
+    # byte. The fixtures store real tabs; rewrite them to whichever form this
+    # test wants (default: the '\037' escape) so the suite exercises both
+    # translations in list_tmux_sessions.
+    if test "${TMUX_FAKE_RAW_US:-0}" = 1; then
+      sed $'s/\t/\x1f/g' "$HOME/.tmux_sessions" 2>/dev/null
+    else
+      sed 's/\t/\\037/g' "$HOME/.tmux_sessions" 2>/dev/null
+    fi
     test -s "$HOME/.tmux_sessions" || { echo "no server running" >&2; exit 1; }
     exit 0
     ;;
   list-panes)
     if printf '%s\n' "$@" | grep -qx -- '-a'; then
-      # Same '\037' escaping as list-sessions (list_tmux_panes uses 0x1f too).
-      sed 's/\t/\\037/g' "$HOME/.tmux_panes" 2>/dev/null
+      # Same US-separator handling as list-sessions.
+      if test "${TMUX_FAKE_RAW_US:-0}" = 1; then
+        sed $'s/\t/\x1f/g' "$HOME/.tmux_panes" 2>/dev/null
+      else
+        sed 's/\t/\\037/g' "$HOME/.tmux_panes" 2>/dev/null
+      fi
     else
       # list-panes -t NAME -F '#{pane_current_command}': serve a generic list.
       cat "$HOME/.tmux_cmds" 2>/dev/null
@@ -243,6 +253,21 @@ test_skips_existing_sessions() {
   assert_status 0
   assert_called "tmux new-session -s 3"
   assert_output_contains "Creating tmux session 3"
+}
+
+test_attaches_disconnected_first_raw_us() {
+  # Some tmux builds emit a format-string 0x1f as a raw US byte rather than the
+  # '\037' escape. Without translating both forms back to TAB, session names
+  # end up concatenated with the attached count -- the picker would show
+  # session "1" with one client as "11" and session "2" detached as "20", and
+  # attach would target the mangled name. Cover the raw-byte case here.
+  export TMUX_FAKE_RAW_US=1
+  add_session 1 1   # attached
+  add_session 2 0   # disconnected
+  run_autotmux
+  assert_status 0
+  assert_called "tmux attach-session -t =2"
+  assert_output_contains "Attaching tmux session 2"
 }
 
 test_attaches_disconnected_with_space_in_name() {
@@ -709,6 +734,7 @@ run_test "passthrough preserves all arguments" test_passthrough_preserves_args
 run_test "creates session 1 when no sessions exist" test_creates_session_1
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
 run_test "skips existing sessions when creating" test_skips_existing_sessions
+run_test "handles raw US byte from tmux without mangling names" test_attaches_disconnected_first_raw_us
 run_test "attaches to a disconnected session whose name has a space" test_attaches_disconnected_with_space_in_name
 run_test "creates the next number when a space-named session is attached" test_creates_next_number_with_space_in_name
 run_test "normalizes '.' and ':' in the project prefix" test_sanitizes_prefix_metacharacters

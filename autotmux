@@ -90,11 +90,12 @@ list_tmux_sessions() {
   #
   # tmux mangles a literal TAB in a -F format into '_' (and won't emit a real
   # tab via '\t' either), so the columns would otherwise run together. Separate
-  # them with US (0x1f) instead, which tmux can't have in a session name and
-  # emits as the escape '\037'; translate that back to a real TAB so every
-  # downstream tab-parser keeps working unchanged.
+  # them with US (0x1f) instead, which tmux can't have in a session name.
+  # Different tmux versions emit the 0x1f back as either the raw byte or the
+  # 4-char escape '\037' (3.4); translate both to a real TAB. Use ANSI-C
+  # quoting throughout so the patterns mirror the format string's $'\x1f'.
   tmux list-sessions -F "#{session_name}"$'\x1f'"#{session_attached}" 2>/dev/null \
-    | sed 's/\\037/\t/g'
+    | sed $'s/\x1f/\t/g; s/\\\\037/\t/g'
 }
 
 get_all_session_names() {
@@ -254,10 +255,10 @@ attach_or_create() {
 list_tmux_panes() {
   # One "session<TAB>path" row per pane, for resolving a switch target to the
   # session whose working directory matches. Uses the US (0x1f) separator and
-  # '\037'->TAB translation for the same reason as list_tmux_sessions (tmux
-  # mangles a literal TAB in a -F format).
+  # translates both the raw byte and the 4-char '\037' escape back to TAB, for
+  # the same reason as list_tmux_sessions (tmux mangles a literal TAB in -F).
   tmux list-panes -a -F "#{session_name}"$'\x1f'"#{pane_current_path}" 2>/dev/null \
-    | sed 's/\\037/\t/g'
+    | sed $'s/\x1f/\t/g; s/\\\\037/\t/g'
 }
 
 session_state() {
