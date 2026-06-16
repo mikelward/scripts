@@ -115,6 +115,12 @@ test_fallback_shpool_installed() {
   run makesession
   assert_called "makeshpool "
 }
+# Default preference when both are installed: shpool wins, tmux is the fallback.
+test_fallback_prefers_shpool_when_both_installed() {
+  install_script makesession; fake maketmux; fake makeshpool; fake tmux; fake shpool
+  run makesession
+  assert_called "makeshpool "
+}
 test_no_backend_errors() {
   install_script makesession; fake maketmux; fake makeshpool
   run makesession
@@ -244,6 +250,7 @@ run_test "dispatch: SESSION_BACKEND=tmux picks maketmux" test_session_backend_tm
 run_test "dispatch: SESSION_BACKEND=shpool picks makeshpool" test_session_backend_shpool
 run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
 run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: prefers shpool when both installed" test_fallback_prefers_shpool_when_both_installed
 run_test "dispatch: no backend errors out" test_no_backend_errors
 run_test "dispatch: session name passes through" test_name_passes_through
 run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_outside_tmux_creates_and_attaches
