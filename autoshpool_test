@@ -61,12 +61,14 @@ PGREP
   mkdir -p "$SHPOOL_PROC_DIR"
 
   # Fake vcs that reads per-directory marker files in the current directory:
-  #   .vcsroot  - printed by "vcs rootdir"
-  #   .unmerged - printed by "vcs unmerged"
+  #   .vcsroot    - printed by "vcs rootdir"
+  #   .vcssession - printed by "vcs session" (the session-name source)
+  #   .unmerged   - printed by "vcs unmerged"
   cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
 #!/bin/bash
 case "$1" in
   rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  session)  cat "$PWD/.vcssession" 2>/dev/null ;;
   unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
 esac
 exit 0

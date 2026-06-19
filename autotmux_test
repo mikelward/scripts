@@ -92,12 +92,14 @@ ROOTDIR
   chmod +x "$TEST_TMPDIR/bin/rootdir"
 
   # Fake vcs that reads per-directory marker files in the current directory:
-  #   .vcsroot  - printed by "vcs rootdir"
-  #   .unmerged - printed by "vcs unmerged"
+  #   .vcsroot    - printed by "vcs rootdir"
+  #   .vcssession - printed by "vcs session" (the session-name source)
+  #   .unmerged   - printed by "vcs unmerged"
   cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
 #!/bin/bash
 case "$1" in
   rootdir)  cat "$PWD/.vcsroot" 2>/dev/null ;;
+  session)  cat "$PWD/.vcssession" 2>/dev/null ;;
   unmerged) cat "$PWD/.unmerged" 2>/dev/null ;;
 esac
 exit 0
@@ -292,18 +294,39 @@ test_creates_next_number_with_space_in_name() {
   assert_called "tmux new-session -s my project/2"
 }
 
-test_sanitizes_prefix_metacharacters() {
-  # A project basename with '.', ':' or '#' must be normalized to '_' when
-  # building the prefix, since tmux rewrites those characters in stored session
-  # names and treats them specially (target metacharacters / format expansion).
-  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+test_prefix_from_vcs_session() {
+  # The session prefix comes from `vcs session` (a feature branch, jj
+  # workspace, or project name), so sibling branches get distinct session
+  # groups rather than all collapsing onto the repository name.
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
 #!/bin/bash
-echo "/home/u/a.b:c#d"
-ROOTDIR
-  chmod +x "$TEST_TMPDIR/bin/rootdir"
+case "$1" in
+  session) echo 'feature' ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
   run_autotmux
   assert_status 0
-  assert_called "tmux new-session -s a_b_c_d/1"
+  assert_called "tmux new-session -s feature/1"
+}
+
+test_sanitizes_prefix_metacharacters() {
+  # The prefix comes from `vcs session`. A name with '.', ':' or '#' must be
+  # normalized to '_' (tmux rewrites those in stored session names and treats
+  # them specially), and '/' -- common in branch names -- must fold to '_' too
+  # since it is TMUX_SEP and would otherwise break prefix matching.
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
+#!/bin/bash
+case "$1" in
+  session) echo 'a.b:c#d/e' ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
+  run_autotmux
+  assert_status 0
+  assert_called "tmux new-session -s a_b_c_d_e/1"
 }
 
 test_reuses_separatorless_session() {
@@ -603,13 +626,16 @@ test_switch_normalizes_leading_dollar() {
 }
 
 test_normalizes_leading_equals_prefix() {
-  # A project basename starting with a sigil is normalized when building the
-  # prefix, so it can't be mis-resolved as id/exact-match target syntax.
-  cat > "$TEST_TMPDIR/bin/rootdir" <<'ROOTDIR'
+  # A session name starting with a sigil is normalized when building the prefix,
+  # so it can't be mis-resolved as id/exact-match target syntax.
+  cat > "$TEST_TMPDIR/bin/vcs" <<'VCS'
 #!/bin/bash
-echo "/home/u/=api"
-ROOTDIR
-  chmod +x "$TEST_TMPDIR/bin/rootdir"
+case "$1" in
+  session) echo '=api' ;;
+esac
+exit 0
+VCS
+  chmod +x "$TEST_TMPDIR/bin/vcs"
   run_autotmux
   assert_status 0
   assert_called "tmux new-session -s _api/1"
@@ -737,7 +763,8 @@ run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "handles raw US byte from tmux without mangling names" test_attaches_disconnected_first_raw_us
 run_test "attaches to a disconnected session whose name has a space" test_attaches_disconnected_with_space_in_name
 run_test "creates the next number when a space-named session is attached" test_creates_next_number_with_space_in_name
-run_test "normalizes '.' and ':' in the project prefix" test_sanitizes_prefix_metacharacters
+run_test "derives the session prefix from vcs session" test_prefix_from_vcs_session
+run_test "normalizes '.', ':' and '/' in the session prefix" test_sanitizes_prefix_metacharacters
 run_test "reuses a detached separatorless session at startup" test_reuses_separatorless_session
 run_test "reuses a detached separatorless session on mismatch switch" test_mismatch_switch_reuses_separatorless_session
 run_test "uses TMUX_PREFIX for session names" test_uses_prefix
