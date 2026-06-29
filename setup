@@ -2,13 +2,21 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
+#     setup [--gui | --no-gui] [-h | --help]
+#
+#  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
-#  or
 #     wget -qO- https://mikelward.com/setup | sh
 #
 # The full GitHub URLs also work:
 #     curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 #     wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
+#
+# Graphical components (KDE/Plasma, kitty, fonts, desktop config) are
+# installed only when a display server is detected. Pass --gui to force
+# them on, or --no-gui to skip them (e.g. on a headless server). To pass
+# flags through a pipe:
+#     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui
 
 set -e
 
@@ -21,6 +29,28 @@ CONF_DIR="$HOME/conf"
 SRC_DIR="$HOME/src"
 ROOT_DIR="$SRC_DIR/root"
 
+# Whether to install/configure graphical components. One of:
+#   auto - decide based on a detected display server (the default)
+#   yes  - forced on via --gui
+#   no   - forced off via --no-gui
+GUI=auto
+
+usage() {
+    cat <<'USAGE'
+Usage: setup [--gui | --no-gui] [-h | --help]
+
+Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
+
+Options:
+  --gui       Force installation of graphical packages and desktop config
+  --no-gui    Skip all graphical packages and desktop configuration
+  -h, --help  Show this help and exit
+
+By default graphical components are installed only when a display server
+(X11 or Wayland) is detected, so this runs sensibly on headless machines.
+USAGE
+}
+
 info() {
     printf "%s\n" "$*"
 }
@@ -32,6 +62,29 @@ warn() {
 error() {
     printf "Error: %s\n" "$*" >&2
 }
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        --gui)
+            GUI=yes
+            ;;
+        --no-gui)
+            GUI=no
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 clone_or_pull() {
     repo="$1"
@@ -65,6 +118,44 @@ detect_os() {
             ;;
         *)
             OS="unknown"
+            ;;
+    esac
+}
+
+# --- Detect GUI ---
+
+# True if a graphical session appears to be available. Checks the usual
+# environment variables plus the session type reported by logind, so it
+# works under both X11 and Wayland.
+have_display() {
+    test -n "${DISPLAY:-}" && return 0
+    test -n "${WAYLAND_DISPLAY:-}" && return 0
+    case "${XDG_SESSION_TYPE:-}" in
+        x11|wayland) return 0 ;;
+    esac
+    return 1
+}
+
+# Resolve $GUI (auto/yes/no) into GUI_ENABLED (1/0). Must run after
+# detect_os, since macOS is always graphical and exposes no DISPLAY.
+resolve_gui() {
+    case "$GUI" in
+        yes)
+            GUI_ENABLED=1
+            info "Graphical setup: enabled (--gui)"
+            ;;
+        no)
+            GUI_ENABLED=0
+            info "Graphical setup: disabled (--no-gui)"
+            ;;
+        *)
+            if test "$OS" = "macos" || have_display; then
+                GUI_ENABLED=1
+                info "Graphical setup: enabled (display detected)"
+            else
+                GUI_ENABLED=0
+                info "Graphical setup: disabled (no display detected; use --gui to override)"
+            fi
             ;;
     esac
 }
@@ -107,15 +198,10 @@ install_packages() {
                 git-email \
                 golang \
                 jq \
-                kde-standard \
-                kitty \
-                plasma-desktop \
-                kwin-dev \
                 mercurial \
                 micro \
                 npm \
                 p7zip-full \
-                plasma-sdk \
                 python3 \
                 python3-pip \
                 python3-venv \
@@ -123,12 +209,20 @@ install_packages() {
                 shellcheck \
                 vim \
                 zsh
+            if test "$GUI_ENABLED" -eq 1; then
+                info "Installing graphical packages"
+                sudo apt-get install -y --install-recommends \
+                    kde-standard \
+                    kitty \
+                    kwin-dev \
+                    plasma-desktop \
+                    plasma-sdk
+            fi
             ;;
         redhat)
             info "Installing system packages"
             sudo dnf install -y \
                 '@development-tools' \
-                '@kde-desktop-environment' \
                 android-tools \
                 bat \
                 curl \
@@ -140,21 +234,26 @@ install_packages() {
                 git-email \
                 golang \
                 jq \
-                kitty \
-                kwin-devel \
                 mercurial \
                 micro \
                 npm \
                 p7zip \
                 p7zip-plugins \
-                plasma-desktop \
-                plasma-sdk \
                 python3 \
                 python3-pip \
                 ripgrep \
                 ShellCheck \
                 vim \
                 zsh
+            if test "$GUI_ENABLED" -eq 1; then
+                info "Installing graphical packages"
+                sudo dnf install -y \
+                    '@kde-desktop-environment' \
+                    kitty \
+                    kwin-devel \
+                    plasma-desktop \
+                    plasma-sdk
+            fi
             ;;
         macos)
             install_homebrew
@@ -171,7 +270,6 @@ install_packages() {
                 git-delta \
                 go \
                 jq \
-                kitty \
                 mercurial \
                 micro \
                 node \
@@ -181,12 +279,16 @@ install_packages() {
                 shellcheck \
                 vim \
                 zsh
-            info "Installing macOS applications"
-            brew install --cask \
-                amethyst \
-                android-platform-tools \
-                iterm2 \
-                rectangle
+            if test "$GUI_ENABLED" -eq 1; then
+                info "Installing graphical packages"
+                brew install kitty
+                info "Installing macOS applications"
+                brew install --cask \
+                    amethyst \
+                    android-platform-tools \
+                    iterm2 \
+                    rectangle
+            fi
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
@@ -494,12 +596,17 @@ KEYBOARD
 # --- Main ---
 
 detect_os
+resolve_gui
 install_packages
-install_fonts
+if test "$GUI_ENABLED" -eq 1; then
+    install_fonts
+fi
 install_go_task
 install_uv
 generate_ssh_key
-set_default_terminal
+if test "$GUI_ENABLED" -eq 1; then
+    set_default_terminal
+fi
 configure_keyboard
 
 if ! command -v git >/dev/null 2>&1; then
@@ -531,12 +638,16 @@ install_nushell
 
 start_services
 
-if test "$OS" = "macos"; then
-    info "Configuring macOS desktop environment"
-    "$SCRIPTS_DIR/setup-macos"
+if test "$GUI_ENABLED" -eq 1; then
+    if test "$OS" = "macos"; then
+        info "Configuring macOS desktop environment"
+        "$SCRIPTS_DIR/setup-macos"
+    else
+        info "Configuring KDE desktop environment"
+        "$SCRIPTS_DIR/setup-kde"
+    fi
 else
-    info "Configuring KDE desktop environment"
-    "$SCRIPTS_DIR/setup-kde"
+    info "Skipping desktop environment configuration (no GUI)"
 fi
 
 # --- Install root config ---
