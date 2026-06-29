@@ -716,8 +716,21 @@ fi
 
 mkdir -p "$SRC_DIR"
 clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
-make -C "$ROOT_DIR"
-sudo make -C "$ROOT_DIR" install
+# The default root config builds helper tools that require cargo. When
+# cargo isn't available (e.g. a --minimal run, or rustup was skipped),
+# install the legacy config from the repo's legacy/ subdirectory instead.
+# Source ~/.cargo/env first so a previously installed toolchain still
+# counts as available even on a run that skipped install_rust.
+if test -f "$HOME/.cargo/env"; then
+    . "$HOME/.cargo/env"
+fi
+if command -v cargo >/dev/null 2>&1; then
+    make -C "$ROOT_DIR"
+    sudo make -C "$ROOT_DIR" install
+else
+    info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
+    sudo make -C "$ROOT_DIR/legacy" install
+fi
 if test "$OS" = "macos"; then
     # macOS: the admin group (GID 80) already has sudo access; the wheel/admin
     # group membership is managed by Directory Services, not /etc/group.
