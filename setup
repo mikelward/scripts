@@ -279,13 +279,16 @@ install_packages() {
                 shellcheck \
                 vim \
                 zsh
+            # adb/fastboot are CLI tools (used by pidcat and friends), not
+            # graphical -- install them regardless of --no-gui, matching the
+            # Linux paths which keep adb/android-tools as core packages.
+            brew install --cask android-platform-tools
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing graphical packages"
                 brew install kitty
                 info "Installing macOS applications"
                 brew install --cask \
                     amethyst \
-                    android-platform-tools \
                     iterm2 \
                     rectangle
             fi
