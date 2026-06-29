@@ -528,23 +528,6 @@ install_nushell() {
     cargo install --locked nu
 }
 
-# --- Install go-task ---
-
-install_go_task() {
-    if command -v task >/dev/null 2>&1; then
-        info "go-task already installed"
-        return
-    fi
-
-    if ! command -v go >/dev/null 2>&1; then
-        warn "go not found, skipping go-task installation"
-        return
-    fi
-
-    info "Installing go-task"
-    go install github.com/go-task/task/v3/cmd/task@latest
-}
-
 # --- Install uv (Python package manager) ---
 
 install_uv() {
@@ -677,7 +660,6 @@ install_packages
 if test "$GUI_ENABLED" -eq 1; then
     install_fonts
 fi
-install_go_task
 install_uv
 generate_ssh_key
 if test "$GUI_ENABLED" -eq 1; then
