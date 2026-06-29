@@ -14,9 +14,13 @@
 #
 # Graphical components (KDE/Plasma, kitty, fonts, desktop config) are
 # installed only when a display server is detected. Pass --gui to force
-# them on, or --no-gui to skip them (e.g. on a headless server). To pass
-# flags through a pipe:
-#     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui
+# them on, or --no-gui to skip them (e.g. on a headless server).
+#
+# The heavyweight extras (Rust toolchain plus helix/jj/shpool/nushell,
+# all built from source) are skipped automatically when the disk is small
+# (see MIN_DISK_GB). Pass --minimal to force that lean profile, or --full
+# to install everything regardless. To pass flags through a pipe:
+#     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui --minimal
 
 set -e
 
@@ -35,19 +39,34 @@ ROOT_DIR="$SRC_DIR/root"
 #   no   - forced off via --no-gui
 GUI=auto
 
+# Install profile for the heavyweight source-built extras. One of:
+#   auto - decide based on available disk space (the default)
+#   yes  - forced lean via --minimal
+#   no   - forced full via --full
+MINIMAL=auto
+
+# Below this many GB free on $HOME's filesystem, auto mode picks --minimal.
+# Override by exporting MIN_DISK_GB before running.
+MIN_DISK_GB="${MIN_DISK_GB:-15}"
+
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [-h | --help]
+Usage: setup [--gui | --no-gui] [--minimal | --full] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
 Options:
   --gui       Force installation of graphical packages and desktop config
   --no-gui    Skip all graphical packages and desktop configuration
+  --minimal   Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
+              nushell), installing only core packages, tools, and dotfiles
+  --full      Install everything, even when disk space looks tight
   -h, --help  Show this help and exit
 
 By default graphical components are installed only when a display server
-(X11 or Wayland) is detected, so this runs sensibly on headless machines.
+(X11 or Wayland) is detected, and the heavyweight source-built extras are
+skipped when free disk space is below MIN_DISK_GB (default 15GB), so this
+runs sensibly on headless and small-disk machines.
 USAGE
 }
 
@@ -72,6 +91,12 @@ while test $# -gt 0; do
             ;;
         --no-gui)
             GUI=no
+            ;;
+        --minimal)
+            MINIMAL=yes
+            ;;
+        --full)
+            MINIMAL=no
             ;;
         -h|--help)
             usage
@@ -149,12 +174,52 @@ resolve_gui() {
             info "Graphical setup: disabled (--no-gui)"
             ;;
         *)
-            if test "$OS" = "macos" || have_display; then
+            if test "$OS" = "macos"; then
+                # macOS has no DISPLAY variable; it's always graphical.
+                GUI_ENABLED=1
+                info "Graphical setup: enabled (macOS: display assumed)"
+            elif have_display; then
                 GUI_ENABLED=1
                 info "Graphical setup: enabled (display detected)"
             else
                 GUI_ENABLED=0
                 info "Graphical setup: disabled (no display detected; use --gui to override)"
+            fi
+            ;;
+    esac
+}
+
+# --- Detect available disk space ---
+
+# Available space, in whole GB, on the filesystem holding $HOME. Prints
+# nothing if df can't report it (caller treats that as "unknown").
+available_disk_gb() {
+    df -Pk "$HOME" 2>/dev/null | awk 'NR==2 {print int($4 / 1024 / 1024)}'
+}
+
+# Resolve $MINIMAL (auto/yes/no) into MINIMAL_ENABLED (1/0). In auto mode,
+# pick the lean profile when free disk space is below MIN_DISK_GB.
+resolve_minimal() {
+    case "$MINIMAL" in
+        yes)
+            MINIMAL_ENABLED=1
+            info "Install profile: minimal (--minimal)"
+            ;;
+        no)
+            MINIMAL_ENABLED=0
+            info "Install profile: full (--full)"
+            ;;
+        *)
+            avail=$(available_disk_gb)
+            if test -n "$avail" && test "$avail" -lt "$MIN_DISK_GB"; then
+                MINIMAL_ENABLED=1
+                info "Install profile: minimal (${avail}GB free < ${MIN_DISK_GB}GB; use --full to override)"
+            elif test -n "$avail"; then
+                MINIMAL_ENABLED=0
+                info "Install profile: full (${avail}GB free)"
+            else
+                MINIMAL_ENABLED=0
+                info "Install profile: full (could not determine free disk space)"
             fi
             ;;
     esac
@@ -600,6 +665,7 @@ KEYBOARD
 
 detect_os
 resolve_gui
+resolve_minimal
 install_packages
 if test "$GUI_ENABLED" -eq 1; then
     install_fonts
@@ -633,11 +699,15 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
     make -C "$CONF_DIR/vcs" install
 fi
 
-install_rust
-install_helix
-install_jj
-install_shpool
-install_nushell
+if test "$MINIMAL_ENABLED" -eq 0; then
+    install_rust
+    install_helix
+    install_jj
+    install_shpool
+    install_nushell
+else
+    info "Skipping heavyweight extras (Rust, helix, jj, shpool, nushell); minimal profile"
+fi
 
 start_services
 
