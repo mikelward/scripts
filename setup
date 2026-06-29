@@ -416,20 +416,27 @@ install_fonts() {
 start_services() {
     case "$OS" in
         debian|redhat)
-            # Enable shpool as a systemd user service
+            # Enable shpool as a systemd user service. Use the resolved
+            # shpool path in ExecStart rather than hard-coding
+            # %h/.cargo/bin/shpool: under --minimal we skip the cargo
+            # install, and shpool may instead come from a distro/Nix
+            # package elsewhere on PATH. Pointing the unit at a
+            # nonexistent ~/.cargo/bin/shpool would make `enable --now`
+            # fail and abort the whole bootstrap under set -e.
             if command -v shpool >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
+                shpool_bin=$(command -v shpool)
                 shpool_service_dir="$HOME/.config/systemd/user"
                 shpool_service="$shpool_service_dir/shpool.service"
                 if ! test -f "$shpool_service"; then
                     info "Creating shpool systemd user service"
                     mkdir -p "$shpool_service_dir"
-                    cat > "$shpool_service" <<'SERVICE'
+                    cat > "$shpool_service" <<SERVICE
 [Unit]
 Description=shpool session manager
 Documentation=https://github.com/shell-pool/shpool
 
 [Service]
-ExecStart=%h/.cargo/bin/shpool daemon
+ExecStart=$shpool_bin daemon
 Restart=on-failure
 
 [Install]
