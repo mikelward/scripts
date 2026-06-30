@@ -18,9 +18,16 @@
 # Requires: defaults, hidutil
 #
 # Usage:
-#     setup-macos
+#     setup-macos [--no-install] [--ignore-errors] [-h | --help]
+#
+# setup forwards --no-install and --ignore-errors here. macOS configuration
+# installs no separate software (everything is `defaults`/Automator config),
+# so --no-install is accepted but has nothing to skip. --ignore-errors keeps
+# going past failures instead of aborting on the first one.
 
-set -e
+# Whether to keep going past failures. "no" aborts on the first error via
+# set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
+IGNORE_ERRORS=no
 
 info() {
     printf "%s\n" "$*"
@@ -29,6 +36,50 @@ info() {
 warn() {
     printf "Warning: %s\n" "$*" >&2
 }
+
+usage() {
+    cat <<'USAGE'
+Usage: setup-macos [--no-install] [--ignore-errors] [-h | --help]
+
+Configure the macOS desktop environment.
+
+Options:
+  --no-install     Accepted for consistency with setup; macOS configuration
+                   installs no separate software, so there's nothing to skip
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        --install|--no-install)
+            # No separate install step on macOS; accepted as a no-op so
+            # setup can forward the flag uniformly.
+            ;;
+        --ignore-errors)
+            IGNORE_ERRORS=yes
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Abort on the first error by default. --ignore-errors leaves set -e off so
+# the script pushes through failing steps.
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
 
 # --- Configure keyboard ---
 
