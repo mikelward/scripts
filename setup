@@ -2,7 +2,8 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [-h | --help]
+#     setup [--gui | --no-gui] [--minimal | --full] [--no-install] \
+#           [--ignore-errors] [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -21,8 +22,12 @@
 # (see MIN_DISK_GB). Pass --minimal to force that lean profile, or --full
 # to install everything regardless. To pass flags through a pipe:
 #     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui --minimal
-
-set -e
+#
+# Pass --no-install to skip all software installation (packages, fonts,
+# uv, and the heavyweight extras) and only (re)apply configuration --
+# handy when re-running on a machine that already has the tools. Pass
+# --ignore-errors to keep going past failures instead of aborting on the
+# first one. Both flags are forwarded to setup-kde / setup-macos.
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -49,19 +54,34 @@ MINIMAL=auto
 # Override by exporting MIN_DISK_GB before running.
 MIN_DISK_GB="${MIN_DISK_GB:-15}"
 
+# Whether to install software at all. One of:
+#   yes - install packages, fonts, and tools (the default)
+#   no  - skip every install step and only (re)apply configuration (--no-install)
+INSTALL=yes
+
+# Whether to keep going after a command fails. One of:
+#   no  - abort on the first error, via set -e (the default)
+#   yes - keep going past failures (--ignore-errors)
+IGNORE_ERRORS=no
+
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--minimal | --full] [-h | --help]
+Usage: setup [--gui | --no-gui] [--minimal | --full] [--no-install]
+             [--ignore-errors] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
 Options:
-  --gui       Force installation of graphical packages and desktop config
-  --no-gui    Skip all graphical packages and desktop configuration
-  --minimal   Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
-              nushell), installing only core packages, tools, and dotfiles
-  --full      Install everything, even when disk space looks tight
-  -h, --help  Show this help and exit
+  --gui            Force installation of graphical packages and desktop config
+  --no-gui         Skip all graphical packages and desktop configuration
+  --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
+                   nushell), installing only core packages, tools, and dotfiles
+  --full           Install everything, even when disk space looks tight
+  --no-install     Skip every install step (packages, fonts, uv, extras) and
+                   only (re)apply configuration. Forwarded to setup-kde/macos
+  --ignore-errors  Keep going past failures instead of aborting on the first
+                   one. Forwarded to setup-kde/macos
+  -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
 (X11 or Wayland) is detected, and the heavyweight source-built extras are
@@ -98,6 +118,15 @@ while test $# -gt 0; do
         --full)
             MINIMAL=no
             ;;
+        --install)
+            INSTALL=yes
+            ;;
+        --no-install)
+            INSTALL=no
+            ;;
+        --ignore-errors)
+            IGNORE_ERRORS=yes
+            ;;
         -h|--help)
             usage
             exit 0
@@ -110,6 +139,22 @@ while test $# -gt 0; do
     esac
     shift
 done
+
+# Abort on the first error by default. --ignore-errors leaves set -e off so
+# the bootstrap pushes through failing steps. We toggle this only after
+# parsing args, so an unknown option above still exits non-zero.
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
+
+# Flags to forward to the desktop setup helpers (setup-kde / setup-macos).
+DESKTOP_SETUP_FLAGS=""
+if test "$INSTALL" = no; then
+    DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --no-install"
+fi
+if test "$IGNORE_ERRORS" = yes; then
+    DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --ignore-errors"
+fi
 
 clone_or_pull() {
     repo="$1"
@@ -656,11 +701,15 @@ KEYBOARD
 detect_os
 resolve_gui
 resolve_minimal
-install_packages
-if test "$GUI_ENABLED" -eq 1; then
-    install_fonts
+if test "$INSTALL" = yes; then
+    install_packages
+    if test "$GUI_ENABLED" -eq 1; then
+        install_fonts
+    fi
+    install_uv
+else
+    info "Skipping software installation (--no-install)"
 fi
-install_uv
 generate_ssh_key
 if test "$GUI_ENABLED" -eq 1; then
     set_default_terminal
@@ -688,7 +737,9 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
     make -C "$CONF_DIR/vcs" install
 fi
 
-if test "$MINIMAL_ENABLED" -eq 0; then
+if test "$INSTALL" = no; then
+    info "Skipping heavyweight extras (Rust, helix, jj, shpool, nushell); --no-install"
+elif test "$MINIMAL_ENABLED" -eq 0; then
     install_rust
     install_helix
     install_jj
@@ -703,10 +754,10 @@ start_services
 if test "$GUI_ENABLED" -eq 1; then
     if test "$OS" = "macos"; then
         info "Configuring macOS desktop environment"
-        "$SCRIPTS_DIR/setup-macos"
+        "$SCRIPTS_DIR/setup-macos" $DESKTOP_SETUP_FLAGS
     else
         info "Configuring KDE desktop environment"
-        "$SCRIPTS_DIR/setup-kde"
+        "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS
     fi
 else
     info "Skipping desktop environment configuration (no GUI)"

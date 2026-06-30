@@ -11,12 +11,22 @@
 # Optional: go-task (preferred build tool), p7zip
 #
 # Usage:
-#     setup-kde
-
-set -e
+#     setup-kde [--no-install] [--ignore-errors] [-h | --help]
+#
+# --no-install skips building/installing Krohnkite and only (re)applies the
+# KDE configuration. --ignore-errors keeps going past failures instead of
+# aborting on the first one. setup forwards both flags here.
 
 KROHNKITE_REPO="https://codeberg.org/anametologin/Krohnkite.git"
 KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
+
+# Whether to build and install Krohnkite. "no" (via --no-install) skips the
+# install and only (re)applies configuration.
+INSTALL=yes
+
+# Whether to keep going past failures. "no" aborts on the first error via
+# set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
+IGNORE_ERRORS=no
 
 info() {
     printf "%s\n" "$*"
@@ -35,6 +45,51 @@ is_command() {
     test -x "$(command -v "$1")"
 }
 
+usage() {
+    cat <<'USAGE'
+Usage: setup-kde [--no-install] [--ignore-errors] [-h | --help]
+
+Configure the KDE Plasma 6 desktop environment.
+
+Options:
+  --no-install     Skip building/installing Krohnkite; only (re)apply config
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        --install)
+            INSTALL=yes
+            ;;
+        --no-install)
+            INSTALL=no
+            ;;
+        --ignore-errors)
+            IGNORE_ERRORS=yes
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Abort on the first error by default. --ignore-errors leaves set -e off so
+# the script pushes through failing steps.
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
+
 cleanup() {
     rm -rf "$KROHNKITE_DIR"
 }
@@ -42,10 +97,15 @@ trap cleanup EXIT
 
 # --- Check prerequisites ---
 
-command -v git >/dev/null 2>&1 || error "git is required"
-command -v npm >/dev/null 2>&1 || error "npm is required (to build Krohnkite)"
-command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
+# kwriteconfig6 is needed for every configuration step, so it's always
+# required. git/npm/kpackagetool6 are only used to build and install
+# Krohnkite, so they're only required when actually installing.
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
+if test "$INSTALL" = yes; then
+    command -v git >/dev/null 2>&1 || error "git is required"
+    command -v npm >/dev/null 2>&1 || error "npm is required (to build Krohnkite)"
+    command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
+fi
 
 # --- Install Krohnkite ---
 
@@ -399,7 +459,11 @@ reload_kglobalaccel() {
 
 # --- Main ---
 
-install_krohnkite
+if test "$INSTALL" = yes; then
+    install_krohnkite
+else
+    info "Skipping Krohnkite installation (--no-install)"
+fi
 enable_krohnkite
 configure_krohnkite
 configure_focus_follows_mouse
