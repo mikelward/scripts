@@ -24,10 +24,11 @@
 #     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui --minimal
 #
 # Pass --no-install to skip all software installation (packages, fonts,
-# uv, and the heavyweight extras) and only (re)apply configuration --
-# handy when re-running on a machine that already has the tools. Pass
-# --ignore-errors to keep going past failures instead of aborting on the
-# first one. Both flags are forwarded to setup-kde / setup-macos.
+# uv, the heavyweight extras, and the root config build) and only
+# (re)apply configuration -- handy when re-running on a machine that
+# already has the tools. Pass --ignore-errors to keep going past failures
+# instead of aborting on the first one. Both flags are forwarded to
+# setup-kde / setup-macos.
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -77,8 +78,8 @@ Options:
   --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
                    nushell), installing only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
-  --no-install     Skip every install step (packages, fonts, uv, extras) and
-                   only (re)apply configuration. Forwarded to setup-kde/macos
+  --no-install     Skip every install step (packages, fonts, uv, extras, root
+                   config) and only (re)apply config. Forwarded to setup-kde/macos
   --ignore-errors  Keep going past failures instead of aborting on the first
                    one. Forwarded to setup-kde/macos
   -h, --help       Show this help and exit
@@ -765,23 +766,32 @@ fi
 
 # --- Install root config ---
 
-mkdir -p "$SRC_DIR"
-clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
-# The default root config builds helper tools that require cargo. When
-# cargo isn't available (e.g. a --minimal run, or rustup was skipped),
-# install the legacy config from the repo's legacy/ subdirectory instead.
-# Source ~/.cargo/env first so a previously installed toolchain still
-# counts as available even on a run that skipped install_rust.
-if test -f "$HOME/.cargo/env"; then
-    . "$HOME/.cargo/env"
-fi
-if command -v cargo >/dev/null 2>&1; then
-    make -C "$ROOT_DIR"
-    sudo make -C "$ROOT_DIR" install
+# The root config builds helper tools and installs files via make, so it's
+# an install step too: skip it under --no-install.
+if test "$INSTALL" = yes; then
+    mkdir -p "$SRC_DIR"
+    clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
+    # The default root config builds helper tools that require cargo. When
+    # cargo isn't available (e.g. a --minimal run, or rustup was skipped),
+    # install the legacy config from the repo's legacy/ subdirectory instead.
+    # Source ~/.cargo/env first so a previously installed toolchain still
+    # counts as available even on a run that skipped install_rust.
+    if test -f "$HOME/.cargo/env"; then
+        . "$HOME/.cargo/env"
+    fi
+    if command -v cargo >/dev/null 2>&1; then
+        make -C "$ROOT_DIR"
+        sudo make -C "$ROOT_DIR" install
+    else
+        info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
+        sudo make -C "$ROOT_DIR/legacy" install
+    fi
 else
-    info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
-    sudo make -C "$ROOT_DIR/legacy" install
+    info "Skipping root config installation (--no-install)"
 fi
+
+# Group membership is configuration, not an install, so apply it regardless
+# of --no-install.
 if test "$OS" = "macos"; then
     # macOS: the admin group (GID 80) already has sudo access; the wheel/admin
     # group membership is managed by Directory Services, not /etc/group.
