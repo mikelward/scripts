@@ -3,7 +3,7 @@
 #
 # Usage:
 #     setup [--gui | --no-gui] [--minimal | --full] [--no-install] \
-#           [--ignore-errors] [-h | --help]
+#           [--ignore-errors] [--ssh | --no-ssh] [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -29,6 +29,11 @@
 # already has the tools. Pass --ignore-errors to keep going past failures
 # instead of aborting on the first one. Both flags are forwarded to
 # setup-kde / setup-macos.
+#
+# An SSH key is generated only when one isn't already available -- the
+# check skips generation when ssh-add -l lists a key (e.g. a forwarded
+# agent) or a key file already exists. Pass --ssh to generate one anyway,
+# or --no-ssh to skip it entirely.
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -65,10 +70,17 @@ INSTALL=yes
 #   yes - keep going past failures (--ignore-errors)
 IGNORE_ERRORS=no
 
+# Whether to generate an SSH key. One of:
+#   auto - skip when a key is already available -- loaded in the agent
+#          (ssh-add -l) or present on disk -- otherwise generate one (default)
+#   yes  - generate even if the agent already has a key (--ssh)
+#   no   - never generate (--no-ssh)
+SSH=auto
+
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--minimal | --full] [--no-install]
-             [--ignore-errors] [-h | --help]
+             [--ignore-errors] [--ssh | --no-ssh] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -82,12 +94,15 @@ Options:
                    config) and only (re)apply config. Forwarded to setup-kde/macos
   --ignore-errors  Keep going past failures instead of aborting on the first
                    one. Forwarded to setup-kde/macos
+  --ssh            Generate an SSH key even if one is already available
+  --no-ssh         Skip SSH key generation
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
 (X11 or Wayland) is detected, and the heavyweight source-built extras are
 skipped when free disk space is below MIN_DISK_GB (default 15GB), so this
-runs sensibly on headless and small-disk machines.
+runs sensibly on headless and small-disk machines. An SSH key is generated
+only when one isn't already loaded in the agent or present on disk.
 USAGE
 }
 
@@ -127,6 +142,12 @@ while test $# -gt 0; do
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
+            ;;
+        --ssh)
+            SSH=yes
+            ;;
+        --no-ssh)
+            SSH=no
             ;;
         -h|--help)
             usage
@@ -589,6 +610,22 @@ install_uv() {
 # --- Generate SSH key ---
 
 generate_ssh_key() {
+    if test "$SSH" = no; then
+        info "Skipping SSH key generation (--no-ssh)"
+        return
+    fi
+
+    # In auto mode, skip when the agent already has a key loaded. This
+    # catches keys that aren't on this machine's disk -- a forwarded agent
+    # over SSH, or a hardware token -- which the on-disk check below misses.
+    # ssh-add -l exits 0 only when at least one identity is loaded.
+    if test "$SSH" = auto \
+            && command -v ssh-add >/dev/null 2>&1 \
+            && ssh-add -l >/dev/null 2>&1; then
+        info "SSH key already available via ssh-agent; pass --ssh to create one anyway"
+        return
+    fi
+
     for key in "$HOME"/.ssh/id_*; do
         case "$key" in
             *.pub) continue ;;
