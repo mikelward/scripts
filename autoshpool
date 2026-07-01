@@ -25,9 +25,26 @@
 # after moving into another project. Keep the `&& exit` in switchshpool/shrc
 # anyway: it cleanly exits the now-detached shell instead of leaving it parked
 # in a disconnected session.
+#
+# A request made from inside a session is keyed to that session's name (the
+# file gets a ".<session>" suffix), so it is serviced only by the loop that
+# holds that session -- with several terminals each running their own loop, a
+# concurrently woken loop in another terminal can neither consume this
+# terminal's switch nor have its own session-creation derailed by it. A request
+# made outside any session has no owning loop, so it stays unkeyed and is
+# serviced by the next loop that wakes (or starts).
 
 switch_session_file="$HOME/.autoshpool_switch"
 switch_pwd_file="$HOME/.autoshpool_switch_pwd"
+
+# The switch-file suffix for a request made from inside session $1: ".<name>"
+# with '/' (the one character a filename can't hold) mapped to '_'. Empty when
+# $1 is empty (a request made outside any session), naming the shared unkeyed
+# files above.
+switch_file_suffix() {
+  test -n "$1" || return 0
+  printf '.%s' "${1//\//_}"
+}
 
 # Shared helpers and the fzf picker engine. SESSION_SEP tells the library which
 # separator this backend uses (for session_matches_prefix).
@@ -105,7 +122,9 @@ abort_if_hung() {
 
 get_prefix() {
   # Use the current project name with a colon at the end, or empty string.
-  local prefix="$(basename "$(rootdir)")"
+  # Silence rootdir like autotmux's get_prefix: without ~/.shrc.vcs it doesn't
+  # exist, and "command not found" noise on stderr isn't an error here.
+  local prefix="$(basename "$(rootdir 2>/dev/null)")"
   test -n "$prefix" && echo "$prefix:"
 }
 
@@ -160,59 +179,67 @@ create_and_attach_next() {
     # user started the shell), instead of shpool's daemon dir.
     shpool attach -d . "$session"
     rc=$?
-    # shpool exits 0 even when refusing because the session is already
-    # attached elsewhere (libshpool BusyError -> AttachResult::Done), so a
-    # clean exit alone is not proof that we actually owned the session.
-    # Re-check the listing: if our session still shows as "attached", we lost
-    # a race against another shell and should try the next number. A session
-    # we just exited from is either gone or "disconnected" by now.
-    # Bound the list the way abort_if_hung does -- if it hangs or errors we
-    # cannot tell a real attach from a busy refusal, so report failure
-    # rather than letting `autoshpool && exit` silently exit the shell with
-    # no session attached.
+    # A clean exit alone is not proof that we actually owned the session: see
+    # wait_attach_settled for the busy race it re-checks the listing for. If we
+    # lost the race, try the next number.
     # Capturing stderr to disambiguate the busy message was tried and rolled
     # back because routing shpool's interactive stderr through a pipe (tee
     # buffering) splattered escape sequences onto the user's terminal at
     # unpredictable moments.
     if test $rc -eq 0; then
+      current_session="$session"
       # A switch queued while we held this session means the detach that ended
       # the attach was deliberate (changeshpool/switchshpool detaches us to hand
       # the switch to this loop). We owned the session, so hand straight back to
       # the loop to service the switch instead of running the busy-race check
       # below -- otherwise the not-yet-settled "attached" status (see the poll)
       # is mistaken for a lost race and a brand-new numbered session is created.
-      if test -n "$(get_switch_session)"; then
+      if pending_switch_key "$session" >/dev/null; then
         return 0
       fi
-      if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
-        echo "shpool list failed after attach; cannot confirm session state" >&2
-        return 2
-      fi
-      # A session we owned and just detached from still shows as "attached" for
-      # a moment before the daemon settles the status (the same lag changeshpool
-      # polls around when stealing). A session we genuinely lost the race for is
-      # owned by another live client and stays "attached". Poll briefly so the
-      # status can settle: ours leaves "attached" (we return to the loop), a lost
-      # race stays "attached" for the whole window (we try the next number).
-      local i
-      for i in 1 2 3 4 5 6 7 8 9 10; do
-        test "$(session_status "$session" "$listing")" = attached || break
-        sleep 0.1
-        if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
-          echo "shpool list failed after attach; cannot confirm session state" >&2
-          return 2
-        fi
-      done
-      if test "$(session_status "$session" "$listing")" = "attached"; then
-        sessions[$session]=1
-        continue
-      fi
+      wait_attach_settled "$session"
+      case $? in
+        1)
+          sessions[$session]=1
+          continue
+          ;;
+        2) return 2 ;;
+      esac
       return 0
     fi
     return $rc
   done
   echo "You already have more than 100 sessions??" >&2
   return 2
+}
+
+# Wait briefly for a just-released session's status to settle after an attach
+# that exited 0. A session we owned and just detached from still shows as
+# "attached" for a moment before the daemon settles the status (the same lag
+# changeshpool used to poll around when stealing); a session we never owned --
+# shpool exits 0 without attaching when the target is busy (libshpool
+# BusyError -> AttachResult::Done) -- is held by another live client and stays
+# "attached" for the whole window. Returns:
+#   0 - the session left "attached": the attach was real and cleanly released
+#   1 - still "attached" after the window: we lost a busy race, never attached
+#   2 - shpool list failed or hung: cannot tell (bounded like abort_if_hung so
+#       a wedged daemon doesn't hang shell startup; the caller reports failure
+#       rather than letting `autoshpool && exit` silently exit the shell)
+wait_attach_settled() {
+  local session="$1" listing i
+  if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
+    echo "shpool list failed after attach; cannot confirm session state" >&2
+    return 2
+  fi
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    test "$(session_status "$session" "$listing")" = attached || return 0
+    sleep 0.1
+    if ! listing="$(timeout 2 shpool list 2>/dev/null)"; then
+      echo "shpool list failed after attach; cannot confirm session state" >&2
+      return 2
+    fi
+  done
+  test "$(session_status "$session" "$listing")" != attached
 }
 
 proc_dir() {
@@ -394,22 +421,48 @@ resolve_switch_target() {
 }
 
 get_switch_session() {
-  cat "$switch_session_file" 2>/dev/null
+  # The queued switch target for the request keyed to session $1 (or the
+  # unkeyed request, with $1 empty). Empty when there is none.
+  cat "$switch_session_file$(switch_file_suffix "$1")" 2>/dev/null
 }
 
 get_switch_pwd() {
-  cat "$switch_pwd_file" 2>/dev/null
+  cat "$switch_pwd_file$(switch_file_suffix "$1")" 2>/dev/null
+}
+
+# Print the key of the pending switch request this loop should service while
+# holding session $1 (empty at startup): a request keyed to that session wins,
+# else an unkeyed request (made outside any session, first loop to wake takes
+# it). Prints nothing and fails when neither is pending. The key -- not the
+# target -- is printed so the caller reads the target and pwd from, and later
+# clears, the same request.
+pending_switch_key() {
+  local key
+  for key in "$1" ""; do
+    if test -n "$(get_switch_session "$key")"; then
+      printf '%s\n' "$key"
+      return 0
+    fi
+    # With $1 empty both iterations name the unkeyed file; stop after one.
+    test -n "$key" || break
+  done
+  return 1
 }
 
 request_switch() {
   # Record the target session and, optionally, the directory to open it in. A
   # bare request (e.g. switchshpool to an existing session) leaves the pwd file
-  # absent so the target keeps its own working directory.
-  echo "$1" > "$switch_session_file"
+  # absent so the target keeps its own working directory. The request is keyed
+  # to the session we're inside (see switch_file_suffix) so only the loop
+  # holding it -- the one whose attach returns when we detach below -- picks it
+  # up.
+  local suffix
+  suffix="$(switch_file_suffix "${SHPOOL_SESSION_NAME:-}")"
+  echo "$1" > "$switch_session_file$suffix"
   if test -n "$2"; then
-    echo "$2" > "$switch_pwd_file"
+    echo "$2" > "$switch_pwd_file$suffix"
   else
-    rm -f "$switch_pwd_file"
+    rm -f "$switch_pwd_file$suffix"
   fi
   # Hand the terminal back to the outer loop so the switch lands even when the
   # caller isn't a shell that will `exit` afterwards (a bare `autoshpool`, or a
@@ -429,7 +482,10 @@ request_switch() {
 }
 
 clear_switch() {
-  rm -f "$switch_session_file" "$switch_pwd_file"
+  # Remove the request keyed to session $1 (or the unkeyed request, $1 empty).
+  local suffix
+  suffix="$(switch_file_suffix "$1")"
+  rm -f "$switch_session_file$suffix" "$switch_pwd_file$suffix"
 }
 
 # Start an shpool session with a useful session name.
@@ -447,19 +503,31 @@ autoshpool_loop() {
 
   abort_if_hung
 
+  # The session this loop most recently held, so switch requests keyed to it
+  # (see request_switch) are serviced here and not by another terminal's loop.
+  # local, but bash's dynamic scoping shares it with create_and_attach_next.
+  local current_session=""
   while true; do
-    switch_session="$(get_switch_session)"
-    if test -n "$switch_session"; then
-      switch_pwd="$(get_switch_pwd)"
-      clear_switch
+    if switch_key="$(pending_switch_key "$current_session")"; then
+      switch_session="$(get_switch_session "$switch_key")"
+      switch_pwd="$(get_switch_pwd "$switch_key")"
+      clear_switch "$switch_key"
       # A recorded pwd (a prefix-mismatch switch) opens a freshly created session
       # there via -d; a bare switch omits -d so an existing target keeps its own
-      # directory.
+      # directory. -f detaches any client already attached to the target before
+      # attaching us: a switch to a session that's attached in another terminal
+      # is an explicit request to bring it here (changeshpool steals the same
+      # way from outside a session), and without -f shpool reports that busy
+      # case as a silent no-op (exit 0 without attaching) -- the loop would
+      # return 0 and the caller's `&& exit` would close this terminal with
+      # nothing attached.
       if test -n "$switch_pwd"; then
-        shpool attach -d "$switch_pwd" "$switch_session"
+        shpool attach -f -d "$switch_pwd" "$switch_session"
       else
-        shpool attach "$switch_session"
+        shpool attach -f "$switch_session"
       fi
+      rc=$?
+      current_session="$switch_session"
     else
       # Pick the session first so a failed attach is reported as a failure
       # rather than falling through to create a brand-new session.
@@ -467,11 +535,27 @@ autoshpool_loop() {
       if test -n "$session"; then
         echo "Attaching shpool session $session"
         shpool attach "$session"
+        rc=$?
+        current_session="$session"
+        # The same busy race create_and_attach_next checks for: another shell
+        # can attach this session between the listing and our attach, and
+        # shpool exits 0 without attaching (BusyError -> Done). Returning 0
+        # would let the caller's `&& exit` close the terminal with nothing
+        # attached; re-run the loop instead to pick another disconnected
+        # session (or create one). A queued switch means the detach was
+        # deliberate -- skip straight to servicing it.
+        if test $rc -eq 0 && ! pending_switch_key "$session" >/dev/null; then
+          wait_attach_settled "$session"
+          case $? in
+            1) continue ;;
+            2) rc=2 ;;
+          esac
+        fi
       else
         create_and_attach_next
+        rc=$?
       fi
     fi
-    rc=$?
 
     if test $rc -ne 0; then
       # Maybe .shrc failed or something.
@@ -480,8 +564,7 @@ autoshpool_loop() {
       return $rc
     fi
 
-    switch_session="$(get_switch_session)"
-    if test -n "$switch_session"; then
+    if pending_switch_key "$current_session" >/dev/null; then
       continue
     fi
 

@@ -89,8 +89,7 @@ TIMEOUT
   unset SHPOOL_SESSION_NAME
   unset SHPOOL_PREFIX
   unset SHPOOL_ATTACH_EXIT
-  rm -f "$TEST_TMPDIR/.autoshpool_switch"
-  rm -f "$TEST_TMPDIR/.autoshpool_switch_pwd"
+  rm -f "$TEST_TMPDIR"/.autoshpool_switch*
   rm -f "$TEST_TMPDIR/.shpool_calls"
   rm -f "$TEST_TMPDIR/.shpool_sessions"
   rm -f "$TEST_TMPDIR/.fake_shpool_pids"
@@ -348,12 +347,13 @@ test_plain_switch_records_no_pwd() {
 
 test_loop_switch_passes_recorded_pwd_as_dir() {
   # When the loop services a switch that carries a pwd, it passes it via
-  # `shpool attach -d` so the freshly created session starts there.
+  # `shpool attach -d` so the freshly created session starts there (and -f so
+  # an attached target is stolen rather than silently skipped).
   echo "myproject:1" > "$HOME/.autoshpool_switch"
   echo "/home/u/proj" > "$HOME/.autoshpool_switch_pwd"
   run_autoshpool
   assert_status 0
-  assert_called "shpool attach -d /home/u/proj myproject:1"
+  assert_called "shpool attach -f -d /home/u/proj myproject:1"
 }
 
 test_creates_session_1() {
@@ -475,7 +475,9 @@ SHPOOL
   run_autoshpool
   assert_status 0
   assert_called "shpool attach -d . 1"
-  assert_called "shpool attach other"
+  # -f: a switch target attached in another terminal is stolen, not silently
+  # skipped (shpool exits 0 without attaching on a busy target).
+  assert_called "shpool attach -f other"
 }
 
 test_create_path_services_queued_switch() {
@@ -512,7 +514,7 @@ SHPOOL
   run_autoshpool
   assert_status 0
   assert_called "shpool attach -d . 1"
-  assert_called "shpool attach target:9"
+  assert_called "shpool attach -f target:9"
   if grep -q "shpool attach -d . 2" "$HOME/.shpool_calls" 2>/dev/null; then
     echo "  FAIL: created a new numbered session instead of servicing the switch"
     echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
@@ -563,6 +565,108 @@ SHPOOL
   if grep -q "shpool attach -d . 2" "$HOME/.shpool_calls" 2>/dev/null; then
     echo "  FAIL: created a new session despite the status settling to disconnected"
     echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
+test_reattach_busy_noop_retries() {
+  # The plain reattach path (attach a listed-disconnected session) can lose the
+  # same race the create path retries around: another shell attaches the
+  # session between our listing and our attach, and shpool exits 0 without
+  # attaching. Returning 0 would let `autoshpool && exit` close the terminal
+  # with nothing attached; the loop must re-run and pick/create another session.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    session="${@: -1}"
+    if [ "$session" = "3" ]; then
+      # Busy no-op: another shell won the race; the session shows attached and
+      # shpool exits 0 without attaching us.
+      sed -i 's/^3\(.*\)disconnected$/3\1attached/' "$HOME/.shpool_sessions"
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+  cat > "$HOME/.shpool_sessions" <<EOF
+3      2025-01-01T00:00:00Z   disconnected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 3"
+  assert_called "shpool attach -d . 1"
+  assert_output_contains "Creating shpool session 1"
+}
+
+test_switch_request_keyed_to_current_session() {
+  # A request made from inside a session is keyed to that session's name, so
+  # only the loop holding it services the switch.
+  export SHPOOL_SESSION_NAME="other:1"
+  run_autoshpool switch foo
+  assert_status 0
+  assert_switch_file foo   # reads the keyed file (see switch_suffix)
+  if [ -e "$HOME/.autoshpool_switch" ]; then
+    echo "  FAIL: request from inside a session must not use the unkeyed file"
+    return 1
+  fi
+}
+
+test_foreign_keyed_switch_not_consumed() {
+  # A switch request keyed to another terminal's session is left for the loop
+  # that actually holds that session; this loop attaches/creates as normal.
+  echo "stolen" > "$HOME/.autoshpool_switch.foreign:1"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach -d . 1"
+  if grep -q -- "-f stolen" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: serviced a switch keyed to another session"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+  if [ "$(cat "$HOME/.autoshpool_switch.foreign:1" 2>/dev/null)" != "stolen" ]; then
+    echo "  FAIL: the foreign request should still be queued"
+    return 1
+  fi
+}
+
+test_loop_services_switch_keyed_to_its_session() {
+  # A request keyed to the session this loop holds (written by switchshpool
+  # from inside it) is serviced when the attach returns, and cleared.
+  cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
+#!/bin/bash
+echo "shpool $*" >> "$HOME/.shpool_calls"
+case "$1" in
+  list)
+    echo "name                           started_at                         status"
+    cat "$HOME/.shpool_sessions" 2>/dev/null
+    exit 0
+    ;;
+  attach)
+    call_count=$(grep -c "shpool attach" "$HOME/.shpool_calls" 2>/dev/null || echo 0)
+    if [ "$call_count" -le 1 ]; then
+      # The shell inside the just-created session "1" requests a switch.
+      echo "other" > "$HOME/.autoshpool_switch.1"
+    fi
+    exit 0
+    ;;
+esac
+SHPOOL
+  chmod +x "$TEST_TMPDIR/bin/shpool"
+
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach -d . 1"
+  assert_called "shpool attach -f other"
+  if [ -e "$HOME/.autoshpool_switch.1" ]; then
+    echo "  FAIL: the serviced request should have been cleared"
     return 1
   fi
 }
@@ -671,10 +775,18 @@ test_propagates_real_attach_failure() {
   fi
 }
 
+# The switch-file suffix for a request made by a test that exported
+# SHPOOL_SESSION_NAME: requests from inside a session are keyed to that
+# session (see autoshpool's switch_file_suffix), unkeyed otherwise.
+switch_suffix() {
+  test -n "${SHPOOL_SESSION_NAME:-}" || return 0
+  printf '.%s' "${SHPOOL_SESSION_NAME//\//_}"
+}
+
 assert_switch_file() {
   local expected="$1"
   local actual
-  actual="$(cat "$HOME/.autoshpool_switch" 2>/dev/null)"
+  actual="$(cat "$HOME/.autoshpool_switch$(switch_suffix)" 2>/dev/null)"
   if [ "$actual" != "$expected" ]; then
     echo "  FAIL: expected switch file '$expected', got '$actual'"
     echo "  output: $output"
@@ -684,17 +796,22 @@ assert_switch_file() {
 }
 
 assert_no_switch_file() {
-  if [ -e "$HOME/.autoshpool_switch" ]; then
-    echo "  FAIL: expected no switch file, but it exists: $(cat "$HOME/.autoshpool_switch")"
-    TEST_FAILED=1
-    return 1
-  fi
+  # No request may exist at all -- keyed or unkeyed.
+  local f
+  for f in "$HOME"/.autoshpool_switch*; do
+    if [ -e "$f" ] && [[ "$f" != *_pwd* ]]; then
+      echo "  FAIL: expected no switch file, but $f exists: $(cat "$f")"
+      TEST_FAILED=1
+      return 1
+    fi
+  done
+  return 0
 }
 
 assert_switch_pwd() {
   local expected="$1"
   local actual
-  actual="$(cat "$HOME/.autoshpool_switch_pwd" 2>/dev/null)"
+  actual="$(cat "$HOME/.autoshpool_switch_pwd$(switch_suffix)" 2>/dev/null)"
   if [ "$actual" != "$expected" ]; then
     echo "  FAIL: expected switch pwd '$expected', got '$actual'"
     echo "  output: $output"
@@ -704,11 +821,15 @@ assert_switch_pwd() {
 }
 
 assert_no_switch_pwd() {
-  if [ -e "$HOME/.autoshpool_switch_pwd" ]; then
-    echo "  FAIL: expected no switch pwd file, but it exists: $(cat "$HOME/.autoshpool_switch_pwd")"
-    TEST_FAILED=1
-    return 1
-  fi
+  local f
+  for f in "$HOME"/.autoshpool_switch_pwd*; do
+    if [ -e "$f" ]; then
+      echo "  FAIL: expected no switch pwd file, but $f exists: $(cat "$f")"
+      TEST_FAILED=1
+      return 1
+    fi
+  done
+  return 0
 }
 
 test_switch_resolves_path_segment() {
@@ -885,6 +1006,10 @@ run_test "preserves specific exit code from shpool attach" test_preserves_exit_c
 run_test "loop handles switch request after session ends" test_loop_handles_switch
 run_test "create path services a switch queued before the status settles" test_create_path_services_queued_switch
 run_test "create path waits for an unsettled attached status to settle" test_create_path_waits_for_unsettled_status
+run_test "reattach path retries when the disconnected session was stolen" test_reattach_busy_noop_retries
+run_test "switch request from inside a session is keyed to that session" test_switch_request_keyed_to_current_session
+run_test "a switch keyed to another session is left for its own loop" test_foreign_keyed_switch_not_consumed
+run_test "loop services a switch keyed to the session it holds" test_loop_services_switch_keyed_to_its_session
 run_test "uses SHPOOL_PREFIX for session names" test_uses_prefix
 run_test "skips existing sessions when creating" test_skips_existing_sessions
 run_test "retries with the next number when a session is already attached" test_retries_when_session_already_attached
