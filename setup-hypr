@@ -122,7 +122,7 @@ install_packages() {
             # All first-class in Arch's repos.
             sudo pacman -S --needed --noconfirm \
                 hyprland hypridle hyprlock \
-                xdg-desktop-portal-hyprland \
+                xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
                 waybar fuzzel swaync swww kanshi \
                 power-profiles-daemon \
                 pipewire wireplumber pavucontrol \
@@ -140,6 +140,7 @@ install_packages() {
             # on the rest.
             sudo apt-get install -y --install-recommends \
                 hyprland hyprland-idle hyprland-lock \
+                xdg-desktop-portal-gtk \
                 waybar fuzzel swaync kanshi \
                 power-profiles-daemon \
                 pipewire wireplumber pavucontrol \
@@ -153,7 +154,7 @@ install_packages() {
             info "Installing Wayland desktop packages (dnf)"
             sudo dnf install -y \
                 hyprland hypridle hyprlock \
-                hyprland-portal \
+                hyprland-portal xdg-desktop-portal-gtk \
                 waybar fuzzel swaync swww kanshi \
                 power-profiles-daemon \
                 pipewire wireplumber pavucontrol \
