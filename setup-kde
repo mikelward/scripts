@@ -347,11 +347,21 @@ add_app_shortcut() {
     shortcut="$2"
     # type -p fails when the helper script isn't on PATH; without the guard
     # that kills the whole script under set -e (or, with --ignore-errors,
-    # writes a broken .desktop file with an empty Exec=).
-    command="$(type -p "$name")" || {
-        warn "$name not found on PATH; skipping its launch shortcut"
-        return 0
-    }
+    # writes a broken .desktop file with an empty Exec=). During a fresh
+    # bootstrap `setup` runs this script straight out of the just-cloned
+    # scripts repo, before any login shell has put ~/scripts on PATH -- the
+    # launchers exist beside this script, so fall back to a sibling file
+    # before treating the launcher as absent.
+    command="$(type -p "$name")" || command=""
+    if test -z "$command"; then
+        script_dir="$(cd "$(dirname "$0")" && pwd)"
+        if test -x "$script_dir/$name"; then
+            command="$script_dir/$name"
+        else
+            warn "$name not found on PATH or in $script_dir; skipping its launch shortcut"
+            return 0
+        fi
+    fi
     desktop_file="shortcut-$1.desktop"
 
     desktop_dir="$HOME/.local/share/applications"
