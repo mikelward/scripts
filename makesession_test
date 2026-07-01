@@ -228,6 +228,25 @@ test_maketmux_existing_session_attaches_outside() {
     TEST_FAILED=1
   fi
 }
+test_maketmux_existing_literal_name_wins() {
+  # A session that exists verbatim under a name sanitize_session_name would
+  # rewrite (names can legally contain '#', which tmux keeps on some paths) is
+  # targeted as-is -- existing-first, sanitize-only-when-generating, like
+  # sessionlib's perform_switch_to. Without that order, maketmux 'foo#bar'
+  # would miss the existing session and create a "foo_bar" twin.
+  install_maketmux; fake_tmux_with_list
+  printf 'foo#bar\x1f1\n' > "$TEST_TMPDIR/.tmux_sessions"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" TMUX=/tmp/sock,1,0 "$BIN/maketmux" 'foo#bar' 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux switch-client -t =foo#bar"
+  if grep -q "new-session" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not create a twin of an existing literal name"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
 test_maketmux_existing_session_rejects_command() {
   # A command argument has nowhere to go when the session already exists, so
   # refuse rather than silently drop it.
@@ -382,6 +401,7 @@ run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tm
 run_test "backend: maketmux sanitizes the session name" test_maketmux_sanitizes_name
 run_test "backend: maketmux switches to an existing session" test_maketmux_existing_session_switches
 run_test "backend: maketmux attaches an existing session from outside" test_maketmux_existing_session_attaches_outside
+run_test "backend: maketmux targets an existing literal name unsanitized" test_maketmux_existing_literal_name_wins
 run_test "backend: maketmux rejects a command for an existing session" test_maketmux_existing_session_rejects_command
 run_test "backend: maketmux requires a session name" test_maketmux_requires_name
 run_test "backend: makeshpool runs shpool attach -d ." test_makeshpool_runs_shpool_attach
