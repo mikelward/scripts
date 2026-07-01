@@ -330,9 +330,11 @@ test_outside_session_steals_attached_target() {
 test_outside_session_create_opens_in_current_dir() {
   # Creating a session from outside any session attaches it directly with -d .
   # so the new shell opens in the caller's directory, not shpool's daemon dir.
+  # -f guards the classify->attach race (another terminal creating the same
+  # target first), matching the steal path, so the attach never no-ops silently.
   export SHPOOL_PREFIX="proj:"
   FZF_PICK='^create' run_cs
-  assert_called 'shpool attach -d . proj:1'
+  assert_called 'shpool attach -f -d . proj:1'
   assert_no_switch_file            # no loop to service: attach directly
 }
 

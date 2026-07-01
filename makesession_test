@@ -163,6 +163,17 @@ test_makeshpool_runs_shpool_attach() {
   set -e
   assert_called "shpool attach -d . work"
 }
+test_makeshpool_preserves_caller_dir() {
+  # shpool's --dir isn't repeatable, so a caller-supplied -d/--dir must be
+  # forwarded as-is rather than clobbered by the default -d .
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
+  fake shpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" --dir /tmp work 2>&1)"
+  status=$?
+  set -e
+  assert_called "shpool attach --dir /tmp work"
+}
 test_makeshpool_inside_session_requests_switch() {
   # Inside a session, makeshpool can't attach a second session to this terminal
   # without nesting, so it hands the new session to autoshpool's loop via
@@ -237,6 +248,7 @@ run_test "dispatch: session name passes through" test_name_passes_through
 run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_outside_tmux_creates_and_attaches
 run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tmux_switches_client
 run_test "backend: makeshpool runs shpool attach -d ." test_makeshpool_runs_shpool_attach
+run_test "backend: makeshpool preserves a caller-supplied --dir" test_makeshpool_preserves_caller_dir
 run_test "backend: makeshpool inside a session requests a switch" test_makeshpool_inside_session_requests_switch
 run_test "backend: makeshpool inside a session rejects extra args" test_makeshpool_inside_session_rejects_extra_args
 

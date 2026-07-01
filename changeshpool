@@ -100,12 +100,15 @@ backend_perform_switch() {
     fi
     return 0   # request_switch exits; not reached
   fi
-  # A create opens a brand-new session in the current directory (-d .); an
-  # existing target is stolen from any other terminal with -f, which tells
-  # shpool to detach the current client before attaching us (no manual
-  # detach-then-poll around the daemon's settle lag).
+  # -f tells shpool to detach any client already attached before attaching us,
+  # so we no longer detach-then-poll around the daemon's settle lag by hand. It
+  # is needed on the create path too: another terminal can create and attach the
+  # same target between perform_switch_to classifying it as missing and this
+  # attach, and without -f shpool would report that Busy case as a silent no-op
+  # (exit 0 without switching). A create also opens the new session in the
+  # current directory with -d . (ignored when the session already exists).
   if test "$action" = create; then
-    shpool attach -d . "$target"
+    shpool attach -f -d . "$target"
   else
     shpool attach -f "$target"
   fi
