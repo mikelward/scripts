@@ -3,7 +3,7 @@
 #
 # Usage:
 #     setup [--gui | --no-gui] [--minimal | --full] [--no-install] \
-#           [--ignore-errors] [--ssh | --no-ssh] [-h | --help]
+#           [--ignore-errors] [--ssh | --no-ssh] [--no-npm] [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -34,6 +34,10 @@
 # check skips generation when ssh-add -l lists a key (e.g. a forwarded
 # agent) or a key file already exists. Pass --ssh to generate one anyway,
 # or --no-ssh to skip it entirely.
+#
+# The distro npm/Node.js package is installed by default. Pass --no-npm to
+# skip it on machines where that package fails to install or where Node is
+# provided some other way (nvm, fnm, corepack, a standalone pnpm, etc.).
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -77,10 +81,17 @@ IGNORE_ERRORS=no
 #   no   - never generate (--no-ssh)
 SSH=auto
 
+# Whether to install the npm/Node.js package. One of:
+#   yes - install it along with the other system packages (the default)
+#   no  - skip it (--no-npm), for machines where the distro npm package
+#         fails to install or where Node is provided some other way
+#         (nvm, fnm, corepack, a standalone pnpm, etc.)
+NPM=yes
+
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--minimal | --full] [--no-install]
-             [--ignore-errors] [--ssh | --no-ssh] [-h | --help]
+             [--ignore-errors] [--ssh | --no-ssh] [--no-npm] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -96,6 +107,8 @@ Options:
                    one. Forwarded to setup-kde/macos
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
+  --no-npm         Skip the distro npm/Node.js package (for machines where it
+                   fails to install or Node is provided another way)
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
@@ -148,6 +161,12 @@ while test $# -gt 0; do
             ;;
         --no-ssh)
             SSH=no
+            ;;
+        --npm)
+            NPM=yes
+            ;;
+        --no-npm)
+            NPM=no
             ;;
         -h|--help)
             usage
@@ -332,7 +351,6 @@ install_packages() {
                 jq \
                 mercurial \
                 micro \
-                npm \
                 p7zip-full \
                 python3 \
                 python3-pip \
@@ -341,6 +359,10 @@ install_packages() {
                 shellcheck \
                 vim \
                 zsh
+            if test "$NPM" = yes; then
+                info "Installing npm"
+                sudo apt-get install -y --install-recommends npm
+            fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing graphical packages"
                 sudo apt-get install -y --install-recommends \
@@ -368,7 +390,6 @@ install_packages() {
                 jq \
                 mercurial \
                 micro \
-                npm \
                 p7zip \
                 p7zip-plugins \
                 python3 \
@@ -377,6 +398,10 @@ install_packages() {
                 ShellCheck \
                 vim \
                 zsh
+            if test "$NPM" = yes; then
+                info "Installing npm"
+                sudo dnf install -y npm
+            fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing graphical packages"
                 sudo dnf install -y \
@@ -404,13 +429,16 @@ install_packages() {
                 jq \
                 mercurial \
                 micro \
-                node \
                 p7zip \
                 python3 \
                 ripgrep \
                 shellcheck \
                 vim \
                 zsh
+            if test "$NPM" = yes; then
+                info "Installing Node.js (npm)"
+                brew install node
+            fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
             # Linux paths which keep adb/android-tools as core packages.
