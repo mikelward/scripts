@@ -2,7 +2,7 @@
 # Configure a Hyprland-based Wayland desktop (KDE replacement).
 #
 # The dotfiles themselves live in the conf repo (config/hypr, config/waybar,
-# config/fuzzel, config/swaync, config/kanshi) and are installed by conf's
+# config/fuzzel, config/swaync) and are installed by conf's
 # `make install`. The Wayland desktop *packages* are installed by the top-level
 # `setup` (alongside the KDE packages). This script, like setup-kde, handles the
 # parts that are neither dotfiles nor packages:

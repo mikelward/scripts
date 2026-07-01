@@ -8,4 +8,6 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
+	./setup_test
 	./setup-hypr_test
+	./setup-kde_test

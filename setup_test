@@ -1,0 +1,125 @@
+#!/bin/sh
+# Tests for setup.
+#
+# The full bootstrap can't run in CI (it installs packages and edits system
+# config), so these are argument-parsing checks plus static checks on the
+# script source -- notably that the Hyprland package lists use real distro
+# package names: apt/dnf abort the whole transaction on one unknown name,
+# which would silently drop every other desktop package on the same line.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SETUP="$SCRIPT_DIR/setup"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+run_setup() {
+    set +e
+    output="$("$SETUP" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_source_contains() {
+    if ! grep -q "$1" "$SETUP"; then
+        echo "  FAIL: setup does not contain '$1'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_source_not_contains() {
+    if grep -q "$1" "$SETUP"; then
+        echo "  FAIL: setup contains '$1'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_setup --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup"
+}
+
+test_h_flag() {
+    run_setup -h
+    assert_status 0 &&
+    assert_output_contains "Usage: setup"
+}
+
+test_unknown_option() {
+    run_setup --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- Hyprland package names ---
+
+# The idle/lock daemons are named after the upstream projects (hypridle,
+# hyprlock) on both Debian and Fedora; "hyprland-idle"/"hyprland-lock" don't
+# exist anywhere and make apt/dnf fail the whole install line.
+test_hypr_idle_lock_package_names() {
+    assert_source_contains "hypridle" &&
+    assert_source_contains "hyprlock" &&
+    assert_source_not_contains "hyprland-idle" &&
+    assert_source_not_contains "hyprland-lock"
+}
+
+# Fedora's Hyprland portal package is xdg-desktop-portal-hyprland (as the
+# conf repo's hypr README documents); "hyprland-portal" doesn't exist.
+test_hypr_portal_package_name() {
+    assert_source_contains "xdg-desktop-portal-hyprland" &&
+    assert_source_not_contains '[^-]hyprland-portal'
+}
+
+run_test "help flag" test_help_flag
+run_test "-h flag" test_h_flag
+run_test "unknown option errors" test_unknown_option
+run_test "hypridle/hyprlock package names are the upstream ones" \
+    test_hypr_idle_lock_package_names
+run_test "Hyprland portal package is xdg-desktop-portal-hyprland" \
+    test_hypr_portal_package_name
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
