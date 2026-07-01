@@ -404,6 +404,10 @@ install_packages() {
                     policykit-1-gnome \
                     fonts-jetbrains-mono \
                     || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
+                # yazi (terminal file manager) is often not in the default repos;
+                # install it separately so its absence doesn't block the rest.
+                sudo apt-get install -y --install-recommends yazi \
+                    || warn "yazi unavailable via apt; install with 'cargo install --locked yazi-fm yazi-cli'"
             fi
             ;;
         redhat)
@@ -460,6 +464,10 @@ install_packages() {
                     polkit-gnome \
                     jetbrains-mono-fonts \
                     || warn "some Hyprland packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
+                # yazi (terminal file manager) may need a COPR; install it
+                # separately so its absence doesn't block the rest.
+                sudo dnf install -y yazi \
+                    || warn "yazi unavailable via dnf; install with 'cargo install --locked yazi-fm yazi-cli'"
             fi
             ;;
         macos)
