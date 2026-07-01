@@ -400,6 +400,7 @@ install_packages() {
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
+                    grim slurp wl-clipboard playerctl \
                     network-manager-gnome blueman \
                     policykit-1-gnome \
                     fonts-jetbrains-mono \
@@ -460,6 +461,7 @@ install_packages() {
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
+                    grim slurp wl-clipboard playerctl \
                     network-manager-applet blueman \
                     polkit-gnome \
                     jetbrains-mono-fonts \
