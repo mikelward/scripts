@@ -122,6 +122,10 @@ install_krohnkite() {
     # hand -- but "task" can also be Taskwarrior, so check the version
     # banner before trusting it. Otherwise fall back to make, then pnpm
     # (preferred over npm when available), then npm.
+    #
+    # The make path is only used when npm is present: Krohnkite's Makefile
+    # shells out to npm internally, so on a pnpm-only machine we must skip
+    # make and let the pnpm branch build it directly.
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
         go-task package
@@ -129,7 +133,7 @@ install_krohnkite() {
             && task --version 2>/dev/null | grep -q '^Task version'; then
         info "Building Krohnkite with task"
         task package
-    elif test -f Makefile; then
+    elif test -f Makefile && command -v npm >/dev/null 2>&1; then
         info "Building Krohnkite with make"
         make
     elif command -v pnpm >/dev/null 2>&1; then
