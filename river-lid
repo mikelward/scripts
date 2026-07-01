@@ -34,15 +34,18 @@ if ! command -v wlr-randr >/dev/null 2>&1; then
 	exit 0
 fi
 
-# Locate the ACPI lid state file. No lid (desktop / unusual firmware)
-# means there is nothing to watch -- exit cleanly.
-lid_state_file=""
-for f in /proc/acpi/button/lid/*/state; do
-	test -r "$f" || continue
-	lid_state_file="$f"
-	break
-done
+# Locate the ACPI lid state file. RIVER_LID_STATE_FILE overrides discovery
+# (used by the tests). No lid (desktop / unusual firmware) means there is
+# nothing to watch -- exit cleanly.
+lid_state_file="${RIVER_LID_STATE_FILE:-}"
 if test -z "$lid_state_file"; then
+	for f in /proc/acpi/button/lid/*/state; do
+		test -r "$f" || continue
+		lid_state_file="$f"
+		break
+	done
+fi
+if test -z "$lid_state_file" || ! test -r "$lid_state_file"; then
 	printf 'river-lid: no ACPI lid state file; nothing to watch\n' >&2
 	exit 0
 fi
@@ -53,12 +56,18 @@ lid_status() {
 	awk '{print $NF}' "$lid_state_file" 2>/dev/null
 }
 
-# True if any output other than the internal panel is connected. wlr-randr
-# lists each output on a non-indented line beginning with its name; modes
-# and properties are indented beneath it.
+# True if any output other than the internal panel is connected AND
+# enabled (mapped into compositor space). A connected-but-disabled head
+# must NOT count: blanking the internal panel when the only other output
+# is disabled would leave the session with no visible screen.
+#
+# wlr-randr lists each output on a non-indented line beginning with its
+# name, then indented properties beneath it, including "Enabled: yes|no".
+# Track the current output name and only flag an enabled, non-internal one.
 external_present() {
 	wlr-randr 2>/dev/null | awk -v internal="$internal" '
-		/^[^[:space:]]/ && $1 != internal { found = 1 }
+		/^[^[:space:]]/ { name = $1; next }
+		$1 == "Enabled:" && $2 == "yes" && name != internal { found = 1 }
 		END { exit found ? 0 : 1 }
 	'
 }
@@ -83,6 +92,9 @@ while true; do
 		set_internal "$desired"
 		last_applied="$desired"
 	fi
+
+	# RIVER_LID_ONESHOT runs a single decision cycle then exits (tests).
+	test -n "${RIVER_LID_ONESHOT:-}" && break
 
 	sleep "$poll_seconds"
 done

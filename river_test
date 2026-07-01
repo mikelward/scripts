@@ -63,9 +63,15 @@ run_test() {
 	setup
 	# Run the test in the current shell so its assertions update
 	# TEST_FAILED. Using it as an `if` condition disables `set -e` inside,
-	# so a failing command mid-test doesn't abort the whole run.
+	# so a failing command mid-test doesn't abort the whole run. A nonzero
+	# return from the function ITSELF (e.g. a failing `sh -n` that is the
+	# function's last command and never touches TEST_FAILED) must also fail
+	# the test -- otherwise broken scripts would still print "ok".
 	TEST_FAILED=0
-	if "$func"; then :; fi
+	if "$func"; then :; else
+		echo "  FAIL: $func returned nonzero ($?)"
+		TEST_FAILED=1
+	fi
 	teardown
 	if test "$TEST_FAILED" -eq 0; then
 		echo "ok $TESTS_RUN $name"
@@ -131,8 +137,10 @@ test_dark_palette_written() {
 }
 test_theme_css_defines_palette_names() {
 	"$RIVER_THEME" apply dark >/dev/null 2>&1
-	for name in bg bg-alt fg muted accent alert; do
-		assert_file_contains "$XDG_CONFIG_HOME/waybar/theme.css" "@define-color $name"
+	# Note: not named `name` -- that would clobber run_test's `local name`
+	# (bash dynamic scoping) and mislabel this test in the output.
+	for cname in bg bg-alt fg muted accent alert; do
+		assert_file_contains "$XDG_CONFIG_HOME/waybar/theme.css" "@define-color $cname"
 	done
 }
 
@@ -178,6 +186,78 @@ test_river_lid_noop_without_wlr_randr() {
 	assert_status 0
 }
 
+# Install a fake wlr-randr: a query (no --output) prints the fixture; a
+# set (--output ... --off/--on) is logged so we can assert what happened.
+make_fake_wlr() {
+	export WLR_FIXTURE="$TEST_TMPDIR/wlr_fixture"
+	export WLR_LOG="$TEST_TMPDIR/wlr_log"
+	: >"$WLR_LOG"
+	printf '%s' "$1" >"$WLR_FIXTURE"
+	cat >"$TEST_TMPDIR/bin/wlr-randr" <<'FAKE'
+#!/bin/sh
+if test "$1" = "--output"; then
+	echo "wlr-randr $*" >> "$WLR_LOG"
+	exit 0
+fi
+cat "$WLR_FIXTURE"
+FAKE
+	chmod +x "$TEST_TMPDIR/bin/wlr-randr"
+}
+
+run_lid_oneshot() {
+	local lidfile="$TEST_TMPDIR/lidstate"
+	printf 'state:      %s\n' "$1" >"$lidfile"
+	RIVER_LID_ONESHOT=1 RIVER_LID_STATE_FILE="$lidfile" \
+		"$RIVER_LID" eDP-1 >/dev/null 2>&1
+}
+
+# External connected but DISABLED + lid closed: must NOT blank the internal
+# panel (that would leave no visible screen).
+test_river_lid_keeps_internal_when_external_disabled() {
+	make_fake_wlr 'eDP-1 "Internal"
+  Enabled: yes
+HDMI-A-1 "External"
+  Enabled: no
+'
+	run_lid_oneshot closed
+	if grep -q -- "--off" "$WLR_LOG"; then
+		echo "  FAIL: internal panel turned off despite no enabled external"
+		TEST_FAILED=1
+	fi
+	if ! grep -q -- "--on" "$WLR_LOG"; then
+		echo "  FAIL: internal panel not kept on"
+		TEST_FAILED=1
+	fi
+}
+
+# External connected AND enabled + lid closed: blank the internal panel.
+test_river_lid_blanks_internal_when_external_enabled() {
+	make_fake_wlr 'eDP-1 "Internal"
+  Enabled: yes
+HDMI-A-1 "External"
+  Enabled: yes
+'
+	run_lid_oneshot closed
+	if ! grep -q -- "--off" "$WLR_LOG"; then
+		echo "  FAIL: internal panel not turned off with an enabled external"
+		TEST_FAILED=1
+	fi
+}
+
+# Lid open with an enabled external: internal stays on.
+test_river_lid_keeps_internal_when_open() {
+	make_fake_wlr 'eDP-1 "Internal"
+  Enabled: yes
+HDMI-A-1 "External"
+  Enabled: yes
+'
+	run_lid_oneshot open
+	if grep -q -- "--off" "$WLR_LOG"; then
+		echo "  FAIL: internal panel turned off while lid open"
+		TEST_FAILED=1
+	fi
+}
+
 # --- setup-river help -------------------------------------------------------
 
 test_setup_river_help() {
@@ -211,6 +291,9 @@ run_test "mode subcommand reports state" test_mode_subcommand_reports_state
 run_test "apply degrades without compositor tools" test_apply_succeeds_without_compositor_tools
 run_test "river-lid requires an output name" test_river_lid_requires_output_name
 run_test "river-lid no-ops without wlr-randr" test_river_lid_noop_without_wlr_randr
+run_test "river-lid keeps internal on when external disabled" test_river_lid_keeps_internal_when_external_disabled
+run_test "river-lid blanks internal when external enabled" test_river_lid_blanks_internal_when_external_enabled
+run_test "river-lid keeps internal on while lid open" test_river_lid_keeps_internal_when_open
 run_test "setup-river --help prints usage" test_setup_river_help
 
 echo
