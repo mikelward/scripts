@@ -414,6 +414,11 @@ install_packages() {
                 # install it separately so its absence doesn't block the rest.
                 sudo apt-get install -y --install-recommends yazi \
                     || warn "yazi unavailable via apt; install with 'cargo install --locked yazi-fm yazi-cli'"
+                # uwsm (opt-in Universal Wayland Session Manager). Installed so
+                # it's available; it does NOT change how you log in unless you
+                # pick the uwsm session -- see conf/config/hypr/README.md.
+                sudo apt-get install -y --install-recommends uwsm \
+                    || warn "uwsm unavailable via apt (optional; skip)"
             fi
             ;;
         redhat)
@@ -480,6 +485,11 @@ install_packages() {
                 # separately so its absence doesn't block the rest.
                 sudo dnf install -y yazi \
                     || warn "yazi unavailable via dnf; install with 'cargo install --locked yazi-fm yazi-cli'"
+                # uwsm (opt-in Universal Wayland Session Manager). Installed so
+                # it's available; it does NOT change how you log in unless you
+                # pick the uwsm session -- see conf/config/hypr/README.md.
+                sudo dnf install -y uwsm \
+                    || warn "uwsm unavailable via dnf (optional; skip)"
             fi
             ;;
         macos)
