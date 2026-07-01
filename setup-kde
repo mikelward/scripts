@@ -141,20 +141,33 @@ install_krohnkite() {
             make
         elif command -v pnpm >/dev/null 2>&1; then
             info "Building Krohnkite with make (npm shimmed to pnpm)"
-            # Krohnkite's Makefile only runs "npm install --save-dev" and
-            # "npm run tsc"; map install to "pnpm install" (which pulls dev
-            # deps too) and forward everything else straight to pnpm.
+            # Krohnkite's Makefile runs "npm install --save-dev" and
+            # "npm run tsc --". Write a small npm->pnpm shim: map install
+            # to "pnpm install" (which pulls dev deps too) and, for run,
+            # drop npm's "--" separator -- pnpm would forward a bare "--"
+            # to the script and break tsc (TS5023).
             shimdir="$KROHNKITE_DIR/.npm-shim"
             mkdir -p "$shimdir"
-            # The shim body is deliberately literal (it runs later, not now).
-            # shellcheck disable=SC2016
-            {
-                printf '%s\n' '#!/bin/sh'
-                printf '%s\n' 'case "$1" in'
-                printf '%s\n' '    install|i|ci) exec pnpm install ;;'
-                printf '%s\n' '    *) exec pnpm "$@" ;;'
-                printf '%s\n' 'esac'
-            } > "$shimdir/npm"
+            cat > "$shimdir/npm" <<'SHIM'
+#!/bin/sh
+case "$1" in
+    install|i|ci)
+        exec pnpm install
+        ;;
+    run)
+        # "npm run <s> -- <args>" -> "pnpm run <s> <args>": strip npm's
+        # "--" separator so pnpm does not pass it on to the script.
+        shift
+        script=${1:-}
+        [ "$#" -gt 0 ] && shift
+        [ "${1:-}" = "--" ] && shift
+        exec pnpm run "$script" "$@"
+        ;;
+    *)
+        exec pnpm "$@"
+        ;;
+esac
+SHIM
             chmod +x "$shimdir/npm"
             PATH="$shimdir:$PATH" make
         else
