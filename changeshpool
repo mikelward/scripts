@@ -52,7 +52,10 @@ backend_sanitize_name()  { printf '%s' "$1"; }   # shpool keeps names verbatim
 
 backend_session_rows() {
   # "name<TAB>state<TAB>cwd<TAB>command" per session: one shpool list for the
-  # statuses, one /proc walk for the live shells' cwd/command.
+  # statuses, one /proc walk for the live shells' cwd/command. NF == 3 matches
+  # get_shpool_sessions: a session with an empty name lists with only 2
+  # columns, and $1 would be its start time -- a bogus picker row for a
+  # session that can't be targeted by name anyway.
   local listing
   listing="$(shpool list 2>/dev/null)"
   declare -A spid scwd
@@ -68,7 +71,7 @@ backend_session_rows() {
     state="$(session_status "$s" "$listing")"
     cmd="$(session_command "${spid[$s]}")"
     printf '%s\t%s\t%s\t%s\n' "$s" "$state" "${scwd[$s]}" "$cmd"
-  done < <(awk 'NR > 1 && NF >= 2 { print $1 }' <<<"$listing")
+  done < <(awk 'NR > 1 && NF == 3 { print $1 }' <<<"$listing")
 }
 
 backend_describe() {
