@@ -10,7 +10,8 @@
 # dance autotmux's do_switch uses). Target the switch with tmux's exact "=name"
 # form so a name that is a prefix of another session can't be matched instead.
 # Outside tmux there is no client to switch, so just create-and-attach. tmux
-# opens the session in the caller's PWD natively (no SHPOOL_INITIAL_PWD twin).
+# opens the session in the caller's PWD natively (makeshpool needs `shpool
+# attach -d .` for the same effect).
 if test -n "$TMUX"; then
   tmux new-session -d -s "$@" && exec tmux switch-client -t "=$1"
   exit $?

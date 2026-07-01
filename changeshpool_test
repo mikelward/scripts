@@ -21,8 +21,8 @@ setup() {
 
   # Fake shpool: list serves the header plus .shpool_sessions rows; attach
   # records the call (and honours $SHPOOL_ATTACH_EXIT); detach records the call
-  # and rewrites the named session's row to "disconnected" so the steal-then-
-  # poll path in changeshpool sees the session leave the "attached" state.
+  # and rewrites the named session's row to "disconnected" (still used by the
+  # request_switch handoff, which detaches the current session).
   cat > "$TEST_TMPDIR/bin/shpool" <<'SHPOOL'
 #!/bin/bash
 echo "shpool $*" >> "$HOME/.shpool_calls"
@@ -79,7 +79,7 @@ VCS
 
   touch "$TEST_TMPDIR/.shrc.vcs"
 
-  unset SHPOOL_SESSION_NAME SHPOOL_PREFIX SHPOOL_ATTACH_EXIT SHPOOL_INITIAL_PWD
+  unset SHPOOL_SESSION_NAME SHPOOL_PREFIX SHPOOL_ATTACH_EXIT
   unset FZF_QUERY FZF_PICK FZF_EXIT
   rm -f "$TEST_TMPDIR"/.autoshpool_switch "$TEST_TMPDIR"/.autoshpool_switch_pwd
   rm -f "$TEST_TMPDIR"/.shpool_calls "$TEST_TMPDIR"/.shpool_sessions
@@ -312,19 +312,28 @@ test_typed_new_name_requests_switch() {
 test_outside_session_attaches_with_steal() {
   add_full target:1 disconnected
   FZF_PICK=$'^switch\ttarget:1\t' run_cs
-  assert_called 'shpool detach target:1'   # steal from any other terminal
-  assert_called 'shpool attach target:1'
-  assert_no_switch_file                     # no loop to service: attach directly
+  assert_called 'shpool attach -f target:1'   # -f steals from any other terminal
+  assert_not_called 'shpool detach'           # -f detaches for us, no manual step
+  assert_no_switch_file                        # no loop to service: attach directly
 }
 
 test_outside_session_steals_attached_target() {
   # When the target is currently attached elsewhere, the steal still lands:
-  # detach asks the other client to release, and the poll waits for the
-  # session to leave the "attached" state before attach runs.
+  # shpool attach -f detaches the other client before attaching us, so there is
+  # no manual detach-then-poll dance around the daemon's settle lag.
   add_full target:1 attached
   FZF_PICK=$'^switch\ttarget:1\t' run_cs
-  assert_called 'shpool detach target:1'
-  assert_called 'shpool attach target:1'
+  assert_called 'shpool attach -f target:1'
+  assert_not_called 'shpool detach'
+}
+
+test_outside_session_create_opens_in_current_dir() {
+  # Creating a session from outside any session attaches it directly with -d .
+  # so the new shell opens in the caller's directory, not shpool's daemon dir.
+  export SHPOOL_PREFIX="proj:"
+  FZF_PICK='^create' run_cs
+  assert_called 'shpool attach -d . proj:1'
+  assert_no_switch_file            # no loop to service: attach directly
 }
 
 test_esc_cancels_cleanly() {
@@ -418,6 +427,7 @@ run_test "pick: create entry requests the auto name with pwd" test_pick_create_e
 run_test "pick: typed new name requests a switch with pwd" test_typed_new_name_requests_switch
 run_test "pick: outside a session attaches with steal" test_outside_session_attaches_with_steal
 run_test "pick: outside a session steals an attached target" test_outside_session_steals_attached_target
+run_test "pick: outside a session creates in the current dir" test_outside_session_create_opens_in_current_dir
 run_test "pick: ESC cancels cleanly" test_esc_cancels_cleanly
 run_test "pick: fzf failure propagates as an error" test_picker_error_propagates
 run_test "choose: prints the chosen name without switching" test_choose_prints_name_only

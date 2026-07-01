@@ -9,7 +9,8 @@
 #     case without a real multiplexer.
 #   * backend behaviour - the real maketmux / makeshpool are run with a fake
 #     tmux / shpool, asserting the exact command each forwards and that
-#     makeshpool stamps SHPOOL_INITIAL_PWD with the caller's directory.
+#     makeshpool passes `shpool attach -d .` to open the session in the caller's
+#     directory.
 
 set -e
 
@@ -152,28 +153,15 @@ test_maketmux_inside_tmux_switches_client() {
   assert_called "tmux switch-client -t =work"
 }
 test_makeshpool_runs_shpool_attach() {
+  # makeshpool forwards to `shpool attach -d . <name>`: -d . opens the freshly
+  # created session in the caller's directory rather than shpool's daemon dir.
   install_script makeshpool; install_script autoshpool; install_script sessionlib
   fake shpool
   set +e
   output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work 2>&1)"
   status=$?
   set -e
-  assert_called "shpool attach work"
-}
-test_makeshpool_stamps_initial_pwd() {
-  install_script makeshpool; install_script autoshpool; install_script sessionlib
-  # record the stamped SHPOOL_INITIAL_PWD: a freshly created shpool session
-  # must open in the caller's dir, not the outer shell's startup dir.
-  cat > "$BIN/shpool" <<EOF
-#!/bin/bash
-echo "shpool \$* pwd=\$SHPOOL_INITIAL_PWD" >> "$CALLS"
-EOF
-  chmod +x "$BIN/shpool"
-  # run with the caller's cwd set to $TEST_TMPDIR so \$PWD is deterministic.
-  set +e
-  ( cd "$TEST_TMPDIR" && env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/makeshpool" work )
-  set -e
-  assert_called "shpool attach work pwd=$TEST_TMPDIR"
+  assert_called "shpool attach -d . work"
 }
 test_makeshpool_inside_session_requests_switch() {
   # Inside a session, makeshpool can't attach a second session to this terminal
@@ -248,8 +236,7 @@ run_test "dispatch: no backend errors out" test_no_backend_errors
 run_test "dispatch: session name passes through" test_name_passes_through
 run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_outside_tmux_creates_and_attaches
 run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tmux_switches_client
-run_test "backend: makeshpool runs shpool attach" test_makeshpool_runs_shpool_attach
-run_test "backend: makeshpool stamps SHPOOL_INITIAL_PWD" test_makeshpool_stamps_initial_pwd
+run_test "backend: makeshpool runs shpool attach -d ." test_makeshpool_runs_shpool_attach
 run_test "backend: makeshpool inside a session requests a switch" test_makeshpool_inside_session_requests_switch
 run_test "backend: makeshpool inside a session rejects extra args" test_makeshpool_inside_session_rejects_extra_args
 
