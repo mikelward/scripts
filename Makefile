@@ -8,3 +8,4 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
+	./river_test

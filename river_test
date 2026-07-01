@@ -1,0 +1,218 @@
+#!/bin/bash
+# Tests for the river desktop helper scripts: river-theme, river-lid,
+# setup-river.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+RIVER_THEME="$SCRIPT_DIR/river-theme"
+RIVER_LID="$SCRIPT_DIR/river-lid"
+SETUP_RIVER="$SCRIPT_DIR/setup-river"
+
+setup() {
+	TEST_TMPDIR="$(mktemp -d)"
+	export HOME="$TEST_TMPDIR"
+	export XDG_CONFIG_HOME="$TEST_TMPDIR/.config"
+	export XDG_CACHE_HOME="$TEST_TMPDIR/.cache"
+	# Config dirs the css writer targets.
+	mkdir -p "$XDG_CONFIG_HOME/waybar" "$XDG_CONFIG_HOME/swaync"
+	# Isolated PATH: no riverctl/waybar/swaync-client, so river-theme must
+	# degrade gracefully. Keep coreutils available.
+	mkdir -p "$TEST_TMPDIR/bin"
+	export PATH="$TEST_TMPDIR/bin:/usr/bin:/bin"
+	unset RIVER_THEME_FORCE_HOUR
+}
+
+teardown() {
+	rm -rf "$TEST_TMPDIR"
+}
+
+# --- assertions -------------------------------------------------------------
+
+assert_status() {
+	local expected="$1"
+	if test "$status" -ne "$expected"; then
+		echo "  FAIL: expected exit status $expected, got $status"
+		TEST_FAILED=1
+	fi
+}
+
+assert_equals() {
+	local expected="$1" actual="$2"
+	if test "$expected" != "$actual"; then
+		echo "  FAIL: expected '$expected', got '$actual'"
+		TEST_FAILED=1
+	fi
+}
+
+assert_file_contains() {
+	local file="$1" needle="$2"
+	if ! grep -qF "$needle" "$file" 2>/dev/null; then
+		echo "  FAIL: expected $file to contain '$needle'"
+		TEST_FAILED=1
+	fi
+}
+
+run_test() {
+	local name="$1" func="$2"
+	TESTS_RUN=$((TESTS_RUN + 1))
+	setup
+	# Run the test in the current shell so its assertions update
+	# TEST_FAILED. Using it as an `if` condition disables `set -e` inside,
+	# so a failing command mid-test doesn't abort the whole run.
+	TEST_FAILED=0
+	if "$func"; then :; fi
+	teardown
+	if test "$TEST_FAILED" -eq 0; then
+		echo "ok $TESTS_RUN $name"
+		TESTS_PASSED=$((TESTS_PASSED + 1))
+	else
+		echo "not ok $TESTS_RUN $name"
+		TESTS_FAILED=$((TESTS_FAILED + 1))
+	fi
+}
+
+# --- syntax checks ----------------------------------------------------------
+
+test_river_theme_syntax() {
+	sh -n "$RIVER_THEME"
+}
+test_river_lid_syntax() {
+	sh -n "$RIVER_LID"
+}
+test_setup_river_syntax() {
+	bash -n "$SETUP_RIVER"
+}
+
+# --- mode selection ---------------------------------------------------------
+
+test_mode_midday_is_light() {
+	RIVER_THEME_FORCE_HOUR=12 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "light" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+test_mode_7am_is_light() {
+	RIVER_THEME_FORCE_HOUR=7 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "light" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+test_mode_7pm_is_dark() {
+	# 19:00 is the boundary -- dark starts here.
+	RIVER_THEME_FORCE_HOUR=19 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "dark" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+test_mode_6am_is_dark() {
+	RIVER_THEME_FORCE_HOUR=6 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "dark" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+test_mode_late_night_is_dark() {
+	RIVER_THEME_FORCE_HOUR=23 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "dark" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+# Leading-zero hours must not be read as octal.
+test_mode_0900_is_light() {
+	RIVER_THEME_FORCE_HOUR=09 "$RIVER_THEME" apply >/dev/null 2>&1
+	assert_equals "light" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+
+# --- palette generation -----------------------------------------------------
+
+test_light_palette_written() {
+	"$RIVER_THEME" apply light >/dev/null 2>&1
+	assert_file_contains "$XDG_CONFIG_HOME/waybar/theme.css" "#2c6cbf"
+	assert_file_contains "$XDG_CONFIG_HOME/swaync/theme.css" "#2c6cbf"
+}
+test_dark_palette_written() {
+	"$RIVER_THEME" apply dark >/dev/null 2>&1
+	assert_file_contains "$XDG_CONFIG_HOME/waybar/theme.css" "#ffb52a"
+	assert_file_contains "$XDG_CONFIG_HOME/swaync/theme.css" "#ffb52a"
+}
+test_theme_css_defines_palette_names() {
+	"$RIVER_THEME" apply dark >/dev/null 2>&1
+	for name in bg bg-alt fg muted accent alert; do
+		assert_file_contains "$XDG_CONFIG_HOME/waybar/theme.css" "@define-color $name"
+	done
+}
+
+# --- toggle -----------------------------------------------------------------
+
+test_toggle_dark_to_light() {
+	"$RIVER_THEME" apply dark >/dev/null 2>&1
+	"$RIVER_THEME" toggle >/dev/null 2>&1
+	assert_equals "light" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+test_toggle_light_to_dark() {
+	"$RIVER_THEME" apply light >/dev/null 2>&1
+	"$RIVER_THEME" toggle >/dev/null 2>&1
+	assert_equals "dark" "$(cat "$XDG_CACHE_HOME/river-theme/mode")"
+}
+
+# --- mode subcommand --------------------------------------------------------
+
+test_mode_subcommand_reports_state() {
+	"$RIVER_THEME" apply light >/dev/null 2>&1
+	assert_equals "light" "$("$RIVER_THEME" mode)"
+}
+
+# --- graceful degradation (no riverctl/waybar on PATH) ----------------------
+
+test_apply_succeeds_without_compositor_tools() {
+	"$RIVER_THEME" apply dark >/dev/null 2>&1
+	status=$?
+	assert_status 0
+}
+
+# --- river-lid arg handling -------------------------------------------------
+
+test_river_lid_requires_output_name() {
+	"$RIVER_LID" >/dev/null 2>&1
+	status=$?
+	assert_status 2
+}
+test_river_lid_noop_without_wlr_randr() {
+	# wlr-randr absent on the isolated PATH -> clean no-op exit 0.
+	"$RIVER_LID" eDP-1 >/dev/null 2>&1
+	status=$?
+	assert_status 0
+}
+
+# --- setup-river help -------------------------------------------------------
+
+test_setup_river_help() {
+	out="$("$SETUP_RIVER" --help 2>&1)"
+	status=$?
+	assert_status 0
+	case "$out" in
+	*"Configure a river-based Wayland desktop"*) : ;;
+	*)
+		echo "  FAIL: --help missing usage text"
+		TEST_FAILED=1
+		;;
+	esac
+}
+
+run_test "river-theme has valid sh syntax" test_river_theme_syntax
+run_test "river-lid has valid sh syntax" test_river_lid_syntax
+run_test "setup-river has valid bash syntax" test_setup_river_syntax
+run_test "midday is light mode" test_mode_midday_is_light
+run_test "07:00 is light mode" test_mode_7am_is_light
+run_test "19:00 is dark mode" test_mode_7pm_is_dark
+run_test "06:00 is dark mode" test_mode_6am_is_dark
+run_test "late night is dark mode" test_mode_late_night_is_dark
+run_test "09:00 is light mode (no octal parse)" test_mode_0900_is_light
+run_test "light palette written to theme.css" test_light_palette_written
+run_test "dark palette written to theme.css" test_dark_palette_written
+run_test "theme.css defines all palette names" test_theme_css_defines_palette_names
+run_test "toggle dark -> light" test_toggle_dark_to_light
+run_test "toggle light -> dark" test_toggle_light_to_dark
+run_test "mode subcommand reports state" test_mode_subcommand_reports_state
+run_test "apply degrades without compositor tools" test_apply_succeeds_without_compositor_tools
+run_test "river-lid requires an output name" test_river_lid_requires_output_name
+run_test "river-lid no-ops without wlr-randr" test_river_lid_noop_without_wlr_randr
+run_test "setup-river --help prints usage" test_setup_river_help
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
