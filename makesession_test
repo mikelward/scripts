@@ -25,7 +25,13 @@ setup() {
   CALLS="$TEST_TMPDIR/calls"
   mkdir -p "$BIN"
   : > "$CALLS"
-  ln -s "$(command -v dirname)" "$BIN/dirname"
+  # dirname for the dispatchers; sed/cut/grep for maketmux's session_exists
+  # lookup (via autotmux's list_tmux_sessions); cat for the fake tmux's
+  # list-sessions fixture.
+  local tool
+  for tool in dirname sed cut grep cat; do
+    ln -s "$(command -v $tool)" "$BIN/$tool"
+  done
 }
 
 teardown() {
@@ -116,6 +122,13 @@ test_fallback_shpool_installed() {
   run makesession
   assert_called "makeshpool "
 }
+test_fallback_prefers_shpool() {
+  # With both installed and no $SESSION_BACKEND, the fallback prefers shpool --
+  # the family default, matching the shell session_backend helper.
+  install_script makesession; fake maketmux; fake makeshpool; fake tmux; fake shpool
+  run makesession
+  assert_called "makeshpool "
+}
 test_no_backend_errors() {
   install_script makesession; fake maketmux; fake makeshpool
   run makesession
@@ -133,8 +146,28 @@ test_name_passes_through() {
 
 # --- backend behaviour ---
 
+install_maketmux() {
+  # maketmux sources autotmux (for sanitize_session_name / session_exists),
+  # which sources sessionlib.
+  install_script maketmux; install_script autotmux; install_script sessionlib
+}
+
+# A fake tmux that records its calls and answers list-sessions with the rows in
+# $TEST_TMPDIR/.tmux_sessions ("name<US>attached" per line, see autotmux's
+# list_tmux_sessions format).
+fake_tmux_with_list() {
+  cat > "$BIN/tmux" <<EOF
+#!/bin/bash
+echo "tmux \$*" >> "$CALLS"
+if [ "\$1" = list-sessions ]; then
+  cat "$TEST_TMPDIR/.tmux_sessions" 2>/dev/null
+fi
+EOF
+  chmod +x "$BIN/tmux"
+}
+
 test_maketmux_outside_tmux_creates_and_attaches() {
-  install_script maketmux; fake tmux
+  install_maketmux; fake tmux
   set +e
   output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" work 2>&1)"
   status=$?
@@ -144,13 +177,81 @@ test_maketmux_outside_tmux_creates_and_attaches() {
 test_maketmux_inside_tmux_switches_client() {
   # Inside tmux, new-session can't attach to the current terminal, so maketmux
   # creates the session detached and switches the existing client to it.
-  install_script maketmux; fake tmux
+  install_maketmux; fake tmux
   set +e
   output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" TMUX=/tmp/sock,1,0 "$BIN/maketmux" work 2>&1)"
   status=$?
   set -e
   assert_called "tmux new-session -d -s work"
   assert_called "tmux switch-client -t =work"
+}
+test_maketmux_sanitizes_name() {
+  # tmux rewrites '.' out of names at creation ("foo.bar" stores "foo_bar"), so
+  # maketmux must create and target the sanitized name -- otherwise the
+  # switch-client to "=foo.bar" fails against the stored "foo_bar".
+  install_maketmux; fake tmux
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" TMUX=/tmp/sock,1,0 "$BIN/maketmux" foo.bar 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux new-session -d -s foo_bar"
+  assert_called "tmux switch-client -t =foo_bar"
+}
+test_maketmux_existing_session_switches() {
+  # An existing session is moved to, not re-created (tmux would fail with
+  # "duplicate session") -- mirroring makeshpool, where shpool attach
+  # attaches-or-creates.
+  install_maketmux; fake_tmux_with_list
+  printf 'work\x1f1\n' > "$TEST_TMPDIR/.tmux_sessions"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" TMUX=/tmp/sock,1,0 "$BIN/maketmux" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux switch-client -t =work"
+  if grep -q "new-session" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not create a session that already exists"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+test_maketmux_existing_session_attaches_outside() {
+  install_maketmux; fake_tmux_with_list
+  printf 'work\x1f0\n' > "$TEST_TMPDIR/.tmux_sessions"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" work 2>&1)"
+  status=$?
+  set -e
+  assert_called "tmux attach-session -t =work"
+  if grep -q "new-session" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not create a session that already exists"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+test_maketmux_existing_session_rejects_command() {
+  # A command argument has nowhere to go when the session already exists, so
+  # refuse rather than silently drop it.
+  install_maketmux; fake_tmux_with_list
+  printf 'work\x1f0\n' > "$TEST_TMPDIR/.tmux_sessions"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" work vim 2>&1)"
+  status=$?
+  set -e
+  assert_status 2
+  assert_output_contains "already exists"
+}
+test_maketmux_requires_name() {
+  install_maketmux; fake tmux
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/maketmux" 2>&1)"
+  status=$?
+  set -e
+  assert_status 2
+  assert_output_contains "session name required"
+  if grep -q "tmux" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not touch tmux without a name"
+    TEST_FAILED=1
+  fi
 }
 test_makeshpool_runs_shpool_attach() {
   # makeshpool forwards to `shpool attach -d . <name>`: -d . opens the freshly
@@ -194,12 +295,14 @@ EOF
   set -e
   assert_status 0
   assert_called "shpool detach work"
-  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch" 2>/dev/null)" != "newproj"; then
-    echo "  FAIL: switch file should record 'newproj', got '$(cat "$TEST_TMPDIR/.autoshpool_switch" 2>/dev/null)'"
+  # The request is keyed to the session it was made from (".work"), so only
+  # the loop holding that session services it.
+  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch.work" 2>/dev/null)" != "newproj"; then
+    echo "  FAIL: switch file should record 'newproj', got '$(cat "$TEST_TMPDIR/.autoshpool_switch.work" 2>/dev/null)'"
     TEST_FAILED=1
   fi
-  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd" 2>/dev/null)" != "$TEST_TMPDIR"; then
-    echo "  FAIL: switch pwd file should record '$TEST_TMPDIR', got '$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd" 2>/dev/null)'"
+  if test "$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd.work" 2>/dev/null)" != "$TEST_TMPDIR"; then
+    echo "  FAIL: switch pwd file should record '$TEST_TMPDIR', got '$(cat "$TEST_TMPDIR/.autoshpool_switch_pwd.work" 2>/dev/null)'"
     TEST_FAILED=1
   fi
   if grep -q "shpool attach" "$CALLS" 2>/dev/null; then
@@ -226,12 +329,40 @@ EOF
   set -e
   assert_status 2
   assert_output_contains "can't forward options"
-  if test -e "$TEST_TMPDIR/.autoshpool_switch"; then
+  if compgen -G "$TEST_TMPDIR/.autoshpool_switch*" >/dev/null; then
     echo "  FAIL: must not record a switch when rejecting"
     TEST_FAILED=1
   fi
   if grep -qE "shpool (attach|detach)" "$CALLS" 2>/dev/null; then
     echo "  FAIL: must not touch shpool when rejecting"
+    echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+test_makeshpool_requires_name() {
+  # With no name, the inside-session path would request_switch to "" -- an
+  # empty request the loop reads as "no switch" -- detaching the user into
+  # nothing while the ms/msp wrappers exit the shell. Refuse up front.
+  install_script makeshpool; install_script autoshpool; install_script sessionlib
+  fake shpool
+  cat > "$BIN/timeout" <<'EOF'
+#!/bin/bash
+shift
+"$@"
+EOF
+  chmod +x "$BIN/timeout"
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SHPOOL_SESSION_NAME=work "$BIN/makeshpool" 2>&1)"
+  status=$?
+  set -e
+  assert_status 2
+  assert_output_contains "session name required"
+  if compgen -G "$TEST_TMPDIR/.autoshpool_switch*" >/dev/null; then
+    echo "  FAIL: must not record a switch without a name"
+    TEST_FAILED=1
+  fi
+  if grep -qE "shpool (attach|detach)" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: must not touch shpool without a name"
     echo "  calls: $(cat "$CALLS" 2>/dev/null)"
     TEST_FAILED=1
   fi
@@ -243,14 +374,21 @@ run_test "dispatch: SESSION_BACKEND=tmux picks maketmux" test_session_backend_tm
 run_test "dispatch: SESSION_BACKEND=shpool picks makeshpool" test_session_backend_shpool
 run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
 run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: prefers shpool when both are installed" test_fallback_prefers_shpool
 run_test "dispatch: no backend errors out" test_no_backend_errors
 run_test "dispatch: session name passes through" test_name_passes_through
 run_test "backend: maketmux outside tmux creates and attaches" test_maketmux_outside_tmux_creates_and_attaches
 run_test "backend: maketmux inside tmux switches client" test_maketmux_inside_tmux_switches_client
+run_test "backend: maketmux sanitizes the session name" test_maketmux_sanitizes_name
+run_test "backend: maketmux switches to an existing session" test_maketmux_existing_session_switches
+run_test "backend: maketmux attaches an existing session from outside" test_maketmux_existing_session_attaches_outside
+run_test "backend: maketmux rejects a command for an existing session" test_maketmux_existing_session_rejects_command
+run_test "backend: maketmux requires a session name" test_maketmux_requires_name
 run_test "backend: makeshpool runs shpool attach -d ." test_makeshpool_runs_shpool_attach
 run_test "backend: makeshpool preserves a caller-supplied --dir" test_makeshpool_preserves_caller_dir
 run_test "backend: makeshpool inside a session requests a switch" test_makeshpool_inside_session_requests_switch
 run_test "backend: makeshpool inside a session rejects extra args" test_makeshpool_inside_session_rejects_extra_args
+run_test "backend: makeshpool requires a session name" test_makeshpool_requires_name
 
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
 test "$TESTS_FAILED" -eq 0
