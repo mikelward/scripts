@@ -145,14 +145,17 @@ apply() {
 run_menu() {
 	mode="$(current_mode)"
 	set_palette "$mode"
+	# fuzzel option names per fuzzel(1): the background flag is bare
+	# --background (NOT --background-color); the rest are --<thing>-color.
+	# Passing an unknown option makes fuzzel exit before opening, so only
+	# documented flags are used here.
 	exec fuzzel \
 		--config "$CONFIG_HOME/fuzzel/fuzzel.ini" \
-		--background-color "${BG}f2" \
+		--background "${BG}f2" \
 		--text-color "${FG}ff" \
 		--match-color "${ACCENT}ff" \
 		--selection-color "${ACCENT}ff" \
 		--selection-text-color "${BG}ff" \
-		--selection-match-color "${BG}ff" \
 		--border-color "${ACCENT}ff" \
 		"$@"
 }

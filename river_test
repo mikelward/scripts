@@ -258,6 +258,31 @@ HDMI-A-1 "External"
 	fi
 }
 
+# --- menu wrapper: valid fuzzel flags ---------------------------------------
+
+# river-theme menu execs fuzzel with colour flags. A wrong flag name makes
+# fuzzel exit before opening, so guard the exact flag: --background (bare),
+# never --background-color.
+test_menu_uses_supported_fuzzel_flags() {
+	export FUZZEL_LOG="$TEST_TMPDIR/fuzzel_args"
+	: >"$FUZZEL_LOG"
+	cat >"$TEST_TMPDIR/bin/fuzzel" <<'FAKE'
+#!/bin/sh
+echo "$@" > "$FUZZEL_LOG"
+exit 0
+FAKE
+	chmod +x "$TEST_TMPDIR/bin/fuzzel"
+	"$RIVER_THEME" menu >/dev/null 2>&1
+	if ! grep -qe '--background ' "$FUZZEL_LOG"; then
+		echo "  FAIL: menu did not pass fuzzel's --background flag"
+		TEST_FAILED=1
+	fi
+	if grep -qe '--background-color' "$FUZZEL_LOG"; then
+		echo "  FAIL: menu passed the invalid --background-color flag"
+		TEST_FAILED=1
+	fi
+}
+
 # --- setup-river help -------------------------------------------------------
 
 test_setup_river_help() {
@@ -294,6 +319,7 @@ run_test "river-lid no-ops without wlr-randr" test_river_lid_noop_without_wlr_ra
 run_test "river-lid keeps internal on when external disabled" test_river_lid_keeps_internal_when_external_disabled
 run_test "river-lid blanks internal when external enabled" test_river_lid_blanks_internal_when_external_enabled
 run_test "river-lid keeps internal on while lid open" test_river_lid_keeps_internal_when_open
+run_test "menu wrapper uses supported fuzzel flags" test_menu_uses_supported_fuzzel_flags
 run_test "setup-river --help prints usage" test_setup_river_help
 
 echo
