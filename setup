@@ -394,7 +394,7 @@ install_packages() {
                 # several hypr* tools may need a backport and shouldn't abort.
                 info "Installing Hyprland desktop packages"
                 sudo apt-get install -y --install-recommends \
-                    hyprland hyprland-idle hyprland-lock \
+                    hyprland hypridle hyprlock \
                     xdg-desktop-portal-gtk \
                     waybar fuzzel swaync kanshi \
                     power-profiles-daemon \
@@ -472,7 +472,7 @@ install_packages() {
                 info "Installing Hyprland desktop packages"
                 sudo dnf install -y \
                     hyprland hypridle hyprlock \
-                    hyprland-portal xdg-desktop-portal-gtk \
+                    xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
                     waybar fuzzel swaync swww kanshi \
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \

@@ -1,0 +1,196 @@
+#!/bin/sh
+# Tests for setup-kde
+#
+# Runs setup-kde --no-install (so nothing is cloned or built) against a
+# throwaway HOME with the KDE CLI tools mocked, and checks the pure-config
+# steps: kwinrc/shortcut writes go through kwriteconfig6, and app-launch
+# shortcuts are created for helpers that exist on PATH and skipped (with a
+# warning, not a fatal error) for helpers that don't.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    CALLS="$TEST_TMPDIR/calls"
+    rm -f "$CALLS"
+    mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
+
+    # KDE CLI tools: record argv, touch nothing real.
+    for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+
+    chmod +x "$TEST_TMPDIR"/bin/*
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+# Add a fake launcher script (e.g. browser1) to the mock bin.
+add_launcher() {
+    cat > "$TEST_TMPDIR/bin/$1" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/$1"
+}
+
+# Run setup-kde in the sandbox: fresh HOME, and a PATH of just the mock bin
+# plus the system directories -- so the real ~/scripts (if it's on the
+# caller's PATH) can't satisfy the launcher lookups.
+run_kde() {
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        "$SCRIPT_DIR/setup-kde" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: expected call '$1' not found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_exists() {
+    if ! test -f "$1"; then
+        echo "  FAIL: expected file '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_not_exists() {
+    if test -f "$1"; then
+        echo "  FAIL: unexpected file '$1' exists"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_kde --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-kde"
+}
+
+test_unknown_option() {
+    run_kde --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- configuration (with --no-install so nothing is cloned/built) ---
+
+test_enables_and_configures_krohnkite() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true" &&
+    assert_called "kwriteconfig6 --file kwinrc --group Script-krohnkite --key tileLayoutOrder 1"
+}
+
+test_configures_focus_follows_mouse() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse"
+}
+
+test_configures_nine_desktops() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Desktops --key Number 9"
+}
+
+# A launcher that exists on PATH gets a .desktop file and a [services] _launch
+# shortcut pointing at its resolved path.
+test_app_shortcut_created_for_present_launcher() {
+    add_launcher browser1
+    run_kde --no-install
+    desktop="$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
+    assert_status 0 &&
+    assert_file_exists "$desktop" &&
+    grep -q "Exec=$TEST_TMPDIR/bin/browser1" "$desktop" &&
+    grep -q "X-KDE-GlobalAccel-CommandShortcut=true" "$desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G"
+}
+
+# A launcher missing from PATH is skipped with a warning; it must not abort
+# the script (set -e) or leave a broken .desktop file with an empty Exec=.
+test_missing_launcher_skipped_not_fatal() {
+    add_launcher browser1
+    # browser2, terminal, terminal_on_workstation, music left missing.
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "browser2 not found on PATH" &&
+    assert_output_contains "KDE configured successfully" &&
+    assert_file_not_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser2.desktop" &&
+    assert_file_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
+}
+
+run_test "help flag" test_help_flag
+run_test "unknown option errors" test_unknown_option
+run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
+run_test "configures focus follows mouse" test_configures_focus_follows_mouse
+run_test "configures nine desktops" test_configures_nine_desktops
+run_test "app shortcut created for present launcher" \
+    test_app_shortcut_created_for_present_launcher
+run_test "missing launcher is skipped, not fatal" \
+    test_missing_launcher_skipped_not_fatal
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
