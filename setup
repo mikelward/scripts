@@ -462,7 +462,13 @@ install_packages() {
                 # Hyprland Wayland desktop packages, installed unconditionally
                 # alongside KDE so either desktop is available (--kde/--hypr
                 # only choose which one to *configure*). `|| warn` because
-                # several hypr* tools may need a COPR and shouldn't abort.
+                # several hypr* tools may need the COPR and shouldn't abort.
+                # Fedora doesn't ship Hyprland in its default repos, so enable
+                # the lionheartp/Hyprland COPR first (needs the copr dnf plugin).
+                info "Enabling the lionheartp/Hyprland COPR"
+                sudo dnf install -y dnf-plugins-core || true
+                sudo dnf copr enable -y lionheartp/Hyprland \
+                    || warn "could not enable the lionheartp/Hyprland COPR; hyprland may be unavailable"
                 info "Installing Hyprland desktop packages"
                 sudo dnf install -y \
                     hyprland hypridle hyprlock \
@@ -474,7 +480,7 @@ install_packages() {
                     network-manager-applet blueman \
                     polkit-gnome \
                     jetbrains-mono-fonts \
-                    || warn "some Hyprland packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
+                    || warn "some Hyprland packages are unavailable; check the lionheartp/Hyprland COPR or build manually"
                 # In the default repos even where hyprland isn't, so install
                 # separately -- a missing hyprland above shouldn't take these
                 # down with it.
