@@ -56,6 +56,31 @@ isolate_script() {
     KDE_SCRIPT="$TEST_TMPDIR/isolated/setup-kde"
 }
 
+# Mocks that let the full install path run: git "clones" by creating the
+# target directory with a fake .kwinscript, npm and kpackagetool6 just
+# record. This exercises install_krohnkite's cd into the checkout.
+add_install_mocks() {
+    cat > "$TEST_TMPDIR/bin/git" <<MOCK
+#!/bin/sh
+echo "git \$*" >> "$CALLS"
+if test "\$1" = clone; then
+    for arg in "\$@"; do dir="\$arg"; done
+    mkdir -p "\$dir"
+    touch "\$dir/fake.kwinscript"
+fi
+exit 0
+MOCK
+    for cmd in npm kpackagetool6; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+    chmod +x "$TEST_TMPDIR/bin/git" "$TEST_TMPDIR/bin/npm" \
+        "$TEST_TMPDIR/bin/kpackagetool6"
+}
+
 # Run setup-kde in the sandbox: fresh HOME, and a PATH of just the mock bin
 # plus the system directories -- so the real ~/scripts (if it's on the
 # caller's PATH) can't satisfy the launcher lookups.
@@ -65,6 +90,18 @@ run_kde() {
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+# Like run_kde, but invoke the script by a RELATIVE path (./setup-kde) from
+# its own directory, the way a hands-on run does.
+run_kde_relative() {
+    set +e
+    output="$(cd "$(dirname "$KDE_SCRIPT")" && HOME="$TEST_TMPDIR/home" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        ./setup-kde "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -213,6 +250,26 @@ MOCK
     grep -q "Exec=$TEST_TMPDIR/isolated/browser1" "$desktop"
 }
 
+# The sibling fallback must survive install_krohnkite's cd into the Krohnkite
+# checkout even when the script was invoked by a relative path: $0 is only
+# meaningful relative to the ORIGINAL cwd, so the script directory has to be
+# resolved before any cd.
+test_sibling_launcher_fallback_survives_install_cd() {
+    isolate_script
+    add_install_mocks
+    cat > "$TEST_TMPDIR/isolated/browser1" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/browser1"
+    run_kde_relative
+    desktop="$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
+    assert_status 0 &&
+    assert_called "kpackagetool6" &&
+    assert_file_exists "$desktop" &&
+    grep -q "Exec=$TEST_TMPDIR/isolated/browser1" "$desktop"
+}
+
 run_test "help flag" test_help_flag
 run_test "unknown option errors" test_unknown_option
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
@@ -224,6 +281,8 @@ run_test "missing launcher is skipped, not fatal" \
     test_missing_launcher_skipped_not_fatal
 run_test "launcher beside the script is found without PATH" \
     test_sibling_launcher_fallback
+run_test "sibling fallback survives install's cd (relative \$0)" \
+    test_sibling_launcher_fallback_survives_install_cd
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

@@ -20,6 +20,12 @@
 KROHNKITE_REPO="https://codeberg.org/anametologin/Krohnkite.git"
 KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
 
+# Directory containing this script, resolved up front while $0 still means
+# what the caller typed: install_krohnkite cds into the Krohnkite checkout,
+# after which a relative $0 (./setup-kde) would resolve against the wrong
+# directory. add_app_shortcut uses this to find launchers beside the script.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # Whether to build and install Krohnkite. "no" (via --no-install) skips the
 # install and only (re)applies configuration.
 INSTALL=yes
@@ -354,11 +360,10 @@ add_app_shortcut() {
     # before treating the launcher as absent.
     command="$(type -p "$name")" || command=""
     if test -z "$command"; then
-        script_dir="$(cd "$(dirname "$0")" && pwd)"
-        if test -x "$script_dir/$name"; then
-            command="$script_dir/$name"
+        if test -x "$SCRIPT_DIR/$name"; then
+            command="$SCRIPT_DIR/$name"
         else
-            warn "$name not found on PATH or in $script_dir; skipping its launch shortcut"
+            warn "$name not found on PATH or in $SCRIPT_DIR; skipping its launch shortcut"
             return 0
         fi
     fi
