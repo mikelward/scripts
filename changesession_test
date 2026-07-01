@@ -133,6 +133,19 @@ test_choose_fallback_shpool_installed() {
   run choosesession
   assert_called "changeshpool --choose"
 }
+test_choose_fallback_prefers_shpool() {
+  # With both installed and no $SESSION_BACKEND, the fallback prefers shpool --
+  # the family default, matching the shell session_backend helper.
+  install_script choosesession; fake changetmux; fake changeshpool; fake tmux; fake shpool
+  run choosesession
+  assert_called "changeshpool --choose"
+}
+test_change_fallback_prefers_shpool() {
+  install_script changesession; fake_choosesession "work" 0
+  fake changetmux; fake changeshpool; fake tmux; fake shpool
+  run changesession
+  assert_called "changeshpool --switch work"
+}
 test_choose_no_backend_errors() {
   install_script choosesession; fake changetmux; fake changeshpool
   run choosesession
@@ -216,6 +229,8 @@ run_test "choose: SESSION_BACKEND=tmux picks changetmux" test_choose_session_bac
 run_test "choose: SESSION_BACKEND=shpool picks changeshpool" test_choose_session_backend_shpool
 run_test "choose: falls back to installed tmux" test_choose_fallback_tmux_installed
 run_test "choose: falls back to installed shpool" test_choose_fallback_shpool_installed
+run_test "choose: prefers shpool when both are installed" test_choose_fallback_prefers_shpool
+run_test "change: prefers shpool when both are installed" test_change_fallback_prefers_shpool
 run_test "choose: no backend errors out" test_choose_no_backend_errors
 run_test "choose: args pass through to the backend" test_choose_args_pass_through
 run_test "change: switches to the chosen name" test_change_switches_to_chosen_name

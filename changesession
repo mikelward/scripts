@@ -18,7 +18,8 @@
 #   * inside tmux  ($TMUX set)                 -> changetmux
 #   * inside shpool ($SHPOOL_SESSION_NAME set) -> changeshpool
 #   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (tmux first).
+#     whichever of tmux/shpool is installed (shpool first, the
+#     family default -- matching the shell session_backend helper).
 
 dir="$(cd "$(dirname "$0")" && pwd)"
 
@@ -32,8 +33,8 @@ resolve_backend() {
     tmux)   echo changetmux; return ;;
     shpool) echo changeshpool; return ;;
   esac
-  if command -v tmux >/dev/null 2>&1; then echo changetmux; return; fi
   if command -v shpool >/dev/null 2>&1; then echo changeshpool; return; fi
+  if command -v tmux >/dev/null 2>&1; then echo changetmux; return; fi
 }
 
 backend="$(resolve_backend)"

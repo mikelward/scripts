@@ -122,6 +122,13 @@ test_fallback_shpool_installed() {
   run detachsession
   assert_called "detachshpool "
 }
+test_fallback_prefers_shpool() {
+  # With both installed and no $SESSION_BACKEND, the fallback prefers shpool --
+  # the family default, matching the shell session_backend helper.
+  install_script detachsession; fake detachtmux; fake detachshpool; fake tmux; fake shpool
+  run detachsession
+  assert_called "detachshpool "
+}
 test_no_backend_errors() {
   install_script detachsession; fake detachtmux; fake detachshpool
   run detachsession
@@ -156,6 +163,7 @@ run_test "dispatch: SESSION_BACKEND=tmux picks detachtmux" test_session_backend_
 run_test "dispatch: SESSION_BACKEND=shpool picks detachshpool" test_session_backend_shpool
 run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
 run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: prefers shpool when both are installed" test_fallback_prefers_shpool
 run_test "dispatch: no backend errors out" test_no_backend_errors
 run_test "dispatch: args pass through to backend" test_args_pass_through
 run_test "backend: detachtmux runs tmux detach" test_detachtmux_runs_tmux_detach
