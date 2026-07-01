@@ -1,0 +1,197 @@
+#!/bin/sh
+# Tests for setup-hypr
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    # Put mocks first on PATH so they shadow real commands.
+    export PATH="$TEST_TMPDIR/bin:$PATH"
+    mkdir -p "$TEST_TMPDIR/bin"
+    CALLS="$TEST_TMPDIR/calls"
+    rm -f "$CALLS"
+
+    # sudo records its argv and discards any heredoc stdin (e.g. the logind
+    # drop-in piped to `sudo tee`) so nothing touches the real system.
+    cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
+#!/bin/sh
+echo "sudo \$*" >> "$CALLS"
+exit 0
+MOCK
+
+    # systemctl: record, and make list-unit-files succeed so enable_services
+    # believes power-profiles-daemon exists.
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+echo "systemctl \$*" >> "$CALLS"
+exit 0
+MOCK
+
+    # Package managers: record calls. Which one exists on PATH selects the
+    # backend (detect_backend prefers pacman, then apt-get, then dnf).
+    for cmd in pacman apt-get dnf; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+
+    chmod +x "$TEST_TMPDIR"/bin/*
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+run_hypr() {
+    set +e
+    output="$("$SCRIPT_DIR/setup-hypr" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: expected call '$1' not found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_not_called() {
+    if grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: unexpected call '$1' found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_hypr --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-hypr"
+}
+
+test_h_flag() {
+    run_hypr -h
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-hypr"
+}
+
+test_unknown_option() {
+    run_hypr --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- package installation ---
+
+test_installs_packages_via_pacman() {
+    run_hypr
+    assert_status 0 &&
+    assert_called "sudo pacman -S" &&
+    assert_output_contains "pacman"
+}
+
+test_installs_core_desktop_packages() {
+    run_hypr
+    # A representative slice of the required desktop stack must be requested.
+    assert_status 0 &&
+    assert_called "hyprland" &&
+    assert_called "waybar" &&
+    assert_called "fuzzel" &&
+    assert_called "swaync" &&
+    assert_called "kanshi" &&
+    assert_called "power-profiles-daemon"
+}
+
+test_no_install_skips_packages() {
+    run_hypr --no-install
+    assert_status 0 &&
+    assert_not_called "pacman -S" &&
+    assert_output_contains "Skipping package installation"
+}
+
+# --- logind lid drop-in ---
+
+test_installs_logind_lid_dropin() {
+    run_hypr --no-install
+    assert_status 0 &&
+    assert_called "sudo mkdir -p /etc/systemd/logind.conf.d" &&
+    assert_called "sudo tee /etc/systemd/logind.conf.d/10-hypr-lid.conf"
+}
+
+test_reloads_logind() {
+    run_hypr --no-install
+    assert_status 0 &&
+    assert_called "sudo systemctl kill -s HUP systemd-logind"
+}
+
+# --- services ---
+
+test_enables_power_profiles_daemon() {
+    run_hypr --no-install
+    assert_status 0 &&
+    assert_called "sudo systemctl enable --now power-profiles-daemon"
+}
+
+run_test "help flag" test_help_flag
+run_test "-h flag" test_h_flag
+run_test "unknown option errors" test_unknown_option
+run_test "installs packages via pacman" test_installs_packages_via_pacman
+run_test "requests core desktop packages" test_installs_core_desktop_packages
+run_test "no-install skips packages" test_no_install_skips_packages
+run_test "installs logind lid drop-in" test_installs_logind_lid_dropin
+run_test "reloads logind" test_reloads_logind
+run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

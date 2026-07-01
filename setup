@@ -2,8 +2,9 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [--minimal | --full] [--no-install] \
-#           [--ignore-errors] [--ssh | --no-ssh] [--no-npm] [-h | --help]
+#     setup [--gui | --no-gui] [--kde | --hypr] [--minimal | --full] \
+#           [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm] \
+#           [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -88,16 +89,25 @@ SSH=auto
 #         (nvm, fnm, corepack, a standalone pnpm, etc.)
 NPM=yes
 
+# Which Linux desktop to install and configure (ignored on macOS). One of:
+#   kde   - KDE Plasma + Krohnkite, via setup-kde (the default)
+#   hypr  - Hyprland Wayland desktop, via setup-hypr
+# Override with --kde / --hypr, or by exporting DESKTOP before running.
+DESKTOP="${DESKTOP:-kde}"
+
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--minimal | --full] [--no-install]
-             [--ignore-errors] [--ssh | --no-ssh] [--no-npm] [-h | --help]
+Usage: setup [--gui | --no-gui] [--kde | --hypr] [--minimal | --full]
+             [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm]
+             [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
 Options:
   --gui            Force installation of graphical packages and desktop config
   --no-gui         Skip all graphical packages and desktop configuration
+  --kde            Install/configure KDE Plasma + Krohnkite (default; Linux)
+  --hypr           Install/configure the Hyprland Wayland desktop (Linux)
   --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
                    nushell), installing only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -140,6 +150,12 @@ while test $# -gt 0; do
             ;;
         --no-gui)
             GUI=no
+            ;;
+        --kde)
+            DESKTOP=kde
+            ;;
+        --hypr)
+            DESKTOP=hypr
             ;;
         --minimal)
             MINIMAL=yes
@@ -364,13 +380,18 @@ install_packages() {
                 sudo apt-get install -y --install-recommends npm
             fi
             if test "$GUI_ENABLED" -eq 1; then
-                info "Installing graphical packages"
-                sudo apt-get install -y --install-recommends \
-                    kde-standard \
-                    kitty \
-                    kwin-dev \
-                    plasma-desktop \
-                    plasma-sdk
+                info "Installing kitty"
+                sudo apt-get install -y --install-recommends kitty
+                if test "$DESKTOP" = kde; then
+                    info "Installing KDE graphical packages"
+                    sudo apt-get install -y --install-recommends \
+                        kde-standard \
+                        kwin-dev \
+                        plasma-desktop \
+                        plasma-sdk
+                else
+                    info "Hyprland desktop selected; setup-hypr installs its packages"
+                fi
             fi
             ;;
         redhat)
@@ -403,13 +424,18 @@ install_packages() {
                 sudo dnf install -y npm
             fi
             if test "$GUI_ENABLED" -eq 1; then
-                info "Installing graphical packages"
-                sudo dnf install -y \
-                    '@kde-desktop-environment' \
-                    kitty \
-                    kwin-devel \
-                    plasma-desktop \
-                    plasma-sdk
+                info "Installing kitty"
+                sudo dnf install -y kitty
+                if test "$DESKTOP" = kde; then
+                    info "Installing KDE graphical packages"
+                    sudo dnf install -y \
+                        '@kde-desktop-environment' \
+                        kwin-devel \
+                        plasma-desktop \
+                        plasma-sdk
+                else
+                    info "Hyprland desktop selected; setup-hypr installs its packages"
+                fi
             fi
             ;;
         macos)
@@ -821,6 +847,9 @@ if test "$GUI_ENABLED" -eq 1; then
     if test "$OS" = "macos"; then
         info "Configuring macOS desktop environment"
         "$SCRIPTS_DIR/setup-macos" $DESKTOP_SETUP_FLAGS
+    elif test "$DESKTOP" = hypr; then
+        info "Configuring Hyprland desktop environment"
+        "$SCRIPTS_DIR/setup-hypr" $DESKTOP_SETUP_FLAGS
     else
         info "Configuring KDE desktop environment"
         "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS
