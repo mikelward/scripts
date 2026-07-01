@@ -7,7 +7,7 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 #
-# Requires: git, npm, kpackagetool6, kwriteconfig6
+# Requires: git, pnpm or npm, kpackagetool6, kwriteconfig6
 # Optional: go-task (preferred build tool), p7zip
 #
 # Usage:
@@ -98,12 +98,13 @@ trap cleanup EXIT
 # --- Check prerequisites ---
 
 # kwriteconfig6 is needed for every configuration step, so it's always
-# required. git/npm/kpackagetool6 are only used to build and install
+# required. git/pnpm/npm/kpackagetool6 are only used to build and install
 # Krohnkite, so they're only required when actually installing.
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
 if test "$INSTALL" = yes; then
     command -v git >/dev/null 2>&1 || error "git is required"
-    command -v npm >/dev/null 2>&1 || error "npm is required (to build Krohnkite)"
+    command -v pnpm >/dev/null 2>&1 || command -v npm >/dev/null 2>&1 \
+        || error "pnpm or npm is required (to build Krohnkite)"
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
 fi
 
@@ -119,7 +120,8 @@ install_krohnkite() {
     # longer installed by setup, but use it if it's present: the binary is
     # named "go-task" from Fedora's package, or "task" when installed by
     # hand -- but "task" can also be Taskwarrior, so check the version
-    # banner before trusting it. Otherwise fall back to make, then npm.
+    # banner before trusting it. Otherwise fall back to make, then pnpm
+    # (preferred over npm when available), then npm.
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
         go-task package
@@ -130,6 +132,9 @@ install_krohnkite() {
     elif test -f Makefile; then
         info "Building Krohnkite with make"
         make
+    elif command -v pnpm >/dev/null 2>&1; then
+        info "Building Krohnkite with pnpm"
+        pnpm install && pnpm run build
     else
         info "Building Krohnkite with npm"
         npm install && npm run build
