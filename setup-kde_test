@@ -19,6 +19,7 @@ setup() {
     CALLS="$TEST_TMPDIR/calls"
     rm -f "$CALLS"
     mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
+    KDE_SCRIPT="$SCRIPT_DIR/setup-kde"
 
     # KDE CLI tools: record argv, touch nothing real.
     for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6; do
@@ -45,6 +46,16 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/$1"
 }
 
+# Run a copy of setup-kde from a directory with no launcher siblings. In the
+# real repo the launchers live beside setup-kde, so the sibling-directory
+# fallback would find them; tests about genuinely-missing launchers need the
+# script isolated from its siblings.
+isolate_script() {
+    mkdir -p "$TEST_TMPDIR/isolated"
+    cp "$SCRIPT_DIR/setup-kde" "$TEST_TMPDIR/isolated/setup-kde"
+    KDE_SCRIPT="$TEST_TMPDIR/isolated/setup-kde"
+}
+
 # Run setup-kde in the sandbox: fresh HOME, and a PATH of just the mock bin
 # plus the system directories -- so the real ~/scripts (if it's on the
 # caller's PATH) can't satisfy the launcher lookups.
@@ -53,7 +64,7 @@ run_kde() {
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
-        "$SCRIPT_DIR/setup-kde" "$@" 2>&1)"
+        "$KDE_SCRIPT" "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -168,9 +179,12 @@ test_app_shortcut_created_for_present_launcher() {
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G"
 }
 
-# A launcher missing from PATH is skipped with a warning; it must not abort
-# the script (set -e) or leave a broken .desktop file with an empty Exec=.
+# A launcher on neither PATH nor beside the script is skipped with a warning;
+# it must not abort the script (set -e) or leave a broken .desktop file with
+# an empty Exec=. Uses an isolated copy of setup-kde: in the repo the
+# launchers are siblings of the script, which the fallback would find.
 test_missing_launcher_skipped_not_fatal() {
+    isolate_script
     add_launcher browser1
     # browser2, terminal, terminal_on_workstation, music left missing.
     run_kde --no-install
@@ -179,6 +193,24 @@ test_missing_launcher_skipped_not_fatal() {
     assert_output_contains "KDE configured successfully" &&
     assert_file_not_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser2.desktop" &&
     assert_file_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
+}
+
+# A launcher absent from PATH but sitting beside setup-kde (the fresh
+# bootstrap case: `setup` runs the just-cloned repo's setup-kde before any
+# login shell puts ~/scripts on PATH) is resolved via the script's own
+# directory.
+test_sibling_launcher_fallback() {
+    isolate_script
+    cat > "$TEST_TMPDIR/isolated/browser1" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/browser1"
+    run_kde --no-install
+    desktop="$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
+    assert_status 0 &&
+    assert_file_exists "$desktop" &&
+    grep -q "Exec=$TEST_TMPDIR/isolated/browser1" "$desktop"
 }
 
 run_test "help flag" test_help_flag
@@ -190,6 +222,8 @@ run_test "app shortcut created for present launcher" \
     test_app_shortcut_created_for_present_launcher
 run_test "missing launcher is skipped, not fatal" \
     test_missing_launcher_skipped_not_fatal
+run_test "launcher beside the script is found without PATH" \
+    test_sibling_launcher_fallback
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
