@@ -312,19 +312,19 @@ test_typed_new_name_requests_switch() {
 test_outside_session_attaches_with_steal() {
   add_full target:1 disconnected
   FZF_PICK=$'^switch\ttarget:1\t' run_cs
-  assert_called 'shpool detach target:1'   # steal from any other terminal
-  assert_called 'shpool attach target:1'
-  assert_no_switch_file                     # no loop to service: attach directly
+  assert_called 'shpool attach --force target:1'   # --force steals from any other terminal
+  assert_not_called 'shpool detach'                 # no separate detach/poll dance
+  assert_no_switch_file                             # no loop to service: attach directly
 }
 
 test_outside_session_steals_attached_target() {
-  # When the target is currently attached elsewhere, the steal still lands:
-  # detach asks the other client to release, and the poll waits for the
-  # session to leave the "attached" state before attach runs.
+  # When the target is currently attached elsewhere, --force still lands the
+  # attach: shpool detaches the other client and sequences the handover itself,
+  # so there is no manual detach-then-poll.
   add_full target:1 attached
   FZF_PICK=$'^switch\ttarget:1\t' run_cs
-  assert_called 'shpool detach target:1'
-  assert_called 'shpool attach target:1'
+  assert_called 'shpool attach --force target:1'
+  assert_not_called 'shpool detach'
 }
 
 test_esc_cancels_cleanly() {

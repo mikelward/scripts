@@ -100,22 +100,16 @@ backend_perform_switch() {
     fi
     return 0   # request_switch exits; not reached
   fi
-  test "$action" = create && export SHPOOL_INITIAL_PWD="$PWD"
-  # shpool detach returns once the daemon has signalled the other client, but
-  # the client's tty hasn't released yet, so a back-to-back attach hits
-  # BusyError ("session 'X' already has a terminal attached"). Poll shpool
-  # list until the session leaves the "attached" state so attach lands
-  # cleanly. Bounded so a wedged client doesn't hang us forever -- if the
-  # target stays attached we still try attach (matches the old behaviour and
-  # surfaces the real error).
-  timeout 2 shpool detach "$target" 2>/dev/null
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    test "$(session_status "$target" "$(shpool list 2>/dev/null)")" = attached \
-      || break
-    sleep 0.1
-  done
-  shpool attach "$target"
+  # From outside a session, attach directly. --force tells shpool to detach any
+  # tty already attached to the target first (stealing it from another
+  # terminal), which replaces the old detach-then-poll-until-released dance: no
+  # BusyError race to poll around, since shpool sequences the handover itself. A
+  # create carries --dir so the new session opens in the current directory.
+  if test "$action" = create; then
+    shpool attach --force --dir "$PWD" "$target"
+  else
+    shpool attach --force "$target"
+  fi
 }
 
 case "$1" in

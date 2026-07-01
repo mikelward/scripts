@@ -155,9 +155,11 @@ create_and_attach_next() {
     if test -n "${sessions[$session]}"; then
       continue
     fi
-    export SHPOOL_INITIAL_PWD="$PWD"
     echo "Creating shpool session $session"
-    shpool attach "$session"
+    # --dir opens the new session in the caller's directory rather than the
+    # outer shell's startup dir. It only takes effect when the session is
+    # created; shpool ignores it on a reattach (the shell already exists).
+    shpool attach "$session" --dir "$PWD"
     rc=$?
     # shpool exits 0 even when refusing because the session is already
     # attached elsewhere (libshpool BusyError -> AttachResult::Done), so a
@@ -451,14 +453,14 @@ autoshpool_loop() {
     if test -n "$switch_session"; then
       switch_pwd="$(get_switch_pwd)"
       clear_switch
-      # A recorded pwd (a prefix-mismatch switch) opens the session there; a
-      # bare switch keeps the target's own directory, so drop any stale value.
+      # A recorded pwd (a create/prefix-mismatch switch) opens the session there
+      # via --dir; a bare switch to an existing session omits --dir so it keeps
+      # its own directory (shpool ignores --dir on a reattach anyway).
       if test -n "$switch_pwd"; then
-        export SHPOOL_INITIAL_PWD="$switch_pwd"
+        shpool attach "$switch_session" --dir "$switch_pwd"
       else
-        unset SHPOOL_INITIAL_PWD
+        shpool attach "$switch_session"
       fi
-      shpool attach "$switch_session"
     else
       # Pick the session first so a failed attach is reported as a failure
       # rather than falling through to create a brand-new session.

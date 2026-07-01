@@ -5,10 +5,11 @@
 # the session name.
 #
 # Outside any session, create-and-attach directly (shpool attach creates the
-# session when it doesn't exist yet). Stamp SHPOOL_INITIAL_PWD so the new
-# session's shell opens in the caller's directory rather than the outer shell's
-# startup dir -- the same reason the autoshpool wrapper stamps it. tmux needs no
-# equivalent (see maketmux).
+# session when it doesn't exist yet). Pass --dir "$PWD" so the new session's
+# shell opens in the caller's directory rather than the outer shell's startup
+# dir -- the same reason the autoshpool wrapper passes it. shpool ignores --dir
+# on a reattach (the shell already exists). tmux needs no equivalent (see
+# maketmux).
 #
 # Inside an existing session shpool can't attach a second session to this
 # terminal without nesting -- and exec'ing `shpool attach` over our shell would
@@ -35,5 +36,4 @@ if test -n "$SHPOOL_SESSION_NAME"; then
   request_switch "$1" "$PWD"   # records target, detaches us, and exits
 fi
 
-export SHPOOL_INITIAL_PWD="$PWD"
-exec shpool attach "$@"
+exec shpool attach "$@" --dir "$PWD"
