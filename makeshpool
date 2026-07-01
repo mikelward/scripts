@@ -5,9 +5,11 @@
 # the session name.
 #
 # Outside any session, create-and-attach directly (shpool attach creates the
-# session when it doesn't exist yet). Pass -d . so the new session's shell opens
-# in the caller's directory rather than shpool's daemon dir. tmux needs no
-# equivalent (see maketmux).
+# session when it doesn't exist yet). Default -d . so the new session's shell
+# opens in the caller's directory rather than shpool's daemon dir, but only when
+# the caller didn't ask for a directory themselves -- shpool's --dir isn't
+# repeatable, so prepending ours would clobber a caller-supplied -d/--dir. tmux
+# needs no equivalent (see maketmux).
 #
 # Inside an existing session shpool can't attach a second session to this
 # terminal without nesting -- and exec'ing `shpool attach` over our shell would
@@ -34,4 +36,15 @@ if test -n "$SHPOOL_SESSION_NAME"; then
   request_switch "$1" "$PWD"   # records target, detaches us, and exits
 fi
 
-exec shpool attach -d . "$@"
+# Honour a caller-supplied directory; only default to -d . when none was given.
+_have_dir=
+for _arg in "$@"; do
+  case "$_arg" in
+    -d|-d?*|--dir|--dir=*) _have_dir=1; break ;;
+  esac
+done
+if test -n "$_have_dir"; then
+  exec shpool attach "$@"
+else
+  exec shpool attach -d . "$@"
+fi
