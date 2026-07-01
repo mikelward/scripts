@@ -285,6 +285,24 @@ FAKE
 
 # --- setup-river help -------------------------------------------------------
 
+# This config uses the riverctl + rivertile model, which lives in
+# river-classic since river 0.4 went non-monolithic. setup-river must
+# prefer river-classic (upstream river 0.4+ doesn't ship rivertile).
+test_setup_river_prefers_river_classic() {
+	if ! grep -q "river-classic" "$SETUP_RIVER"; then
+		echo "  FAIL: setup-river does not install/reference river-classic"
+		TEST_FAILED=1
+	fi
+}
+
+# swaync's binary is packaged as sway-notification-center on Debian/Ubuntu.
+test_setup_river_debian_swaync_package() {
+	if ! grep -q "sway-notification-center" "$SETUP_RIVER"; then
+		echo "  FAIL: setup-river does not use the Debian sway-notification-center package"
+		TEST_FAILED=1
+	fi
+}
+
 test_setup_river_help() {
 	out="$("$SETUP_RIVER" --help 2>&1)"
 	status=$?
@@ -320,6 +338,8 @@ run_test "river-lid keeps internal on when external disabled" test_river_lid_kee
 run_test "river-lid blanks internal when external enabled" test_river_lid_blanks_internal_when_external_enabled
 run_test "river-lid keeps internal on while lid open" test_river_lid_keeps_internal_when_open
 run_test "menu wrapper uses supported fuzzel flags" test_menu_uses_supported_fuzzel_flags
+run_test "setup-river prefers river-classic" test_setup_river_prefers_river_classic
+run_test "setup-river uses Debian swaync package name" test_setup_river_debian_swaync_package
 run_test "setup-river --help prints usage" test_setup_river_help
 
 echo

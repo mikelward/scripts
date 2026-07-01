@@ -122,12 +122,29 @@ install_one() {
 	esac
 }
 
+# Install the compositor. This config targets the monolithic river model
+# (the ~/.config/river/init script driven by riverctl, plus the bundled
+# rivertile layout generator). Since river 0.4 that model lives in
+# "river-classic" (the maintained 0.3.x fork); upstream "river" 0.4+ is
+# non-monolithic, defers window management to a separate WM, and does NOT
+# ship rivertile -- so it would leave a session with no tiling/keybinds.
+# Prefer river-classic; fall back to river (still 0.3.x on some distros).
+install_compositor() {
+	if install_one river-classic; then
+		info "  installed: river-classic"
+	elif install_one river; then
+		info "  installed: river"
+	else
+		warn "could not install river-classic or river; install one manually"
+	fi
+}
+
 install_packages() {
 	# Common package names first; per-distro overrides below. The list
-	# covers: compositor + default layout (river bundles rivertile),
-	# bar/launcher/notifications, display + idle/lock, audio/backlight
-	# helpers used by the keybinds, portals, and a polkit agent.
-	common="river waybar fuzzel kanshi swayidle swaylock swaybg \
+	# covers: bar/launcher/notifications, display + idle/lock,
+	# audio/backlight helpers used by the keybinds, portals, and a polkit
+	# agent. The compositor is handled separately (see install_compositor).
+	common="waybar fuzzel kanshi swayidle swaylock swaybg \
 		wlr-randr wl-clipboard brightnessctl playerctl pavucontrol \
 		grim slurp power-profiles-daemon xdg-desktop-portal-wlr \
 		xdg-desktop-portal-gtk qt6-wayland"
@@ -136,21 +153,25 @@ install_packages() {
 	debian)
 		info "Updating package lists"
 		sudo apt-get update -qq
-		# Debian/Ubuntu-specific names.
-		pkgs="$common swaync wlopm network-manager-gnome \
+		# Debian/Ubuntu-specific names. swaync's binary is packaged as
+		# sway-notification-center on Debian/Ubuntu.
+		pkgs="$common sway-notification-center wlopm network-manager-gnome \
 			polkit-kde-agent-1 fonts-ubuntu qtwayland5"
 		;;
 	redhat)
-		# Fedora-specific names.
+		# Fedora-specific names (Fedora packages swaync as 'swaync').
 		pkgs="$common swaync NetworkManager-tui nm-connection-editor \
 			polkit-kde google-ubuntu-fonts"
 		;;
 	*)
 		warn "Unsupported OS for automatic install."
-		warn "Install manually: river waybar fuzzel kanshi swayidle swaylock swaybg wlopm wlr-randr wl-clipboard brightnessctl playerctl pavucontrol power-profiles-daemon a-polkit-agent"
+		warn "Install manually: river-classic (or river 0.3.x) waybar fuzzel kanshi swayidle swaylock swaybg wlopm wlr-randr wl-clipboard brightnessctl playerctl pavucontrol sway-notification-center power-profiles-daemon a-polkit-agent"
 		return
 		;;
 	esac
+
+	info "Installing the river compositor"
+	install_compositor
 
 	info "Installing river desktop packages (best-effort per package)"
 	for pkg in $pkgs; do
@@ -160,6 +181,15 @@ install_packages() {
 			warn "could not install '$pkg' (skipping); install it manually if you need it"
 		fi
 	done
+
+	# rivertile is the default layout generator this config uses. If it's
+	# missing, the installed river is almost certainly the non-monolithic
+	# 0.4+ build -- warn clearly so the user can switch to river-classic.
+	if ! is_command rivertile; then
+		warn "rivertile not found. Your distro's 'river' is likely the non-monolithic 0.4+"
+		warn "build, which doesn't bundle rivertile. Install 'river-classic' (the 0.3.x fork"
+		warn "this config targets): https://codeberg.org/river/river-classic"
+	fi
 
 	if ! is_command wlopm; then
 		warn "wlopm is not installed -- idle DPMS screen-off (swayidle) will be a no-op."
