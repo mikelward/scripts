@@ -1,0 +1,140 @@
+#!/bin/bash
+# Tests for the autosession dispatcher: which backend it picks for each
+# ($TMUX / $SHPOOL_SESSION_NAME / $SESSION_BACKEND / installed) case. Runs the
+# real autosession with fake autotmux/autoshpool backends in an isolated PATH,
+# following the detachsession_test / makesession_test conventions.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  ln -s "$(command -v dirname)" "$BIN/dirname"
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+fake() {
+  cat > "$BIN/$1" <<EOF
+#!/bin/bash
+echo "$1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$BIN/$1"
+}
+
+install_script() {
+  cp "$SCRIPT_DIR/$1" "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+run() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$@" "$BIN/$script" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_called() {
+  if ! grep -qx -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_status() {
+  if test "$status" -ne "$1"; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1
+  fi
+}
+assert_output_contains() {
+  case "$output" in
+    *"$1"*) ;;
+    *) echo "  FAIL: output missing '$1'"; echo "  output: $output"; TEST_FAILED=1 ;;
+  esac
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+test_inside_tmux_picks_autotmux() {
+  install_script autosession; fake autotmux; fake autoshpool; fake tmux; fake shpool
+  run autosession TMUX=/tmp/sock
+  assert_called "autotmux "
+}
+test_inside_shpool_picks_autoshpool() {
+  install_script autosession; fake autotmux; fake autoshpool; fake tmux; fake shpool
+  run autosession SHPOOL_SESSION_NAME=work
+  assert_called "autoshpool "
+}
+test_session_backend_tmux() {
+  install_script autosession; fake autotmux; fake autoshpool
+  run autosession SESSION_BACKEND=tmux
+  assert_called "autotmux "
+}
+test_session_backend_shpool() {
+  install_script autosession; fake autotmux; fake autoshpool
+  run autosession SESSION_BACKEND=shpool
+  assert_called "autoshpool "
+}
+test_fallback_tmux_installed() {
+  install_script autosession; fake autotmux; fake autoshpool; fake tmux
+  run autosession
+  assert_called "autotmux "
+}
+test_fallback_shpool_installed() {
+  install_script autosession; fake autotmux; fake autoshpool; fake shpool
+  run autosession
+  assert_called "autoshpool "
+}
+test_fallback_prefers_shpool() {
+  # With both installed and no $SESSION_BACKEND, the fallback prefers shpool --
+  # the family default, matching the shell session_backend helper.
+  install_script autosession; fake autotmux; fake autoshpool; fake tmux; fake shpool
+  run autosession
+  assert_called "autoshpool "
+}
+test_no_backend_errors() {
+  install_script autosession; fake autotmux; fake autoshpool
+  run autosession
+  assert_status 1
+  assert_output_contains "no tmux or shpool backend available"
+}
+test_args_pass_through() {
+  install_script autosession; fake autotmux; fake autoshpool
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" SESSION_BACKEND=tmux "$BIN/autosession" switch work 2>&1)"
+  status=$?
+  set -e
+  assert_called "autotmux switch work"
+}
+
+run_test "dispatch: inside tmux picks autotmux" test_inside_tmux_picks_autotmux
+run_test "dispatch: inside shpool picks autoshpool" test_inside_shpool_picks_autoshpool
+run_test "dispatch: SESSION_BACKEND=tmux picks autotmux" test_session_backend_tmux
+run_test "dispatch: SESSION_BACKEND=shpool picks autoshpool" test_session_backend_shpool
+run_test "dispatch: falls back to installed tmux" test_fallback_tmux_installed
+run_test "dispatch: falls back to installed shpool" test_fallback_shpool_installed
+run_test "dispatch: prefers shpool when both are installed" test_fallback_prefers_shpool
+run_test "dispatch: no backend errors out" test_no_backend_errors
+run_test "dispatch: args pass through to backend" test_args_pass_through
+
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
