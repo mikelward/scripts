@@ -4,7 +4,13 @@
 # The tmux twin of makeshpool, dispatched by makesession. The first argument
 # is the session name; any further arguments are the command to run in it.
 #
-# The name is normalized like autotmux's generated names: tmux rewrites '#',
+# An exact existing name always wins, taken as-is: names can legally contain
+# characters sanitize_session_name rewrites (e.g. '#', which tmux keeps on
+# some paths), so classifying the raw name first keeps `maketmux foo#bar`
+# targeting that session instead of creating a "foo_bar" twin -- the same
+# existing-first, sanitize-only-when-generating order as sessionlib's
+# perform_switch_to and autotmux's resolve_switch_target. A name we do end up
+# creating is normalized like autotmux's generated names: tmux rewrites '#',
 # ':' and '.' out of names at creation (`new-session -s foo.bar` stores
 # "foo_bar"), and a leading '$' '%' '=' is id/exact-match syntax, so an
 # unsanitized name would be created under a different name than the one the
@@ -33,8 +39,15 @@ if test -z "$1"; then
   exit 2
 fi
 
-name="$(sanitize_session_name "$1")"
+name="$1"
 shift
+
+# Only a name that doesn't exist verbatim is a *generated* name; sanitize it
+# so creation and targeting agree (and so an already-created "foo_bar" is
+# found when "foo.bar" is asked for again).
+if ! session_exists "$name"; then
+  name="$(sanitize_session_name "$name")"
+fi
 
 if session_exists "$name"; then
   if test "$#" -gt 0; then
