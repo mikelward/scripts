@@ -400,11 +400,16 @@ install_packages() {
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
-                    grim slurp wl-clipboard playerctl \
                     network-manager-gnome blueman \
                     policykit-1-gnome \
                     fonts-jetbrains-mono \
                     || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
+                # These are in the default repos even where hyprland isn't, so
+                # install them separately -- otherwise a missing hyprland fails
+                # the whole command above and takes these down with it.
+                sudo apt-get install -y --install-recommends \
+                    grim slurp wl-clipboard playerctl gnome-calculator \
+                    || warn "screenshot/media/calculator tools unavailable via apt"
                 # yazi (terminal file manager) is often not in the default repos;
                 # install it separately so its absence doesn't block the rest.
                 sudo apt-get install -y --install-recommends yazi \
@@ -461,11 +466,16 @@ install_packages() {
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
-                    grim slurp wl-clipboard playerctl \
                     network-manager-applet blueman \
                     polkit-gnome \
                     jetbrains-mono-fonts \
                     || warn "some Hyprland packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
+                # In the default repos even where hyprland isn't, so install
+                # separately -- a missing hyprland above shouldn't take these
+                # down with it.
+                sudo dnf install -y \
+                    grim slurp wl-clipboard playerctl gnome-calculator \
+                    || warn "screenshot/media/calculator tools unavailable via dnf"
                 # yazi (terminal file manager) may need a COPR; install it
                 # separately so its absence doesn't block the rest.
                 sudo dnf install -y yazi \
