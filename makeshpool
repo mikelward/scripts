@@ -23,6 +23,16 @@
 # guard makes sourcing it define functions without running the loop.
 source "$(dirname "$0")/autoshpool"
 
+# A name is required. Refusing here matters most inside a session: with no
+# name, request_switch below would record an empty target and detach us into
+# nothing -- the loop reads the empty request as "no switch" and the ms/msp
+# wrappers exit the now-detached shell. Same guard as sessionlib's
+# perform_switch_to.
+if test -z "$1"; then
+  echo "makeshpool: session name required" >&2
+  exit 2
+fi
+
 if test -n "$SHPOOL_SESSION_NAME"; then
   # The switch handoff carries only a session name (the outer loop just runs
   # `shpool attach "$name"`), so extra `shpool attach` options -- e.g. --ttl,
