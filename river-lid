@@ -1,0 +1,100 @@
+#!/bin/sh
+# river-lid -- turn a laptop's internal panel off while the lid is closed,
+# but ONLY when at least one external output is connected. Closing the lid
+# on an undocked laptop therefore never blanks the only screen; closing it
+# while docked drops to the external monitor(s). Reopening restores the
+# internal panel.
+#
+# This complements kanshi (which arranges displays on hotplug but can't
+# see the lid) and the logind drop-in installed by setup-river (which
+# stops the machine suspending on lid-close while docked). Together they
+# implement: external enabled on hotplug; internal off on lid-close when
+# external present; no auto-suspend on lid-close with external active.
+#
+# Usage:
+#     river-lid <internal-output-name>      e.g. river-lid eDP-1
+#
+# Launch it from a per-host river file (laptops only):
+#     run_once river-lid eDP-1
+#
+# Get the internal output name from `wlr-randr` (usually eDP-1 or LVDS-1).
+# Requires wlr-randr and an ACPI lid (/proc/acpi/button/lid/*/state).
+# Degrades to a clean no-op if any of those is missing.
+
+poll_seconds=2
+
+internal="$1"
+if test -z "$internal"; then
+	printf 'river-lid: usage: river-lid <internal-output-name>\n' >&2
+	exit 2
+fi
+
+if ! command -v wlr-randr >/dev/null 2>&1; then
+	printf 'river-lid: wlr-randr not found; nothing to do\n' >&2
+	exit 0
+fi
+
+# Locate the ACPI lid state file. RIVER_LID_STATE_FILE overrides discovery
+# (used by the tests). No lid (desktop / unusual firmware) means there is
+# nothing to watch -- exit cleanly.
+lid_state_file="${RIVER_LID_STATE_FILE:-}"
+if test -z "$lid_state_file"; then
+	for f in /proc/acpi/button/lid/*/state; do
+		test -r "$f" || continue
+		lid_state_file="$f"
+		break
+	done
+fi
+if test -z "$lid_state_file" || ! test -r "$lid_state_file"; then
+	printf 'river-lid: no ACPI lid state file; nothing to watch\n' >&2
+	exit 0
+fi
+
+# Print "closed" or "open" for the current lid state.
+lid_status() {
+	# Line looks like: "state:      closed"
+	awk '{print $NF}' "$lid_state_file" 2>/dev/null
+}
+
+# True if any output other than the internal panel is connected AND
+# enabled (mapped into compositor space). A connected-but-disabled head
+# must NOT count: blanking the internal panel when the only other output
+# is disabled would leave the session with no visible screen.
+#
+# wlr-randr lists each output on a non-indented line beginning with its
+# name, then indented properties beneath it, including "Enabled: yes|no".
+# Track the current output name and only flag an enabled, non-internal one.
+external_present() {
+	wlr-randr 2>/dev/null | awk -v internal="$internal" '
+		/^[^[:space:]]/ { name = $1; next }
+		$1 == "Enabled:" && $2 == "yes" && name != internal { found = 1 }
+		END { exit found ? 0 : 1 }
+	'
+}
+
+set_internal() {
+	# $1 is "on" or "off". wlr-randr no-ops harmlessly if already in that
+	# state, but we track last_applied to avoid spamming it every poll.
+	wlr-randr --output "$internal" --"$1" >/dev/null 2>&1 || true
+}
+
+# Track the last state we applied so we only act on transitions.
+last_applied=""
+
+while true; do
+	if test "$(lid_status)" = "closed" && external_present; then
+		desired="off"
+	else
+		desired="on"
+	fi
+
+	if test "$desired" != "$last_applied"; then
+		set_internal "$desired"
+		last_applied="$desired"
+	fi
+
+	# RIVER_LID_ONESHOT runs a single decision cycle then exits (tests).
+	test -n "${RIVER_LID_ONESHOT:-}" && break
+
+	sleep "$poll_seconds"
+done

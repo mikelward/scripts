@@ -1,0 +1,267 @@
+#!/bin/bash
+# Configure a river-based Wayland desktop (a traditional, KDE-like,
+# dynamic-tiling alternative to KDE Plasma).
+#
+# Installs the river compositor and its supporting stack (Waybar, fuzzel,
+# swaync, kanshi, swayidle/swaylock, swaybg, power-profiles-daemon, ...),
+# then applies the system-level bits that dotfiles can't:
+#   - a logind drop-in so the machine does NOT suspend on lid-close while
+#     docked / an external monitor is attached;
+#   - enables power-profiles-daemon;
+#   - a wayland-sessions entry so a display manager offers "river".
+#
+# The river/Waybar/kanshi/... configuration itself is installed as
+# dotfiles by confinst (from the conf repo), not here.
+#
+# Usage:
+#     setup-river [--no-install] [--ignore-errors] [-h | --help]
+#
+# --no-install skips package installation and only (re)applies the
+# system configuration. --ignore-errors keeps going past failures.
+#
+# river is Linux/BSD only; this script supports Debian- and Fedora-family
+# distros for package installation.
+
+# Whether to install packages. "no" (via --no-install) only (re)applies
+# configuration.
+INSTALL=yes
+
+# Whether to keep going past failures. "no" aborts on the first error via
+# set -e; "yes" (via --ignore-errors) pushes through.
+IGNORE_ERRORS=no
+
+info() {
+	printf "%s\n" "$*"
+}
+
+warn() {
+	printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+	printf "Error: %s\n" "$*" >&2
+	exit 1
+}
+
+is_command() {
+	command -v "$1" >/dev/null 2>&1
+}
+
+usage() {
+	cat <<'USAGE'
+Usage: setup-river [--no-install] [--ignore-errors] [-h | --help]
+
+Configure a river-based Wayland desktop.
+
+Options:
+  --no-install     Skip package installation; only (re)apply system config
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+	case "$1" in
+	--install)
+		INSTALL=yes
+		;;
+	--no-install)
+		INSTALL=no
+		;;
+	--ignore-errors)
+		IGNORE_ERRORS=yes
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		warn "Unknown option: $1"
+		usage >&2
+		exit 1
+		;;
+	esac
+	shift
+done
+
+if test "$IGNORE_ERRORS" = no; then
+	set -e
+fi
+
+# --- Detect OS ---
+
+detect_os() {
+	case "$(uname -s)" in
+	Linux)
+		if command -v apt-get >/dev/null 2>&1; then
+			OS="debian"
+		elif command -v dnf >/dev/null 2>&1; then
+			OS="redhat"
+		else
+			OS="unknown"
+		fi
+		;;
+	*)
+		OS="unknown"
+		;;
+	esac
+}
+
+# --- Install packages ---
+
+# Package install is best-effort per package: names differ across distros
+# and some tools (e.g. wlopm) aren't always packaged. A missing package
+# warns and is skipped rather than aborting the whole desktop setup.
+install_one() {
+	pkg="$1"
+	case "$OS" in
+	debian) sudo apt-get install -y --install-recommends "$pkg" ;;
+	redhat) sudo dnf install -y "$pkg" ;;
+	esac
+}
+
+install_packages() {
+	# Common package names first; per-distro overrides below. The list
+	# covers: compositor + default layout (river bundles rivertile),
+	# bar/launcher/notifications, display + idle/lock, audio/backlight
+	# helpers used by the keybinds, portals, and a polkit agent.
+	common="river waybar fuzzel kanshi swayidle swaylock swaybg \
+		wlr-randr wl-clipboard brightnessctl playerctl pavucontrol \
+		grim slurp power-profiles-daemon xdg-desktop-portal-wlr \
+		xdg-desktop-portal-gtk qt6-wayland"
+
+	case "$OS" in
+	debian)
+		info "Updating package lists"
+		sudo apt-get update -qq
+		# Debian/Ubuntu-specific names.
+		pkgs="$common swaync wlopm network-manager-gnome \
+			polkit-kde-agent-1 fonts-ubuntu qtwayland5"
+		;;
+	redhat)
+		# Fedora-specific names.
+		pkgs="$common swaync NetworkManager-tui nm-connection-editor \
+			polkit-kde google-ubuntu-fonts"
+		;;
+	*)
+		warn "Unsupported OS for automatic install."
+		warn "Install manually: river waybar fuzzel kanshi swayidle swaylock swaybg wlopm wlr-randr wl-clipboard brightnessctl playerctl pavucontrol power-profiles-daemon a-polkit-agent"
+		return
+		;;
+	esac
+
+	info "Installing river desktop packages (best-effort per package)"
+	for pkg in $pkgs; do
+		if install_one "$pkg"; then
+			info "  installed: $pkg"
+		else
+			warn "could not install '$pkg' (skipping); install it manually if you need it"
+		fi
+	done
+
+	if ! is_command wlopm; then
+		warn "wlopm is not installed -- idle DPMS screen-off (swayidle) will be a no-op."
+		warn "Build it from https://git.sr.ht/~leon_plickat/wlopm if you want screen blanking on idle."
+	fi
+}
+
+# --- logind: don't suspend on lid-close while docked ---
+
+# HandleLidSwitchDocked=ignore stops logind suspending when the lid closes
+# while the machine is "docked" -- which logind considers true whenever an
+# external display (or dock) is connected. That is exactly the requested
+# behaviour: no auto-suspend on lid-close if an external display is active.
+# Undocked lid-close still suspends (HandleLidSwitch default).
+configure_logind_lid() {
+	dropin_dir="/etc/systemd/logind.conf.d"
+	dropin="$dropin_dir/10-river-lid.conf"
+	info "Configuring logind: no suspend on lid-close while docked ($dropin)"
+	sudo mkdir -p "$dropin_dir"
+	sudo tee "$dropin" >/dev/null <<'LOGIND'
+# Installed by setup-river.
+# Don't suspend when the lid closes while docked / an external display is
+# connected. Undocked lid-close still suspends.
+[Login]
+HandleLidSwitch=suspend
+HandleLidSwitchExternalPower=suspend
+HandleLidSwitchDocked=ignore
+LOGIND
+	# Reload logind so the drop-in takes effect without a reboot. Don't
+	# abort the whole run if the reload fails (e.g. inside a container).
+	if is_command systemctl; then
+		sudo systemctl kill -s HUP systemd-logind 2>/dev/null ||
+			warn "could not reload systemd-logind; changes apply after reboot"
+	fi
+}
+
+# --- power-profiles-daemon ---
+
+enable_power_profiles() {
+	if is_command systemctl; then
+		info "Enabling power-profiles-daemon"
+		sudo systemctl enable --now power-profiles-daemon.service 2>/dev/null ||
+			warn "could not enable power-profiles-daemon (is it installed?)"
+	fi
+}
+
+# --- Display-manager session entry ---
+
+# Install a wayland-sessions entry so SDDM/greetd/GDM offer "River". The
+# river package usually ships one; only create it if missing.
+install_session_entry() {
+	entry="/usr/share/wayland-sessions/river.desktop"
+	if test -f "$entry"; then
+		info "river session entry already present ($entry)"
+		return
+	fi
+	if ! is_command river; then
+		warn "river not on PATH; skipping session entry (install river first)"
+		return
+	fi
+	info "Installing river session entry ($entry)"
+	sudo mkdir -p /usr/share/wayland-sessions
+	sudo tee "$entry" >/dev/null <<'DESKTOP'
+[Desktop Entry]
+Name=River
+Comment=Dynamic tiling Wayland compositor
+Exec=river
+Type=Application
+DESKTOP
+}
+
+# --- Main ---
+
+detect_os
+
+if test "$INSTALL" = yes; then
+	install_packages
+else
+	info "Skipping package installation (--no-install)"
+fi
+
+configure_logind_lid
+enable_power_profiles
+install_session_entry
+
+# Optional local hook, mirroring setup-kde's setup-kde.local.
+if is_command setup-river.local; then
+	info "Sourcing setup-river.local"
+	# shellcheck disable=SC1090
+	source setup-river.local
+fi
+
+info ""
+info "river desktop configured."
+info "Next steps:"
+info "  1. Ensure the conf dotfiles are installed:  confinst"
+info "  2. Log out and pick 'River' at your display manager (or run 'river'"
+info "     from a TTY)."
+info "  3. First run prints a note about the missing per-host config. Create"
+info "     it: copy ~/.config/river/hosts/examples/template.sh to"
+info "     ~/.config/river/hosts/\$(hostname -s).sh and fill in input device"
+info "     names from 'riverctl list-inputs'."
+info "  4. Copy ~/.config/kanshi/hosts/examples/template.conf to"
+info "     ~/.config/kanshi/hosts/\$(hostname -s).conf and fill in output"
+info "     names from 'wlr-randr'."
