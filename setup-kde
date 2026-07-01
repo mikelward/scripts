@@ -116,16 +116,16 @@ install_krohnkite() {
 
     cd "$KROHNKITE_DIR"
 
-    # Build using go-task (preferred) or make (fallback). go-task is no
-    # longer installed by setup, but use it if it's present: the binary is
-    # named "go-task" from Fedora's package, or "task" when installed by
+    # Build using go-task (preferred), then a package manager. go-task is
+    # no longer installed by setup, but use it if it's present: the binary
+    # is named "go-task" from Fedora's package, or "task" when installed by
     # hand -- but "task" can also be Taskwarrior, so check the version
-    # banner before trusting it. Otherwise fall back to make, then pnpm
-    # (preferred over npm when available), then npm.
+    # banner before trusting it.
     #
-    # The make path is only used when npm is present: Krohnkite's Makefile
-    # shells out to npm internally, so on a pnpm-only machine we must skip
-    # make and let the pnpm branch build it directly.
+    # Otherwise prefer pnpm, then make, then npm. pnpm comes before make
+    # because Krohnkite's Makefile shells out to npm internally, so make is
+    # no use on a pnpm-only machine; fall back to make only when npm is
+    # actually present.
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
         go-task package
@@ -133,12 +133,12 @@ install_krohnkite() {
             && task --version 2>/dev/null | grep -q '^Task version'; then
         info "Building Krohnkite with task"
         task package
-    elif test -f Makefile && command -v npm >/dev/null 2>&1; then
-        info "Building Krohnkite with make"
-        make
     elif command -v pnpm >/dev/null 2>&1; then
         info "Building Krohnkite with pnpm"
         pnpm install && pnpm run build
+    elif test -f Makefile && command -v npm >/dev/null 2>&1; then
+        info "Building Krohnkite with make"
+        make
     else
         info "Building Krohnkite with npm"
         npm install && npm run build
