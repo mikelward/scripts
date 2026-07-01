@@ -303,6 +303,14 @@ test_setup_river_debian_swaync_package() {
 	fi
 }
 
+# Qt6 Wayland plugin: qt6-wayland on Debian/Ubuntu, qt6-qtwayland on Fedora.
+test_setup_river_fedora_qtwayland_package() {
+	if ! grep -q "qt6-qtwayland" "$SETUP_RIVER"; then
+		echo "  FAIL: setup-river does not use Fedora's qt6-qtwayland package"
+		TEST_FAILED=1
+	fi
+}
+
 test_setup_river_help() {
 	out="$("$SETUP_RIVER" --help 2>&1)"
 	status=$?
@@ -340,6 +348,7 @@ run_test "river-lid keeps internal on while lid open" test_river_lid_keeps_inter
 run_test "menu wrapper uses supported fuzzel flags" test_menu_uses_supported_fuzzel_flags
 run_test "setup-river prefers river-classic" test_setup_river_prefers_river_classic
 run_test "setup-river uses Debian swaync package name" test_setup_river_debian_swaync_package
+run_test "setup-river uses Fedora qt6-qtwayland package name" test_setup_river_fedora_qtwayland_package
 run_test "setup-river --help prints usage" test_setup_river_help
 
 echo

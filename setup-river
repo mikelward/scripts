@@ -144,24 +144,28 @@ install_packages() {
 	# covers: bar/launcher/notifications, display + idle/lock,
 	# audio/backlight helpers used by the keybinds, portals, and a polkit
 	# agent. The compositor is handled separately (see install_compositor).
+	# Note: the Qt6 Wayland plugin has different package names per distro
+	# (qt6-wayland on Debian/Ubuntu, qt6-qtwayland on Fedora), so it lives
+	# in the per-distro lists below, not here.
 	common="waybar fuzzel kanshi swayidle swaylock swaybg \
 		wlr-randr wl-clipboard brightnessctl playerctl pavucontrol \
 		grim slurp power-profiles-daemon xdg-desktop-portal-wlr \
-		xdg-desktop-portal-gtk qt6-wayland"
+		xdg-desktop-portal-gtk"
 
 	case "$OS" in
 	debian)
 		info "Updating package lists"
 		sudo apt-get update -qq
 		# Debian/Ubuntu-specific names. swaync's binary is packaged as
-		# sway-notification-center on Debian/Ubuntu.
+		# sway-notification-center; Qt6 Wayland is qt6-wayland.
 		pkgs="$common sway-notification-center wlopm network-manager-gnome \
-			polkit-kde-agent-1 fonts-ubuntu qtwayland5"
+			polkit-kde-agent-1 fonts-ubuntu qt6-wayland qtwayland5"
 		;;
 	redhat)
-		# Fedora-specific names (Fedora packages swaync as 'swaync').
+		# Fedora-specific names (swaync is 'swaync'; Qt6 Wayland is
+		# qt6-qtwayland).
 		pkgs="$common swaync NetworkManager-tui nm-connection-editor \
-			polkit-kde google-ubuntu-fonts"
+			polkit-kde qt6-qtwayland google-ubuntu-fonts"
 		;;
 	*)
 		warn "Unsupported OS for automatic install."
