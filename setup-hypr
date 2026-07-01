@@ -3,26 +3,21 @@
 #
 # The dotfiles themselves live in the conf repo (config/hypr, config/waybar,
 # config/fuzzel, config/swaync, config/kanshi) and are installed by conf's
-# `make install`. This script handles the parts that aren't dotfiles:
+# `make install`. The Wayland desktop *packages* are installed by the top-level
+# `setup` (alongside the KDE packages). This script, like setup-kde, handles the
+# parts that are neither dotfiles nor packages:
 #
-# - Install the Wayland desktop packages (compositor, bar, launcher,
-#   notifications, wallpaper, display hotplug, idle/lock, power management).
 # - Tell systemd-logind to ignore the laptop lid so Hyprland's own lid
 #   handler (config/hypr/scripts/lid.sh) is authoritative: disable the
 #   internal panel on close, and suspend only when no external display is
 #   connected.
 # - Enable power-profiles-daemon (used by the waybar power-profiles module).
 #
-# Package availability varies by distro -- Hyprland is first-class on Arch,
-# and may need a backport / COPR / manual build on Debian and Fedora. Missing
-# packages are warned about, not fatal, so the rest still applies.
-#
 # Usage:
 #     setup-hypr [--no-install] [--ignore-errors] [-h | --help]
 #
-# --no-install skips package installation and only (re)applies the logind
-# drop-in and service enablement. --ignore-errors keeps going past failures.
-# setup forwards both flags here.
+# --no-install skips the system-modifying steps (logind drop-in, enabling the
+# service). --ignore-errors keeps going past failures. setup forwards both.
 
 # Whether to install packages. "no" (via --no-install) skips the install.
 INSTALL=yes
@@ -52,10 +47,10 @@ usage() {
     cat <<'USAGE'
 Usage: setup-hypr [--no-install] [--ignore-errors] [-h | --help]
 
-Configure a Hyprland-based Wayland desktop.
+Configure a Hyprland-based Wayland desktop (packages come from `setup`).
 
 Options:
-  --no-install     Skip package installation; only (re)apply logind + services
+  --no-install     Skip the system-modifying steps (logind drop-in, services)
   --ignore-errors  Keep going past failures instead of aborting on the first
   -h, --help       Show this help and exit
 USAGE
@@ -92,88 +87,6 @@ done
 if test "$IGNORE_ERRORS" = no; then
     set -e
 fi
-
-# --- Detect package backend ---
-
-# Unlike the top-level `setup`, detect pacman too: Hyprland is first-class on
-# Arch. Prefer the native package manager of the running distro.
-detect_backend() {
-    if command -v pacman >/dev/null 2>&1; then
-        BACKEND=pacman
-    elif command -v apt-get >/dev/null 2>&1; then
-        BACKEND=apt
-    elif command -v dnf >/dev/null 2>&1; then
-        BACKEND=dnf
-    else
-        BACKEND=unknown
-    fi
-}
-
-# --- Install packages ---
-
-# Package sets per backend. Names differ across distros; where a package isn't
-# in the default repos (common on Debian/Fedora for the hypr* tools), the
-# install warns and continues rather than aborting.
-install_packages() {
-    detect_backend
-    case "$BACKEND" in
-        pacman)
-            info "Installing Wayland desktop packages (pacman)"
-            # All first-class in Arch's repos.
-            sudo pacman -S --needed --noconfirm \
-                hyprland hypridle hyprlock \
-                xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-                waybar fuzzel swaync swww kanshi \
-                power-profiles-daemon \
-                pipewire wireplumber pavucontrol \
-                brightnessctl \
-                network-manager-applet blueman \
-                polkit-gnome \
-                ttf-jetbrains-mono-nerd \
-                || warn "some pacman packages failed to install"
-            ;;
-        apt)
-            info "Installing Wayland desktop packages (apt)"
-            sudo apt-get update -qq || true
-            # hyprland/hypridle/hyprlock/swww/swaync often need a recent
-            # Debian/Ubuntu or a backport; install what's available and warn
-            # on the rest.
-            sudo apt-get install -y --install-recommends \
-                hyprland hyprland-idle hyprland-lock \
-                xdg-desktop-portal-gtk \
-                waybar fuzzel swaync kanshi \
-                power-profiles-daemon \
-                pipewire wireplumber pavucontrol \
-                brightnessctl \
-                network-manager-gnome blueman \
-                policykit-1-gnome \
-                fonts-jetbrains-mono \
-                || warn "some apt packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
-            ;;
-        dnf)
-            info "Installing Wayland desktop packages (dnf)"
-            sudo dnf install -y \
-                hyprland hypridle hyprlock \
-                hyprland-portal xdg-desktop-portal-gtk \
-                waybar fuzzel swaync swww kanshi \
-                power-profiles-daemon \
-                pipewire wireplumber pavucontrol \
-                brightnessctl \
-                network-manager-applet blueman \
-                polkit-gnome \
-                jetbrains-mono-fonts \
-                || warn "some dnf packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
-            ;;
-        *)
-            warn "Unsupported package backend; install manually:"
-            warn "  hyprland hypridle hyprlock xdg-desktop-portal-hyprland"
-            warn "  waybar fuzzel swaync swww kanshi power-profiles-daemon"
-            warn "  pipewire wireplumber pavucontrol brightnessctl"
-            warn "  network-manager-applet blueman polkit-gnome"
-            warn "  a JetBrains Mono Nerd Font"
-            ;;
-    esac
-}
 
 # --- systemd-logind: ignore the lid ---
 
@@ -214,13 +127,15 @@ enable_services() {
 
 # --- Main ---
 
+# The Wayland desktop packages are installed by the top-level `setup`. Here we
+# only apply the system-modifying config; --no-install skips it (e.g. a dry run
+# or when re-running just to source setup-hypr.local).
 if test "$INSTALL" = yes; then
-    install_packages
+    install_logind_lid_dropin
+    enable_services
 else
-    info "Skipping package installation (--no-install)"
+    info "Skipping logind drop-in and service enablement (--no-install)"
 fi
-install_logind_lid_dropin
-enable_services
 
 # Local overrides, mirroring setup-kde's setup-kde.local hook.
 if is_command setup-hypr.local; then
