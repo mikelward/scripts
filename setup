@@ -382,16 +382,28 @@ install_packages() {
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
                 sudo apt-get install -y --install-recommends kitty
-                if test "$DESKTOP" = kde; then
-                    info "Installing KDE graphical packages"
-                    sudo apt-get install -y --install-recommends \
-                        kde-standard \
-                        kwin-dev \
-                        plasma-desktop \
-                        plasma-sdk
-                else
-                    info "Hyprland desktop selected; setup-hypr installs its packages"
-                fi
+                info "Installing KDE graphical packages"
+                sudo apt-get install -y --install-recommends \
+                    kde-standard \
+                    kwin-dev \
+                    plasma-desktop \
+                    plasma-sdk
+                # Hyprland Wayland desktop packages, installed unconditionally
+                # alongside KDE so either desktop is available (--kde/--hypr
+                # only choose which one to *configure*). `|| warn` because
+                # several hypr* tools may need a backport and shouldn't abort.
+                info "Installing Hyprland desktop packages"
+                sudo apt-get install -y --install-recommends \
+                    hyprland hyprland-idle hyprland-lock \
+                    xdg-desktop-portal-gtk \
+                    waybar fuzzel swaync kanshi \
+                    power-profiles-daemon \
+                    pipewire wireplumber pavucontrol \
+                    brightnessctl \
+                    network-manager-gnome blueman \
+                    policykit-1-gnome \
+                    fonts-jetbrains-mono \
+                    || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
             fi
             ;;
         redhat)
@@ -426,16 +438,28 @@ install_packages() {
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
                 sudo dnf install -y kitty
-                if test "$DESKTOP" = kde; then
-                    info "Installing KDE graphical packages"
-                    sudo dnf install -y \
-                        '@kde-desktop-environment' \
-                        kwin-devel \
-                        plasma-desktop \
-                        plasma-sdk
-                else
-                    info "Hyprland desktop selected; setup-hypr installs its packages"
-                fi
+                info "Installing KDE graphical packages"
+                sudo dnf install -y \
+                    '@kde-desktop-environment' \
+                    kwin-devel \
+                    plasma-desktop \
+                    plasma-sdk
+                # Hyprland Wayland desktop packages, installed unconditionally
+                # alongside KDE so either desktop is available (--kde/--hypr
+                # only choose which one to *configure*). `|| warn` because
+                # several hypr* tools may need a COPR and shouldn't abort.
+                info "Installing Hyprland desktop packages"
+                sudo dnf install -y \
+                    hyprland hypridle hyprlock \
+                    hyprland-portal xdg-desktop-portal-gtk \
+                    waybar fuzzel swaync swww kanshi \
+                    power-profiles-daemon \
+                    pipewire wireplumber pavucontrol \
+                    brightnessctl \
+                    network-manager-applet blueman \
+                    polkit-gnome \
+                    jetbrains-mono-fonts \
+                    || warn "some Hyprland packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
             fi
             ;;
         macos)

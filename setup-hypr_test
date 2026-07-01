@@ -131,45 +131,27 @@ test_unknown_option() {
     assert_output_contains "Unknown option"
 }
 
-# --- package installation ---
+# --- packages are NOT installed here (the top-level `setup` does that) ---
 
-test_installs_packages_via_pacman() {
+test_does_not_install_packages() {
     run_hypr
-    assert_status 0 &&
-    assert_called "sudo pacman -S" &&
-    assert_output_contains "pacman"
-}
-
-test_installs_core_desktop_packages() {
-    run_hypr
-    # A representative slice of the required desktop stack must be requested.
-    assert_status 0 &&
-    assert_called "hyprland" &&
-    assert_called "waybar" &&
-    assert_called "fuzzel" &&
-    assert_called "swaync" &&
-    assert_called "kanshi" &&
-    assert_called "power-profiles-daemon"
-}
-
-test_no_install_skips_packages() {
-    run_hypr --no-install
     assert_status 0 &&
     assert_not_called "pacman -S" &&
-    assert_output_contains "Skipping package installation"
+    assert_not_called "apt-get install" &&
+    assert_not_called "dnf install"
 }
 
 # --- logind lid drop-in ---
 
 test_installs_logind_lid_dropin() {
-    run_hypr --no-install
+    run_hypr
     assert_status 0 &&
     assert_called "sudo mkdir -p /etc/systemd/logind.conf.d" &&
     assert_called "sudo tee /etc/systemd/logind.conf.d/10-hypr-lid.conf"
 }
 
 test_reloads_logind() {
-    run_hypr --no-install
+    run_hypr
     assert_status 0 &&
     assert_called "sudo systemctl kill -s HUP systemd-logind"
 }
@@ -177,20 +159,27 @@ test_reloads_logind() {
 # --- services ---
 
 test_enables_power_profiles_daemon() {
-    run_hypr --no-install
+    run_hypr
     assert_status 0 &&
     assert_called "sudo systemctl enable --now power-profiles-daemon"
+}
+
+# --no-install skips the system-modifying steps.
+test_no_install_skips_system_changes() {
+    run_hypr --no-install
+    assert_status 0 &&
+    assert_not_called "sudo tee /etc/systemd/logind.conf.d" &&
+    assert_output_contains "Skipping logind"
 }
 
 run_test "help flag" test_help_flag
 run_test "-h flag" test_h_flag
 run_test "unknown option errors" test_unknown_option
-run_test "installs packages via pacman" test_installs_packages_via_pacman
-run_test "requests core desktop packages" test_installs_core_desktop_packages
-run_test "no-install skips packages" test_no_install_skips_packages
+run_test "does not install packages (setup does)" test_does_not_install_packages
 run_test "installs logind lid drop-in" test_installs_logind_lid_dropin
 run_test "reloads logind" test_reloads_logind
 run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
+run_test "no-install skips system changes" test_no_install_skips_system_changes
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
