@@ -1,0 +1,234 @@
+#!/bin/sh
+# Configure a Hyprland-based Wayland desktop (KDE replacement).
+#
+# The dotfiles themselves live in the conf repo (config/hypr, config/waybar,
+# config/fuzzel, config/swaync, config/kanshi) and are installed by conf's
+# `make install`. This script handles the parts that aren't dotfiles:
+#
+# - Install the Wayland desktop packages (compositor, bar, launcher,
+#   notifications, wallpaper, display hotplug, idle/lock, power management).
+# - Tell systemd-logind to ignore the laptop lid so Hyprland's own lid
+#   handler (config/hypr/scripts/lid.sh) is authoritative: disable the
+#   internal panel on close, and suspend only when no external display is
+#   connected.
+# - Enable power-profiles-daemon (used by the waybar power-profiles module).
+#
+# Package availability varies by distro -- Hyprland is first-class on Arch,
+# and may need a backport / COPR / manual build on Debian and Fedora. Missing
+# packages are warned about, not fatal, so the rest still applies.
+#
+# Usage:
+#     setup-hypr [--no-install] [--ignore-errors] [-h | --help]
+#
+# --no-install skips package installation and only (re)applies the logind
+# drop-in and service enablement. --ignore-errors keeps going past failures.
+# setup forwards both flags here.
+
+# Whether to install packages. "no" (via --no-install) skips the install.
+INSTALL=yes
+
+# Whether to keep going past failures. "no" aborts on the first error via
+# set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
+IGNORE_ERRORS=no
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+is_command() {
+    test -x "$(command -v "$1")"
+}
+
+usage() {
+    cat <<'USAGE'
+Usage: setup-hypr [--no-install] [--ignore-errors] [-h | --help]
+
+Configure a Hyprland-based Wayland desktop.
+
+Options:
+  --no-install     Skip package installation; only (re)apply logind + services
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        --install)
+            INSTALL=yes
+            ;;
+        --no-install)
+            INSTALL=no
+            ;;
+        --ignore-errors)
+            IGNORE_ERRORS=yes
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Abort on the first error by default. --ignore-errors leaves set -e off so
+# the script pushes through failing steps.
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
+
+# --- Detect package backend ---
+
+# Unlike the top-level `setup`, detect pacman too: Hyprland is first-class on
+# Arch. Prefer the native package manager of the running distro.
+detect_backend() {
+    if command -v pacman >/dev/null 2>&1; then
+        BACKEND=pacman
+    elif command -v apt-get >/dev/null 2>&1; then
+        BACKEND=apt
+    elif command -v dnf >/dev/null 2>&1; then
+        BACKEND=dnf
+    else
+        BACKEND=unknown
+    fi
+}
+
+# --- Install packages ---
+
+# Package sets per backend. Names differ across distros; where a package isn't
+# in the default repos (common on Debian/Fedora for the hypr* tools), the
+# install warns and continues rather than aborting.
+install_packages() {
+    detect_backend
+    case "$BACKEND" in
+        pacman)
+            info "Installing Wayland desktop packages (pacman)"
+            # All first-class in Arch's repos.
+            sudo pacman -S --needed --noconfirm \
+                hyprland hypridle hyprlock \
+                xdg-desktop-portal-hyprland \
+                waybar fuzzel swaync swww kanshi \
+                power-profiles-daemon \
+                pipewire wireplumber pavucontrol \
+                brightnessctl \
+                network-manager-applet blueman \
+                polkit-gnome \
+                ttf-jetbrains-mono-nerd \
+                || warn "some pacman packages failed to install"
+            ;;
+        apt)
+            info "Installing Wayland desktop packages (apt)"
+            sudo apt-get update -qq || true
+            # hyprland/hypridle/hyprlock/swww/swaync often need a recent
+            # Debian/Ubuntu or a backport; install what's available and warn
+            # on the rest.
+            sudo apt-get install -y --install-recommends \
+                hyprland hyprland-idle hyprland-lock \
+                waybar fuzzel swaync kanshi \
+                power-profiles-daemon \
+                pipewire wireplumber pavucontrol \
+                brightnessctl \
+                network-manager-gnome blueman \
+                policykit-1-gnome \
+                fonts-jetbrains-mono \
+                || warn "some apt packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
+            ;;
+        dnf)
+            info "Installing Wayland desktop packages (dnf)"
+            sudo dnf install -y \
+                hyprland hypridle hyprlock \
+                hyprland-portal \
+                waybar fuzzel swaync swww kanshi \
+                power-profiles-daemon \
+                pipewire wireplumber pavucontrol \
+                brightnessctl \
+                network-manager-applet blueman \
+                polkit-gnome \
+                jetbrains-mono-fonts \
+                || warn "some dnf packages are unavailable; you may need a COPR (e.g. solopasha/hyprland) or manual build"
+            ;;
+        *)
+            warn "Unsupported package backend; install manually:"
+            warn "  hyprland hypridle hyprlock xdg-desktop-portal-hyprland"
+            warn "  waybar fuzzel swaync swww kanshi power-profiles-daemon"
+            warn "  pipewire wireplumber pavucontrol brightnessctl"
+            warn "  network-manager-applet blueman polkit-gnome"
+            warn "  a JetBrains Mono Nerd Font"
+            ;;
+    esac
+}
+
+# --- systemd-logind: ignore the lid ---
+
+# Hand full lid control to Hyprland (config/hypr/scripts/lid.sh) so a docked
+# laptop with the lid shut doesn't suspend when an external display is active.
+# A drop-in is cleaner than editing /etc/systemd/logind.conf directly.
+install_logind_lid_dropin() {
+    is_command systemctl || { warn "systemd not detected; skipping logind lid drop-in"; return 0; }
+    dropin_dir=/etc/systemd/logind.conf.d
+    dropin="$dropin_dir/10-hypr-lid.conf"
+    info "Installing logind lid drop-in ($dropin)"
+    sudo mkdir -p "$dropin_dir"
+    sudo tee "$dropin" >/dev/null <<'CONF'
+# Installed by setup-hypr. Let Hyprland's lid handler (lid.sh) manage the lid
+# so a docked laptop with the lid closed keeps running on its external display.
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+CONF
+    # Reload logind so the drop-in takes effect without a reboot.
+    sudo systemctl kill -s HUP systemd-logind 2>/dev/null \
+        || warn "could not reload systemd-logind; changes apply after reboot"
+}
+
+# --- Services ---
+
+enable_services() {
+    is_command systemctl || { warn "systemd not detected; enable power-profiles-daemon manually"; return 0; }
+    if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
+        info "Enabling power-profiles-daemon"
+        sudo systemctl enable --now power-profiles-daemon.service \
+            || warn "could not enable power-profiles-daemon"
+    else
+        warn "power-profiles-daemon.service not found; install power-profiles-daemon"
+    fi
+}
+
+# --- Main ---
+
+if test "$INSTALL" = yes; then
+    install_packages
+else
+    info "Skipping package installation (--no-install)"
+fi
+install_logind_lid_dropin
+enable_services
+
+# Local overrides, mirroring setup-kde's setup-kde.local hook.
+if is_command setup-hypr.local; then
+    info "Sourcing setup-hypr.local"
+    # shellcheck source=/dev/null
+    . setup-hypr.local
+fi
+
+info "Hyprland desktop configured."
+info "Fill in the placeholders (pointer/monitor names, wallpaper) noted in"
+info "conf/config/hypr/README.md, then log in and pick the Hyprland session"
+info "(or run 'Hyprland' from a TTY)."
