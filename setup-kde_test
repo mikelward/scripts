@@ -229,22 +229,24 @@ test_unknown_option() {
 
 # --- installation (mocked git/kpackagetool6; npm is a never-called canary) ---
 
-# The clone must come from my fork, not upstream codeberg.
+# The clone must come from my fork's mikel branch, not upstream codeberg.
 test_clones_fork_by_default() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_called "git clone --depth 1 https://github.com/mikelward/krohnkite.git"
+    assert_called "git clone --depth 1 --branch mikel https://github.com/mikelward/Krohnkite-codeberg.git"
 }
 
-# KROHNKITE_REPO overrides the clone source (any git URL or local path).
+# KROHNKITE_REPO and KROHNKITE_BRANCH override the clone source (any git
+# URL or local path) and branch.
 test_krohnkite_repo_env_overrides_clone_source() {
     add_install_mocks
     export KROHNKITE_REPO="https://example.test/me/krohnkite.git"
+    export KROHNKITE_BRANCH="mybranch"
     run_kde
-    unset KROHNKITE_REPO
+    unset KROHNKITE_REPO KROHNKITE_BRANCH
     assert_status 0 &&
-    assert_called "git clone --depth 1 https://example.test/me/krohnkite.git"
+    assert_called "git clone --depth 1 --branch mybranch https://example.test/me/krohnkite.git"
 }
 
 # A prebuilt .kwinscript committed to the fork installs directly: no build
