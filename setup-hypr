@@ -12,6 +12,11 @@
 #   internal panel on close, and suspend only when no external display is
 #   connected.
 # - Enable power-profiles-daemon (used by the waybar power-profiles module).
+# - Seed ~/.config/hypr/hyprland.conf.local (per-machine overrides: pinned
+#   monitor rules, extra launchers, device tweaks) from the installed
+#   template. Never overwrites an existing one. hyprland.conf sources the
+#   file, and Hyprland reports an error when a sourced file is missing, so
+#   an (empty) file must exist on every machine.
 #
 # Usage:
 #     setup-hypr [--no-install] [--ignore-errors] [-h | --help]
@@ -125,6 +130,46 @@ enable_services() {
     fi
 }
 
+# --- Per-machine hyprland.conf.local ---
+
+# Seed ~/.config/hypr/hyprland.conf.local from the template conf's
+# `make install` ships, mirroring setup-sway's config.local seeding. The
+# shared hyprland.conf sources it last so per-machine overrides win; it must
+# exist (even empty) or Hyprland reports a config error for the missing
+# sourced file. Never overwrite an existing one -- re-running setup-hypr
+# must be safe.
+seed_conf_local() {
+    cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+    local_file="$cfgdir/hyprland.conf.local"
+    template="$cfgdir/hyprland.conf.local.template"
+    if test -f "$local_file"; then
+        info "Per-machine config already exists ($local_file); leaving it alone"
+        return 0
+    fi
+    mkdir -p "$cfgdir"
+    if test -f "$template"; then
+        cp "$template" "$local_file"
+        info "Created $local_file from the template"
+    else
+        warn "hyprland.conf.local.template not found ($template); run conf's 'make install' first"
+        # Create an empty file anyway so hyprland.conf's `source` line
+        # doesn't raise a config error at startup.
+        : > "$local_file"
+        info "Created empty $local_file"
+    fi
+    # Inside a running Hyprland session, append this machine's monitor names
+    # as comments so filling in a pinned layout is copy-paste.
+    if test -n "$HYPRLAND_INSTANCE_SIGNATURE" && is_command hyprctl; then
+        {
+            echo ""
+            echo "# Monitors detected on this machine ($(hostname)):"
+            hyprctl monitors all -j 2>/dev/null \
+                | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 \
+                | sed 's/^/#   /'
+        } >> "$local_file"
+    fi
+}
+
 # --- Main ---
 
 # The Wayland desktop packages are installed by the top-level `setup`. Here we
@@ -136,6 +181,10 @@ if test "$INSTALL" = yes; then
 else
     info "Skipping logind drop-in and service enablement (--no-install)"
 fi
+
+# Per-machine overrides are user-level config, not a system change: seed them
+# even under --no-install.
+seed_conf_local
 
 # Local overrides, mirroring setup-kde's setup-kde.local hook.
 if is_command setup-hypr.local; then
