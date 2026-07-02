@@ -165,12 +165,27 @@ test_swaync_package_names() {
     assert_source_not_contains "fuzzel swaync"
 }
 
+# --- TypeScript compiler ---
+
+# setup-kde builds Krohnkite from source without fetching from the npm
+# registry at build time, which needs a local tsc -- so setup installs it
+# alongside npm: Debian/Ubuntu package it as node-typescript, Homebrew as
+# typescript, and Fedora ships no rpm so it's a one-time global npm
+# install during bootstrap.
+test_typescript_installed_with_npm() {
+    assert_source_contains "node-typescript" &&
+    assert_source_contains "npm install -g typescript" &&
+    assert_source_contains "brew install typescript"
+}
+
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
 run_test "shared Wayland stack installs independently of hyprland" \
     test_shared_wayland_stack_decoupled
 run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
+run_test "tsc installs alongside npm on every platform" \
+    test_typescript_installed_with_npm
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

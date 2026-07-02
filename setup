@@ -36,9 +36,12 @@
 # agent) or a key file already exists. Pass --ssh to generate one anyway,
 # or --no-ssh to skip it entirely.
 #
-# The distro npm/Node.js package is installed by default. Pass --no-npm to
-# skip it on machines where that package fails to install or where Node is
-# provided some other way (nvm, fnm, corepack, a standalone pnpm, etc.).
+# The distro npm/Node.js package is installed by default, along with the
+# TypeScript compiler (tsc), which setup-kde needs to build Krohnkite from
+# source without fetching from the npm registry at build time. Pass
+# --no-npm to skip both on machines where the npm package fails to install
+# or where Node is provided some other way (nvm, fnm, corepack, a
+# standalone pnpm, etc.) -- then provide tsc yourself.
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -82,9 +85,10 @@ IGNORE_ERRORS=no
 #   no   - never generate (--no-ssh)
 SSH=auto
 
-# Whether to install the npm/Node.js package. One of:
-#   yes - install it along with the other system packages (the default)
-#   no  - skip it (--no-npm), for machines where the distro npm package
+# Whether to install the npm/Node.js package and the TypeScript compiler
+# (tsc, needed by setup-kde to build Krohnkite). One of:
+#   yes - install them along with the other system packages (the default)
+#   no  - skip them (--no-npm), for machines where the distro npm package
 #         fails to install or where Node is provided some other way
 #         (nvm, fnm, corepack, a standalone pnpm, etc.)
 NPM=yes
@@ -120,8 +124,9 @@ Options:
                    one. Forwarded to setup-kde/macos
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
-  --no-npm         Skip the distro npm/Node.js package (for machines where it
-                   fails to install or Node is provided another way)
+  --no-npm         Skip the distro npm/Node.js package and the TypeScript
+                   compiler (for machines where npm fails to install or Node
+                   is provided another way; provide tsc yourself)
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
@@ -384,6 +389,14 @@ install_packages() {
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo apt-get install -y --install-recommends npm
+                # tsc lets setup-kde build Krohnkite from source without
+                # fetching typescript from the npm registry at build time.
+                # Debian/Ubuntu package it as node-typescript; fall back to
+                # a one-time global npm install where that's unavailable.
+                info "Installing TypeScript (tsc)"
+                sudo apt-get install -y --install-recommends node-typescript \
+                    || sudo npm install -g typescript \
+                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
@@ -485,6 +498,13 @@ install_packages() {
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo dnf install -y npm
+                # tsc lets setup-kde build Krohnkite from source without
+                # fetching typescript from the npm registry at build time.
+                # Fedora ships no typescript rpm, so this is a one-time
+                # global npm install during bootstrap.
+                info "Installing TypeScript (tsc)"
+                sudo npm install -g typescript \
+                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
@@ -592,6 +612,12 @@ install_packages() {
             if test "$NPM" = yes; then
                 info "Installing Node.js (npm)"
                 brew install node
+                # tsc lets setup-kde build Krohnkite from source without
+                # fetching typescript from the npm registry at build time.
+                # Installed on macOS too so the toolchain matches Linux.
+                info "Installing TypeScript (tsc)"
+                brew install typescript \
+                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
@@ -609,7 +635,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript zsh"
             ;;
     esac
 }
