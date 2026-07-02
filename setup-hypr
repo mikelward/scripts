@@ -158,14 +158,22 @@ seed_conf_local() {
         info "Created empty $local_file"
     fi
     # Inside a running Hyprland session, append this machine's monitor names
-    # as comments so filling in a pinned layout is copy-paste.
+    # as comments so filling in a pinned layout is copy-paste. Prefer jq
+    # (`setup` installs it): a bare grep for "name" would also pick up the
+    # nested activeWorkspace/specialWorkspace names in the monitor JSON.
+    # Without jq, parse the plain-text output's "Monitor <name> (ID n):"
+    # headers instead, which only exist at the monitor level.
     if test -n "$HYPRLAND_INSTANCE_SIGNATURE" && is_command hyprctl; then
+        if is_command jq; then
+            monitors=$(hyprctl monitors all -j 2>/dev/null | jq -r '.[].name')
+        else
+            monitors=$(hyprctl monitors all 2>/dev/null \
+                | sed -n 's/^Monitor \([^ ]*\).*/\1/p')
+        fi
         {
             echo ""
             echo "# Monitors detected on this machine ($(hostname)):"
-            hyprctl monitors all -j 2>/dev/null \
-                | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 \
-                | sed 's/^/#   /'
+            printf '%s\n' "$monitors" | sed 's/^/#   /'
         } >> "$local_file"
     fi
 }

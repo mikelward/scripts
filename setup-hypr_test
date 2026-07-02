@@ -215,14 +215,32 @@ test_never_overwrites_existing_conf_local() {
     assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "my precious overrides"
 }
 
+assert_file_not_contains_line() {
+    if grep -q "^$2\$" "$1" 2>/dev/null; then
+        echo "  FAIL: $1 contains unwanted line '$2'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
 # Inside a Hyprland session, the detected monitor names are appended as
-# comments.
+# comments -- and ONLY monitor names: the monitor JSON nests
+# activeWorkspace/specialWorkspace objects that also have "name" keys, which
+# must not leak in as bogus hints (jq path), and the plain-text fallback must
+# only take the "Monitor <name> (ID n):" headers. The mock serves both forms.
 test_appends_detected_monitors_inside_hyprland() {
     mkdir -p "$XDG_CONFIG_HOME/hypr"
     echo "# template body" > "$XDG_CONFIG_HOME/hypr/hyprland.conf.local.template"
     cat > "$TEST_TMPDIR/bin/hyprctl" <<'MOCK'
 #!/bin/sh
-printf '[ { "name": "eDP-1" }, { "name": "DP-3" } ]\n'
+case "$*" in
+    *-j*)
+        printf '[ { "name": "eDP-1", "activeWorkspace": { "id": 1, "name": "1" }, "specialWorkspace": { "id": 0, "name": "" } }, { "name": "DP-3", "activeWorkspace": { "id": 2, "name": "2" }, "specialWorkspace": { "id": 0, "name": "" } } ]\n'
+        ;;
+    *)
+        printf 'Monitor eDP-1 (ID 0):\n\tactive workspace: 1 (1)\nMonitor DP-3 (ID 1):\n\tactive workspace: 2 (2)\n'
+        ;;
+esac
 MOCK
     chmod +x "$TEST_TMPDIR/bin/hyprctl"
     export HYPRLAND_INSTANCE_SIGNATURE=fake-sig
@@ -230,7 +248,10 @@ MOCK
     assert_status 0 &&
     assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "Monitors detected" &&
     assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   eDP-1" &&
-    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   DP-3"
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   DP-3" &&
+    assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   1" &&
+    assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   2" &&
+    assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   "
 }
 
 run_test "help flag" test_help_flag
