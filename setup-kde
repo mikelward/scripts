@@ -6,6 +6,9 @@
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
+# - Crash resilience: plasmashell/kwin_x11 auto-restart drop-ins, Xwayland
+#   crash policy, a kde-recover shortcut (Meta+Shift+R), and a warning when
+#   the NVIDIA driver isn't configured to survive suspend
 #
 # Requires: git, pnpm or npm, kpackagetool6, kwriteconfig6
 # Optional: go-task (preferred build tool), p7zip
@@ -289,6 +292,77 @@ configure_desktops() {
     kwriteconfig6 --file kwinrc --group Desktops --key Rows 1
 }
 
+# --- Harden Plasma session services ---
+
+# Plasma 6 starts the session via systemd (startkderc systemdBoot, the
+# default since 5.25), and the stock plasma-plasmashell.service already
+# restarts on failure -- but systemd's default start-rate limit (5 starts
+# in 10s) gives up during the crash loops that resume from sleep or
+# monitor hotplug can trigger, leaving the desktop with no shell until a
+# manual restart. Drop-ins lift the limit so the shell always comes back;
+# RestartSec throttles a truly persistent loop to one attempt every 2s.
+harden_plasma_services() {
+    info "Hardening Plasma session services (always restart after a crash)"
+    kwriteconfig6 --file startkderc --group General --key systemdBoot true
+
+    dropin_root="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    # kwin_wayland is deliberately absent: on Wayland kwin IS the session,
+    # and every client dies with it, so an auto-restart can't save
+    # anything. kwin_x11 can be restarted in place.
+    for service in plasma-plasmashell plasma-kwin_x11; do
+        dropin_dir="$dropin_root/$service.service.d"
+        mkdir -p "$dropin_dir"
+        cat > "$dropin_dir/50-restart.conf" <<'DROPIN'
+# Written by setup-kde: keep restarting after crashes (e.g. after resume
+# from sleep or monitor hotplug) instead of giving up when systemd's
+# default start-rate limit (5 starts in 10s) is exceeded.
+[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=on-failure
+RestartSec=2
+DROPIN
+    done
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user daemon-reload 2>/dev/null \
+            || warn "could not reload systemd user units; restart drop-ins apply at next login"
+    fi
+}
+
+# --- Xwayland crash policy ---
+
+# On Wayland an Xwayland crash takes every X11 app with it; with
+# XwaylandCrashPolicy=Stop it also ends X11 support for the whole session.
+# Restart (the upstream default) respawns it, but KWin stops trying after
+# XwaylandMaxCrashCount consecutive crashes (default 3), which a bad
+# resume/hotplug flurry can burn through. Be explicit and raise the budget.
+configure_xwayland_crash_policy() {
+    info "Configuring Xwayland to restart after crashes (up to 10 times)"
+    kwriteconfig6 --file kwinrc --group Wayland --key XwaylandCrashPolicy Restart
+    kwriteconfig6 --file kwinrc --group Wayland --key XwaylandMaxCrashCount 10
+}
+
+# --- Diagnose NVIDIA suspend configuration ---
+
+# The most common cause of Plasma/KWin crashing or resuming to a black or
+# corrupted desktop on NVIDIA is the driver discarding video memory across
+# suspend. The fix is system-level (a module option plus the driver's
+# suspend/resume services), so only detect and warn here rather than
+# touching system config from a user-scoped script.
+check_nvidia_suspend() {
+    test -r /proc/driver/nvidia/params || return 0
+    preserve=$(sed -n 's/^PreserveVideoMemoryAllocations: *//p' \
+        /proc/driver/nvidia/params 2>/dev/null)
+    if test "$preserve" != 1; then
+        warn "NVIDIA driver loaded without PreserveVideoMemoryAllocations=1;"
+        warn "Plasma/KWin crashes after resume from sleep are likely. To fix, as root:"
+        warn "  printf '%s\\n' 'options nvidia NVreg_PreserveAllVideoMemoryAllocations=1 NVreg_TemporaryFilePath=/var/tmp' > /etc/modprobe.d/nvidia-power.conf"
+        warn "  systemctl enable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service"
+        warn "  then regenerate the initramfs and reboot"
+    fi
+}
+
 # --- Configure keybindings ---
 
 # Third arg is the human-readable label written into the value's third
@@ -421,6 +495,12 @@ configure_app_shortcuts() {
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
+
+    # Recovery: restart a crashed/wedged plasmashell, reload KWin, and
+    # re-enable outputs a bad hotplug left all-disabled. Bound via
+    # kglobalaccel, which lives inside kwin, so the shortcut still works
+    # when plasmashell is dead and there's no panel left to click.
+    add_app_shortcut "kde-recover" "Meta+Shift+R"
 }
 
 configure_keybindings() {
@@ -537,6 +617,9 @@ configure_krohnkite
 configure_focus_follows_mouse
 configure_dim_inactive
 configure_desktops
+harden_plasma_services
+configure_xwayland_crash_policy
+check_nvidia_suspend
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings

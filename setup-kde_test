@@ -21,8 +21,9 @@ setup() {
     mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
     KDE_SCRIPT="$SCRIPT_DIR/setup-kde"
 
-    # KDE CLI tools: record argv, touch nothing real.
-    for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6; do
+    # KDE CLI tools (plus systemctl, which harden_plasma_services calls
+    # for daemon-reload): record argv, touch nothing real.
+    for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6 systemctl; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 echo "$cmd \$*" >> "$CALLS"
@@ -87,6 +88,7 @@ MOCK
 run_kde() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" "$@" 2>&1)"
@@ -99,6 +101,7 @@ run_kde() {
 run_kde_relative() {
     set +e
     output="$(cd "$(dirname "$KDE_SCRIPT")" && HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         ./setup-kde "$@" 2>&1)"
@@ -203,6 +206,40 @@ test_configures_nine_desktops() {
     assert_called "kwriteconfig6 --file kwinrc --group Desktops --key Number 9"
 }
 
+# Crash hardening: systemd drop-ins that keep plasmashell/kwin_x11
+# restarting past the default start-rate limit, plus the explicit
+# systemdBoot so the units are used at all.
+test_hardens_plasma_services() {
+    run_kde --no-install
+    dropin_dir="$TEST_TMPDIR/home/.config/systemd/user"
+    shell_dropin="$dropin_dir/plasma-plasmashell.service.d/50-restart.conf"
+    kwin_dropin="$dropin_dir/plasma-kwin_x11.service.d/50-restart.conf"
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file startkderc --group General --key systemdBoot true" &&
+    assert_file_exists "$shell_dropin" &&
+    assert_file_exists "$kwin_dropin" &&
+    grep -q "Restart=on-failure" "$shell_dropin" &&
+    grep -q "StartLimitIntervalSec=0" "$shell_dropin" &&
+    assert_called "systemctl --user daemon-reload"
+}
+
+test_configures_xwayland_crash_policy() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Wayland --key XwaylandCrashPolicy Restart" &&
+    assert_called "kwriteconfig6 --file kwinrc --group Wayland --key XwaylandMaxCrashCount 10"
+}
+
+# kde-recover lives beside setup-kde in the repo, so the sibling fallback
+# resolves it and the recovery shortcut is registered.
+test_kde_recover_shortcut() {
+    run_kde --no-install
+    desktop="$TEST_TMPDIR/home/.local/share/applications/shortcut-kde-recover.desktop"
+    assert_status 0 &&
+    assert_file_exists "$desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-kde-recover.desktop --key _launch Meta+Shift+R"
+}
+
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch
 # shortcut pointing at its resolved path.
 test_app_shortcut_created_for_present_launcher() {
@@ -275,6 +312,11 @@ run_test "unknown option errors" test_unknown_option
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
 run_test "configures nine desktops" test_configures_nine_desktops
+run_test "hardens plasma services with restart drop-ins" \
+    test_hardens_plasma_services
+run_test "configures Xwayland crash policy" \
+    test_configures_xwayland_crash_policy
+run_test "registers the kde-recover shortcut" test_kde_recover_shortcut
 run_test "app shortcut created for present launcher" \
     test_app_shortcut_created_for_present_launcher
 run_test "missing launcher is skipped, not fatal" \
