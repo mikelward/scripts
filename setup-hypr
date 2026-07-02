@@ -12,11 +12,13 @@
 #   internal panel on close, and suspend only when no external display is
 #   connected.
 # - Enable power-profiles-daemon (used by the waybar power-profiles module).
-# - Seed ~/.config/hypr/hyprland.conf.local (per-machine overrides: pinned
-#   monitor rules, extra launchers, device tweaks) from the installed
-#   template. Never overwrites an existing one. hyprland.conf sources the
-#   file, and Hyprland reports an error when a sourced file is missing, so
-#   an (empty) file must exist on every machine.
+# - Seed the per-machine override files (pinned monitor rules, extra
+#   launchers, device tweaks) from the installed templates, never
+#   overwriting existing ones: ~/.config/hypr/hyprland.conf.local (hyprlang,
+#   Hyprland <= 0.54 -- hyprland.conf sources it, and Hyprland reports an
+#   error when a sourced file is missing, so an (empty) file must exist) and
+#   ~/.config/hypr/hyprland-local.lua (Lua, Hyprland 0.55+ -- hyprland.lua
+#   requires it via pcall, so it's optional but seeded for documentation).
 #
 # Usage:
 #     setup-hypr [--no-install] [--ignore-errors] [-h | --help]
@@ -130,30 +132,34 @@ enable_services() {
     fi
 }
 
-# --- Per-machine hyprland.conf.local ---
+# --- Per-machine hyprland.conf.local / hyprland-local.lua ---
 
-# Seed ~/.config/hypr/hyprland.conf.local from the template conf's
-# `make install` ships, mirroring setup-sway's config.local seeding. The
-# shared hyprland.conf sources it last so per-machine overrides win; it must
-# exist (even empty) or Hyprland reports a config error for the missing
-# sourced file. Never overwrite an existing one -- re-running setup-hypr
-# must be safe.
-seed_conf_local() {
-    cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
-    local_file="$cfgdir/hyprland.conf.local"
-    template="$cfgdir/hyprland.conf.local.template"
+# Seed the per-machine override files from the templates conf's
+# `make install` ships, mirroring setup-sway's config.local seeding. Two
+# files, one per config generation:
+#   hyprland.conf.local -- hyprlang; hyprland.conf (Hyprland <= 0.54)
+#       sources it last, and it must exist (even empty) or Hyprland reports
+#       a config error for the missing sourced file.
+#   hyprland-local.lua  -- Lua; hyprland.lua (Hyprland 0.55+) requires it
+#       last via pcall, so it's optional -- but seed it anyway so the
+#       documented template (rebinding via hyprbinds, monitor rules) is at
+#       hand.
+# Never overwrite an existing one -- re-running setup-hypr must be safe.
+seed_one_local() {
+    local_file="$1"
+    template="$2"
+    comment="$3"    # comment prefix for the appended monitor hints
     if test -f "$local_file"; then
         info "Per-machine config already exists ($local_file); leaving it alone"
         return 0
     fi
-    mkdir -p "$cfgdir"
     if test -f "$template"; then
         cp "$template" "$local_file"
         info "Created $local_file from the template"
     else
-        warn "hyprland.conf.local.template not found ($template); run conf's 'make install' first"
-        # Create an empty file anyway so hyprland.conf's `source` line
-        # doesn't raise a config error at startup.
+        warn "${template##*/} not found ($template); run conf's 'make install' first"
+        # Create an empty file anyway: hyprland.conf's `source` line raises
+        # a config error at startup without it (harmless for the lua file).
         : > "$local_file"
         info "Created empty $local_file"
     fi
@@ -172,10 +178,19 @@ seed_conf_local() {
         fi
         {
             echo ""
-            echo "# Monitors detected on this machine ($(hostname)):"
-            printf '%s\n' "$monitors" | sed 's/^/#   /'
+            echo "$comment Monitors detected on this machine ($(hostname)):"
+            printf '%s\n' "$monitors" | sed "s/^/$comment   /"
         } >> "$local_file"
     fi
+}
+
+seed_conf_local() {
+    cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/hypr"
+    mkdir -p "$cfgdir"
+    seed_one_local "$cfgdir/hyprland.conf.local" \
+                   "$cfgdir/hyprland.conf.local.template" "#"
+    seed_one_local "$cfgdir/hyprland-local.lua" \
+                   "$cfgdir/hyprland-local.lua.template" "--"
 }
 
 # --- Main ---

@@ -215,6 +215,33 @@ test_never_overwrites_existing_conf_local() {
     assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "my precious overrides"
 }
 
+# --- per-machine hyprland-local.lua seeding (Hyprland 0.55+, Lua config) ---
+
+test_seeds_local_lua_from_template() {
+    mkdir -p "$XDG_CONFIG_HOME/hypr"
+    echo "-- lua template body" > "$XDG_CONFIG_HOME/hypr/hyprland-local.lua.template"
+    run_hypr
+    assert_status 0 &&
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland-local.lua" "lua template body"
+}
+
+# hyprland.lua requires the file via pcall so it's optional there, but the
+# seeder still creates an empty one for consistency with the hyprlang path.
+test_creates_empty_local_lua_without_template() {
+    run_hypr
+    assert_status 0 &&
+    test -f "$XDG_CONFIG_HOME/hypr/hyprland-local.lua"
+}
+
+test_never_overwrites_existing_local_lua() {
+    mkdir -p "$XDG_CONFIG_HOME/hypr"
+    echo "-- lua template body" > "$XDG_CONFIG_HOME/hypr/hyprland-local.lua.template"
+    echo "-- my precious lua overrides" > "$XDG_CONFIG_HOME/hypr/hyprland-local.lua"
+    run_hypr
+    assert_status 0 &&
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland-local.lua" "my precious lua overrides"
+}
+
 assert_file_not_contains_line() {
     if grep -q "^$2\$" "$1" 2>/dev/null; then
         echo "  FAIL: $1 contains unwanted line '$2'"
@@ -251,7 +278,11 @@ MOCK
     assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   DP-3" &&
     assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   1" &&
     assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   2" &&
-    assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   "
+    assert_file_not_contains_line "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "#   " &&
+    # The lua override file gets the same hints with lua comments.
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland-local.lua" "Monitors detected" &&
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland-local.lua" "\-\-   eDP-1" &&
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland-local.lua" "\-\-   DP-3"
 }
 
 run_test "help flag" test_help_flag
@@ -268,6 +299,12 @@ run_test "creates an empty hyprland.conf.local without the template" \
     test_creates_empty_conf_local_without_template
 run_test "never overwrites an existing hyprland.conf.local" \
     test_never_overwrites_existing_conf_local
+run_test "seeds hyprland-local.lua from the template" \
+    test_seeds_local_lua_from_template
+run_test "creates an empty hyprland-local.lua without the template" \
+    test_creates_empty_local_lua_without_template
+run_test "never overwrites an existing hyprland-local.lua" \
+    test_never_overwrites_existing_local_lua
 run_test "appends detected monitors inside a hyprland session" \
     test_appends_detected_monitors_inside_hyprland
 
