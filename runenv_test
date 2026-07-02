@@ -1,8 +1,10 @@
 #!/bin/bash
-# Tests for runenv: it must source $HOME/.shrc (picking up the PATH built
-# there), exec the named command with its arguments, propagate the exit
-# status, and reject empty usage. Runs the real runenv against a fake HOME
-# and .shrc in an isolated PATH, following the autosession_test conventions.
+# Tests for runenv: it must source $HOME/.env then $HOME/.env.local (picking
+# up the PATH and exports defined there, with local prepends winning), skip
+# both when DOTENV_SOURCED says the environment already applied them, exec
+# the named command with its arguments, propagate the exit status, and
+# reject empty usage. Runs the real runenv against a fake HOME in an
+# isolated PATH, following the autosession_test conventions.
 
 set -e
 
@@ -14,26 +16,28 @@ TESTS_FAILED=0
 setup() {
   TEST_TMPDIR="$(mktemp -d)"
   BIN="$TEST_TMPDIR/bin"
-  SHRC_BIN="$TEST_TMPDIR/shrc-bin"
+  ENV_BIN="$TEST_TMPDIR/env-bin"
+  LOCAL_BIN="$TEST_TMPDIR/local-bin"
   CALLS="$TEST_TMPDIR/calls"
-  mkdir -p "$BIN" "$SHRC_BIN"
+  mkdir -p "$BIN" "$ENV_BIN" "$LOCAL_BIN"
   : > "$CALLS"
-  # The fake .shrc stands in for the real one: its only job here is to put
-  # a directory on PATH that the caller's PATH doesn't have.
-  cat > "$TEST_TMPDIR/.shrc" <<EOF
-PATH="$SHRC_BIN:\$PATH"
+  # The fake ~/.env stands in for the real one: its only job here is to put
+  # a directory on PATH that the caller's PATH doesn't have, in the same
+  # plain-assignment dialect the real file uses.
+  cat > "$TEST_TMPDIR/.env" <<EOF
+PATH=$ENV_BIN:\$PATH
 EOF
 }
 
 teardown() { rm -rf "$TEST_TMPDIR"; }
 
-# A target command only findable via the fake .shrc's PATH entry.
-shrc_fake() {
-  cat > "$SHRC_BIN/$1" <<EOF
+# A target command only findable via the fake .env's PATH entry.
+env_fake() {
+  cat > "$ENV_BIN/$1" <<EOF
 #!/bin/bash
 echo "$1 \$*" >> "$CALLS"
 EOF
-  chmod +x "$SHRC_BIN/$1"
+  chmod +x "$ENV_BIN/$1"
 }
 
 install_script() {
@@ -80,44 +84,68 @@ run_test() {
   teardown
 }
 
-test_runs_command_via_shrc_path() {
-  install_script runenv; shrc_fake browser1
+test_runs_command_via_env_path() {
+  install_script runenv; env_fake browser1
   run runenv browser1
   assert_status 0
   assert_called "browser1 "
 }
 
 test_passes_arguments_through() {
-  install_script runenv; shrc_fake notepad
+  install_script runenv; env_fake notepad
   run runenv notepad --new-window "$TEST_TMPDIR/todo.txt"
   assert_status 0
   assert_called "notepad --new-window $TEST_TMPDIR/todo.txt"
 }
 
-test_shrc_path_order_decides_which_command_runs() {
-  install_script runenv; shrc_fake browser1
-  # An override dir prepended by .shrc after the generic one must win,
-  # mirroring how add_path puts ~/scripts.* ahead of ~/scripts.
-  OVERRIDE="$TEST_TMPDIR/override-bin"
-  mkdir -p "$OVERRIDE"
-  cat > "$OVERRIDE/browser1" <<EOF
+test_env_local_prepend_wins() {
+  install_script runenv; env_fake browser1
+  # ~/.env.local prepends an override dir, mirroring how a per-machine
+  # ~/scripts.work is named there; it must beat ~/.env's generic dir.
+  cat > "$LOCAL_BIN/browser1" <<EOF
 #!/bin/bash
-echo "override-browser1 \$*" >> "$CALLS"
+echo "local-browser1 \$*" >> "$CALLS"
 EOF
-  chmod +x "$OVERRIDE/browser1"
-  echo "PATH=\"$OVERRIDE:\$PATH\"" >> "$TEST_TMPDIR/.shrc"
+  chmod +x "$LOCAL_BIN/browser1"
+  cat > "$TEST_TMPDIR/.env.local" <<EOF
+PATH=$LOCAL_BIN:\$PATH
+EOF
   run runenv browser1
   assert_status 0
-  assert_called "override-browser1 "
+  assert_called "local-browser1 "
+}
+
+test_plain_assignments_are_exported() {
+  install_script runenv
+  echo "RUNENV_TEST_VAR=hello" >> "$TEST_TMPDIR/.env"
+  cat > "$BIN/show-var" <<'EOF'
+#!/bin/bash
+echo "$RUNENV_TEST_VAR"
+EOF
+  chmod +x "$BIN/show-var"
+  run runenv show-var
+  assert_status 0
+  assert_output_contains "hello"
+}
+
+test_dotenv_sourced_skips_the_files() {
+  install_script runenv; env_fake browser1
+  # A login shell's child already has the values; runenv must not re-apply
+  # (so PATH prepends don't stack). browser1 is then not findable at all.
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" DOTENV_SOURCED=1 "$BIN/runenv" browser1 2>&1)"
+  status=$?
+  set -e
+  assert_status 127
 }
 
 test_propagates_exit_status() {
   install_script runenv
-  cat > "$SHRC_BIN/failer" <<'EOF'
+  cat > "$ENV_BIN/failer" <<'EOF'
 #!/bin/bash
 exit 3
 EOF
-  chmod +x "$SHRC_BIN/failer"
+  chmod +x "$ENV_BIN/failer"
   run runenv failer
   assert_status 3
 }
@@ -129,9 +157,11 @@ test_no_arguments_is_a_usage_error() {
   assert_output_contains "usage: runenv"
 }
 
-run_test "runs a command found via .shrc's PATH" test_runs_command_via_shrc_path
+run_test "runs a command found via ~/.env's PATH" test_runs_command_via_env_path
 run_test "passes arguments through" test_passes_arguments_through
-run_test ".shrc PATH order decides which command runs" test_shrc_path_order_decides_which_command_runs
+run_test "~/.env.local prepend beats ~/.env" test_env_local_prepend_wins
+run_test "plain assignments are exported to the command" test_plain_assignments_are_exported
+run_test "DOTENV_SOURCED skips re-sourcing" test_dotenv_sourced_skips_the_files
 run_test "propagates the command's exit status" test_propagates_exit_status
 run_test "no arguments is a usage error" test_no_arguments_is_a_usage_error
 

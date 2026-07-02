@@ -1,15 +1,28 @@
 #!/bin/bash
 #
-# runenv -- run a command with the login-shell environment.
+# runenv -- run a command with the shared login environment.
 #
-# Sources ~/.shrc, which builds PATH via its add_path calls (including the
-# per-machine ~/scripts.* override dirs), then execs the given command. For
-# callers that don't inherit a login environment, e.g. Hyprland's exec binds:
-# a display-manager or uwsm session never runs .profile/.shrc, so helper
+# Sources ~/.env (the canonical user PATH dirs and shared exports, from the
+# conf repo) and ~/.env.local (per-machine additions such as
+# PATH=$HOME/scripts.work:$PATH), then execs the given command. For callers
+# that don't inherit a login environment, e.g. Hyprland's exec binds: a
+# display-manager or uwsm session never runs .profile/.shrc, so helper
 # scripts in ~/scripts wouldn't resolve without this.
+#
+# Same DOTENV_SOURCED sentinel and `set -a` form as zshenv/profile/shrc: an
+# environment that already applied the files (a login shell's children) is
+# left alone, so self-referential PATH prepends don't stack.
 if test $# -eq 0; then
     echo "usage: runenv command [args...]" >&2
     exit 2
 fi
-. "$HOME/.shrc"
+if test -z "${DOTENV_SOURCED:-}"; then
+    set -a
+    for _dotenv in "$HOME/.env" "$HOME/.env.local"; do
+        test -f "$_dotenv" && . "$_dotenv"
+    done
+    unset _dotenv
+    set +a
+    export DOTENV_SOURCED=1
+fi
 exec "$@"
