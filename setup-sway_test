@@ -1,0 +1,273 @@
+#!/bin/sh
+# Tests for setup-sway
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    # Put mocks first on PATH so they shadow real commands.
+    export PATH="$TEST_TMPDIR/bin:$PATH"
+    mkdir -p "$TEST_TMPDIR/bin"
+    CALLS="$TEST_TMPDIR/calls"
+    rm -f "$CALLS"
+
+    # Isolate the user-level config seeding from the real $HOME, and the
+    # logind drop-in detection from the real /etc.
+    export XDG_CONFIG_HOME="$TEST_TMPDIR/config"
+    export SETUP_LOGIND_DIR="$TEST_TMPDIR/logind.conf.d"
+    unset SWAYSOCK
+
+    # sudo records its argv and discards any heredoc stdin (e.g. the logind
+    # drop-in piped to `sudo tee`) so nothing touches the real system.
+    cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
+#!/bin/sh
+echo "sudo \$*" >> "$CALLS"
+exit 0
+MOCK
+
+    # systemctl: record, and make list-unit-files succeed so enable_services
+    # believes power-profiles-daemon exists.
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+echo "systemctl \$*" >> "$CALLS"
+exit 0
+MOCK
+
+    # Package managers: record calls, to prove setup-sway installs nothing.
+    for cmd in pacman apt-get dnf; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+
+    chmod +x "$TEST_TMPDIR"/bin/*
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+run_sway() {
+    set +e
+    output="$("$SCRIPT_DIR/setup-sway" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: expected call '$1' not found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_not_called() {
+    if grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: unexpected call '$1' found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_contains() {
+    if ! grep -q "$2" "$1" 2>/dev/null; then
+        echo "  FAIL: $1 does not contain '$2'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_sway --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-sway"
+}
+
+test_h_flag() {
+    run_sway -h
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-sway"
+}
+
+test_unknown_option() {
+    run_sway --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- packages are NOT installed here (the top-level `setup` does that) ---
+
+test_does_not_install_packages() {
+    run_sway
+    assert_status 0 &&
+    assert_not_called "pacman -S" &&
+    assert_not_called "apt-get install" &&
+    assert_not_called "dnf install"
+}
+
+# --- logind lid drop-in ---
+
+test_installs_logind_lid_dropin() {
+    run_sway
+    assert_status 0 &&
+    assert_called "sudo mkdir -p $SETUP_LOGIND_DIR" &&
+    assert_called "sudo tee $SETUP_LOGIND_DIR/10-sway-lid.conf"
+}
+
+test_reloads_logind() {
+    run_sway
+    assert_status 0 &&
+    assert_called "sudo systemctl kill -s HUP systemd-logind"
+}
+
+# Shared with the Hyprland build: when a drop-in (e.g. setup-hypr's) already
+# ignores the lid, nothing is written.
+test_skips_dropin_when_lid_already_ignored() {
+    mkdir -p "$SETUP_LOGIND_DIR"
+    printf '[Login]\nHandleLidSwitch=ignore\n' > "$SETUP_LOGIND_DIR/10-hypr-lid.conf"
+    run_sway
+    assert_status 0 &&
+    assert_output_contains "already ignores the lid" &&
+    assert_not_called "sudo tee"
+}
+
+# --- services ---
+
+test_enables_power_profiles_daemon() {
+    run_sway
+    assert_status 0 &&
+    assert_called "sudo systemctl enable --now power-profiles-daemon"
+}
+
+# --no-install skips the system-modifying steps.
+test_no_install_skips_system_changes() {
+    run_sway --no-install
+    assert_status 0 &&
+    assert_not_called "sudo tee" &&
+    assert_output_contains "Skipping logind"
+}
+
+# --- per-host config.local seeding ---
+
+test_seeds_config_local_from_template() {
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    run_sway
+    assert_status 0 &&
+    assert_output_contains "Created" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "template body"
+}
+
+test_never_overwrites_existing_config_local() {
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    echo "# my precious overrides" > "$XDG_CONFIG_HOME/sway/config.local"
+    run_sway
+    assert_status 0 &&
+    assert_output_contains "leaving it alone" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "my precious overrides"
+}
+
+test_warns_when_template_missing() {
+    run_sway
+    assert_status 0 &&
+    assert_output_contains "config.local.template not found"
+}
+
+# Seeding is user-level config, not a system change: it happens even under
+# --no-install.
+test_no_install_still_seeds_config_local() {
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    run_sway --no-install
+    assert_status 0 &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "template body"
+}
+
+# Inside a Sway session, the detected output names are appended as comments.
+test_appends_detected_outputs_inside_sway() {
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    cat > "$TEST_TMPDIR/bin/swaymsg" <<'MOCK'
+#!/bin/sh
+printf '[ { "name": "eDP-1", "active": true }, { "name": "DP-3", "active": true } ]\n'
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/swaymsg"
+    export SWAYSOCK=/tmp/fake-sock
+    run_sway
+    assert_status 0 &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "Outputs detected" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "#   eDP-1" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "#   DP-3"
+}
+
+run_test "help flag" test_help_flag
+run_test "-h flag" test_h_flag
+run_test "unknown option errors" test_unknown_option
+run_test "does not install packages (setup does)" test_does_not_install_packages
+run_test "installs logind lid drop-in" test_installs_logind_lid_dropin
+run_test "reloads logind" test_reloads_logind
+run_test "skips drop-in when the lid is already ignored (shared with hypr)" \
+    test_skips_dropin_when_lid_already_ignored
+run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
+run_test "no-install skips system changes" test_no_install_skips_system_changes
+run_test "seeds config.local from the template" test_seeds_config_local_from_template
+run_test "never overwrites an existing config.local" \
+    test_never_overwrites_existing_config_local
+run_test "warns when the template is missing" test_warns_when_template_missing
+run_test "no-install still seeds config.local" test_no_install_still_seeds_config_local
+run_test "appends detected outputs inside a sway session" \
+    test_appends_detected_outputs_inside_sway
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
