@@ -24,8 +24,14 @@
 # committed to the repo installs as-is, and building from source uses the
 # local tsc via an npm shim.
 
-KROHNKITE_REPO="${KROHNKITE_REPO:-https://github.com/mikelward/Krohnkite-codeberg.git}"
-KROHNKITE_BRANCH="${KROHNKITE_BRANCH:-mikel}"
+KROHNKITE_DEFAULT_REPO="https://github.com/mikelward/Krohnkite-codeberg.git"
+KROHNKITE_REPO="${KROHNKITE_REPO:-$KROHNKITE_DEFAULT_REPO}"
+# The mikel branch only exists on my fork, so it's only the default when
+# cloning the default repo: an overridden KROHNKITE_REPO clones its remote
+# HEAD unless KROHNKITE_BRANCH says otherwise.
+if test -z "${KROHNKITE_BRANCH:-}" && test "$KROHNKITE_REPO" = "$KROHNKITE_DEFAULT_REPO"; then
+    KROHNKITE_BRANCH=mikel
+fi
 KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
 
 # Directory containing this script, resolved up front while $0 still means
@@ -197,8 +203,13 @@ SHIM
 }
 
 install_krohnkite() {
-    info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
-    git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+    if test -n "${KROHNKITE_BRANCH:-}"; then
+        info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
+        git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+    else
+        info "Cloning Krohnkite from $KROHNKITE_REPO"
+        git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+    fi
 
     cd "$KROHNKITE_DIR"
 

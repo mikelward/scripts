@@ -164,7 +164,7 @@ assert_output_contains() {
 }
 
 assert_called() {
-    if ! grep -q "$1" "$CALLS" 2>/dev/null; then
+    if ! grep -q -- "$1" "$CALLS" 2>/dev/null; then
         echo "  FAIL: expected call '$1' not found"
         echo "  calls: $(cat "$CALLS" 2>/dev/null)"
         TEST_FAILED=1
@@ -173,7 +173,7 @@ assert_called() {
 }
 
 assert_not_called() {
-    if grep -q "$1" "$CALLS" 2>/dev/null; then
+    if grep -q -- "$1" "$CALLS" 2>/dev/null; then
         echo "  FAIL: unexpected call '$1' found"
         echo "  calls: $(cat "$CALLS" 2>/dev/null)"
         TEST_FAILED=1
@@ -247,6 +247,19 @@ test_krohnkite_repo_env_overrides_clone_source() {
     unset KROHNKITE_REPO KROHNKITE_BRANCH
     assert_status 0 &&
     assert_called "git clone --depth 1 --branch mybranch https://example.test/me/krohnkite.git"
+}
+
+# The mikel branch only exists on my fork: overriding KROHNKITE_REPO alone
+# must clone that repo's remote HEAD, not force --branch mikel onto a repo
+# that may not have it.
+test_repo_override_does_not_force_mikel_branch() {
+    add_install_mocks
+    export KROHNKITE_REPO="https://example.test/me/krohnkite.git"
+    run_kde
+    unset KROHNKITE_REPO
+    assert_status 0 &&
+    assert_called "git clone --depth 1 https://example.test/me/krohnkite.git" &&
+    assert_not_called "--branch"
 }
 
 # A prebuilt .kwinscript committed to the fork installs directly: no build
@@ -399,6 +412,8 @@ run_test "unknown option errors" test_unknown_option
 run_test "clones my krohnkite fork by default" test_clones_fork_by_default
 run_test "KROHNKITE_REPO overrides the clone source" \
     test_krohnkite_repo_env_overrides_clone_source
+run_test "repo override alone doesn't force the mikel branch" \
+    test_repo_override_does_not_force_mikel_branch
 run_test "prebuilt package installs without npm" \
     test_prebuilt_package_installs_without_npm
 run_test "source build uses local tsc, never remote npm" \
