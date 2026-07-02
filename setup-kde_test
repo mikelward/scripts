@@ -57,8 +57,10 @@ isolate_script() {
 }
 
 # Mocks that let the full install path run: git "clones" by creating the
-# target directory with a fake .kwinscript, npm and kpackagetool6 just
-# record. This exercises install_krohnkite's cd into the checkout.
+# target directory with a fake prebuilt .kwinscript (the expected shape of
+# the fork), kpackagetool6 just records. npm is mocked purely as a canary:
+# nothing in the install may ever reach it. This exercises
+# install_krohnkite's cd into the checkout.
 add_install_mocks() {
     cat > "$TEST_TMPDIR/bin/git" <<MOCK
 #!/bin/sh
@@ -79,6 +81,40 @@ MOCK
     done
     chmod +x "$TEST_TMPDIR/bin/git" "$TEST_TMPDIR/bin/npm" \
         "$TEST_TMPDIR/bin/kpackagetool6"
+}
+
+# Like add_install_mocks, but the clone is source-only (no prebuilt
+# .kwinscript), forcing the build path. The mock go-task stands in for
+# Krohnkite's real build and invokes npm exactly the way the Makefile and
+# Taskfile do; setup-kde's shim must intercept both calls -- install
+# becomes a no-op and "run tsc" execs the (mocked) local tsc -- so the
+# canary npm in the mock bin is never reached.
+add_source_build_mocks() {
+    add_install_mocks
+    cat > "$TEST_TMPDIR/bin/git" <<MOCK
+#!/bin/sh
+echo "git \$*" >> "$CALLS"
+if test "\$1" = clone; then
+    for arg in "\$@"; do dir="\$arg"; done
+    mkdir -p "\$dir"
+fi
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/go-task" <<MOCK
+#!/bin/sh
+echo "go-task \$*" >> "$CALLS"
+npm install --save-dev || exit 1
+npm run tsc -- --strict || exit 1
+touch krohnkite.kwinscript
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/tsc" <<MOCK
+#!/bin/sh
+echo "tsc \$*" >> "$CALLS"
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/git" "$TEST_TMPDIR/bin/go-task" \
+        "$TEST_TMPDIR/bin/tsc"
 }
 
 # Run setup-kde in the sandbox: fresh HOME, and a PATH of just the mock bin
@@ -136,6 +172,15 @@ assert_called() {
     fi
 }
 
+assert_not_called() {
+    if grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: unexpected call '$1' found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
 assert_file_exists() {
     if ! test -f "$1"; then
         echo "  FAIL: expected file '$1' to exist"
@@ -180,6 +225,66 @@ test_unknown_option() {
     run_kde --bogus
     assert_status 1 &&
     assert_output_contains "Unknown option"
+}
+
+# --- installation (mocked git/kpackagetool6; npm is a never-called canary) ---
+
+# The clone must come from my fork, not upstream codeberg.
+test_clones_fork_by_default() {
+    add_install_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "git clone --depth 1 https://github.com/mikelward/krohnkite.git"
+}
+
+# KROHNKITE_REPO overrides the clone source (any git URL or local path).
+test_krohnkite_repo_env_overrides_clone_source() {
+    add_install_mocks
+    export KROHNKITE_REPO="https://example.test/me/krohnkite.git"
+    run_kde
+    unset KROHNKITE_REPO
+    assert_status 0 &&
+    assert_called "git clone --depth 1 https://example.test/me/krohnkite.git"
+}
+
+# A prebuilt .kwinscript committed to the fork installs directly: no build
+# tool runs and npm is never touched.
+test_prebuilt_package_installs_without_npm() {
+    add_install_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "kpackagetool6 -t KWin/Script" &&
+    assert_not_called "npm" &&
+    assert_not_called "go-task"
+}
+
+# A source-only checkout builds via the npm shim: install is swallowed,
+# "npm run tsc" execs the local tsc, and the real npm (the canary mock on
+# PATH) is never reached.
+test_source_build_uses_local_tsc_not_remote_npm() {
+    add_source_build_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "go-task package" &&
+    assert_called "tsc --strict" &&
+    assert_called "kpackagetool6 -t KWin/Script" &&
+    assert_not_called "npm"
+}
+
+# Without a prebuilt package or a local tsc, the build refuses rather than
+# falling back to a registry fetch. Skipped when the host itself has tsc on
+# the test PATH -- the script would legitimately find it and not error.
+test_source_build_without_tsc_errors() {
+    if PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+            command -v tsc >/dev/null 2>&1; then
+        echo "  skip: tsc present on test PATH"
+        return 0
+    fi
+    add_source_build_mocks
+    rm "$TEST_TMPDIR/bin/tsc"
+    run_kde
+    assert_status 1 &&
+    assert_output_contains "tsc is required to build Krohnkite without remote npm"
 }
 
 # --- configuration (with --no-install so nothing is cloned/built) ---
@@ -272,6 +377,15 @@ MOCK
 
 run_test "help flag" test_help_flag
 run_test "unknown option errors" test_unknown_option
+run_test "clones my krohnkite fork by default" test_clones_fork_by_default
+run_test "KROHNKITE_REPO overrides the clone source" \
+    test_krohnkite_repo_env_overrides_clone_source
+run_test "prebuilt package installs without npm" \
+    test_prebuilt_package_installs_without_npm
+run_test "source build uses local tsc, never remote npm" \
+    test_source_build_uses_local_tsc_not_remote_npm
+run_test "source build without tsc errors instead of remote npm" \
+    test_source_build_without_tsc_errors
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
 run_test "configures nine desktops" test_configures_nine_desktops

@@ -7,8 +7,9 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 #
-# Requires: git, pnpm or npm, kpackagetool6, kwriteconfig6
-# Optional: go-task (preferred build tool), p7zip
+# Requires: git, kpackagetool6, kwriteconfig6
+# Optional: tsc (only to build Krohnkite when the checkout has no prebuilt
+#           .kwinscript), go-task (preferred build tool), p7zip
 #
 # Usage:
 #     setup-kde [--no-install] [--ignore-errors] [-h | --help]
@@ -16,8 +17,13 @@
 # --no-install skips building/installing Krohnkite and only (re)applies the
 # KDE configuration. --ignore-errors keeps going past failures instead of
 # aborting on the first one. setup forwards both flags here.
+#
+# Krohnkite comes from my fork by default; set KROHNKITE_REPO to clone from
+# somewhere else (any git URL or local path). The build never talks to the
+# npm registry: a prebuilt .kwinscript committed to the repo installs as-is,
+# and building from source uses the local tsc via an npm shim.
 
-KROHNKITE_REPO="https://codeberg.org/anametologin/Krohnkite.git"
+KROHNKITE_REPO="${KROHNKITE_REPO:-https://github.com/mikelward/krohnkite.git}"
 KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
 
 # Directory containing this script, resolved up front while $0 still means
@@ -104,23 +110,59 @@ trap cleanup EXIT
 # --- Check prerequisites ---
 
 # kwriteconfig6 is needed for every configuration step, so it's always
-# required. git/pnpm/npm/kpackagetool6 are only used to build and install
-# Krohnkite, so they're only required when actually installing.
+# required. git/kpackagetool6 are only used to fetch and install Krohnkite,
+# so they're only required when actually installing. tsc is checked in
+# build_krohnkite: whether a build is needed at all depends on the checkout
+# (a committed prebuilt .kwinscript installs without one).
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
 if test "$INSTALL" = yes; then
     command -v git >/dev/null 2>&1 || error "git is required"
-    command -v pnpm >/dev/null 2>&1 || command -v npm >/dev/null 2>&1 \
-        || error "pnpm or npm is required (to build Krohnkite)"
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
 fi
 
 # --- Install Krohnkite ---
 
-install_krohnkite() {
-    info "Cloning Krohnkite"
-    git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+# Build the .kwinscript package from source without touching the npm
+# registry. Krohnkite's build (the Makefile, or the Taskfile via
+# go-task/task) shells out to npm for exactly two things: "npm install
+# --save-dev" to fetch typescript, and "npm run tsc --" to compile. A
+# local tsc covers both, so prepend an npm shim to PATH that turns install
+# into a no-op and run tsc into the local compiler. Anything else the
+# build asks npm for would be a remote fetch, so the shim fails on it.
+build_krohnkite() {
+    command -v tsc >/dev/null 2>&1 \
+        || error "tsc is required to build Krohnkite without remote npm; install typescript, or commit a prebuilt .kwinscript to $KROHNKITE_REPO"
 
-    cd "$KROHNKITE_DIR"
+    shimdir="$KROHNKITE_DIR/.npm-shim"
+    mkdir -p "$shimdir"
+    cat > "$shimdir/npm" <<'SHIM'
+#!/bin/sh
+case "$1" in
+    install|i|ci)
+        # Krohnkite's only build dependency is typescript; the local tsc
+        # stands in for it, so there is nothing to install.
+        exit 0
+        ;;
+    run)
+        # "npm run tsc -- <args>" -> "tsc <args>": strip npm's "--"
+        # separator, which tsc would reject (TS5023).
+        shift
+        script=${1:-}
+        [ "$#" -gt 0 ] && shift
+        [ "${1:-}" = "--" ] && shift
+        if [ "$script" = tsc ]; then
+            exec tsc "$@"
+        fi
+        echo "npm shim: refusing 'npm run $script' (no remote npm)" >&2
+        exit 1
+        ;;
+    *)
+        echo "npm shim: refusing 'npm $1' (no remote npm)" >&2
+        exit 1
+        ;;
+esac
+SHIM
+    chmod +x "$shimdir/npm"
 
     # Build using go-task (preferred), then make. go-task is no longer
     # installed by setup, but use it if it's present: the binary is named
@@ -130,62 +172,36 @@ install_krohnkite() {
     #
     # Krohnkite's Makefile is the real build: it compiles the TypeScript and
     # assembles the installable .kwinscript package. package.json defines no
-    # "build" script, so there is no pnpm/npm-only build to fall back on --
-    # the Makefile is it. The Makefile shells out to npm, though, so on a
-    # host that has pnpm but not npm we prepend a tiny npm->pnpm shim to
-    # PATH and run make as usual.
+    # "build" script, so there is no npm-only build to fall back on -- the
+    # Makefile is it.
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
-        go-task package
+        PATH="$shimdir:$PATH" go-task package
     elif command -v task >/dev/null 2>&1 \
             && task --version 2>/dev/null | grep -q '^Task version'; then
         info "Building Krohnkite with task"
-        task package
+        PATH="$shimdir:$PATH" task package
     elif test -f Makefile; then
-        if command -v npm >/dev/null 2>&1; then
-            info "Building Krohnkite with make"
-            make
-        elif command -v pnpm >/dev/null 2>&1; then
-            info "Building Krohnkite with make (npm shimmed to pnpm)"
-            # Krohnkite's Makefile runs "npm install --save-dev" and
-            # "npm run tsc --". Write a small npm->pnpm shim: map install
-            # to "pnpm install" (which pulls dev deps too) and, for run,
-            # drop npm's "--" separator -- pnpm would forward a bare "--"
-            # to the script and break tsc (TS5023).
-            shimdir="$KROHNKITE_DIR/.npm-shim"
-            mkdir -p "$shimdir"
-            cat > "$shimdir/npm" <<'SHIM'
-#!/bin/sh
-case "$1" in
-    install|i|ci)
-        exec pnpm install
-        ;;
-    run)
-        # "npm run <s> -- <args>" -> "pnpm run <s> <args>": strip npm's
-        # "--" separator so pnpm does not pass it on to the script.
-        shift
-        script=${1:-}
-        [ "$#" -gt 0 ] && shift
-        [ "${1:-}" = "--" ] && shift
-        exec pnpm run "$script" "$@"
-        ;;
-    *)
-        exec pnpm "$@"
-        ;;
-esac
-SHIM
-            chmod +x "$shimdir/npm"
-            PATH="$shimdir:$PATH" make
-        else
-            error "npm or pnpm is required (to build Krohnkite)"
-        fi
+        info "Building Krohnkite with make"
+        PATH="$shimdir:$PATH" make
     else
-        info "Building Krohnkite with npm"
-        npm install && npm run build
+        error "Krohnkite checkout has no Taskfile or Makefile to build with"
     fi
+}
 
-    # Find the built .kwinscript file, or a directory containing metadata.json
+install_krohnkite() {
+    info "Cloning Krohnkite from $KROHNKITE_REPO"
+    git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+
+    cd "$KROHNKITE_DIR"
+
+    # A prebuilt .kwinscript committed to the repo installs as-is -- no
+    # build, no npm. Only build from source when there isn't one.
     kwinscript=$(find . -name '*.kwinscript' -print -quit)
+    if test -z "$kwinscript"; then
+        build_krohnkite
+        kwinscript=$(find . -name '*.kwinscript' -print -quit)
+    fi
     if test -n "$kwinscript"; then
         info "Installing Krohnkite from $kwinscript"
         kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
