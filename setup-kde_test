@@ -271,6 +271,23 @@ test_source_build_uses_local_tsc_not_remote_npm() {
     assert_not_called "npm"
 }
 
+# Missing tsc is a prerequisite *warning*, not an error: a checkout that
+# ships a prebuilt .kwinscript installs without any compiler, so the
+# install must still succeed. Skipped when the host itself has tsc on the
+# test PATH -- the script would legitimately find it and not warn.
+test_missing_tsc_warns_but_prebuilt_still_installs() {
+    if PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+            command -v tsc >/dev/null 2>&1; then
+        echo "  skip: tsc present on test PATH"
+        return 0
+    fi
+    add_install_mocks
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "tsc not found" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
 # Without a prebuilt package or a local tsc, the build refuses rather than
 # falling back to a registry fetch. Skipped when the host itself has tsc on
 # the test PATH -- the script would legitimately find it and not error.
@@ -384,6 +401,8 @@ run_test "prebuilt package installs without npm" \
     test_prebuilt_package_installs_without_npm
 run_test "source build uses local tsc, never remote npm" \
     test_source_build_uses_local_tsc_not_remote_npm
+run_test "missing tsc warns up front but prebuilt still installs" \
+    test_missing_tsc_warns_but_prebuilt_still_installs
 run_test "source build without tsc errors instead of remote npm" \
     test_source_build_without_tsc_errors
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite

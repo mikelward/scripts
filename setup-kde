@@ -118,6 +118,11 @@ command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KD
 if test "$INSTALL" = yes; then
     command -v git >/dev/null 2>&1 || error "git is required"
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
+    # Not fatal here: a checkout that ships a prebuilt .kwinscript installs
+    # without any compiler. But if a build turns out to be needed it will
+    # fail on this, so say so before spending time on the clone.
+    command -v tsc >/dev/null 2>&1 \
+        || warn "tsc not found; the install will fail unless $KROHNKITE_REPO ships a prebuilt .kwinscript"
 fi
 
 # --- Install Krohnkite ---
