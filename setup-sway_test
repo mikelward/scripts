@@ -180,6 +180,16 @@ test_skips_dropin_when_lid_already_ignored() {
     assert_not_called "sudo tee"
 }
 
+# A commented example ("#HandleLidSwitch=ignore") is not configuration --
+# systemd ignores it, so the drop-in must still be installed.
+test_commented_lid_entry_does_not_skip_dropin() {
+    mkdir -p "$SETUP_LOGIND_DIR"
+    printf '[Login]\n#HandleLidSwitch=ignore\n' > "$SETUP_LOGIND_DIR/50-example.conf"
+    run_sway
+    assert_status 0 &&
+    assert_called "sudo tee $SETUP_LOGIND_DIR/10-sway-lid.conf"
+}
+
 # --- services ---
 
 test_enables_power_profiles_daemon() {
@@ -258,6 +268,8 @@ run_test "installs logind lid drop-in" test_installs_logind_lid_dropin
 run_test "reloads logind" test_reloads_logind
 run_test "skips drop-in when the lid is already ignored (shared with hypr)" \
     test_skips_dropin_when_lid_already_ignored
+run_test "commented lid entry does not skip the drop-in" \
+    test_commented_lid_entry_does_not_skip_dropin
 run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
 run_test "no-install skips system changes" test_no_install_skips_system_changes
 run_test "seeds config.local from the template" test_seeds_config_local_from_template

@@ -110,7 +110,9 @@ fi
 # the same settings, so whichever ran first wins and the other skips.
 install_logind_lid_dropin() {
     is_command systemctl || { warn "systemd not detected; skipping logind lid drop-in"; return 0; }
-    if grep -qs 'HandleLidSwitch=ignore' "$LOGIND_DIR"/*.conf 2>/dev/null; then
+    # Anchored to an uncommented assignment: a drop-in carrying a commented
+    # example like "#HandleLidSwitch=ignore" must not count as configured.
+    if grep -qsE '^[[:space:]]*HandleLidSwitch=ignore' "$LOGIND_DIR"/*.conf 2>/dev/null; then
         info "logind already ignores the lid (drop-in present); skipping"
         return 0
     fi
