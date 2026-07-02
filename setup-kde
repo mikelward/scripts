@@ -18,12 +18,14 @@
 # KDE configuration. --ignore-errors keeps going past failures instead of
 # aborting on the first one. setup forwards both flags here.
 #
-# Krohnkite comes from my fork by default; set KROHNKITE_REPO to clone from
-# somewhere else (any git URL or local path). The build never talks to the
-# npm registry: a prebuilt .kwinscript committed to the repo installs as-is,
-# and building from source uses the local tsc via an npm shim.
+# Krohnkite comes from my fork's mikel branch by default; set KROHNKITE_REPO
+# (any git URL or local path) and/or KROHNKITE_BRANCH to clone something
+# else. The build never talks to the npm registry: a prebuilt .kwinscript
+# committed to the repo installs as-is, and building from source uses the
+# local tsc via an npm shim.
 
-KROHNKITE_REPO="${KROHNKITE_REPO:-https://github.com/mikelward/krohnkite.git}"
+KROHNKITE_REPO="${KROHNKITE_REPO:-https://github.com/mikelward/Krohnkite-codeberg.git}"
+KROHNKITE_BRANCH="${KROHNKITE_BRANCH:-mikel}"
 KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
 
 # Directory containing this script, resolved up front while $0 still means
@@ -195,8 +197,8 @@ SHIM
 }
 
 install_krohnkite() {
-    info "Cloning Krohnkite from $KROHNKITE_REPO"
-    git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+    info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
+    git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
 
     cd "$KROHNKITE_DIR"
 
