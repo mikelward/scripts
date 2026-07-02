@@ -1,0 +1,15 @@
+#!/bin/bash
+#
+# runenv -- run a command with the login-shell environment.
+#
+# Sources ~/.shrc, which builds PATH via its add_path calls (including the
+# per-machine ~/scripts.* override dirs), then execs the given command. For
+# callers that don't inherit a login environment, e.g. Hyprland's exec binds:
+# a display-manager or uwsm session never runs .profile/.shrc, so helper
+# scripts in ~/scripts wouldn't resolve without this.
+if test $# -eq 0; then
+    echo "usage: runenv command [args...]" >&2
+    exit 2
+fi
+. "$HOME/.shrc"
+exec "$@"

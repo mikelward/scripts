@@ -1,0 +1,139 @@
+#!/bin/bash
+# Tests for runenv: it must source $HOME/.shrc (picking up the PATH built
+# there), exec the named command with its arguments, propagate the exit
+# status, and reject empty usage. Runs the real runenv against a fake HOME
+# and .shrc in an isolated PATH, following the autosession_test conventions.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  SHRC_BIN="$TEST_TMPDIR/shrc-bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN" "$SHRC_BIN"
+  : > "$CALLS"
+  # The fake .shrc stands in for the real one: its only job here is to put
+  # a directory on PATH that the caller's PATH doesn't have.
+  cat > "$TEST_TMPDIR/.shrc" <<EOF
+PATH="$SHRC_BIN:\$PATH"
+EOF
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+# A target command only findable via the fake .shrc's PATH entry.
+shrc_fake() {
+  cat > "$SHRC_BIN/$1" <<EOF
+#!/bin/bash
+echo "$1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$SHRC_BIN/$1"
+}
+
+install_script() {
+  cp "$SCRIPT_DIR/$1" "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+run() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" "$BIN/$script" "$@" 2>&1)"
+  status=$?
+  set -e
+}
+
+assert_called() {
+  if ! grep -qx -- "$1" "$CALLS" 2>/dev/null; then
+    echo "  FAIL: expected call '$1'"; echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+    TEST_FAILED=1
+  fi
+}
+assert_status() {
+  if test "$status" -ne "$1"; then
+    echo "  FAIL: expected exit $1, got $status"; echo "  output: $output"
+    TEST_FAILED=1
+  fi
+}
+assert_output_contains() {
+  case "$output" in
+    *"$1"*) ;;
+    *) echo "  FAIL: output missing '$1'"; echo "  output: $output"; TEST_FAILED=1 ;;
+  esac
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+test_runs_command_via_shrc_path() {
+  install_script runenv; shrc_fake browser1
+  run runenv browser1
+  assert_status 0
+  assert_called "browser1 "
+}
+
+test_passes_arguments_through() {
+  install_script runenv; shrc_fake notepad
+  run runenv notepad --new-window "$TEST_TMPDIR/todo.txt"
+  assert_status 0
+  assert_called "notepad --new-window $TEST_TMPDIR/todo.txt"
+}
+
+test_shrc_path_order_decides_which_command_runs() {
+  install_script runenv; shrc_fake browser1
+  # An override dir prepended by .shrc after the generic one must win,
+  # mirroring how add_path puts ~/scripts.* ahead of ~/scripts.
+  OVERRIDE="$TEST_TMPDIR/override-bin"
+  mkdir -p "$OVERRIDE"
+  cat > "$OVERRIDE/browser1" <<EOF
+#!/bin/bash
+echo "override-browser1 \$*" >> "$CALLS"
+EOF
+  chmod +x "$OVERRIDE/browser1"
+  echo "PATH=\"$OVERRIDE:\$PATH\"" >> "$TEST_TMPDIR/.shrc"
+  run runenv browser1
+  assert_status 0
+  assert_called "override-browser1 "
+}
+
+test_propagates_exit_status() {
+  install_script runenv
+  cat > "$SHRC_BIN/failer" <<'EOF'
+#!/bin/bash
+exit 3
+EOF
+  chmod +x "$SHRC_BIN/failer"
+  run runenv failer
+  assert_status 3
+}
+
+test_no_arguments_is_a_usage_error() {
+  install_script runenv
+  run runenv
+  assert_status 2
+  assert_output_contains "usage: runenv"
+}
+
+run_test "runs a command found via .shrc's PATH" test_runs_command_via_shrc_path
+run_test "passes arguments through" test_passes_arguments_through
+run_test ".shrc PATH order decides which command runs" test_shrc_path_order_decides_which_command_runs
+run_test "propagates the command's exit status" test_propagates_exit_status
+run_test "no arguments is a usage error" test_no_arguments_is_a_usage_error
+
+echo "$TESTS_PASSED/$TESTS_RUN tests passed"
+test "$TESTS_FAILED" -eq 0
