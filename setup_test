@@ -154,10 +154,23 @@ run_test "hypridle/hyprlock package names are the upstream ones" \
     test_hypr_idle_lock_package_names
 run_test "Hyprland portal package is xdg-desktop-portal-hyprland" \
     test_hypr_portal_package_name
+# swaync's distro package names differ from the upstream project name --
+# apt has sway-notification-center (Ubuntu 24.04 / Debian 13), Fedora has
+# SwayNotificationCenter -- and one wrong name in a multi-package apt/dnf
+# transaction aborts the rest. It must be installed in its own transaction
+# under the distro name (upstream name as the fallback).
+test_swaync_package_names() {
+    assert_source_contains "sway-notification-center" &&
+    assert_source_contains "SwayNotificationCenter" &&
+    assert_source_not_contains "fuzzel swaync"
+}
+
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
 run_test "shared Wayland stack installs independently of hyprland" \
     test_shared_wayland_stack_decoupled
+run_test "swaync installs under its distro package names, decoupled" \
+    test_swaync_package_names
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
