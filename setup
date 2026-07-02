@@ -405,7 +405,7 @@ install_packages() {
                 info "Installing shared Wayland desktop packages"
                 sudo apt-get install -y --install-recommends \
                     xdg-desktop-portal-gtk \
-                    waybar fuzzel swaync kanshi \
+                    waybar fuzzel kanshi \
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
@@ -413,6 +413,13 @@ install_packages() {
                     policykit-1-gnome \
                     fonts-jetbrains-mono \
                     || warn "some shared Wayland desktop packages are unavailable via apt"
+                # swaync ships on apt as sway-notification-center (Ubuntu
+                # 24.04, Debian 13); try the upstream name for backports.
+                # Its own transaction so a missing name can't abort the
+                # shared stack above.
+                sudo apt-get install -y --install-recommends sway-notification-center \
+                    || sudo apt-get install -y --install-recommends swaync \
+                    || warn "swaync unavailable via apt (sway-notification-center); notifications need a manual build"
                 # Hyprland-only packages. `|| warn` because the hypr* tools
                 # may need a backport and shouldn't abort.
                 info "Installing Hyprland desktop packages"
@@ -505,7 +512,7 @@ install_packages() {
                 info "Installing shared Wayland desktop packages"
                 sudo dnf install -y \
                     xdg-desktop-portal-gtk \
-                    waybar fuzzel swaync kanshi \
+                    waybar fuzzel kanshi \
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
@@ -513,6 +520,13 @@ install_packages() {
                     polkit-gnome \
                     jetbrains-mono-fonts \
                     || warn "some shared Wayland desktop packages are unavailable via dnf"
+                # Fedora packages swaync as SwayNotificationCenter; try the
+                # upstream name too in case a COPR provides it. Its own
+                # transaction so a missing name can't abort the shared stack
+                # above.
+                sudo dnf install -y SwayNotificationCenter \
+                    || sudo dnf install -y swaync \
+                    || warn "swaync unavailable via dnf (SwayNotificationCenter); notifications need a manual build"
                 # Hyprland-only packages (these are the ones that need the
                 # COPR above).
                 info "Installing Hyprland desktop packages"
