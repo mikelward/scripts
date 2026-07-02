@@ -112,6 +112,25 @@ test_hypr_portal_package_name() {
     assert_source_not_contains '[^-]hyprland-portal'
 }
 
+# --- Sway desktop ---
+
+# --sway selects the Sway desktop and dispatches to setup-sway, mirroring
+# --kde/--hypr.
+test_sway_flag_and_dispatch() {
+    assert_source_contains '[-]-sway)' &&
+    assert_source_contains "DESKTOP=sway" &&
+    assert_source_contains "setup-sway"
+}
+
+# The Sway stack packages ship under their upstream names in the default
+# Debian and Fedora repos; wlroots' portal is xdg-desktop-portal-wlr (not
+# "-sway"). One bad name would abort the whole apt/dnf line.
+test_sway_package_names() {
+    assert_source_contains "sway swaybg swayidle swaylock xdg-desktop-portal-wlr" &&
+    assert_source_contains "autotiling" &&
+    assert_source_not_contains "xdg-desktop-portal-sway"
+}
+
 run_test "help flag" test_help_flag
 run_test "-h flag" test_h_flag
 run_test "unknown option errors" test_unknown_option
@@ -119,6 +138,8 @@ run_test "hypridle/hyprlock package names are the upstream ones" \
     test_hypr_idle_lock_package_names
 run_test "Hyprland portal package is xdg-desktop-portal-hyprland" \
     test_hypr_portal_package_name
+run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
+run_test "Sway package names are the upstream ones" test_sway_package_names
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

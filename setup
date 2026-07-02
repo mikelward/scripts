@@ -92,12 +92,14 @@ NPM=yes
 # Which Linux desktop to install and configure (ignored on macOS). One of:
 #   kde   - KDE Plasma + Krohnkite, via setup-kde (the default)
 #   hypr  - Hyprland Wayland desktop, via setup-hypr
-# Override with --kde / --hypr, or by exporting DESKTOP before running.
+#   sway  - Sway Wayland desktop, via setup-sway
+# Override with --kde / --hypr / --sway, or by exporting DESKTOP before
+# running.
 DESKTOP="${DESKTOP:-kde}"
 
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--kde | --hypr] [--minimal | --full]
+Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
              [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm]
              [-h | --help]
 
@@ -108,6 +110,7 @@ Options:
   --no-gui         Skip all graphical packages and desktop configuration
   --kde            Install/configure KDE Plasma + Krohnkite (default; Linux)
   --hypr           Install/configure the Hyprland Wayland desktop (Linux)
+  --sway           Install/configure the Sway Wayland desktop (Linux)
   --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
                    nushell), installing only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -156,6 +159,9 @@ while test $# -gt 0; do
             ;;
         --hypr)
             DESKTOP=hypr
+            ;;
+        --sway)
+            DESKTOP=sway
             ;;
         --minimal)
             MINIMAL=yes
@@ -410,6 +416,20 @@ install_packages() {
                 sudo apt-get install -y --install-recommends \
                     grim slurp wl-clipboard playerctl gnome-calculator \
                     || warn "screenshot/media/calculator tools unavailable via apt"
+                # Sway Wayland desktop packages, installed unconditionally
+                # alongside KDE/Hyprland for the same reason (--sway only
+                # chooses which desktop to *configure*). All are in the
+                # default repos; the bar/launcher/notification stack above
+                # (waybar, fuzzel, swaync, ...) is shared with Hyprland.
+                info "Installing Sway desktop packages"
+                sudo apt-get install -y --install-recommends \
+                    sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
+                    || warn "some Sway packages are unavailable via apt"
+                # autotiling (dwindle-style dynamic tiling) is packaged
+                # separately and missing from some releases; its absence
+                # only costs the dynamic splits, not the desktop.
+                sudo apt-get install -y --install-recommends autotiling \
+                    || warn "autotiling unavailable via apt; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) is often not in the default repos;
                 # install it separately so its absence doesn't block the rest.
                 sudo apt-get install -y --install-recommends yazi \
@@ -487,6 +507,21 @@ install_packages() {
                 sudo dnf install -y \
                     grim slurp wl-clipboard playerctl gnome-calculator \
                     || warn "screenshot/media/calculator tools unavailable via dnf"
+                # Sway Wayland desktop packages, installed unconditionally
+                # alongside KDE/Hyprland for the same reason (--sway only
+                # chooses which desktop to *configure*). All are in the
+                # default Fedora repos -- no COPR needed, unlike Hyprland.
+                # The bar/launcher/notification stack above (waybar, fuzzel,
+                # swaync, ...) is shared with Hyprland.
+                info "Installing Sway desktop packages"
+                sudo dnf install -y \
+                    sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
+                    || warn "some Sway packages are unavailable via dnf"
+                # autotiling (dwindle-style dynamic tiling) is packaged
+                # separately; its absence only costs the dynamic splits,
+                # not the desktop.
+                sudo dnf install -y autotiling \
+                    || warn "autotiling unavailable via dnf; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) may need a COPR; install it
                 # separately so its absence doesn't block the rest.
                 sudo dnf install -y yazi \
@@ -910,6 +945,9 @@ if test "$GUI_ENABLED" -eq 1; then
     elif test "$DESKTOP" = hypr; then
         info "Configuring Hyprland desktop environment"
         "$SCRIPTS_DIR/setup-hypr" $DESKTOP_SETUP_FLAGS
+    elif test "$DESKTOP" = sway; then
+        info "Configuring Sway desktop environment"
+        "$SCRIPTS_DIR/setup-sway" $DESKTOP_SETUP_FLAGS
     else
         info "Configuring KDE desktop environment"
         "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS

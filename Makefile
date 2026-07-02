@@ -11,4 +11,5 @@ test:
 	./mdf_test
 	./setup_test
 	./setup-hypr_test
+	./setup-sway_test
 	./setup-kde_test

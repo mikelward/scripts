@@ -1,0 +1,207 @@
+#!/bin/sh
+# Configure a Sway-based Wayland desktop (KDE replacement).
+#
+# The dotfiles live in the conf repo (config/sway, config/swaylock, plus the
+# shared config/waybar, config/fuzzel, config/swaync, and the shared theme
+# scripts under config/hypr/scripts) and are installed by conf's
+# `make install`. The Wayland desktop *packages* are installed by the
+# top-level `setup`. This script, like setup-hypr and setup-kde, handles the
+# parts that are neither dotfiles nor packages:
+#
+# - Tell systemd-logind to ignore the laptop lid so Sway's own lid handler
+#   (config/sway/scripts/lid.sh, wired via bindswitch) is authoritative:
+#   disable the internal panel on close, and suspend only when no external
+#   display is active. The drop-in content is SHARED with the Hyprland build
+#   (setup-hypr installs the same settings), so if a drop-in already ignores
+#   the lid nothing is written.
+#   TODO: consider moving the lid suspend policy to logind instead
+#   (HandleLidSwitch=suspend + HandleLidSwitchDocked=ignore) and dropping
+#   the conditional suspend from both compositors' lid scripts; that is a
+#   shared system-level change, so change the Hyprland build at the same
+#   time.
+# - Enable power-profiles-daemon (used by the waybar power-profiles module).
+# - Seed ~/.config/sway/config.local (per-host overrides: output names, idle
+#   tweaks) from the installed template. Never overwrites an existing one.
+#
+# Usage:
+#     setup-sway [--no-install] [--ignore-errors] [-h | --help]
+#
+# --no-install skips the system-modifying steps (logind drop-in, enabling the
+# service). --ignore-errors keeps going past failures. setup forwards both.
+
+# Whether to install packages. "no" (via --no-install) skips the install.
+INSTALL=yes
+
+# Whether to keep going past failures. "no" aborts on the first error via
+# set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
+IGNORE_ERRORS=no
+
+# Where logind drop-ins live. Overridable for tests (SETUP_LOGIND_DIR), which
+# can't mock the real /etc.
+LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+is_command() {
+    test -x "$(command -v "$1")"
+}
+
+usage() {
+    cat <<'USAGE'
+Usage: setup-sway [--no-install] [--ignore-errors] [-h | --help]
+
+Configure a Sway-based Wayland desktop (packages come from `setup`).
+
+Options:
+  --no-install     Skip the system-modifying steps (logind drop-in, services)
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        --install)
+            INSTALL=yes
+            ;;
+        --no-install)
+            INSTALL=no
+            ;;
+        --ignore-errors)
+            IGNORE_ERRORS=yes
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+# Abort on the first error by default. --ignore-errors leaves set -e off so
+# the script pushes through failing steps.
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
+
+# --- systemd-logind: ignore the lid ---
+
+# Hand full lid control to Sway (config/sway/scripts/lid.sh) so a docked
+# laptop with the lid shut doesn't suspend when an external display is
+# active. Shared with the Hyprland build: setup-hypr installs a drop-in with
+# the same settings, so whichever ran first wins and the other skips.
+install_logind_lid_dropin() {
+    is_command systemctl || { warn "systemd not detected; skipping logind lid drop-in"; return 0; }
+    if grep -qs 'HandleLidSwitch=ignore' "$LOGIND_DIR"/*.conf 2>/dev/null; then
+        info "logind already ignores the lid (drop-in present); skipping"
+        return 0
+    fi
+    dropin="$LOGIND_DIR/10-sway-lid.conf"
+    info "Installing logind lid drop-in ($dropin)"
+    sudo mkdir -p "$LOGIND_DIR"
+    sudo tee "$dropin" >/dev/null <<'CONF'
+# Installed by setup-sway. Let the compositor's lid handler (Sway's lid.sh,
+# or Hyprland's -- they implement the same policy) manage the lid so a docked
+# laptop with the lid closed keeps running on its external display.
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+CONF
+    # Reload logind so the drop-in takes effect without a reboot.
+    sudo systemctl kill -s HUP systemd-logind 2>/dev/null \
+        || warn "could not reload systemd-logind; changes apply after reboot"
+}
+
+# --- Services ---
+
+enable_services() {
+    is_command systemctl || { warn "systemd not detected; enable power-profiles-daemon manually"; return 0; }
+    if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
+        info "Enabling power-profiles-daemon"
+        sudo systemctl enable --now power-profiles-daemon.service \
+            || warn "could not enable power-profiles-daemon"
+    else
+        warn "power-profiles-daemon.service not found; install power-profiles-daemon"
+    fi
+}
+
+# --- Per-host config.local ---
+
+# Seed ~/.config/sway/config.local from the template conf's `make install`
+# ships. The base sway config is identical on every machine; config.local
+# holds only this machine's overrides (output names, idle tweaks). Never
+# overwrite an existing one -- re-running setup-sway must be safe.
+seed_config_local() {
+    cfgdir="${XDG_CONFIG_HOME:-$HOME/.config}/sway"
+    local_file="$cfgdir/config.local"
+    template="$cfgdir/config.local.template"
+    if test -f "$local_file"; then
+        info "Per-host config already exists ($local_file); leaving it alone"
+        return 0
+    fi
+    if ! test -f "$template"; then
+        warn "config.local.template not found ($template); run conf's 'make install' first"
+        return 0
+    fi
+    mkdir -p "$cfgdir"
+    cp "$template" "$local_file"
+    info "Created $local_file from the template"
+    # Inside a running Sway session, append this machine's output names as
+    # comments so filling in the per-host values is copy-paste.
+    if test -n "$SWAYSOCK" && is_command swaymsg; then
+        {
+            echo ""
+            echo "# Outputs detected on this machine ($(hostname)):"
+            swaymsg -t get_outputs 2>/dev/null \
+                | grep -o '"name": *"[^"]*"' | cut -d'"' -f4 \
+                | sed 's/^/#   /'
+        } >> "$local_file"
+    fi
+}
+
+# --- Main ---
+
+# The Wayland desktop packages are installed by the top-level `setup`. Here we
+# only apply the system-modifying config; --no-install skips it (e.g. a dry run
+# or when re-running just to reseed config.local / source setup-sway.local).
+if test "$INSTALL" = yes; then
+    install_logind_lid_dropin
+    enable_services
+else
+    info "Skipping logind drop-in and service enablement (--no-install)"
+fi
+
+# Per-host overrides are user-level config, not a system change: seed them
+# even under --no-install.
+seed_config_local
+
+# Local overrides, mirroring setup-kde's setup-kde.local hook.
+if is_command setup-sway.local; then
+    info "Sourcing setup-sway.local"
+    # shellcheck source=/dev/null
+    . setup-sway.local
+fi
+
+info "Sway desktop configured."
+info "Per-host values (output names, idle tweaks) live in"
+info "~/.config/sway/config.local -- see conf/config/sway/README.md."
+info "Log in and pick the Sway session (or run 'sway' from a TTY)."
