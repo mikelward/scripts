@@ -131,6 +131,22 @@ test_sway_package_names() {
     assert_source_not_contains "xdg-desktop-portal-sway"
 }
 
+# The shared Wayland stack (waybar/fuzzel/swaync/power-profiles-daemon/...,
+# used by BOTH the Hyprland and Sway builds) must install in its own
+# transaction: apt/dnf abort a transaction on one unavailable package, so a
+# release without hyprland must not take the shared pieces down with it.
+# Join the backslash-continued lines first so each install command is one
+# line, then make sure no install command mixes hyprland with waybar.
+test_shared_wayland_stack_decoupled() {
+    joined=$(sed -e ':a' -e '/\\$/N; s/\\\n//; ta' "$SETUP")
+    if printf '%s\n' "$joined" | grep 'install' | grep 'hyprland' | grep -q 'waybar'; then
+        echo "  FAIL: hyprland and waybar share an install transaction"
+        TEST_FAILED=1
+        return 1
+    fi
+    assert_source_contains "Installing shared Wayland desktop packages"
+}
+
 run_test "help flag" test_help_flag
 run_test "-h flag" test_h_flag
 run_test "unknown option errors" test_unknown_option
@@ -140,6 +156,8 @@ run_test "Hyprland portal package is xdg-desktop-portal-hyprland" \
     test_hypr_portal_package_name
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
+run_test "shared Wayland stack installs independently of hyprland" \
+    test_shared_wayland_stack_decoupled
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

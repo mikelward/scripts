@@ -394,13 +394,16 @@ install_packages() {
                     kwin-dev \
                     plasma-desktop \
                     plasma-sdk
-                # Hyprland Wayland desktop packages, installed unconditionally
-                # alongside KDE so either desktop is available (--kde/--hypr
-                # only choose which one to *configure*). `|| warn` because
-                # several hypr* tools may need a backport and shouldn't abort.
-                info "Installing Hyprland desktop packages"
+                # Shared Wayland desktop stack, used by BOTH the Hyprland and
+                # Sway builds (bar, launcher, notifications, portal, audio,
+                # applets, fonts). Installed unconditionally alongside KDE so
+                # any desktop is available (--kde/--hypr/--sway only choose
+                # which one to *configure*), and in its OWN transaction: apt
+                # aborts the whole install on one unavailable name, so a
+                # release without hyprland must not take the Sway/Hyprland
+                # shared pieces down with it.
+                info "Installing shared Wayland desktop packages"
                 sudo apt-get install -y --install-recommends \
-                    hyprland hypridle hyprlock \
                     xdg-desktop-portal-gtk \
                     waybar fuzzel swaync kanshi \
                     power-profiles-daemon \
@@ -409,7 +412,13 @@ install_packages() {
                     network-manager-gnome blueman \
                     policykit-1-gnome \
                     fonts-jetbrains-mono \
-                    || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww, swaync)"
+                    || warn "some shared Wayland desktop packages are unavailable via apt"
+                # Hyprland-only packages. `|| warn` because the hypr* tools
+                # may need a backport and shouldn't abort.
+                info "Installing Hyprland desktop packages"
+                sudo apt-get install -y --install-recommends \
+                    hyprland hypridle hyprlock \
+                    || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww)"
                 # These are in the default repos even where hyprland isn't, so
                 # install them separately -- otherwise a missing hyprland fails
                 # the whole command above and takes these down with it.
@@ -489,17 +498,27 @@ install_packages() {
                 sudo dnf install -y dnf-plugins-core || true
                 sudo dnf copr enable -y lionheartp/Hyprland \
                     || warn "could not enable the lionheartp/Hyprland COPR; hyprland may be unavailable"
-                info "Installing Hyprland desktop packages"
+                # Shared Wayland desktop stack, used by BOTH the Hyprland and
+                # Sway builds. Its own transaction, all default-repo, so a
+                # failed COPR / missing hyprland can't take the bar, launcher,
+                # and power pieces down with it.
+                info "Installing shared Wayland desktop packages"
                 sudo dnf install -y \
-                    hyprland hypridle hyprlock \
-                    xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-                    waybar fuzzel swaync swww kanshi \
+                    xdg-desktop-portal-gtk \
+                    waybar fuzzel swaync kanshi \
                     power-profiles-daemon \
                     pipewire wireplumber pavucontrol \
                     brightnessctl \
                     network-manager-applet blueman \
                     polkit-gnome \
                     jetbrains-mono-fonts \
+                    || warn "some shared Wayland desktop packages are unavailable via dnf"
+                # Hyprland-only packages (these are the ones that need the
+                # COPR above).
+                info "Installing Hyprland desktop packages"
+                sudo dnf install -y \
+                    hyprland hypridle hyprlock \
+                    xdg-desktop-portal-hyprland swww \
                     || warn "some Hyprland packages are unavailable; check the lionheartp/Hyprland COPR or build manually"
                 # In the default repos even where hyprland isn't, so install
                 # separately -- a missing hyprland above shouldn't take these
