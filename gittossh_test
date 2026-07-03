@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tests for gitusessh
+# Tests for gittossh
 #
 # These build throwaway git repositories with git init + git remote (no network
 # access), run the converter, and inspect the resulting remote URLs.
@@ -7,7 +7,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONVERT="$SCRIPT_DIR/gitusessh"
+CONVERT="$SCRIPT_DIR/gittossh"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -191,10 +191,31 @@ test_non_repo_errors() {
     assert_output_contains "not a git repository"
 }
 
+# A rewrite that fails must surface as a non-zero exit, not a silent "nothing
+# to convert". Reproduce it with a remote whose url lives in global config:
+# git sees the remote and reads the HTTPS url, but "git config --unset-all"
+# (which writes the local config) can't remove it, so the rewrite fails.
+test_reports_failure_when_rewrite_fails() {
+    tmp="$(mktemp -d)"
+    git init -q "$tmp/repo"
+    cat > "$tmp/gitconfig" <<EOF
+[remote "origin"]
+	url = https://github.com/mikelward/scripts.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+EOF
+    set +e
+    output="$(GIT_CONFIG_GLOBAL="$tmp/gitconfig" "$CONVERT" "$tmp/repo" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$tmp"
+    assert_status 1 &&
+    assert_output_contains "failed to update remote 'origin'"
+}
+
 test_help_exits_zero() {
     run_convert --help
     assert_status 0 &&
-    assert_output_contains "Usage: gitusessh"
+    assert_output_contains "Usage: gittossh"
 }
 
 test_unknown_option_errors() {
@@ -216,6 +237,7 @@ run_test "multi-URL remote leaves SSH value alone" test_multi_url_mixed_leaves_s
 run_test "dry run leaves remote unchanged" test_dry_run_leaves_remote_unchanged
 run_test "URL without .git suffix" test_url_without_dot_git_suffix
 run_test "non-repo directory errors" test_non_repo_errors
+run_test "reports failure when a rewrite fails" test_reports_failure_when_rewrite_fails
 run_test "help exits zero" test_help_exits_zero
 run_test "unknown option errors" test_unknown_option_errors
 

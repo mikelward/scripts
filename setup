@@ -877,16 +877,18 @@ generate_ssh_key() {
 # be flipped here so pushes use the key. Defaults to no, so a non-interactive
 # "curl | sh" run never rewrites anything without being asked.
 offer_ssh_remotes() {
-    converter="$SCRIPTS_DIR/gitusessh"
+    converter="$SCRIPTS_DIR/gittossh"
     test -x "$converter" || return 0
 
-    repos=""
+    # Collect the cloned repos as positional parameters, not a space-joined
+    # string, so paths survive an $SCRIPTS_DIR/etc. that contains whitespace.
+    set --
     for dir in "$SCRIPTS_DIR" "$CONF_DIR" "$ROOT_DIR"; do
         if test -d "$dir/.git"; then
-            repos="$repos $dir"
+            set -- "$@" "$dir"
         fi
     done
-    test -n "$repos" || return 0
+    test "$#" -gt 0 || return 0
 
     prompt="Switch your repo remotes (scripts, conf, root) from HTTPS to SSH? [y/N] "
     reply=n
@@ -897,13 +899,13 @@ offer_ssh_remotes() {
         printf "%s" "$prompt"
         read reply < /dev/tty
     else
-        info "Non-interactive; leaving repo remotes as-is (run gitusessh later to switch)"
+        info "Non-interactive; leaving repo remotes as-is (run gittossh later to switch)"
         return 0
     fi
 
     case "$reply" in
         y|Y|yes|YES)
-            "$converter" $repos
+            "$converter" "$@"
             ;;
         *)
             info "Leaving repo remotes as-is"
