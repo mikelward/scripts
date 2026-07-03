@@ -1,0 +1,150 @@
+#!/bin/bash
+# git-remotes-to-ssh - rewrite a git repository's HTTPS remotes to SSH.
+#
+# Converts https://github.com/OWNER/REPO and https://codeberg.org/OWNER/REPO
+# remote URLs to their scp-style SSH equivalents (git@github.com:OWNER/REPO,
+# git@codeberg.org:OWNER/REPO) so pushes authenticate with an SSH key instead
+# of prompting for a password. Remotes on other hosts, and remotes that are
+# already SSH, are left untouched.
+#
+# Usage:
+#     git-remotes-to-ssh [-n | --dry-run] [-h | --help] [DIR ...]
+#
+# With no DIR, operates on the current directory. Each DIR may be a git
+# working tree or any path inside one.
+
+scriptname=git-remotes-to-ssh
+
+# Hosts whose HTTPS URLs we rewrite. Both accept the scp-like
+# git@HOST:OWNER/REPO form. Space-separated; extend as needed.
+SSH_HOSTS="github.com codeberg.org"
+
+DRY_RUN=no
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "%s: %s\n" "$scriptname" "$*" >&2
+}
+
+error() {
+    printf "%s: %s\n" "$scriptname" "$*" >&2
+    exit 1
+}
+
+usage() {
+    cat <<'USAGE'
+Usage: git-remotes-to-ssh [-n | --dry-run] [-h | --help] [DIR ...]
+
+Rewrite a git repository's GitHub/Codeberg HTTPS remotes to SSH.
+
+Options:
+  -n, --dry-run    Show what would change without touching any remote
+  -h, --help       Show this help and exit
+
+With no DIR, operates on the current directory.
+USAGE
+}
+
+# https_to_ssh URL: print the SSH form of URL when it is an HTTPS/HTTP URL on a
+# known host, and return 0. Return 1 (printing nothing) for anything else, so
+# already-SSH and foreign remotes are left alone.
+https_to_ssh() {
+    url=$1
+    rest=${url#https://}
+    if test "$rest" = "$url"; then
+        rest=${url#http://}
+        if test "$rest" = "$url"; then
+            return 1
+        fi
+    fi
+
+    host=${rest%%/*}
+    path=${rest#*/}
+    test "$host" = "$rest" && return 1   # no path after the host
+    host=${host#*@}                      # drop any user@ prefix
+    host=${host%%:*}                     # drop any :port
+
+    case " $SSH_HOSTS " in
+        *" $host "*) ;;
+        *) return 1 ;;
+    esac
+
+    printf "git@%s:%s\n" "$host" "$path"
+}
+
+# convert_repo DIR: rewrite every convertible remote in the repo containing DIR.
+convert_repo() {
+    dir=$1
+    if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        warn "not a git repository: $dir"
+        return 1
+    fi
+
+    toplevel=$(git -C "$dir" rev-parse --show-toplevel)
+    changed=0
+    for remote in $(git -C "$dir" remote); do
+        # Read the raw configured URL rather than "remote get-url", which
+        # applies url.*.insteadOf rewrites and would hide the real value.
+        old=$(git -C "$dir" config --get "remote.$remote.url")
+        new=$(https_to_ssh "$old") || continue
+        test "$new" = "$old" && continue
+
+        if test "$DRY_RUN" = yes; then
+            info "Would update $toplevel remote '$remote': $old -> $new"
+        else
+            git -C "$dir" remote set-url "$remote" "$new"
+            info "Updated $toplevel remote '$remote': $old -> $new"
+        fi
+        changed=$((changed + 1))
+    done
+
+    if test "$changed" -eq 0; then
+        info "No HTTPS remotes to convert in $toplevel"
+    fi
+}
+
+# --- Parse arguments ---
+
+while test $# -gt 0; do
+    case "$1" in
+        -n|--dry-run)
+            DRY_RUN=yes
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+    shift
+done
+
+if ! command -v git >/dev/null 2>&1; then
+    error "git is required but was not found"
+fi
+
+# Default to the current directory when no repositories are given.
+if test $# -eq 0; then
+    set -- .
+fi
+
+status=0
+for dir in "$@"; do
+    convert_repo "$dir" || status=1
+done
+
+exit "$status"

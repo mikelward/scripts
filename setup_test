@@ -190,6 +190,15 @@ test_ssh_key_prompt_covers_github_and_codeberg() {
     assert_source_contains "add the key to GitHub and Codeberg"
 }
 
+# After cloning the repos, setup offers to flip their remotes to SSH via the
+# git-remotes-to-ssh helper. The prompt must default to no so a
+# non-interactive "curl | sh" run doesn't rewrite remotes unasked.
+test_offers_ssh_remote_switch() {
+    assert_source_contains "offer_ssh_remotes" &&
+    assert_source_contains "git-remotes-to-ssh" &&
+    assert_source_contains "from HTTPS to SSH?"
+}
+
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
 run_test "shared Wayland stack installs independently of hyprland" \
@@ -200,6 +209,8 @@ run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg
+run_test "setup offers to switch repo remotes to SSH" \
+    test_offers_ssh_remote_switch
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
