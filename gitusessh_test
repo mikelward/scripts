@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tests for git-remotes-to-ssh
+# Tests for gitusessh
 #
 # These build throwaway git repositories with git init + git remote (no network
 # access), run the converter, and inspect the resulting remote URLs.
@@ -7,7 +7,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONVERT="$SCRIPT_DIR/git-remotes-to-ssh"
+CONVERT="$SCRIPT_DIR/gitusessh"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -163,7 +163,7 @@ test_non_repo_errors() {
 test_help_exits_zero() {
     run_convert --help
     assert_status 0 &&
-    assert_output_contains "Usage: git-remotes-to-ssh"
+    assert_output_contains "Usage: gitusessh"
 }
 
 test_unknown_option_errors() {
