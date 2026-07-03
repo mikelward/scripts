@@ -850,8 +850,9 @@ generate_ssh_key() {
     ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
 
     info ""
-    info "Add this SSH public key to GitHub before continuing:"
-    info "  https://github.com/settings/ssh/new"
+    info "Add this SSH public key to GitHub and Codeberg before continuing:"
+    info "  GitHub:   https://github.com/settings/ssh/new"
+    info "  Codeberg: https://codeberg.org/user/settings/keys"
     info ""
     cat "$HOME/.ssh/id_ed25519.pub"
     info ""
@@ -859,13 +860,13 @@ generate_ssh_key() {
     # When run via "curl | sh", stdin is the script itself, so we
     # can't read user input.  Open /dev/tty to read from the terminal.
     if test -t 0; then
-        printf "Press Enter after adding the key to GitHub..."
+        printf "Press Enter after adding the key to GitHub and Codeberg..."
         read _
     elif test -e /dev/tty; then
-        printf "Press Enter after adding the key to GitHub..."
+        printf "Press Enter after adding the key to GitHub and Codeberg..."
         read _ < /dev/tty
     else
-        warn "Cannot prompt for input; add the key to GitHub manually before cloning SSH repos"
+        warn "Cannot prompt for input; add the key to GitHub and Codeberg manually before cloning SSH repos"
     fi
 }
 

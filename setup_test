@@ -178,6 +178,18 @@ test_typescript_installed_with_npm() {
     assert_source_contains "brew install typescript"
 }
 
+# --- SSH key ---
+
+# The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
+# cloned over SSH, and pushing anywhere needs a key. Codeberg hosts Krohnkite
+# now, so the key-generation prompt must point at both GitHub and Codeberg,
+# not GitHub alone.
+test_ssh_key_prompt_covers_github_and_codeberg() {
+    assert_source_contains "https://github.com/settings/ssh/new" &&
+    assert_source_contains "https://codeberg.org/user/settings/keys" &&
+    assert_source_contains "add the key to GitHub and Codeberg"
+}
+
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
 run_test "shared Wayland stack installs independently of hyprland" \
@@ -186,6 +198,8 @@ run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
 run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
+run_test "SSH key prompt points at GitHub and Codeberg" \
+    test_ssh_key_prompt_covers_github_and_codeberg
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
