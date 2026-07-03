@@ -136,6 +136,37 @@ test_converts_push_url() {
     }
 }
 
+# A mirror-style remote can carry several fetch URLs; every HTTPS one must be
+# rewritten, not just the first, and the run must report success.
+test_converts_multiple_fetch_urls() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    git -C "$repo" remote set-url --add origin "https://codeberg.org/mikelward/other.git"
+    run_convert "$repo"
+    all="$(git -C "$repo" config --get-all remote.origin.url | tr '\n' ' ')"
+    assert_status 0 &&
+    { test "$all" = "git@github.com:mikelward/scripts.git git@codeberg.org:mikelward/other.git " || {
+        echo "  FAIL: not all fetch URLs converted: $all"
+        TEST_FAILED=1
+        return 1
+    }; }
+}
+
+# One HTTPS value and one already-SSH value: convert only the HTTPS one.
+test_multi_url_mixed_leaves_ssh_value() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    git -C "$repo" remote set-url --add origin "git@codeberg.org:mikelward/other.git"
+    run_convert "$repo"
+    all="$(git -C "$repo" config --get-all remote.origin.url | tr '\n' ' ')"
+    assert_status 0 &&
+    { test "$all" = "git@github.com:mikelward/scripts.git git@codeberg.org:mikelward/other.git " || {
+        echo "  FAIL: unexpected URLs: $all"
+        TEST_FAILED=1
+        return 1
+    }; }
+}
+
 test_dry_run_leaves_remote_unchanged() {
     repo="$(make_repo)"
     git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
@@ -180,6 +211,8 @@ run_test "leaves SSH remotes untouched" test_leaves_ssh_remotes_untouched
 run_test "leaves other hosts untouched" test_leaves_other_hosts_untouched
 run_test "converts every remote" test_converts_all_remotes
 run_test "converts configured push URL" test_converts_push_url
+run_test "converts multiple fetch URLs" test_converts_multiple_fetch_urls
+run_test "multi-URL remote leaves SSH value alone" test_multi_url_mixed_leaves_ssh_value
 run_test "dry run leaves remote unchanged" test_dry_run_leaves_remote_unchanged
 run_test "URL without .git suffix" test_url_without_dot_git_suffix
 run_test "non-repo directory errors" test_non_repo_errors
