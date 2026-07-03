@@ -229,12 +229,12 @@ test_unknown_option() {
 
 # --- installation (mocked git/kpackagetool6; npm is a never-called canary) ---
 
-# The clone must come from my fork's mikel branch, not upstream codeberg.
+# The clone must come from my Codeberg fork's mikel branch.
 test_clones_fork_by_default() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_called "git clone --depth 1 --branch mikel https://github.com/mikelward/Krohnkite-codeberg.git"
+    assert_called "git clone --depth 1 --branch mikel git@codeberg.org:mikelward/Krohnkite.git"
 }
 
 # KROHNKITE_REPO and KROHNKITE_BRANCH override the clone source (any git
