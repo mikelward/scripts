@@ -122,6 +122,20 @@ test_converts_all_remotes() {
     assert_url "$repo" upstream "git@codeberg.org:mikelward/Krohnkite.git"
 }
 
+test_converts_push_url() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    git -C "$repo" remote set-url --push origin "https://github.com/mikelward/scripts.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@github.com:mikelward/scripts.git" &&
+    test "$(git -C "$repo" config --get remote.origin.pushurl)" = "git@github.com:mikelward/scripts.git" || {
+        echo "  FAIL: pushurl not converted: $(git -C "$repo" config --get remote.origin.pushurl)"
+        TEST_FAILED=1
+        return 1
+    }
+}
+
 test_dry_run_leaves_remote_unchanged() {
     repo="$(make_repo)"
     git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
@@ -165,6 +179,7 @@ run_test "converts Codeberg HTTPS to SSH" test_converts_codeberg_https
 run_test "leaves SSH remotes untouched" test_leaves_ssh_remotes_untouched
 run_test "leaves other hosts untouched" test_leaves_other_hosts_untouched
 run_test "converts every remote" test_converts_all_remotes
+run_test "converts configured push URL" test_converts_push_url
 run_test "dry run leaves remote unchanged" test_dry_run_leaves_remote_unchanged
 run_test "URL without .git suffix" test_url_without_dot_git_suffix
 run_test "non-repo directory errors" test_non_repo_errors

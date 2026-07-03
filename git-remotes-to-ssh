@@ -75,6 +75,34 @@ https_to_ssh() {
     printf "git@%s:%s\n" "$host" "$path"
 }
 
+# convert_key DIR REMOTE KEY SETFLAG DESC: rewrite remote.<REMOTE>.<KEY> from
+# HTTPS to SSH, writing it back with "git remote set-url SETFLAG". KEY is "url"
+# (SETFLAG empty) for the fetch URL or "pushurl" (SETFLAG --push) for a
+# separately configured push URL. Prints a line and returns 0 when it changes
+# (or would change) the value; returns 1 otherwise -- no such key, a foreign
+# host, or already SSH. Reads the raw config value rather than "remote get-url"
+# so url.*.insteadOf rewrites don't hide it.
+convert_key() {
+    dir=$1
+    remote=$2
+    key=$3
+    setflag=$4
+    desc=$5
+
+    old=$(git -C "$dir" config --get "remote.$remote.$key") || return 1
+    new=$(https_to_ssh "$old") || return 1
+    test "$new" = "$old" && return 1
+
+    if test "$DRY_RUN" = yes; then
+        info "Would update $toplevel remote '$remote'$desc: $old -> $new"
+    else
+        # Unquoted $setflag so "url" passes no flag and "pushurl" passes --push.
+        git -C "$dir" remote set-url $setflag "$remote" "$new"
+        info "Updated $toplevel remote '$remote'$desc: $old -> $new"
+    fi
+    return 0
+}
+
 # convert_repo DIR: rewrite every convertible remote in the repo containing DIR.
 convert_repo() {
     dir=$1
@@ -86,19 +114,14 @@ convert_repo() {
     toplevel=$(git -C "$dir" rev-parse --show-toplevel)
     changed=0
     for remote in $(git -C "$dir" remote); do
-        # Read the raw configured URL rather than "remote get-url", which
-        # applies url.*.insteadOf rewrites and would hide the real value.
-        old=$(git -C "$dir" config --get "remote.$remote.url")
-        new=$(https_to_ssh "$old") || continue
-        test "$new" = "$old" && continue
-
-        if test "$DRY_RUN" = yes; then
-            info "Would update $toplevel remote '$remote': $old -> $new"
-        else
-            git -C "$dir" remote set-url "$remote" "$new"
-            info "Updated $toplevel remote '$remote': $old -> $new"
+        # A remote can carry a separate push URL; convert both so pushes, not
+        # just fetches, actually switch to SSH.
+        if convert_key "$dir" "$remote" url "" ""; then
+            changed=$((changed + 1))
         fi
-        changed=$((changed + 1))
+        if convert_key "$dir" "$remote" pushurl --push " (push)"; then
+            changed=$((changed + 1))
+        fi
     done
 
     if test "$changed" -eq 0; then
