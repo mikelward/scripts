@@ -9,7 +9,7 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
-	./gitusessh_test
+	./gittossh_test
 	./runenv_test
 	./setup_test
 	./setup-hypr_test

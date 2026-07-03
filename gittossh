@@ -1,5 +1,5 @@
 #!/bin/bash
-# gitusessh - rewrite a git repository's HTTPS remotes to SSH.
+# gittossh - rewrite a git repository's HTTPS remotes to SSH.
 #
 # Converts https://github.com/OWNER/REPO and https://codeberg.org/OWNER/REPO
 # remote URLs to their scp-style SSH equivalents (git@github.com:OWNER/REPO,
@@ -8,12 +8,12 @@
 # already SSH, are left untouched.
 #
 # Usage:
-#     gitusessh [-n | --dry-run] [-h | --help] [DIR ...]
+#     gittossh [-n | --dry-run] [-h | --help] [DIR ...]
 #
 # With no DIR, operates on the current directory. Each DIR may be a git
 # working tree or any path inside one.
 
-scriptname=gitusessh
+scriptname=gittossh
 
 # Hosts whose HTTPS URLs we rewrite. Both accept the scp-like
 # git@HOST:OWNER/REPO form. Space-separated; extend as needed.
@@ -36,7 +36,7 @@ error() {
 
 usage() {
     cat <<'USAGE'
-Usage: gitusessh [-n | --dry-run] [-h | --help] [DIR ...]
+Usage: gittossh [-n | --dry-run] [-h | --help] [DIR ...]
 
 Rewrite a git repository's GitHub/Codeberg HTTPS remotes to SSH.
 
@@ -83,7 +83,10 @@ https_to_ssh() {
 # via git config rather than "git remote set-url <name> <new> <old>": operating
 # on the raw stored values sidesteps both the "has multiple values" error and
 # the url.*.insteadOf rewrites that an <oldurl> selector matches against.
-# Prints a line per change and returns 0 if anything changed, 1 otherwise.
+# Prints a line per change. Exit status: 0 if it rewrote something, 1 if there
+# was nothing to convert, 2 if a rewrite was needed but failed (e.g. the value
+# lives in a config scope this can't write) -- callers must not treat 2 as "no
+# change".
 convert_key() {
     dir=$1
     remote=$2
@@ -122,15 +125,23 @@ convert_key() {
         return 0
     fi
 
-    # Replace the key's values with the converted set, preserving order.
+    # Replace the key's values with the converted set, preserving order. A
+    # failure here (return 2) is distinct from "nothing to convert" so the
+    # caller can report it rather than exit 0 with the HTTPS URL still in place.
     if ! git -C "$dir" config --unset-all "$cfgkey"; then
         warn "failed to update remote '$remote'$desc"
         IFS=$oldifs
-        return 1
+        return 2
     fi
+    add_failed=0
     for v in $newlist; do
-        git -C "$dir" config --add "$cfgkey" "$v"
+        git -C "$dir" config --add "$cfgkey" "$v" || add_failed=1
     done
+    if test "$add_failed" -eq 1; then
+        warn "failed to update remote '$remote'$desc"
+        IFS=$oldifs
+        return 2
+    fi
     for line in $changelog; do info "Updated $line"; done
     IFS=$oldifs
     return 0
@@ -146,20 +157,29 @@ convert_repo() {
 
     toplevel=$(git -C "$dir" rev-parse --show-toplevel)
     changed=0
+    failed=0
     for remote in $(git -C "$dir" remote); do
         # A remote can carry a separate push URL; convert both so pushes, not
         # just fetches, actually switch to SSH.
-        if convert_key "$dir" "$remote" url ""; then
-            changed=$((changed + 1))
-        fi
-        if convert_key "$dir" "$remote" pushurl " (push)"; then
-            changed=$((changed + 1))
-        fi
+        convert_key "$dir" "$remote" url ""
+        case $? in
+            0) changed=$((changed + 1)) ;;
+            2) failed=1 ;;
+        esac
+        convert_key "$dir" "$remote" pushurl " (push)"
+        case $? in
+            0) changed=$((changed + 1)) ;;
+            2) failed=1 ;;
+        esac
     done
 
+    if test "$failed" -eq 1; then
+        return 1
+    fi
     if test "$changed" -eq 0; then
         info "No HTTPS remotes to convert in $toplevel"
     fi
+    return 0
 }
 
 # --- Parse arguments ---
