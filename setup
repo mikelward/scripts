@@ -877,7 +877,7 @@ generate_ssh_key() {
 # be flipped here so pushes use the key. Defaults to no, so a non-interactive
 # "curl | sh" run never rewrites anything without being asked.
 offer_ssh_remotes() {
-    converter="$SCRIPTS_DIR/git-remotes-to-ssh"
+    converter="$SCRIPTS_DIR/gitusessh"
     test -x "$converter" || return 0
 
     repos=""
@@ -897,7 +897,7 @@ offer_ssh_remotes() {
         printf "%s" "$prompt"
         read reply < /dev/tty
     else
-        info "Non-interactive; leaving repo remotes as-is (run git-remotes-to-ssh later to switch)"
+        info "Non-interactive; leaving repo remotes as-is (run gitusessh later to switch)"
         return 0
     fi
 

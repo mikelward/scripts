@@ -191,11 +191,11 @@ test_ssh_key_prompt_covers_github_and_codeberg() {
 }
 
 # After cloning the repos, setup offers to flip their remotes to SSH via the
-# git-remotes-to-ssh helper. The prompt must default to no so a
-# non-interactive "curl | sh" run doesn't rewrite remotes unasked.
+# gitusessh helper. The prompt must default to no so a non-interactive
+# "curl | sh" run doesn't rewrite remotes unasked.
 test_offers_ssh_remote_switch() {
     assert_source_contains "offer_ssh_remotes" &&
-    assert_source_contains "git-remotes-to-ssh" &&
+    assert_source_contains "gitusessh" &&
     assert_source_contains "from HTTPS to SSH?"
 }
 

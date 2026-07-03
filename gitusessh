@@ -1,5 +1,5 @@
 #!/bin/bash
-# git-remotes-to-ssh - rewrite a git repository's HTTPS remotes to SSH.
+# gitusessh - rewrite a git repository's HTTPS remotes to SSH.
 #
 # Converts https://github.com/OWNER/REPO and https://codeberg.org/OWNER/REPO
 # remote URLs to their scp-style SSH equivalents (git@github.com:OWNER/REPO,
@@ -8,12 +8,12 @@
 # already SSH, are left untouched.
 #
 # Usage:
-#     git-remotes-to-ssh [-n | --dry-run] [-h | --help] [DIR ...]
+#     gitusessh [-n | --dry-run] [-h | --help] [DIR ...]
 #
 # With no DIR, operates on the current directory. Each DIR may be a git
 # working tree or any path inside one.
 
-scriptname=git-remotes-to-ssh
+scriptname=gitusessh
 
 # Hosts whose HTTPS URLs we rewrite. Both accept the scp-like
 # git@HOST:OWNER/REPO form. Space-separated; extend as needed.
@@ -36,7 +36,7 @@ error() {
 
 usage() {
     cat <<'USAGE'
-Usage: git-remotes-to-ssh [-n | --dry-run] [-h | --help] [DIR ...]
+Usage: gitusessh [-n | --dry-run] [-h | --help] [DIR ...]
 
 Rewrite a git repository's GitHub/Codeberg HTTPS remotes to SSH.
 
