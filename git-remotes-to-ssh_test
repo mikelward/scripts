@@ -1,0 +1,176 @@
+#!/bin/sh
+# Tests for git-remotes-to-ssh
+#
+# These build throwaway git repositories with git init + git remote (no network
+# access), run the converter, and inspect the resulting remote URLs.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONVERT="$SCRIPT_DIR/git-remotes-to-ssh"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# make_repo: create a fresh git repo in a temp dir and echo its path.
+make_repo() {
+    dir="$(mktemp -d)"
+    git -C "$dir" init -q
+    echo "$dir"
+}
+
+# remote_url REPO REMOTE: echo the raw configured URL of REMOTE in REPO.
+# Reads the stored config value rather than "remote get-url" so url.*.insteadOf
+# rewrites (which some environments set for github.com) don't mask it.
+remote_url() {
+    git -C "$1" config --get "remote.$2.url"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_url() {
+    actual="$(remote_url "$1" "$2")"
+    if test "$actual" != "$3"; then
+        echo "  FAIL: $2 URL is '$actual', expected '$3'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+run_convert() {
+    set +e
+    output="$("$CONVERT" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# --- conversion tests ---
+
+test_converts_github_https() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@github.com:mikelward/scripts.git"
+}
+
+test_converts_codeberg_https() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://codeberg.org/mikelward/Krohnkite.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@codeberg.org:mikelward/Krohnkite.git"
+}
+
+test_leaves_ssh_remotes_untouched() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "git@github.com:mikelward/scripts.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@github.com:mikelward/scripts.git" &&
+    assert_output_contains "No HTTPS remotes to convert"
+}
+
+test_leaves_other_hosts_untouched() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://gitlab.com/someone/thing.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "https://gitlab.com/someone/thing.git"
+}
+
+test_converts_all_remotes() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    git -C "$repo" remote add upstream "https://codeberg.org/mikelward/Krohnkite.git"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@github.com:mikelward/scripts.git" &&
+    assert_url "$repo" upstream "git@codeberg.org:mikelward/Krohnkite.git"
+}
+
+test_dry_run_leaves_remote_unchanged() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
+    run_convert --dry-run "$repo"
+    assert_status 0 &&
+    assert_output_contains "Would update" &&
+    assert_url "$repo" origin "https://github.com/mikelward/scripts.git"
+}
+
+test_url_without_dot_git_suffix() {
+    repo="$(make_repo)"
+    git -C "$repo" remote add origin "https://github.com/mikelward/scripts"
+    run_convert "$repo"
+    assert_status 0 &&
+    assert_url "$repo" origin "git@github.com:mikelward/scripts"
+}
+
+test_non_repo_errors() {
+    dir="$(mktemp -d)"
+    run_convert "$dir"
+    assert_status 1 &&
+    assert_output_contains "not a git repository"
+}
+
+test_help_exits_zero() {
+    run_convert --help
+    assert_status 0 &&
+    assert_output_contains "Usage: git-remotes-to-ssh"
+}
+
+test_unknown_option_errors() {
+    run_convert --bogus
+    assert_status 2 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- run ---
+
+run_test "converts GitHub HTTPS to SSH" test_converts_github_https
+run_test "converts Codeberg HTTPS to SSH" test_converts_codeberg_https
+run_test "leaves SSH remotes untouched" test_leaves_ssh_remotes_untouched
+run_test "leaves other hosts untouched" test_leaves_other_hosts_untouched
+run_test "converts every remote" test_converts_all_remotes
+run_test "dry run leaves remote unchanged" test_dry_run_leaves_remote_unchanged
+run_test "URL without .git suffix" test_url_without_dot_git_suffix
+run_test "non-repo directory errors" test_non_repo_errors
+run_test "help exits zero" test_help_exits_zero
+run_test "unknown option errors" test_unknown_option_errors
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

@@ -9,6 +9,7 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
+	./git-remotes-to-ssh_test
 	./runenv_test
 	./setup_test
 	./setup-hypr_test
