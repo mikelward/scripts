@@ -75,31 +75,64 @@ https_to_ssh() {
     printf "git@%s:%s\n" "$host" "$path"
 }
 
-# convert_key DIR REMOTE KEY SETFLAG DESC: rewrite remote.<REMOTE>.<KEY> from
-# HTTPS to SSH, writing it back with "git remote set-url SETFLAG". KEY is "url"
-# (SETFLAG empty) for the fetch URL or "pushurl" (SETFLAG --push) for a
-# separately configured push URL. Prints a line and returns 0 when it changes
-# (or would change) the value; returns 1 otherwise -- no such key, a foreign
-# host, or already SSH. Reads the raw config value rather than "remote get-url"
-# so url.*.insteadOf rewrites don't hide it.
+# convert_key DIR REMOTE KEY DESC: rewrite remote.<REMOTE>.<KEY> from HTTPS to
+# SSH. KEY is "url" for fetch URLs or "pushurl" for a separately configured
+# push URL; DESC labels push URLs in the output. A remote may hold several
+# values for a key (mirror / multi-push setups), so every value is read and
+# each HTTPS one is converted, keeping the rest. The whole key is then rewritten
+# via git config rather than "git remote set-url <name> <new> <old>": operating
+# on the raw stored values sidesteps both the "has multiple values" error and
+# the url.*.insteadOf rewrites that an <oldurl> selector matches against.
+# Prints a line per change and returns 0 if anything changed, 1 otherwise.
 convert_key() {
     dir=$1
     remote=$2
     key=$3
-    setflag=$4
-    desc=$5
+    desc=$4
+    cfgkey="remote.$remote.$key"
 
-    old=$(git -C "$dir" config --get "remote.$remote.$key") || return 1
-    new=$(https_to_ssh "$old") || return 1
-    test "$new" = "$old" && return 1
+    values=$(git -C "$dir" config --get-all "$cfgkey" 2>/dev/null) || return 1
+    test -n "$values" || return 1
+
+    oldifs=$IFS
+    IFS='
+'
+    changed_here=0
+    newlist=
+    changelog=
+    for old in $values; do
+        new=$(https_to_ssh "$old") || new=$old
+        if test "$new" != "$old"; then
+            changed_here=1
+            changelog="$changelog$toplevel remote '$remote'$desc: $old -> $new
+"
+        fi
+        newlist="$newlist$new
+"
+    done
+
+    if test "$changed_here" -eq 0; then
+        IFS=$oldifs
+        return 1
+    fi
 
     if test "$DRY_RUN" = yes; then
-        info "Would update $toplevel remote '$remote'$desc: $old -> $new"
-    else
-        # Unquoted $setflag so "url" passes no flag and "pushurl" passes --push.
-        git -C "$dir" remote set-url $setflag "$remote" "$new"
-        info "Updated $toplevel remote '$remote'$desc: $old -> $new"
+        for line in $changelog; do info "Would update $line"; done
+        IFS=$oldifs
+        return 0
     fi
+
+    # Replace the key's values with the converted set, preserving order.
+    if ! git -C "$dir" config --unset-all "$cfgkey"; then
+        warn "failed to update remote '$remote'$desc"
+        IFS=$oldifs
+        return 1
+    fi
+    for v in $newlist; do
+        git -C "$dir" config --add "$cfgkey" "$v"
+    done
+    for line in $changelog; do info "Updated $line"; done
+    IFS=$oldifs
     return 0
 }
 
@@ -116,10 +149,10 @@ convert_repo() {
     for remote in $(git -C "$dir" remote); do
         # A remote can carry a separate push URL; convert both so pushes, not
         # just fetches, actually switch to SSH.
-        if convert_key "$dir" "$remote" url "" ""; then
+        if convert_key "$dir" "$remote" url ""; then
             changed=$((changed + 1))
         fi
-        if convert_key "$dir" "$remote" pushurl --push " (push)"; then
+        if convert_key "$dir" "$remote" pushurl " (push)"; then
             changed=$((changed + 1))
         fi
     done
