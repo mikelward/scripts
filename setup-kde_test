@@ -234,7 +234,7 @@ test_clones_fork_by_default() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_called "git clone --depth 1 --branch mikel git@codeberg.org:mikelward/Krohnkite.git"
+    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git"
 }
 
 # KROHNKITE_REPO and KROHNKITE_BRANCH override the clone source (any git

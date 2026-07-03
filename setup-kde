@@ -24,7 +24,7 @@
 # committed to the repo installs as-is, and building from source uses the
 # local tsc via an npm shim.
 
-KROHNKITE_DEFAULT_REPO="git@codeberg.org:mikelward/Krohnkite.git"
+KROHNKITE_DEFAULT_REPO="https://codeberg.org/mikelward/Krohnkite.git"
 KROHNKITE_REPO="${KROHNKITE_REPO:-$KROHNKITE_DEFAULT_REPO}"
 # The mikel branch only exists on my fork, so it's only the default when
 # cloning the default repo: an overridden KROHNKITE_REPO clones its remote
