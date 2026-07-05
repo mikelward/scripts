@@ -187,6 +187,17 @@ test_unzip_installed() {
     assert_source_contains "typescript unzip zsh"
 }
 
+# --- fnm ---
+
+# fnm (Fast Node Manager) is installed via its upstream installer during the
+# install phase, alongside uv. --skip-shell keeps the installer out of the
+# shell rc files, which are managed by the conf repo, not setup.
+test_fnm_installed() {
+    assert_source_contains "install_fnm" &&
+    assert_source_contains "https://fnm.vercel.app/install" &&
+    assert_source_contains "skip-shell"
+}
+
 # --- SSH key ---
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
@@ -216,6 +227,8 @@ run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
 run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
+run_test "fnm installs via its upstream installer with --skip-shell" \
+    test_fnm_installed
 run_test "unzip installs on every platform" test_unzip_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg

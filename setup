@@ -818,6 +818,19 @@ install_uv() {
     fi
 }
 
+# --- Install fnm (Fast Node Manager) ---
+
+install_fnm() {
+    if command -v fnm >/dev/null 2>&1; then
+        info "fnm already installed"
+        return
+    fi
+    info "Installing fnm"
+    # The upstream installer edits shell rc files by default; --skip-shell
+    # keeps it out of them since the shell config is managed by the conf repo.
+    curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+}
+
 # --- Generate SSH key ---
 
 generate_ssh_key() {
@@ -1000,6 +1013,7 @@ if test "$INSTALL" = yes; then
         install_fonts
     fi
     install_uv
+    install_fnm
 else
     info "Skipping software installation (--no-install)"
 fi
