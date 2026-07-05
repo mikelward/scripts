@@ -178,6 +178,15 @@ test_typescript_installed_with_npm() {
     assert_source_contains "brew install typescript"
 }
 
+# --- unzip ---
+
+# unzip is a core package installed on every platform, and listed in the
+# manual-install hint for unsupported OSes.
+test_unzip_installed() {
+    assert_source_contains "unzip" &&
+    assert_source_contains "typescript unzip zsh"
+}
+
 # --- SSH key ---
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
@@ -207,6 +216,7 @@ run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
 run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
+run_test "unzip installs on every platform" test_unzip_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg
 run_test "setup offers to switch repo remotes to SSH" \
