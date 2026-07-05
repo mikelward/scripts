@@ -191,11 +191,14 @@ test_unzip_installed() {
 
 # fnm (Fast Node Manager) is installed via its upstream installer during the
 # install phase, alongside uv. --skip-shell keeps the installer out of the
-# shell rc files, which are managed by the conf repo, not setup.
+# shell rc files, which are managed by the conf repo, not setup. The installer
+# is downloaded to a temp file rather than piped into bash: a piped curl
+# failure is masked (bash exits 0 on empty stdin) so set -e wouldn't catch it.
 test_fnm_installed() {
     assert_source_contains "install_fnm" &&
-    assert_source_contains "https://fnm.vercel.app/install" &&
-    assert_source_contains "skip-shell"
+    assert_source_contains "https://fnm.vercel.app/install -o" &&
+    assert_source_contains "skip-shell" &&
+    assert_source_not_contains "fnm.vercel.app/install | bash"
 }
 
 # --- SSH key ---
