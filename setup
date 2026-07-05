@@ -384,6 +384,7 @@ install_packages() {
                 python3-venv \
                 ripgrep \
                 shellcheck \
+                unzip \
                 vim \
                 zsh
             if test "$NPM" = yes; then
@@ -493,6 +494,7 @@ install_packages() {
                 python3-pip \
                 ripgrep \
                 ShellCheck \
+                unzip \
                 vim \
                 zsh
             if test "$NPM" = yes; then
@@ -607,6 +609,7 @@ install_packages() {
                 python3 \
                 ripgrep \
                 shellcheck \
+                unzip \
                 vim \
                 zsh
             if test "$NPM" = yes; then
@@ -635,7 +638,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zsh"
             ;;
     esac
 }
