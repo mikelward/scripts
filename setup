@@ -828,7 +828,13 @@ install_fnm() {
     info "Installing fnm"
     # The upstream installer edits shell rc files by default; --skip-shell
     # keeps it out of them since the shell config is managed by the conf repo.
-    curl -fsSL https://fnm.vercel.app/install | bash -s -- --skip-shell
+    # Download to a temp file rather than piping curl into bash: a piped curl
+    # failure (network/HTTP error) is masked because bash exits 0 on the empty
+    # stdin, so set -e wouldn't catch it and fnm would silently never install.
+    fnm_installer=$(mktemp)
+    curl -fsSL https://fnm.vercel.app/install -o "$fnm_installer"
+    bash "$fnm_installer" --skip-shell
+    rm -f "$fnm_installer"
 }
 
 # --- Generate SSH key ---
