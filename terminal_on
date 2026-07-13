@@ -1,7 +1,7 @@
 #!/bin/bash
 . "$HOME"/.shrc
 set -eu
-destination="$1"
+destination="${1:-}"
 if test -z "$destination"; then
   echo "Usage: $0 hostname" >&2
   exit 2
@@ -14,5 +14,5 @@ fi
 if command -v rw >/dev/null 2>&1; then
   terminal rw -r "$destination"
 else
-  terminal bash -i -c 'need_auth && auth; ssh -n "$destination" true; ssh "$destination"'
+  terminal bash -i -c 'need_auth && auth; ssh -n "$1" true; ssh "$1"' bash "$destination"
 fi
