@@ -209,7 +209,10 @@ do
     # create the destination directory if it doesn't exist
     # (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
     debug "Creating $dstdir on $dsthost"
-    run ssh $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
+    # -n: don't let ssh inherit the find pipe feeding this loop as stdin,
+    # or it drains the remaining repository paths and only the first repo
+    # gets backed up
+    run ssh -n $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
 
     flags=
     if test "$debug"
