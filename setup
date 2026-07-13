@@ -856,15 +856,23 @@ generate_ssh_key() {
         return
     fi
 
-    for key in "$HOME"/.ssh/id_*; do
-        case "$key" in
-            *.pub) continue ;;
-        esac
-        if test -f "$key"; then
-            info "SSH key already exists: $key"
-            return
-        fi
-    done
+    # Only auto mode skips on existing key files: --ssh promises to
+    # generate anyway, so it pushes past this check too. It still never
+    # clobbers the file ssh-keygen would write.
+    if test "$SSH" = auto; then
+        for key in "$HOME"/.ssh/id_*; do
+            case "$key" in
+                *.pub) continue ;;
+            esac
+            if test -f "$key"; then
+                info "SSH key already exists: $key; pass --ssh to create one anyway"
+                return
+            fi
+        done
+    elif test -f "$HOME/.ssh/id_ed25519"; then
+        info "SSH key already exists: $HOME/.ssh/id_ed25519; not overwriting"
+        return
+    fi
 
     info "Generating SSH key"
     mkdir -p "$HOME/.ssh"
