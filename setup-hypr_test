@@ -21,6 +21,10 @@ setup() {
     export XDG_CONFIG_HOME="$TEST_TMPDIR/config"
     unset HYPRLAND_INSTANCE_SIGNATURE
 
+    # Point the logind drop-in dir into the sandbox so the already-configured
+    # check reads test fixtures, not the host's /etc.
+    export SETUP_LOGIND_DIR="$TEST_TMPDIR/logind.conf.d"
+
     # sudo records its argv and discards any heredoc stdin (e.g. the logind
     # drop-in piped to `sudo tee`) so nothing touches the real system.
     cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
@@ -151,8 +155,29 @@ test_does_not_install_packages() {
 test_installs_logind_lid_dropin() {
     run_hypr
     assert_status 0 &&
-    assert_called "sudo mkdir -p /etc/systemd/logind.conf.d" &&
-    assert_called "sudo tee /etc/systemd/logind.conf.d/10-hypr-lid.conf"
+    assert_called "sudo mkdir -p $SETUP_LOGIND_DIR" &&
+    assert_called "sudo tee $SETUP_LOGIND_DIR/10-hypr-lid.conf"
+}
+
+# Shared with the Sway build: when a drop-in (e.g. setup-sway's) already
+# ignores the lid, nothing is written.
+test_skips_dropin_when_lid_already_ignored() {
+    mkdir -p "$SETUP_LOGIND_DIR"
+    printf '[Login]\nHandleLidSwitch=ignore\n' > "$SETUP_LOGIND_DIR/10-sway-lid.conf"
+    run_hypr
+    assert_status 0 &&
+    assert_output_contains "already ignores the lid" &&
+    assert_not_called "sudo tee"
+}
+
+# A commented example ("#HandleLidSwitch=ignore") is not configuration --
+# systemd ignores it, so the drop-in must still be installed.
+test_commented_lid_entry_does_not_skip_dropin() {
+    mkdir -p "$SETUP_LOGIND_DIR"
+    printf '[Login]\n#HandleLidSwitch=ignore\n' > "$SETUP_LOGIND_DIR/50-example.conf"
+    run_hypr
+    assert_status 0 &&
+    assert_called "sudo tee $SETUP_LOGIND_DIR/10-hypr-lid.conf"
 }
 
 test_reloads_logind() {
@@ -173,7 +198,7 @@ test_enables_power_profiles_daemon() {
 test_no_install_skips_system_changes() {
     run_hypr --no-install
     assert_status 0 &&
-    assert_not_called "sudo tee /etc/systemd/logind.conf.d" &&
+    assert_not_called "sudo tee $SETUP_LOGIND_DIR" &&
     assert_output_contains "Skipping logind"
 }
 
@@ -259,6 +284,10 @@ run_test "-h flag" test_h_flag
 run_test "unknown option errors" test_unknown_option
 run_test "does not install packages (setup does)" test_does_not_install_packages
 run_test "installs logind lid drop-in" test_installs_logind_lid_dropin
+run_test "skips drop-in when the lid is already ignored (shared with sway)" \
+    test_skips_dropin_when_lid_already_ignored
+run_test "commented lid entry does not skip the drop-in" \
+    test_commented_lid_entry_does_not_skip_dropin
 run_test "reloads logind" test_reloads_logind
 run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
 run_test "no-install skips system changes" test_no_install_skips_system_changes
