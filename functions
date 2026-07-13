@@ -136,12 +136,15 @@ get_size_of_file_or_directory()
     local size
     local file
     file="$1"
-    size=$(du -ks "$file" | cut -f 1)
+    # don't pipe into cut here: $? would report cut's status, masking
+    # a du failure (empty size that fails open in callers' -lt checks)
+    size=$(du -ks "$file")
     if test $? -ne 0
     then
         error "Cannot determine disk usage of $file"
         return 1
     fi
+    size=${size%%[[:space:]]*}
     debug "$file uses $size kilobytes of disk space"
     echo "$size"
     return 0
