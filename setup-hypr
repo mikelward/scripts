@@ -31,6 +31,10 @@ INSTALL=yes
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
 
+# Where logind drop-ins live. Overridable for tests (SETUP_LOGIND_DIR), which
+# can't mock the real /etc.
+LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+
 info() {
     printf "%s\n" "$*"
 }
@@ -98,12 +102,19 @@ fi
 # Hand full lid control to Hyprland (config/hypr/scripts/lid.sh) so a docked
 # laptop with the lid shut doesn't suspend when an external display is active.
 # A drop-in is cleaner than editing /etc/systemd/logind.conf directly.
+# Shared with the Sway build: setup-sway installs a drop-in with the same
+# settings, so whichever ran first wins and the other skips.
 install_logind_lid_dropin() {
     is_command systemctl || { warn "systemd not detected; skipping logind lid drop-in"; return 0; }
-    dropin_dir=/etc/systemd/logind.conf.d
-    dropin="$dropin_dir/10-hypr-lid.conf"
+    # Anchored to an uncommented assignment: a drop-in carrying a commented
+    # example like "#HandleLidSwitch=ignore" must not count as configured.
+    if grep -qsE '^[[:space:]]*HandleLidSwitch=ignore' "$LOGIND_DIR"/*.conf 2>/dev/null; then
+        info "logind already ignores the lid (drop-in present); skipping"
+        return 0
+    fi
+    dropin="$LOGIND_DIR/10-hypr-lid.conf"
     info "Installing logind lid drop-in ($dropin)"
-    sudo mkdir -p "$dropin_dir"
+    sudo mkdir -p "$LOGIND_DIR"
     sudo tee "$dropin" >/dev/null <<'CONF'
 # Installed by setup-hypr. Let Hyprland's lid handler (lid.sh) manage the lid
 # so a docked laptop with the lid closed keeps running on its external display.
