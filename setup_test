@@ -213,6 +213,15 @@ test_ssh_key_prompt_covers_github_and_codeberg() {
     assert_source_contains "add the key to GitHub and Codeberg"
 }
 
+# --ssh promises to generate a key even when one is already available, so
+# only auto mode may skip on existing on-disk keys; forced mode pushes past
+# that check and skips only to avoid clobbering the id_ed25519 it would write.
+test_ssh_flag_overrides_existing_key_check() {
+    assert_source_contains 'test "$SSH" = auto' &&
+    assert_source_contains "pass --ssh to create one anyway" &&
+    assert_source_contains "not overwriting"
+}
+
 # After cloning the repos, setup offers to flip their remotes to SSH via the
 # gittossh helper. The prompt must default to no so a non-interactive
 # "curl | sh" run doesn't rewrite remotes unasked.
@@ -235,6 +244,8 @@ run_test "fnm installs via its upstream installer with --skip-shell" \
 run_test "unzip installs on every platform" test_unzip_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg
+run_test "--ssh overrides the existing-key skip" \
+    test_ssh_flag_overrides_existing_key_check
 run_test "setup offers to switch repo remotes to SSH" \
     test_offers_ssh_remote_switch
 
