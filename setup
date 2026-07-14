@@ -101,6 +101,7 @@ NPM=yes
 # running.
 DESKTOP="${DESKTOP:-kde}"
 
+
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
@@ -392,12 +393,12 @@ install_packages() {
                 sudo apt-get install -y --install-recommends npm
                 # tsc lets setup-kde build Krohnkite from source without
                 # fetching typescript from the npm registry at build time.
-                # Debian/Ubuntu package it as node-typescript; fall back to
-                # a one-time global npm install where that's unavailable.
+                # Debian/Ubuntu package it as node-typescript. Do not fall
+                # back to sudo npm here: locked-down hosts may only permit
+                # sudo apt against system repositories.
                 info "Installing TypeScript (tsc)"
                 sudo apt-get install -y --install-recommends node-typescript \
-                    || sudo npm install -g typescript \
-                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
+                    || warn "could not install tsc from apt; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
@@ -950,7 +951,8 @@ set_default_terminal() {
         debian)
             if command -v update-alternatives >/dev/null 2>&1 && command -v kitty >/dev/null 2>&1; then
                 info "Setting kitty as default terminal"
-                sudo update-alternatives --set x-terminal-emulator "$(command -v kitty)"
+                sudo update-alternatives --set x-terminal-emulator "$(command -v kitty)" \
+                    || warn "could not set kitty as default terminal; sudo outside apt may be unavailable"
             fi
             ;;
         redhat)
@@ -982,16 +984,25 @@ configure_keyboard() {
     case "$OS" in
         debian)
             info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
-            sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
+            # Try the privileged write directly. On apt-only sudo systems this
+            # fails, and we skip the rest of the system keyboard block while
+            # still applying the layout to the current graphical session below.
+            if sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
 XKBMODEL="pc105"
 XKBLAYOUT="us"
 XKBVARIANT="dvorak"
 XKBOPTIONS="compose:caps"
 BACKSPACE="guess"
 KEYBOARD
-            # Apply to virtual consoles
-            if command -v setupcon >/dev/null 2>&1; then
-                sudo setupcon --save
+            then
+                # Apply to virtual consoles only if the system config write
+                # succeeded; otherwise sudo outside apt is likely unavailable.
+                if command -v setupcon >/dev/null 2>&1; then
+                    sudo setupcon --save \
+                        || warn "could not apply console keyboard config; sudo outside apt may be unavailable"
+                fi
+            else
+                warn "skipping system keyboard config; sudo outside apt may be unavailable"
             fi
             ;;
         redhat)
@@ -1095,22 +1106,28 @@ fi
 # The root config builds helper tools and installs files via make, so it's
 # an install step too: skip it under --no-install.
 if test "$INSTALL" = yes; then
-    mkdir -p "$SRC_DIR"
-    clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
-    # The default root config builds helper tools that require cargo. When
-    # cargo isn't available (e.g. a --minimal run, or rustup was skipped),
-    # install the legacy config from the repo's legacy/ subdirectory instead.
-    # Source ~/.cargo/env first so a previously installed toolchain still
-    # counts as available even on a run that skipped install_rust.
-    if test -f "$HOME/.cargo/env"; then
-        . "$HOME/.cargo/env"
-    fi
-    if command -v cargo >/dev/null 2>&1; then
-        make -C "$ROOT_DIR"
-        sudo make -C "$ROOT_DIR" install
+    # The root config install writes system files with sudo make install. Try
+    # sudo first and skip the whole block if this host only permits sudo apt.
+    if sudo -v; then
+        mkdir -p "$SRC_DIR"
+        clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
+        # The default root config builds helper tools that require cargo. When
+        # cargo isn't available (e.g. a --minimal run, or rustup was skipped),
+        # install the legacy config from the repo's legacy/ subdirectory instead.
+        # Source ~/.cargo/env first so a previously installed toolchain still
+        # counts as available even on a run that skipped install_rust.
+        if test -f "$HOME/.cargo/env"; then
+            . "$HOME/.cargo/env"
+        fi
+        if command -v cargo >/dev/null 2>&1; then
+            make -C "$ROOT_DIR"
+            sudo make -C "$ROOT_DIR" install
+        else
+            info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
+            sudo make -C "$ROOT_DIR/legacy" install
+        fi
     else
-        info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
-        sudo make -C "$ROOT_DIR/legacy" install
+        warn "skipping root config installation; sudo outside apt may be unavailable"
     fi
 else
     info "Skipping root config installation (--no-install)"
@@ -1127,6 +1144,9 @@ if test "$OS" = "macos"; then
     info "On macOS, use System Settings to manage admin group membership"
 else
     root_group=$(getent group 0 | cut -d: -f1)
-    sudo gpasswd -a "$USER" "$root_group"
-    info "Added $USER to $root_group group (log out and back in for this to take effect)"
+    if sudo gpasswd -a "$USER" "$root_group"; then
+        info "Added $USER to $root_group group (log out and back in for this to take effect)"
+    else
+        warn "skipping root-group membership update; sudo outside apt may be unavailable"
+    fi
 fi

@@ -8,6 +8,8 @@
 # - Application launch shortcuts (browser, terminal, music)
 #
 # Requires: git, kpackagetool6, kwriteconfig6
+# No root access or sudo is required; Krohnkite and KDE settings are installed
+# into the current user account.
 # Optional: tsc (only to build Krohnkite when the checkout has no prebuilt
 #           .kwinscript), go-task (preferred build tool), p7zip
 #

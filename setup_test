@@ -169,13 +169,21 @@ test_swaync_package_names() {
 
 # setup-kde builds Krohnkite from source without fetching from the npm
 # registry at build time, which needs a local tsc -- so setup installs it
-# alongside npm: Debian/Ubuntu package it as node-typescript, Homebrew as
-# typescript, and Fedora ships no rpm so it's a one-time global npm
-# install during bootstrap.
+# alongside npm. Debian/Ubuntu apt-only hosts must stay within system repos,
+# so they use node-typescript and do not fall back to sudo npm.
 test_typescript_installed_with_npm() {
     assert_source_contains "node-typescript" &&
-    assert_source_contains "npm install -g typescript" &&
     assert_source_contains "brew install typescript"
+}
+
+# Locked-down Debian/Ubuntu hosts can allow `sudo apt` while denying all
+# other root actions. For non-apt privileged blocks, setup should try sudo
+# directly and skip the rest of that block if sudo fails.
+test_debian_apt_only_sudo_supported() {
+    assert_source_contains "sudo tee /etc/default/keyboard" &&
+    assert_source_contains "if sudo -v; then" &&
+    assert_source_contains "sudo outside apt may be unavailable" &&
+    assert_source_not_contains "SUDO_APT_ONLY"
 }
 
 # --- unzip ---
@@ -239,6 +247,8 @@ run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
 run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
+run_test "Debian apt-only sudo systems skip failed non-apt sudo blocks" \
+    test_debian_apt_only_sudo_supported
 run_test "fnm installs via its upstream installer with --skip-shell" \
     test_fnm_installed
 run_test "unzip installs on every platform" test_unzip_installed
