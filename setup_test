@@ -248,9 +248,10 @@ test_sudo_success_preserves_stderr() {
 # Every privileged operation goes through the wrapper, and blocks with
 # dependent follow-up work test its result before continuing.
 test_sudo_calls_are_guarded() {
-    raw_sudo_calls=$(grep -c '^[[:space:]]*sudo ' "$SETUP")
-    if test "$raw_sudo_calls" -ne 1; then
-        echo "  FAIL: expected only sudo_or_warn's internal sudo call, got $raw_sudo_calls"
+    wrapper_sudo_calls=$(grep -c 'sudo "\$@"' "$SETUP")
+    unwrapped_sudo_calls=$(grep -c '^[[:space:]]*sudo ' "$SETUP" || true)
+    if test "$wrapper_sudo_calls" -ne 1 || test "$unwrapped_sudo_calls" -ne 0; then
+        echo "  FAIL: expected one wrapped sudo call and no direct sudo calls"
         TEST_FAILED=1
         return 1
     fi
