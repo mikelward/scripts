@@ -9,6 +9,8 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
+	./pa_test
+	./package_test
 	./gittossh_test
 	./runenv_test
 	./setup_test

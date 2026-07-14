@@ -4,6 +4,7 @@
 
 import re
 import subprocess
+import sys
 
 
 def get_active_port(output):
@@ -30,12 +31,22 @@ def get_active_port(output):
           port_names[m[1]] = m[2]
 
 
+def format_ports(ports):
+  # Drop missing ports (no default sink/source, PulseAudio not running)
+  # instead of rendering the literal string "None" in the status bar.
+  return ' '.join(p for p in ports if p)
+
+
 def main():
-  ports = [get_active_port(result.stdout)
-           for subcommand in ['list-sinks', 'list-sources']
-           for result in [subprocess.run(['pacmd', subcommand], capture_output=True)]]
-  print(' '.join('%s' % p for p in ports))
+  try:
+    results = [subprocess.run(['pacmd', subcommand], capture_output=True)
+               for subcommand in ['list-sinks', 'list-sources']]
+  except FileNotFoundError:
+    print('pa.py: pacmd not found', file=sys.stderr)
+    return 1
+  print(format_ports(get_active_port(result.stdout) for result in results))
+  return 0
 
 
 if __name__ == '__main__':
-  main()
+  sys.exit(main())

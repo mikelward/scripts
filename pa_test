@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+# Tests for pa.py: the pacmd output parser and the status-bar formatting.
+# Regression: with no default sink/source (or PulseAudio down) pa.py printed
+# the literal string "None None"; with pacmd missing it crashed with a
+# traceback.
+
+import importlib.util
+import os
+import subprocess
+import sys
+
+_dir = os.path.dirname(os.path.abspath(__file__))
+_spec = importlib.util.spec_from_file_location('pa', os.path.join(_dir, 'pa.py'))
+pa = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pa)
+
+SAMPLE = b'''2 sink(s) available.
+    index: 0
+	name: <other-sink>
+	active port: <other-port>
+  * index: 1
+	name: <default-sink>
+	ports:
+		analog-output-speaker: Speakers (priority 10000, latency offset 0 usec)
+	active port: <analog-output-speaker>
+'''
+
+tests_run = 0
+failures = 0
+
+
+def check(label, expected, actual):
+  global tests_run, failures
+  tests_run += 1
+  if expected == actual:
+    print('ok %d %s' % (tests_run, label))
+  else:
+    print('not ok %d %s' % (tests_run, label))
+    print('  expected: %r' % (expected,))
+    print('  actual:   %r' % (actual,))
+    failures += 1
+
+
+check('active port of the default sink is resolved to its name',
+      'Speakers', pa.get_active_port(SAMPLE))
+check('empty pacmd output yields no port, not a crash',
+      None, pa.get_active_port(b''))
+check('output without a default marker yields no port',
+      None, pa.get_active_port(b'    index: 0\n\tactive port: <p>\n'))
+check('missing ports are dropped from the status line',
+      'Speakers', pa.format_ports(['Speakers', None]))
+check('all ports missing renders an empty line, not "None None"',
+      '', pa.format_ports([None, None]))
+
+# End-to-end: pacmd absent must print an error to stderr and exit non-zero,
+# never a traceback.
+env = dict(os.environ, PATH='/nonexistent')
+result = subprocess.run([sys.executable, os.path.join(_dir, 'pa.py')],
+                        capture_output=True, env=env, text=True)
+check('missing pacmd exits non-zero', True, result.returncode != 0)
+check('missing pacmd reports the problem without a traceback',
+      True, 'pacmd not found' in result.stderr
+      and 'Traceback' not in result.stderr)
+
+print()
+print('%d tests, %d passed, %d failed' % (tests_run, tests_run - failures, failures))
+sys.exit(1 if failures else 0)
