@@ -8,6 +8,8 @@
 # - Application launch shortcuts (browser, terminal, music)
 #
 # Requires: git, kpackagetool6, kwriteconfig6
+# This helper does not use sudo: Krohnkite and every KDE setting are installed
+# for the current user, so setup-kde still works when system sudo is restricted.
 # Optional: tsc (only to build Krohnkite when the checkout has no prebuilt
 #           .kwinscript), go-task (preferred build tool), p7zip
 #
