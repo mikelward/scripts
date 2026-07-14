@@ -113,6 +113,58 @@ test_fresh_auto_name_shows_create_entry() {
   test "$creates" -eq 1  || { echo "  FAIL: expected exactly one create entry, got $creates"; TEST_FAILED=1; }
 }
 
+# --- picker search flags -----------------------------------------------------
+
+# Record the args choose_session passes to fzf, via a stub that saves them and
+# cancels. Used by both picker-flag tests below.
+record_fzf_args() {
+  FZF_ARGS_FILE="$TMPDIR_FZF/args"
+  export FZF_ARGS_FILE
+  cat > "$TMPDIR_FZF/fzf" <<'FZF'
+#!/bin/bash
+printf '%s\n' "$@" > "$FZF_ARGS_FILE"
+cat >/dev/null
+exit 130
+FZF
+  chmod +x "$TMPDIR_FZF/fzf"
+  CHANGESESSION_FZF="$TMPDIR_FZF/fzf" SESSION_SELF=/bin/true choose_session >/dev/null 2>&1
+  test -f "$FZF_ARGS_FILE"
+}
+
+test_picker_does_not_pass_nth() {
+  # Regression: --nth=3 alongside --with-nth=3 scoped the search to a field
+  # that doesn't exist in the with-nth-transformed line (which has no tabs
+  # left), so every non-empty query matched nothing and typing in the picker
+  # always fell through to "create a new session by that name".
+  STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\n')"
+  TMPDIR_FZF="$(mktemp -d)"
+  record_fzf_args || { echo "  FAIL: fzf stub was not invoked"; TEST_FAILED=1; rm -rf "$TMPDIR_FZF"; return 0; }
+  grep -qx -- '--with-nth=3' "$FZF_ARGS_FILE" \
+    || { echo "  FAIL: picker no longer restricts display/search with --with-nth=3"; TEST_FAILED=1; }
+  ! grep -q -- '^--nth' "$FZF_ARGS_FILE" \
+    || { echo "  FAIL: picker passes --nth, which empties the search scope under --with-nth"; TEST_FAILED=1; }
+  rm -rf "$TMPDIR_FZF"
+}
+
+test_picker_query_matches_display_field() {
+  # End-to-end pin with a real fzf: the search flags choose_session uses must
+  # let a typed query match the displayed (command) column. Skips when fzf
+  # isn't installed.
+  command -v fzf >/dev/null 2>&1 || return 0
+  STUB_ROWS="$(printf 'proj/1\tattached\t/home/u/proj\tvim\n')"
+  TMPDIR_FZF="$(mktemp -d)"
+  record_fzf_args || { echo "  FAIL: fzf stub was not invoked"; TEST_FAILED=1; rm -rf "$TMPDIR_FZF"; return 0; }
+  # Replay only the search-scoping flags against the real fzf in filter mode.
+  local search_flags matched
+  search_flags="$(grep -E -- '^--(delimiter|with-nth|nth)' "$FZF_ARGS_FILE")"
+  # shellcheck disable=SC2086
+  matched="$(printf 'switch\tproj/1\t*  proj/1  code  vim\n' | fzf $search_flags --filter=vim)" \
+    || true
+  test -n "$matched" \
+    || { echo "  FAIL: query 'vim' matches nothing under the picker's search flags"; TEST_FAILED=1; }
+  rm -rf "$TMPDIR_FZF"
+}
+
 run_test test_existing_attached_auto_session_listed_once \
   "build_list: an attached auto session is not listed twice"
 run_test test_existing_disconnected_auto_session_listed_once \
@@ -121,6 +173,10 @@ run_test test_reused_auto_target_stays_default_row \
   "build_list: a reused auto target stays the first/default row"
 run_test test_fresh_auto_name_shows_create_entry \
   "build_list: a fresh auto name still shows the create entry first"
+run_test test_picker_does_not_pass_nth \
+  "choose_session: no --nth flag alongside --with-nth (typed filtering works)"
+run_test test_picker_query_matches_display_field \
+  "choose_session: search flags let a query match the command column"
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
