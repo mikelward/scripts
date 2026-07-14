@@ -9,6 +9,9 @@ import os
 import subprocess
 import sys
 
+# Don't drop a __pycache__/ dir in the repo when importing pa.py.
+sys.dont_write_bytecode = True
+
 _dir = os.path.dirname(os.path.abspath(__file__))
 _spec = importlib.util.spec_from_file_location('pa', os.path.join(_dir, 'pa.py'))
 pa = importlib.util.module_from_spec(_spec)
