@@ -145,6 +145,46 @@ warn() {
     printf "Warning: %s\n" "$*" >&2
 }
 
+# Run one privileged command without letting a sudo failure abort the whole
+# bootstrap. Stderr is preserved on success; on failure its last non-empty
+# line is folded into a concise warning. Shell-standard 126/127 statuses are
+# more useful than some sudo implementations' diagnostics, so name those
+# explicitly.
+sudo_or_warn() {
+    _sudo_name=${1##*/}
+    _sudo_stderr=$(mktemp) || {
+        warn "sudo $_sudo_name: could not create a temporary error log"
+        return 1
+    }
+
+    if sudo "$@" 2>"$_sudo_stderr"; then
+        cat "$_sudo_stderr" >&2
+        rm -f "$_sudo_stderr"
+        return 0
+    else
+        _sudo_status=$?
+    fi
+    _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
+    rm -f "$_sudo_stderr"
+
+    case "$_sudo_status" in
+        126) _sudo_detail="permission denied" ;;
+        127) _sudo_detail="command not found" ;;
+        *)
+            case "$_sudo_detail" in
+                "sudo: $_sudo_name: "*) _sudo_detail=${_sudo_detail#"sudo: $_sudo_name: "} ;;
+                "sudo: "*) _sudo_detail=${_sudo_detail#"sudo: "} ;;
+                "$_sudo_name: "*) _sudo_detail=${_sudo_detail#"$_sudo_name: "} ;;
+            esac
+            if test -z "$_sudo_detail"; then
+                _sudo_detail="failed (exit status $_sudo_status)"
+            fi
+            ;;
+    esac
+    warn "sudo $_sudo_name: $_sudo_detail"
+    return "$_sudo_status"
+}
+
 error() {
     printf "Error: %s\n" "$*" >&2
 }
@@ -361,53 +401,61 @@ install_packages() {
     case "$OS" in
         debian)
             info "Updating package lists"
-            sudo apt-get update -qq
+            if ! sudo_or_warn apt-get update -qq; then
+                warn "skipping Debian package installation because apt-get update failed"
+                return 0
+            fi
             info "Installing system packages"
-            sudo apt-get install -y --install-recommends \
-                adb \
-                bat \
-                build-essential \
-                curl \
-                fd-find \
-                fzf \
-                gh \
-                git \
-                git-delta \
-                git-email \
-                golang \
-                jq \
-                mercurial \
-                micro \
-                p7zip-full \
-                python3 \
-                python3-pip \
-                python3-venv \
-                ripgrep \
-                shellcheck \
-                unzip \
-                vim \
-                zsh
+            if ! sudo_or_warn apt-get install -y --install-recommends \
+                    adb \
+                    bat \
+                    build-essential \
+                    curl \
+                    fd-find \
+                    fzf \
+                    gh \
+                    git \
+                    git-delta \
+                    git-email \
+                    golang \
+                    jq \
+                    mercurial \
+                    micro \
+                    p7zip-full \
+                    python3 \
+                    python3-pip \
+                    python3-venv \
+                    ripgrep \
+                    shellcheck \
+                    unzip \
+                    vim \
+                    zsh; then
+                warn "skipping remaining Debian package installs"
+                return 0
+            fi
             if test "$NPM" = yes; then
                 info "Installing npm"
-                sudo apt-get install -y --install-recommends npm
+                sudo_or_warn apt-get install -y --install-recommends npm \
+                    || warn "could not install the distro npm package; continuing with the TypeScript attempt"
                 # tsc lets setup-kde build Krohnkite from source without
                 # fetching typescript from the npm registry at build time.
                 # Debian/Ubuntu package it as node-typescript; fall back to
                 # a one-time global npm install where that's unavailable.
                 info "Installing TypeScript (tsc)"
-                sudo apt-get install -y --install-recommends node-typescript \
-                    || sudo npm install -g typescript \
+                sudo_or_warn apt-get install -y --install-recommends node-typescript \
+                    || sudo_or_warn npm install -g typescript \
                     || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
-                sudo apt-get install -y --install-recommends kitty
+                sudo_or_warn apt-get install -y --install-recommends kitty \
+                    || warn "skipping kitty installation"
                 info "Installing KDE graphical packages"
-                sudo apt-get install -y --install-recommends \
+                sudo_or_warn apt-get install -y --install-recommends \
                     kde-standard \
                     kwin-dev \
-                    plasma-desktop \
-                    plasma-sdk
+                    plasma-desktop plasma-sdk \
+                    || warn "skipping KDE graphical package installation"
                 # Shared Wayland desktop stack, used by BOTH the Hyprland and
                 # Sway builds (bar, launcher, notifications, portal, audio,
                 # applets, fonts). Installed unconditionally alongside KDE so
@@ -417,7 +465,7 @@ install_packages() {
                 # release without hyprland must not take the Sway/Hyprland
                 # shared pieces down with it.
                 info "Installing shared Wayland desktop packages"
-                sudo apt-get install -y --install-recommends \
+                sudo_or_warn apt-get install -y --install-recommends \
                     xdg-desktop-portal-gtk \
                     waybar fuzzel kanshi \
                     power-profiles-daemon \
@@ -431,19 +479,19 @@ install_packages() {
                 # 24.04, Debian 13); try the upstream name for backports.
                 # Its own transaction so a missing name can't abort the
                 # shared stack above.
-                sudo apt-get install -y --install-recommends sway-notification-center \
-                    || sudo apt-get install -y --install-recommends swaync \
+                sudo_or_warn apt-get install -y --install-recommends sway-notification-center \
+                    || sudo_or_warn apt-get install -y --install-recommends swaync \
                     || warn "swaync unavailable via apt (sway-notification-center); notifications need a manual build"
                 # Hyprland-only packages. `|| warn` because the hypr* tools
                 # may need a backport and shouldn't abort.
                 info "Installing Hyprland desktop packages"
-                sudo apt-get install -y --install-recommends \
+                sudo_or_warn apt-get install -y --install-recommends \
                     hyprland hypridle hyprlock \
                     || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww)"
                 # These are in the default repos even where hyprland isn't, so
                 # install them separately -- otherwise a missing hyprland fails
                 # the whole command above and takes these down with it.
-                sudo apt-get install -y --install-recommends \
+                sudo_or_warn apt-get install -y --install-recommends \
                     grim slurp wl-clipboard playerctl gnome-calculator \
                     || warn "screenshot/media/calculator tools unavailable via apt"
                 # Sway Wayland desktop packages, installed unconditionally
@@ -452,71 +500,77 @@ install_packages() {
                 # default repos; the bar/launcher/notification stack above
                 # (waybar, fuzzel, swaync, ...) is shared with Hyprland.
                 info "Installing Sway desktop packages"
-                sudo apt-get install -y --install-recommends \
+                sudo_or_warn apt-get install -y --install-recommends \
                     sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
                     || warn "some Sway packages are unavailable via apt"
                 # autotiling (dwindle-style dynamic tiling) is packaged
                 # separately and missing from some releases; its absence
                 # only costs the dynamic splits, not the desktop.
-                sudo apt-get install -y --install-recommends autotiling \
+                sudo_or_warn apt-get install -y --install-recommends autotiling \
                     || warn "autotiling unavailable via apt; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) is often not in the default repos;
                 # install it separately so its absence doesn't block the rest.
-                sudo apt-get install -y --install-recommends yazi \
+                sudo_or_warn apt-get install -y --install-recommends yazi \
                     || warn "yazi unavailable via apt; install with 'cargo install --locked yazi-fm yazi-cli'"
                 # uwsm (opt-in Universal Wayland Session Manager). Installed so
                 # it's available; it does NOT change how you log in unless you
                 # pick the uwsm session -- see conf/config/hypr/README.md.
-                sudo apt-get install -y --install-recommends uwsm \
+                sudo_or_warn apt-get install -y --install-recommends uwsm \
                     || warn "uwsm unavailable via apt (optional; skip)"
             fi
             ;;
         redhat)
             info "Installing system packages"
-            sudo dnf install -y \
-                '@development-tools' \
-                android-tools \
-                bat \
-                curl \
-                fd-find \
-                fzf \
-                gh \
-                git \
-                git-delta \
-                git-email \
-                golang \
-                jq \
-                mercurial \
-                micro \
-                p7zip \
-                p7zip-plugins \
-                python3 \
-                python3-pip \
-                ripgrep \
-                ShellCheck \
-                unzip \
-                vim \
-                zsh
+            if ! sudo_or_warn dnf install -y \
+                    '@development-tools' \
+                    android-tools \
+                    bat \
+                    curl \
+                    fd-find \
+                    fzf \
+                    gh \
+                    git \
+                    git-delta \
+                    git-email \
+                    golang \
+                    jq \
+                    mercurial \
+                    micro \
+                    p7zip \
+                    p7zip-plugins \
+                    python3 \
+                    python3-pip \
+                    ripgrep \
+                    ShellCheck \
+                    unzip \
+                    vim \
+                    zsh; then
+                warn "skipping remaining Fedora package installs"
+                return 0
+            fi
             if test "$NPM" = yes; then
                 info "Installing npm"
-                sudo dnf install -y npm
+                sudo_or_warn dnf install -y npm \
+                    || warn "could not install the distro npm package; continuing with the TypeScript attempt"
                 # tsc lets setup-kde build Krohnkite from source without
                 # fetching typescript from the npm registry at build time.
                 # Fedora ships no typescript rpm, so this is a one-time
                 # global npm install during bootstrap.
                 info "Installing TypeScript (tsc)"
-                sudo npm install -g typescript \
+                sudo_or_warn npm install -g typescript \
                     || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
-                sudo dnf install -y kitty
+                sudo_or_warn dnf install -y kitty \
+                    || warn "skipping kitty installation"
                 info "Installing KDE graphical packages"
-                sudo dnf install -y \
+                sudo_or_warn dnf install -y \
                     '@kde-desktop-environment' \
                     kwin-devel \
                     plasma-desktop \
-                    plasma-sdk
+                    plasma-sdk \
+                    || warn "skipping KDE graphical package installation"
                 # Hyprland Wayland desktop packages, installed unconditionally
                 # alongside KDE so either desktop is available (--kde/--hypr
                 # only choose which one to *configure*). `|| warn` because
@@ -524,15 +578,18 @@ install_packages() {
                 # Fedora doesn't ship Hyprland in its default repos, so enable
                 # the lionheartp/Hyprland COPR first (needs the copr dnf plugin).
                 info "Enabling the lionheartp/Hyprland COPR"
-                sudo dnf install -y dnf-plugins-core || true
-                sudo dnf copr enable -y lionheartp/Hyprland \
-                    || warn "could not enable the lionheartp/Hyprland COPR; hyprland may be unavailable"
+                if sudo_or_warn dnf install -y dnf-plugins-core; then
+                    sudo_or_warn dnf copr enable -y lionheartp/Hyprland \
+                        || warn "could not enable the lionheartp/Hyprland COPR; hyprland may be unavailable"
+                else
+                    warn "skipping COPR enable because the dnf plugin could not be installed"
+                fi
                 # Shared Wayland desktop stack, used by BOTH the Hyprland and
                 # Sway builds. Its own transaction, all default-repo, so a
                 # failed COPR / missing hyprland can't take the bar, launcher,
                 # and power pieces down with it.
                 info "Installing shared Wayland desktop packages"
-                sudo dnf install -y \
+                sudo_or_warn dnf install -y \
                     xdg-desktop-portal-gtk \
                     waybar fuzzel kanshi \
                     power-profiles-daemon \
@@ -546,20 +603,20 @@ install_packages() {
                 # upstream name too in case a COPR provides it. Its own
                 # transaction so a missing name can't abort the shared stack
                 # above.
-                sudo dnf install -y SwayNotificationCenter \
-                    || sudo dnf install -y swaync \
+                sudo_or_warn dnf install -y SwayNotificationCenter \
+                    || sudo_or_warn dnf install -y swaync \
                     || warn "swaync unavailable via dnf (SwayNotificationCenter); notifications need a manual build"
                 # Hyprland-only packages (these are the ones that need the
                 # COPR above).
                 info "Installing Hyprland desktop packages"
-                sudo dnf install -y \
+                sudo_or_warn dnf install -y \
                     hyprland hypridle hyprlock \
                     xdg-desktop-portal-hyprland swww \
                     || warn "some Hyprland packages are unavailable; check the lionheartp/Hyprland COPR or build manually"
                 # In the default repos even where hyprland isn't, so install
                 # separately -- a missing hyprland above shouldn't take these
                 # down with it.
-                sudo dnf install -y \
+                sudo_or_warn dnf install -y \
                     grim slurp wl-clipboard playerctl gnome-calculator \
                     || warn "screenshot/media/calculator tools unavailable via dnf"
                 # Sway Wayland desktop packages, installed unconditionally
@@ -569,22 +626,22 @@ install_packages() {
                 # The bar/launcher/notification stack above (waybar, fuzzel,
                 # swaync, ...) is shared with Hyprland.
                 info "Installing Sway desktop packages"
-                sudo dnf install -y \
+                sudo_or_warn dnf install -y \
                     sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
                     || warn "some Sway packages are unavailable via dnf"
                 # autotiling (dwindle-style dynamic tiling) is packaged
                 # separately; its absence only costs the dynamic splits,
                 # not the desktop.
-                sudo dnf install -y autotiling \
+                sudo_or_warn dnf install -y autotiling \
                     || warn "autotiling unavailable via dnf; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) may need a COPR; install it
                 # separately so its absence doesn't block the rest.
-                sudo dnf install -y yazi \
+                sudo_or_warn dnf install -y yazi \
                     || warn "yazi unavailable via dnf; install with 'cargo install --locked yazi-fm yazi-cli'"
                 # uwsm (opt-in Universal Wayland Session Manager). Installed so
                 # it's available; it does NOT change how you log in unless you
                 # pick the uwsm session -- see conf/config/hypr/README.md.
-                sudo dnf install -y uwsm \
+                sudo_or_warn dnf install -y uwsm \
                     || warn "uwsm unavailable via dnf (optional; skip)"
             fi
             ;;
@@ -950,7 +1007,8 @@ set_default_terminal() {
         debian)
             if command -v update-alternatives >/dev/null 2>&1 && command -v kitty >/dev/null 2>&1; then
                 info "Setting kitty as default terminal"
-                sudo update-alternatives --set x-terminal-emulator "$(command -v kitty)"
+                sudo_or_warn update-alternatives --set x-terminal-emulator "$(command -v kitty)" \
+                    || warn "skipping default-terminal update"
             fi
             ;;
         redhat)
@@ -982,22 +1040,32 @@ configure_keyboard() {
     case "$OS" in
         debian)
             info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
-            sudo tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
+            if sudo_or_warn tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
 XKBMODEL="pc105"
 XKBLAYOUT="us"
 XKBVARIANT="dvorak"
 XKBOPTIONS="compose:caps"
 BACKSPACE="guess"
 KEYBOARD
-            # Apply to virtual consoles
-            if command -v setupcon >/dev/null 2>&1; then
-                sudo setupcon --save
+            then
+                # Applying the console copy depends on the persistent config
+                # write above. Skip it if that sudo command was denied.
+                if command -v setupcon >/dev/null 2>&1; then
+                    sudo_or_warn setupcon --save \
+                        || warn "could not apply the keyboard config to virtual consoles"
+                fi
+            else
+                warn "skipping the rest of the system keyboard configuration"
             fi
             ;;
         redhat)
             info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
-            sudo localectl set-keymap us-dvorak
-            sudo localectl set-x11-keymap us "" dvorak compose:caps
+            if sudo_or_warn localectl set-keymap us-dvorak; then
+                sudo_or_warn localectl set-x11-keymap us "" dvorak compose:caps \
+                    || warn "could not configure the X11 keyboard layout"
+            else
+                warn "skipping the rest of the system keyboard configuration"
+            fi
             ;;
         macos)
             # Handled by setup-macos
@@ -1107,10 +1175,12 @@ if test "$INSTALL" = yes; then
     fi
     if command -v cargo >/dev/null 2>&1; then
         make -C "$ROOT_DIR"
-        sudo make -C "$ROOT_DIR" install
+        sudo_or_warn make -C "$ROOT_DIR" install \
+            || warn "skipping root config installation"
     else
         info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
-        sudo make -C "$ROOT_DIR/legacy" install
+        sudo_or_warn make -C "$ROOT_DIR/legacy" install \
+            || warn "skipping legacy root config installation"
     fi
 else
     info "Skipping root config installation (--no-install)"
@@ -1127,6 +1197,9 @@ if test "$OS" = "macos"; then
     info "On macOS, use System Settings to manage admin group membership"
 else
     root_group=$(getent group 0 | cut -d: -f1)
-    sudo gpasswd -a "$USER" "$root_group"
-    info "Added $USER to $root_group group (log out and back in for this to take effect)"
+    if sudo_or_warn gpasswd -a "$USER" "$root_group"; then
+        info "Added $USER to $root_group group (log out and back in for this to take effect)"
+    else
+        warn "skipping root-group membership update"
+    fi
 fi

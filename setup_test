@@ -59,6 +59,46 @@ assert_source_not_contains() {
     fi
 }
 
+# Run setup's sudo wrapper in isolation against a controlled sudo mock. This
+# tests the diagnostics without executing the bootstrap's system changes.
+run_sudo_helper() {
+    sudo_mode="$1"
+    sudo_tmpdir="$(mktemp -d)"
+    cat > "$sudo_tmpdir/sudo" <<'MOCK'
+#!/bin/sh
+case "$SUDO_MODE" in
+    denied)
+        echo "sudo: permission denied" >&2
+        exit 1
+        ;;
+    missing)
+        exit 127
+        ;;
+    silent)
+        exit 42
+        ;;
+    success)
+        echo "sudo notice" >&2
+        exit 0
+        ;;
+esac
+MOCK
+    chmod +x "$sudo_tmpdir/sudo"
+    sudo_functions=$(awk '
+        /^warn\(\) \{/ { copying = 1 }
+        /^error\(\) \{/ { copying = 0 }
+        copying { print }
+    ' "$SETUP")
+
+    set +e
+    output="$(SUDO_MODE="$sudo_mode" PATH="$sudo_tmpdir:$PATH" \
+        sh -c "$sudo_functions
+sudo_or_warn apt-get update" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$sudo_tmpdir"
+}
+
 run_test() {
     name="$1"
     func="$2"
@@ -178,6 +218,48 @@ test_typescript_installed_with_npm() {
     assert_source_contains "brew install typescript"
 }
 
+# sudo failures are warnings rather than fatal set -e exits. Use stderr when
+# it has a useful reason, the shell-standard 127 meaning when it does not, and
+# an explicit status as the final fallback.
+test_sudo_warning_uses_stderr() {
+    run_sudo_helper denied
+    assert_status 1 &&
+    assert_output_contains "Warning: sudo apt-get: permission denied"
+}
+
+test_sudo_warning_uses_exit_status() {
+    run_sudo_helper missing
+    assert_status 127 &&
+    assert_output_contains "Warning: sudo apt-get: command not found"
+}
+
+test_sudo_warning_falls_back_to_numeric_status() {
+    run_sudo_helper silent
+    assert_status 42 &&
+    assert_output_contains "Warning: sudo apt-get: failed (exit status 42)"
+}
+
+test_sudo_success_preserves_stderr() {
+    run_sudo_helper success
+    assert_status 0 &&
+    assert_output_contains "sudo notice"
+}
+
+# Every privileged operation goes through the wrapper, and blocks with
+# dependent follow-up work test its result before continuing.
+test_sudo_calls_are_guarded() {
+    raw_sudo_calls=$(grep -c '^[[:space:]]*sudo ' "$SETUP")
+    if test "$raw_sudo_calls" -ne 1; then
+        echo "  FAIL: expected only sudo_or_warn's internal sudo call, got $raw_sudo_calls"
+        TEST_FAILED=1
+        return 1
+    fi
+    assert_source_contains "if ! sudo_or_warn apt-get update" &&
+    assert_source_contains "if sudo_or_warn tee /etc/default/keyboard" &&
+    assert_source_contains "if sudo_or_warn localectl set-keymap" &&
+    assert_source_contains "if sudo_or_warn gpasswd"
+}
+
 # --- unzip ---
 
 # unzip is a core package installed on every platform, and listed in the
@@ -239,6 +321,16 @@ run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
 run_test "tsc installs alongside npm on every platform" \
     test_typescript_installed_with_npm
+run_test "sudo warning includes a useful stderr reason" \
+    test_sudo_warning_uses_stderr
+run_test "sudo warning recognizes command-not-found status" \
+    test_sudo_warning_uses_exit_status
+run_test "sudo warning falls back to the numeric status" \
+    test_sudo_warning_falls_back_to_numeric_status
+run_test "successful sudo preserves its stderr" \
+    test_sudo_success_preserves_stderr
+run_test "sudo-dependent blocks guard every privileged call" \
+    test_sudo_calls_are_guarded
 run_test "fnm installs via its upstream installer with --skip-shell" \
     test_fnm_installed
 run_test "unzip installs on every platform" test_unzip_installed

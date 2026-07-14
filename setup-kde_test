@@ -227,6 +227,22 @@ test_unknown_option() {
     assert_output_contains "Unknown option"
 }
 
+# setup-kde is entirely user-scoped. Even a sudo executable that always fails
+# must be irrelevant to KDE configuration.
+test_failing_sudo_is_not_used() {
+    cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
+#!/bin/sh
+echo "sudo \$*" >> "$CALLS"
+echo "sudo: permission denied" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/sudo"
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "sudo" &&
+    assert_output_contains "KDE configured successfully"
+}
+
 # --- installation (mocked git/kpackagetool6; npm is a never-called canary) ---
 
 # The clone must come from my Codeberg fork's mikel branch.
@@ -409,6 +425,8 @@ MOCK
 
 run_test "help flag" test_help_flag
 run_test "unknown option errors" test_unknown_option
+run_test "failing sudo does not affect user-scoped KDE setup" \
+    test_failing_sudo_is_not_used
 run_test "clones my krohnkite fork by default" test_clones_fork_by_default
 run_test "KROHNKITE_REPO overrides the clone source" \
     test_krohnkite_repo_env_overrides_clone_source
