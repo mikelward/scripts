@@ -190,9 +190,14 @@ choose_session() {
   # --print-query lets a typed-but-unmatched name become a new session. The
   # preview calls back into this script for the highlighted row's field 2.
   local out query selection
+  # --with-nth=3 alone scopes both display AND search to field 3. Do not
+  # add --nth: fzf applies --nth to the with-nth-transformed line (which
+  # has no tabs left), so --nth=3 made every non-empty query match
+  # nothing and typing in the picker always fell through to "create a
+  # new session by that name".
   out="$(printf '%s\n' "$list" | "${CHANGESESSION_FZF:-fzf}" \
     --ansi \
-    --delimiter='\t' --with-nth=3 --nth=3 \
+    --delimiter='\t' --with-nth=3 \
     --print-query \
     --header='Enter: switch/create   type: filter or new name   ESC: cancel' \
     --preview="$SESSION_SELF --preview {2}" \
