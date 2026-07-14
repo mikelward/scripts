@@ -101,7 +101,6 @@ NPM=yes
 # running.
 DESKTOP="${DESKTOP:-kde}"
 
-
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
@@ -393,12 +392,12 @@ install_packages() {
                 sudo apt-get install -y --install-recommends npm
                 # tsc lets setup-kde build Krohnkite from source without
                 # fetching typescript from the npm registry at build time.
-                # Debian/Ubuntu package it as node-typescript. Do not fall
-                # back to sudo npm here: locked-down hosts may only permit
-                # sudo apt against system repositories.
+                # Debian/Ubuntu package it as node-typescript; fall back to
+                # a one-time global npm install where that's unavailable.
                 info "Installing TypeScript (tsc)"
                 sudo apt-get install -y --install-recommends node-typescript \
-                    || warn "could not install tsc from apt; setup-kde needs it to build Krohnkite"
+                    || sudo npm install -g typescript \
+                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"

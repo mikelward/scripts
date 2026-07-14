@@ -169,10 +169,13 @@ test_swaync_package_names() {
 
 # setup-kde builds Krohnkite from source without fetching from the npm
 # registry at build time, which needs a local tsc -- so setup installs it
-# alongside npm. Debian/Ubuntu apt-only hosts must stay within system repos,
-# so they use node-typescript and do not fall back to sudo npm.
+# alongside npm: Debian/Ubuntu package it as node-typescript, Homebrew as
+# typescript, and Fedora ships no rpm so it's a one-time global npm
+# install during bootstrap. On locked-down hosts, sudo npm may fail; that's
+# ok because this fallback is isolated to the TypeScript install attempt.
 test_typescript_installed_with_npm() {
     assert_source_contains "node-typescript" &&
+    assert_source_contains "npm install -g typescript" &&
     assert_source_contains "brew install typescript"
 }
 
