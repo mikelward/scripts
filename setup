@@ -803,7 +803,10 @@ install_rust() {
         rustup update
     else
         info "Installing Rust via rustup"
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        # -y runs unattended; --no-modify-path keeps rustup out of the shell
+        # rc/profile files, since PATH is managed by the conf repo. We source
+        # ~/.cargo/env below so cargo is on PATH for the rest of this run.
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
         . "$HOME/.cargo/env"
     fi
 }
@@ -871,7 +874,10 @@ install_uv() {
         uv self update
     else
         info "Installing uv"
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        # --no-modify-path keeps the uv installer out of the shell rc/profile
+        # files; PATH is managed by the conf repo. uv installs to ~/.local/bin
+        # (or ~/.cargo/bin), which the conf repo already puts on PATH.
+        curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path
     fi
 }
 

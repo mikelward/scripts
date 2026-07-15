@@ -284,6 +284,25 @@ test_fnm_installed() {
     assert_source_not_contains "fnm.vercel.app/install | bash"
 }
 
+# --- Rust / cargo ---
+
+# rustup edits the shell rc/profile files by default to put ~/.cargo/bin on
+# PATH. --no-modify-path keeps it out of them, since PATH is managed by the
+# conf repo, not setup. -y still runs the install unattended.
+test_rust_installs_without_modifying_path() {
+    assert_source_contains "sh -s -- -y --no-modify-path" &&
+    assert_source_not_contains "sh.rustup.rs | sh -s -- -y$"
+}
+
+# --- uv ---
+
+# The uv installer also edits shell rc/profile files by default. --no-modify-path
+# keeps it out of them; the conf repo already has ~/.local/bin on PATH.
+test_uv_installs_without_modifying_path() {
+    assert_source_contains "uv/install.sh | sh -s -- --no-modify-path" &&
+    assert_source_not_contains "uv/install.sh | sh$"
+}
+
 # --- SSH key ---
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
@@ -334,6 +353,10 @@ run_test "sudo-dependent blocks guard every privileged call" \
     test_sudo_calls_are_guarded
 run_test "fnm installs via its upstream installer with --skip-shell" \
     test_fnm_installed
+run_test "rustup installs with --no-modify-path" \
+    test_rust_installs_without_modifying_path
+run_test "uv installs with --no-modify-path" \
+    test_uv_installs_without_modifying_path
 run_test "unzip installs on every platform" test_unzip_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg
