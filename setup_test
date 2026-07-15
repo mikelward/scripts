@@ -474,6 +474,13 @@ test_home_tools_install_degrades() {
     assert_source_contains "some CLI tools could not be installed via homepkg"
 }
 
+# shpool is source-only, so (like the brew path) the homepkg path can't provide
+# it. The full no-sudo run must say so explicitly rather than silently dropping
+# it, since the normal full cargo path installs shpool.
+test_home_tools_warns_about_shpool() {
+    assert_source_contains "shpool is not available on the homepkg path"
+}
+
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
 run_test "--no-sudo parses and forwards to desktop helpers" \
@@ -486,6 +493,8 @@ run_test "--no-sudo installs CLI tools into a home prefix via homepkg" \
     test_no_sudo_installs_via_homepkg
 run_test "home-prefix tool install degrades on failure" \
     test_home_tools_install_degrades
+run_test "home-prefix full install warns that shpool is unavailable" \
+    test_home_tools_warns_about_shpool
 
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
