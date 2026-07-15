@@ -18,10 +18,15 @@
 # installed only when a display server is detected. Pass --gui to force
 # them on, or --no-gui to skip them (e.g. on a headless server).
 #
-# The heavyweight extras (Rust toolchain plus helix/jj/shpool/nushell,
-# all built from source) are skipped automatically when the disk is small
-# (see MIN_DISK_GB). Pass --minimal to force that lean profile, or --full
-# to install everything regardless. To pass flags through a pipe:
+# The heavyweight extras install from Homebrew bottles when brew is available
+# (or on macOS), and otherwise build from source via a Rust toolchain (rustup
+# + cargo). The brew path covers helix/jj/nushell; shpool has no tap bottle
+# yet, so it stays on the --cargo path for now. Pass --brew to force Homebrew
+# (installing it if needed) -- bottles skip the slow builds and the disk a
+# Rust toolchain needs -- or --cargo to force the from-source path. The extras
+# are skipped when the disk is small (see MIN_DISK_GB). Pass --minimal to
+# force that lean profile, or --full to install everything. To pass flags
+# through a pipe:
 #     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui --minimal
 #
 # Pass --no-install to skip all software installation (packages, fonts,
@@ -101,6 +106,15 @@ NPM=yes
 # running.
 DESKTOP="${DESKTOP:-kde}"
 
+# Which backend installs the heavyweight extras (helix, jj, shpool, nushell).
+# One of:
+#   auto  - Homebrew when brew is available or on macOS; else cargo (default)
+#   brew  - install them from Homebrew bottles (fast, prebuilt, no Rust
+#           toolchain or large build dirs), installing Homebrew if needed
+#   cargo - build them from source via rustup + cargo
+# Override with --brew / --cargo.
+EXTRAS=auto
+
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
@@ -118,6 +132,11 @@ Options:
   --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
                    nushell), installing only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
+  --brew           Install the heavyweight extras (helix, jj, nushell) from
+                   Homebrew bottles instead of building them from source (fast,
+                   no Rust toolchain or large build dirs); installs Homebrew if
+                   needed. shpool has no bottle yet, so use --cargo for it
+  --cargo          Build the heavyweight extras from source via rustup + cargo
   --no-install     Skip every install step (packages, fonts, uv, extras, root
                    config) and only (re)apply config. Forwarded to setup-kde/macos
   --ignore-errors  Keep going past failures instead of aborting on the first
@@ -213,6 +232,12 @@ while test $# -gt 0; do
             ;;
         --full)
             MINIMAL=no
+            ;;
+        --brew)
+            EXTRAS=brew
+            ;;
+        --cargo)
+            EXTRAS=cargo
             ;;
         --install)
             INSTALL=yes
@@ -378,21 +403,59 @@ resolve_minimal() {
     esac
 }
 
+# Resolve $EXTRAS (auto/brew/cargo) into EXTRAS_BACKEND. Auto picks brew when
+# it's available or on macOS, else cargo -- preserving the previous default on
+# Linux without Homebrew. Must run after detect_os.
+resolve_extras() {
+    case "$EXTRAS" in
+        brew)
+            EXTRAS_BACKEND=brew
+            info "Extras backend: Homebrew (--brew)"
+            ;;
+        cargo)
+            EXTRAS_BACKEND=cargo
+            info "Extras backend: cargo/source (--cargo)"
+            ;;
+        *)
+            if command -v brew >/dev/null 2>&1; then
+                EXTRAS_BACKEND=brew
+                info "Extras backend: Homebrew (brew detected)"
+            elif test "$OS" = "macos"; then
+                EXTRAS_BACKEND=brew
+                info "Extras backend: Homebrew (macOS)"
+            else
+                EXTRAS_BACKEND=cargo
+                info "Extras backend: cargo/source (no Homebrew; use --brew to override)"
+            fi
+            ;;
+    esac
+}
+
 # --- Install Homebrew (macOS) ---
 
 install_homebrew() {
     if command -v brew >/dev/null 2>&1; then
         info "Homebrew already installed"
-        return
+        return 0
     fi
     info "Installing Homebrew"
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    # Add Homebrew to PATH for the rest of this script
-    if test -x /opt/homebrew/bin/brew; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-    elif test -x /usr/local/bin/brew; then
-        eval "$(/usr/local/bin/brew shellenv)"
+    if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
+        warn "Homebrew installation failed"
+        return 1
     fi
+    # Add Homebrew to PATH for the rest of this script. macOS installs to
+    # /opt/homebrew (Apple silicon) or /usr/local (Intel); Linuxbrew installs
+    # to /home/linuxbrew/.linuxbrew or ~/.linuxbrew.
+    for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew \
+                    /home/linuxbrew/.linuxbrew/bin/brew "$HOME/.linuxbrew/bin/brew"; do
+        if test -x "$brew_bin"; then
+            eval "$("$brew_bin" shellenv)"
+            break
+        fi
+    done
+    # Return status reflects whether brew is now usable, so callers can fall
+    # back (e.g. to the cargo source builds) rather than assume success.
+    command -v brew >/dev/null 2>&1
 }
 
 # --- Install system packages ---
@@ -866,6 +929,62 @@ install_nushell() {
     cargo install --locked nu
 }
 
+# --- Install the heavyweight extras ---
+
+# helix, jj, and nushell live in homebrew-core with prebuilt Linux/macOS
+# bottles. shpool isn't in core; it ships from the shell-pool/shpool tap.
+install_extras_brew() {
+    # One formula at a time so a single failure doesn't block the rest.
+    helix_installed=no
+    for formula in helix jj nushell; do
+        info "Installing $formula via Homebrew"
+        if brew install "$formula"; then
+            test "$formula" = helix && helix_installed=yes
+        else
+            warn "could not install $formula via Homebrew"
+        fi
+    done
+    # A prior cargo run points ~/.config/helix/runtime at the source checkout,
+    # and hx searches that before the bottle's bundled runtime -- so drop the
+    # symlink (only the one install_helix created) to avoid stale grammars.
+    # Only when brew actually installed helix: otherwise a prior cargo hx would
+    # lose the runtime it still needs.
+    helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
+    if test "$helix_installed" = yes \
+            && test -L "$helix_runtime" \
+            && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
+        info "Removing stale Helix runtime symlink from the cargo build"
+        rm -f "$helix_runtime"
+    fi
+    # TODO (follow-up PR): re-add shpool here optimistically -- attempt the
+    # install and warn on failure. It has no brew bottle, but should be
+    # available via apt on the system path.
+    warn "shpool is not installed on the brew path yet; use --cargo (or apt) for shpool"
+}
+
+# The from-source path: rustup + cargo builds of every extra. Slower and
+# disk-heavy, but needs no Homebrew.
+install_extras_cargo() {
+    install_rust
+    install_helix
+    install_jj
+    install_shpool
+    install_nushell
+}
+
+# Dispatch to the resolved extras backend. When Homebrew is requested but
+# can't be made available, fall back to the cargo/source builds.
+install_extras() {
+    if test "$EXTRAS_BACKEND" = brew; then
+        if install_homebrew; then
+            install_extras_brew
+            return
+        fi
+        warn "Homebrew unavailable; building the extras from source with cargo instead"
+    fi
+    install_extras_cargo
+}
+
 # --- Install uv (Python package manager) ---
 
 install_uv() {
@@ -1097,6 +1216,7 @@ KEYBOARD
 detect_os
 resolve_gui
 resolve_minimal
+resolve_extras
 if test "$INSTALL" = yes; then
     install_packages
     if test "$GUI_ENABLED" -eq 1; then
@@ -1135,15 +1255,11 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
 fi
 
 if test "$INSTALL" = no; then
-    info "Skipping heavyweight extras (Rust, helix, jj, shpool, nushell); --no-install"
+    info "Skipping heavyweight extras (helix, jj, shpool, nushell); --no-install"
 elif test "$MINIMAL_ENABLED" -eq 0; then
-    install_rust
-    install_helix
-    install_jj
-    install_shpool
-    install_nushell
+    install_extras
 else
-    info "Skipping heavyweight extras (Rust, helix, jj, shpool, nushell); minimal profile"
+    info "Skipping heavyweight extras (helix, jj, shpool, nushell); minimal profile"
 fi
 
 start_services
@@ -1174,10 +1290,10 @@ if test "$INSTALL" = yes; then
     mkdir -p "$SRC_DIR"
     clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
     # The default root config builds helper tools that require cargo. When
-    # cargo isn't available (e.g. a --minimal run, or rustup was skipped),
-    # install the legacy config from the repo's legacy/ subdirectory instead.
-    # Source ~/.cargo/env first so a previously installed toolchain still
-    # counts as available even on a run that skipped install_rust.
+    # cargo isn't available -- the --brew extras path skips the Rust toolchain,
+    # as does --minimal -- install the legacy config from the legacy/ subdir
+    # instead. Source ~/.cargo/env first so a previously installed toolchain
+    # still counts as available even on a run that skipped install_rust.
     if test -f "$HOME/.cargo/env"; then
         . "$HOME/.cargo/env"
     fi
@@ -1186,7 +1302,8 @@ if test "$INSTALL" = yes; then
         sudo_or_warn make -C "$ROOT_DIR" install \
             || warn "skipping root config installation"
     else
-        info "cargo unavailable; installing legacy root config from $ROOT_DIR/legacy"
+        info "cargo unavailable; installing the legacy root config from $ROOT_DIR/legacy"
+        info "(no Rust toolchain this run; use --cargo, --full, or 'brew install rust' for the primary Rust root config)"
         sudo_or_warn make -C "$ROOT_DIR/legacy" install \
             || warn "skipping legacy root config installation"
     fi
