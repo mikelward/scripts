@@ -62,6 +62,51 @@ is_command() {
     test -x "$(command -v "$1")"
 }
 
+# Run one privileged command without letting a sudo failure abort the helper
+# under set -e. Mirrors setup's sudo_or_warn: on a box where sudo is allowed
+# for package installs but denied for other commands, a denied lid/service
+# step warns and the helper keeps going instead of exiting. The proactive
+# --no-sudo skip is handled by the caller's SUDO guard below, so this wrapper
+# only needs the reactive path -- but it still honours SUDO=no defensively.
+sudo_or_warn() {
+    _sudo_name=${1##*/}
+    if test "$SUDO" = no; then
+        warn "skipping 'sudo $_sudo_name' (--no-sudo)"
+        return 1
+    fi
+    _sudo_stderr=$(mktemp) || {
+        warn "sudo $_sudo_name: could not create a temporary error log"
+        return 1
+    }
+
+    if sudo "$@" 2>"$_sudo_stderr"; then
+        cat "$_sudo_stderr" >&2
+        rm -f "$_sudo_stderr"
+        return 0
+    else
+        _sudo_status=$?
+    fi
+    _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
+    rm -f "$_sudo_stderr"
+
+    case "$_sudo_status" in
+        126) _sudo_detail="permission denied" ;;
+        127) _sudo_detail="command not found" ;;
+        *)
+            case "$_sudo_detail" in
+                "sudo: $_sudo_name: "*) _sudo_detail=${_sudo_detail#"sudo: $_sudo_name: "} ;;
+                "sudo: "*) _sudo_detail=${_sudo_detail#"sudo: "} ;;
+                "$_sudo_name: "*) _sudo_detail=${_sudo_detail#"$_sudo_name: "} ;;
+            esac
+            if test -z "$_sudo_detail"; then
+                _sudo_detail="failed (exit status $_sudo_status)"
+            fi
+            ;;
+    esac
+    warn "sudo $_sudo_name: $_sudo_detail"
+    return "$_sudo_status"
+}
+
 usage() {
     cat <<'USAGE'
 Usage: setup-hypr [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -132,8 +177,13 @@ install_logind_lid_dropin() {
     fi
     dropin="$LOGIND_DIR/10-hypr-lid.conf"
     info "Installing logind lid drop-in ($dropin)"
-    sudo mkdir -p "$LOGIND_DIR"
-    sudo tee "$dropin" >/dev/null <<'CONF'
+    # sudo_or_warn so a denied step (e.g. sudo allowed for apt but not for
+    # this) warns and returns instead of aborting the helper under set -e.
+    if ! sudo_or_warn mkdir -p "$LOGIND_DIR"; then
+        warn "could not create $LOGIND_DIR; skipping the lid drop-in"
+        return 0
+    fi
+    if ! sudo_or_warn tee "$dropin" >/dev/null <<'CONF'
 # Installed by setup-hypr. Let Hyprland's lid handler (lid.sh) manage the lid
 # so a docked laptop with the lid closed keeps running on its external display.
 [Login]
@@ -141,8 +191,12 @@ HandleLidSwitch=ignore
 HandleLidSwitchExternalPower=ignore
 HandleLidSwitchDocked=ignore
 CONF
+    then
+        warn "could not write $dropin; skipping the lid drop-in"
+        return 0
+    fi
     # Reload logind so the drop-in takes effect without a reboot.
-    sudo systemctl kill -s HUP systemd-logind 2>/dev/null \
+    sudo_or_warn systemctl kill -s HUP systemd-logind \
         || warn "could not reload systemd-logind; changes apply after reboot"
 }
 
@@ -152,7 +206,7 @@ enable_services() {
     is_command systemctl || { warn "systemd not detected; enable power-profiles-daemon manually"; return 0; }
     if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
         info "Enabling power-profiles-daemon"
-        sudo systemctl enable --now power-profiles-daemon.service \
+        sudo_or_warn systemctl enable --now power-profiles-daemon.service \
             || warn "could not enable power-profiles-daemon"
     else
         warn "power-profiles-daemon.service not found; install power-profiles-daemon"

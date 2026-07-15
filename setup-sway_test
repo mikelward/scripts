@@ -219,6 +219,26 @@ test_no_sudo_skips_privileged_steps() {
     assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "template body"
 }
 
+# Partial sudo (allowed for apt, denied here): the privileged lid/service
+# steps now go through sudo_or_warn, so a denial WARNS and the helper keeps
+# going instead of aborting under set -e. The user-level seeding still runs.
+test_denied_sudo_warns_and_continues() {
+    cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
+#!/bin/sh
+echo "sudo \$*" >> "$CALLS"
+echo "sudo: a password is required" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/sudo"
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    run_sway
+    assert_status 0 &&
+    assert_called "sudo mkdir -p $SETUP_LOGIND_DIR" &&
+    assert_output_contains "Warning" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "template body"
+}
+
 # --- per-host config.local seeding ---
 
 test_seeds_config_local_from_template() {
@@ -287,6 +307,8 @@ run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
 run_test "no-install skips system changes" test_no_install_skips_system_changes
 run_test "no-sudo skips privileged steps, keeps user config" \
     test_no_sudo_skips_privileged_steps
+run_test "denied sudo warns and continues (partial sudo)" \
+    test_denied_sudo_warns_and_continues
 run_test "seeds config.local from the template" test_seeds_config_local_from_template
 run_test "never overwrites an existing config.local" \
     test_never_overwrites_existing_config_local
