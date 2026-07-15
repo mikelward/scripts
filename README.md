@@ -21,6 +21,23 @@ curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 ```
 
+## Installing tools without root
+
+On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
+tools into a home prefix (default `~/.local`, already on `PATH` via the conf
+repo). It fetches from conda-forge by default, or GitHub releases:
+
+```sh
+homepkg list                          # known tools
+homepkg install ripgrep fd bat jq     # from conda-forge into ~/.local
+homepkg --backend github install gh   # from GitHub release assets
+homepkg --prefix ~/opt install nu     # a different prefix
+```
+
+conda packages are sha256-verified against the channel index. `.conda`
+payloads need zstd (the python `zstandard` module or the `zstd` CLI); the
+GitHub backend needs neither.
+
 ## Third-party code
 
 This repository vendors [pidcat](https://github.com/JakeWharton/pidcat)
