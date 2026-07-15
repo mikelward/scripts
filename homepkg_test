@@ -148,7 +148,80 @@ check("list shows every registered tool",
 check("unknown tool errors", _run("install", "bogustool").returncode != 0)
 check("install with no tools errors", _run("install").returncode != 0)
 check("bad --arch errors", _run("--arch", "weird", "install", "jq").returncode != 0)
-check("dry-run unknown backend errors", _run("--backend", "apt", "install", "jq").returncode != 0)
+check("unknown backend errors", _run("--backend", "apt", "install", "jq").returncode != 0)
+# These stay subprocesses: argparse rejects them before any backend/network.
+check("remove requires tools", _run("remove").returncode != 0)
+
+# --- micromamba backend: env paths and symlink management --------------------
+
+check("mamba_env lives under the prefix",
+      hp.mamba_env("/p") == os.path.join("/p", "share", "homepkg", "env"))
+
+# Regression: a dry-run install on a fresh prefix (micromamba not yet present)
+# must not crash. bootstrap returns the intended path, not None, so the planned
+# micromamba command can be printed. conda_index is stubbed to stay offline.
+_saved_index = hp.conda_index
+hp.conda_index = lambda subdir: (
+    {"packages": {"micromamba-2.8.1-0.tar.bz2":
+                  {"name": "micromamba", "version": "2.8.1", "build_number": 0}}},
+    "https://example.invalid/conda")
+try:
+    with tempfile.TemporaryDirectory() as td:
+        got = hp.bootstrap_micromamba(td, ("linux", "x86_64"), True)
+        check("dry-run bootstrap returns the micromamba path, not None",
+              got == os.path.join(td, "bin", "micromamba"))
+        crashed = False
+        try:
+            hp.install_mamba(["jq"], td, ("linux", "x86_64"), True)
+        except Exception:
+            crashed = True
+        check("dry-run install on a fresh prefix doesn't crash", not crashed)
+        # bootstrap/update accept no tools and run their dry-run flow offline
+        # (in-process so the stubbed conda_index applies -- a subprocess would
+        # hit the real network path).
+        check("dry-run bootstrap command returns 0",
+              hp.main(["--prefix", td, "--arch", "linux/x86_64", "--dry-run", "bootstrap"]) == 0)
+        check("dry-run update of the whole env returns 0",
+              hp.main(["--prefix", td, "--arch", "linux/x86_64", "--dry-run", "update"]) == 0)
+finally:
+    hp.conda_index = _saved_index
+
+with tempfile.TemporaryDirectory() as td:
+    check("mamba subcommand is 'create' for a fresh env", hp._mamba_subcommand(td) == "create")
+    os.makedirs(os.path.join(hp.mamba_env(td), "conda-meta"))
+    check("mamba subcommand is 'install' once the env exists", hp._mamba_subcommand(td) == "install")
+
+with tempfile.TemporaryDirectory() as td:
+    mm = os.path.join(td, "bin", "micromamba")
+    os.makedirs(os.path.dirname(mm))
+    open(mm, "w").close()
+    check("micromamba_path prefers the one in the prefix", hp.micromamba_path(td) == mm)
+
+with tempfile.TemporaryDirectory() as td:
+    envbin = os.path.join(hp.mamba_env(td), "bin")
+    os.makedirs(envbin)
+    with open(os.path.join(envbin, "rg"), "w") as f:
+        f.write("#!/bin/sh\n")
+    hp._link_bins(["ripgrep"], td)
+    link = os.path.join(td, "bin", "rg")
+    check("_link_bins symlinks env binary into prefix/bin",
+          os.path.islink(link) and os.path.realpath(link) == os.path.join(envbin, "rg"))
+    hp._unlink_bins(["ripgrep"], td)
+    check("_unlink_bins removes the symlink", not os.path.lexists(link))
+    check("_unlink_bins leaves the env binary intact", os.path.exists(os.path.join(envbin, "rg")))
+
+with tempfile.TemporaryDirectory() as td:
+    envbin = os.path.join(hp.mamba_env(td), "bin")
+    os.makedirs(envbin)
+    open(os.path.join(envbin, "rg"), "w").close()
+    realbin = os.path.join(td, "bin")
+    os.makedirs(realbin)
+    with open(os.path.join(realbin, "rg"), "w") as f:
+        f.write("not a symlink")
+    hp._link_bins(["ripgrep"], td)  # must not clobber the real file
+    check("_link_bins won't overwrite a non-symlink",
+          not os.path.islink(os.path.join(realbin, "rg"))
+          and open(os.path.join(realbin, "rg")).read() == "not a symlink")
 
 print()
 print(f"{RUN} tests, {PASS} passed, {FAIL} failed")

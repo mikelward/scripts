@@ -25,17 +25,33 @@ wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
 tools into a home prefix (default `~/.local`, already on `PATH` via the conf
-repo). It fetches from conda-forge by default, or GitHub releases:
+repo).
+
+The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
+manages one conda environment, so you get a real solver (full dependency
+closure), native updates, and clean removal. micromamba is bootstrapped
+automatically from conda-forge.
 
 ```sh
+homepkg install ripgrep fd bat jq     # into a micromamba env, symlinked to ~/.local/bin
+homepkg update                        # update everything (micromamba update --all)
+homepkg update ripgrep                # or a single tool
+homepkg remove jq
+homepkg bootstrap                     # just fetch micromamba
 homepkg list                          # known tools
-homepkg install ripgrep fd bat jq     # from conda-forge into ~/.local
-homepkg --backend github install gh   # from GitHub release assets
-homepkg --prefix ~/opt install nu     # a different prefix
 ```
 
-conda packages are sha256-verified against the channel index. `.conda`
-payloads need zstd (the python `zstandard` module or the `zstd` CLI); the
+For one-shot installs or building push-bundles there are two stateless
+backends that unpack a single artifact (no solver, no dependency resolution):
+
+```sh
+homepkg --backend conda  install ripgrep   # unpack a conda-forge package (sha256-verified)
+homepkg --backend github install gh        # unpack a GitHub release asset
+```
+
+conda artifacts are sha256-verified against the channel index. `.conda`
+payloads (and the channel index) need zstd (the python `zstandard` module or
+a `zstd`/`unzstd` CLI; the code falls back to the uncompressed index). The
 GitHub backend needs neither.
 
 ## Third-party code
