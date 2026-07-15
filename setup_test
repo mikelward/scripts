@@ -456,6 +456,24 @@ test_no_sudo_skips_command_up_front() {
     esac
 }
 
+# Under --no-sudo the apt/dnf installs are skipped, so setup installs the CLI
+# tools into a home prefix with homepkg instead (core set plus the extras).
+# The extras dispatch routes SUDO=no to install_home_tools.
+test_no_sudo_installs_via_homepkg() {
+    assert_source_contains "install_home_tools" &&
+    assert_source_contains 'elif test "$SUDO" = no; then' &&
+    assert_source_contains '"$homepkg" install $tools' &&
+    assert_source_contains "ripgrep fd bat fzf jq delta gh" &&
+    assert_source_contains 'tools="$tools helix jj nu"'
+}
+
+# The homepkg tool install degrades: a missing homepkg or a failed install
+# warns and continues rather than aborting the bootstrap.
+test_home_tools_install_degrades() {
+    assert_source_contains "homepkg not found at" &&
+    assert_source_contains "some CLI tools could not be installed via homepkg"
+}
+
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
 run_test "--no-sudo parses and forwards to desktop helpers" \
@@ -464,6 +482,10 @@ run_test "--no-sudo gate lives in the sudo_or_warn wrapper" \
     test_no_sudo_gate_is_in_the_wrapper
 run_test "--no-sudo skips the command up front without invoking sudo" \
     test_no_sudo_skips_command_up_front
+run_test "--no-sudo installs CLI tools into a home prefix via homepkg" \
+    test_no_sudo_installs_via_homepkg
+run_test "home-prefix tool install degrades on failure" \
+    test_home_tools_install_degrades
 
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names

@@ -27,6 +27,11 @@ On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
 tools into a home prefix (default `~/.local`, already on `PATH` via the conf
 repo).
 
+`setup --no-sudo` wires this in automatically: it skips the `apt`/`dnf`
+package installs (and every other privileged step) and installs the CLI tools
+via `homepkg` instead — the core set (`ripgrep fd bat fzf jq delta gh`) plus
+the extras (`helix jj nu`, unless the minimal profile is in effect).
+
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
 closure), native updates, and clean removal. micromamba is bootstrapped
