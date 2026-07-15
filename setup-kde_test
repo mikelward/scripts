@@ -227,6 +227,14 @@ test_unknown_option() {
     assert_output_contains "Unknown option"
 }
 
+# --no-sudo is accepted (setup forwards it) and is a pure no-op here: setup-kde
+# uses no sudo, so config still goes through kwriteconfig6 and the run succeeds.
+test_no_sudo_accepted_noop() {
+    run_kde --no-install --no-sudo
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true"
+}
+
 # setup-kde is entirely user-scoped. Even a sudo executable that always fails
 # must be irrelevant to KDE configuration.
 test_failing_sudo_is_not_used() {
@@ -425,6 +433,7 @@ MOCK
 
 run_test "help flag" test_help_flag
 run_test "unknown option errors" test_unknown_option
+run_test "--no-sudo is accepted as a no-op" test_no_sudo_accepted_noop
 run_test "failing sudo does not affect user-scoped KDE setup" \
     test_failing_sudo_is_not_used
 run_test "clones my krohnkite fork by default" test_clones_fork_by_default

@@ -206,6 +206,19 @@ test_no_install_skips_system_changes() {
     assert_output_contains "Skipping logind"
 }
 
+# --no-sudo skips the same privileged steps (the logind drop-in and enabling
+# power-profiles-daemon both need sudo) -- no sudo is called -- while the
+# user-level config.local seeding still runs.
+test_no_sudo_skips_privileged_steps() {
+    mkdir -p "$XDG_CONFIG_HOME/sway"
+    echo "# template body" > "$XDG_CONFIG_HOME/sway/config.local.template"
+    run_sway --no-sudo
+    assert_status 0 &&
+    assert_not_called "sudo" &&
+    assert_output_contains "needs sudo; --no-sudo" &&
+    assert_file_contains "$XDG_CONFIG_HOME/sway/config.local" "template body"
+}
+
 # --- per-host config.local seeding ---
 
 test_seeds_config_local_from_template() {
@@ -272,6 +285,8 @@ run_test "commented lid entry does not skip the drop-in" \
     test_commented_lid_entry_does_not_skip_dropin
 run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
 run_test "no-install skips system changes" test_no_install_skips_system_changes
+run_test "no-sudo skips privileged steps, keeps user config" \
+    test_no_sudo_skips_privileged_steps
 run_test "seeds config.local from the template" test_seeds_config_local_from_template
 run_test "never overwrites an existing config.local" \
     test_never_overwrites_existing_config_local

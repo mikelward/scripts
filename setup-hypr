@@ -23,9 +23,19 @@
 #
 # --no-install skips the system-modifying steps (logind drop-in, enabling the
 # service). --ignore-errors keeps going past failures. setup forwards both.
+#
+# --no-sudo (also forwarded by setup) skips the same system-modifying steps:
+# the logind drop-in and enabling power-profiles-daemon both need sudo, which
+# a no-sudo machine lacks. The user-level config (seeding hyprland.conf.local)
+# still runs.
 
 # Whether to install packages. "no" (via --no-install) skips the install.
 INSTALL=yes
+
+# Whether to run the privileged steps. "yes" runs them (the default); "no"
+# (via --no-sudo) skips them -- the logind drop-in and enabling
+# power-profiles-daemon both need sudo.
+SUDO=yes
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -54,12 +64,14 @@ is_command() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-hypr [--no-install] [--ignore-errors] [-h | --help]
+Usage: setup-hypr [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 
 Configure a Hyprland-based Wayland desktop (packages come from `setup`).
 
 Options:
   --no-install     Skip the system-modifying steps (logind drop-in, services)
+  --no-sudo        Skip the same steps: the logind drop-in and enabling
+                   power-profiles-daemon both need sudo
   --ignore-errors  Keep going past failures instead of aborting on the first
   -h, --help       Show this help and exit
 USAGE
@@ -74,6 +86,12 @@ while test $# -gt 0; do
             ;;
         --no-install)
             INSTALL=no
+            ;;
+        --sudo)
+            SUDO=yes
+            ;;
+        --no-sudo)
+            SUDO=no
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
@@ -193,8 +211,11 @@ seed_conf_local() {
 
 # The Wayland desktop packages are installed by the top-level `setup`. Here we
 # only apply the system-modifying config; --no-install skips it (e.g. a dry run
-# or when re-running just to source setup-hypr.local).
-if test "$INSTALL" = yes; then
+# or when re-running just to source setup-hypr.local). --no-sudo skips it too,
+# since the logind drop-in and service enablement both need sudo.
+if test "$SUDO" = no; then
+    info "Skipping logind drop-in and service enablement (needs sudo; --no-sudo)"
+elif test "$INSTALL" = yes; then
     install_logind_lid_dropin
     enable_services
 else

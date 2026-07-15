@@ -18,12 +18,13 @@
 # Requires: defaults, hidutil
 #
 # Usage:
-#     setup-macos [--no-install] [--ignore-errors] [-h | --help]
+#     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 #
-# setup forwards --no-install and --ignore-errors here. macOS configuration
-# installs no separate software (everything is `defaults`/Automator config),
-# so --no-install is accepted but has nothing to skip. --ignore-errors keeps
-# going past failures instead of aborting on the first one.
+# setup forwards --no-install, --no-sudo, and --ignore-errors here. macOS
+# configuration installs no separate software (everything is
+# `defaults`/Automator config) and uses no sudo, so --no-install and --no-sudo
+# are accepted but have nothing to skip. --ignore-errors keeps going past
+# failures instead of aborting on the first one.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -39,13 +40,15 @@ warn() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-macos [--no-install] [--ignore-errors] [-h | --help]
+Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 
 Configure the macOS desktop environment.
 
 Options:
   --no-install     Accepted for consistency with setup; macOS configuration
                    installs no separate software, so there's nothing to skip
+  --no-sudo        Accepted for consistency with setup; macOS configuration
+                   uses no sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
   -h, --help       Show this help and exit
 USAGE
@@ -55,9 +58,9 @@ USAGE
 
 while test $# -gt 0; do
     case "$1" in
-        --install|--no-install)
-            # No separate install step on macOS; accepted as a no-op so
-            # setup can forward the flag uniformly.
+        --install|--no-install|--sudo|--no-sudo)
+            # No separate install step and no sudo on macOS; accepted as a
+            # no-op so setup can forward these flags uniformly.
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
