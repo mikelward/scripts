@@ -9,6 +9,7 @@ locally built archives so the suite needs no network.
 """
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -222,6 +223,194 @@ with tempfile.TemporaryDirectory() as td:
     check("_link_bins won't overwrite a non-symlink",
           not os.path.islink(os.path.join(realbin, "rg"))
           and open(os.path.join(realbin, "rg")).read() == "not a symlink")
+
+# --- push bundles ------------------------------------------------------------
+
+# The explicit lockfile's remote URLs are rewritten to local file:// paths (in
+# the bundle's pkgs dir) for the offline replay, preserving the hash fragment.
+with tempfile.TemporaryDirectory() as td:
+    exp = os.path.join(td, "explicit.txt")
+    with open(exp, "w") as f:
+        f.write("@EXPLICIT\n"
+                "https://conda.anaconda.org/conda-forge/linux-64/jq-1.8.2-h0.conda#abc\n")
+    res = hp._localize_explicit(exp, "/b/pkgs").splitlines()
+    check("_localize_explicit keeps @EXPLICIT", res[0] == "@EXPLICIT")
+    check("_localize_explicit rewrites url to a local file:// path",
+          res[1] == "file:///b/pkgs/jq-1.8.2-h0.conda#abc")
+
+# A github bundle round-trips fully offline: build the tarball by hand, then
+# install-bundle unpacks the asset and places the binary -- no network.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "tool-x86_64-unknown-linux-musl.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset), {"tool-1.0/rg": b"#!/bin/sh\necho rg\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": [{"tool": "ripgrep", "asset": asset, "bins": ["rg"]}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("install-bundle (github) unpacks the asset offline",
+          os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "weird", "platform": "linux/x86_64",
+                   "tools": []}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    raised = False
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "p"), ("linux", "x86_64"), False)
+    except hp.HomepkgError:
+        raised = True
+    check("install-bundle rejects an unknown backend", raised)
+
+# install-bundle refuses a bundle built for a different platform.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": []}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    raised = False
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "p"), ("macos", "aarch64"), False)
+    except hp.HomepkgError:
+        raised = True
+    check("install-bundle rejects a platform mismatch", raised)
+
+# _mamba_solve must pass --platform for the target subdir (so cross-arch
+# bundles solve the right arch) and build from the LINK set, not FETCH (which
+# omits already-cached packages on a warm builder). subprocess.run is stubbed.
+_solve_calls = {}
+def _fake_run(cmd, **kw):
+    _solve_calls["cmd"] = cmd
+    payload = json.dumps({"actions": {
+        "LINK": [{"fn": "libx-1.conda", "url": "https://h/linux-aarch64/libx-1.conda", "md5": "m"},
+                 {"fn": "jq-1.conda", "url": "https://h/linux-aarch64/jq-1.conda"}],
+        "FETCH": [{"fn": "jq-1.conda", "url": "https://h/linux-aarch64/jq-1.conda"}]}}).encode()
+    return type("R", (), {"stdout": payload})()
+_real_run = subprocess.run
+subprocess.run = _fake_run
+try:
+    with tempfile.TemporaryDirectory() as td:
+        pkgs = hp._mamba_solve("/fake/mm", td, ("linux", "aarch64"), ["jq"])
+    check("_mamba_solve passes --platform for the target subdir",
+          "--platform" in _solve_calls["cmd"] and "linux-aarch64" in _solve_calls["cmd"])
+    check("_mamba_solve builds from LINK, not FETCH (cache-independent)",
+          sorted(p["fn"] for p in pkgs) == ["jq-1.conda", "libx-1.conda"])
+finally:
+    subprocess.run = _real_run
+
+# install-bundle treats bundle members as untrusted: a path-traversal entry is
+# rejected before extraction, not written outside the temp dir.
+with tempfile.TemporaryDirectory() as td:
+    evil = os.path.join(td, "evil.tar.gz")
+    with tarfile.open(evil, "w:gz") as tf:
+        ti = tarfile.TarInfo("../evil")
+        ti.size = 1
+        tf.addfile(ti, io.BytesIO(b"x"))
+    raised = False
+    try:
+        hp.install_bundle(evil, os.path.join(td, "p"), ("linux", "x86_64"), False)
+    except hp.HomepkgError:
+        raised = True
+    check("install-bundle rejects path-traversal members", raised)
+
+# hard-link linkname resolves relative to the extraction root (not the member's
+# dir), so a d/rg hardlink to ../secret must also be rejected.
+with tempfile.TemporaryDirectory() as td:
+    hl = os.path.join(td, "hl.tar")
+    with tarfile.open(hl, "w") as tf:
+        ti = tarfile.TarInfo("d/rg")
+        ti.type = tarfile.LNKTYPE
+        ti.linkname = "../secret"
+        tf.addfile(ti)
+    raised = False
+    try:
+        with tarfile.open(hl) as tf:
+            hp._safe_extract_tar(tf, os.path.join(td, "out"))
+    except hp.HomepkgError:
+        raised = True
+    check("_safe_extract_tar rejects escaping hard links", raised)
+
+# special files (FIFO/device) are rejected -- a FIFO named manifest.json would
+# otherwise block install_bundle when it opens the manifest.
+with tempfile.TemporaryDirectory() as td:
+    fifo = os.path.join(td, "fifo.tar")
+    with tarfile.open(fifo, "w") as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.type = tarfile.FIFOTYPE
+        tf.addfile(ti)
+    raised = False
+    try:
+        with tarfile.open(fifo) as tf:
+            hp._safe_extract_tar(tf, os.path.join(td, "out"))
+    except hp.HomepkgError:
+        raised = True
+    check("_safe_extract_tar rejects special files (FIFO)", raised)
+
+# install-bundle creates a fresh env but adds to an existing one, matching the
+# normal install path. _run_mamba/_link_bins are stubbed to stay offline.
+_bundle_cmds = []
+_saved_rm, _saved_lb = hp._run_mamba, hp._link_bins
+hp._run_mamba = lambda mm, prefix, args, dry: _bundle_cmds.append(args[0])
+hp._link_bins = lambda tools, prefix: None
+try:
+    with tempfile.TemporaryDirectory() as td:
+        bdir = os.path.join(td, "b")
+        os.makedirs(os.path.join(bdir, "pkgs"))
+        with open(os.path.join(bdir, "explicit.txt"), "w") as f:
+            f.write("@EXPLICIT\n")
+        open(os.path.join(bdir, "micromamba"), "w").close()
+        prefix = os.path.join(td, "prefix")  # no micromamba here yet
+        hp._install_bundle_mamba(bdir, {"tools": ["jq"]}, prefix, False)
+        check("install-bundle copies the bundled micromamba into the prefix",
+              os.path.exists(os.path.join(prefix, "bin", "micromamba")))
+        check("install-bundle creates a fresh env", _bundle_cmds[-1] == "create")
+        # A second bundle into the same env is refused -- an explicit lock must
+        # not be replayed additively over an existing env.
+        os.makedirs(os.path.join(hp.mamba_env(prefix), "conda-meta"))
+        raised = False
+        try:
+            hp._install_bundle_mamba(bdir, {"tools": ["jq"]}, prefix, False)
+        except hp.HomepkgError:
+            raised = True
+        check("install-bundle refuses to reuse an existing env", raised)
+finally:
+    hp._run_mamba, hp._link_bins = _saved_rm, _saved_lb
+
+# a tampered github-bundle manifest can't escape the prefix: asset/bin names
+# with .. or absolute paths are rejected.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "tool.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset), {"rg": b"#!/bin/sh\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": [{"tool": "ripgrep", "asset": asset, "bins": ["../evil"]}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    raised = False
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "prefix"), ("linux", "x86_64"), False)
+    except hp.HomepkgError:
+        raised = True
+    check("install-bundle rejects manifest bin names that escape the prefix", raised)
+
+check("bundle requires --output", _run("bundle", "jq").returncode != 0)
+check("bundle rejects the conda backend",
+      _run("--backend", "conda", "bundle", "-o", "/tmp/x.tgz", "jq").returncode != 0)
+check("install-bundle needs exactly one file", _run("install-bundle").returncode != 0)
+check("install-bundle rejects two files", _run("install-bundle", "a", "b").returncode != 0)
 
 print()
 print(f"{RUN} tests, {PASS} passed, {FAIL} failed")

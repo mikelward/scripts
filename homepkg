@@ -21,6 +21,11 @@ Usage:
     homepkg --backend conda|github install TOOL...
     homepkg list
 
+Push bundles (build on an online host, install on an air-gapped target):
+    homepkg bundle -o tools.tgz TOOL...            # online: solve + download
+    homepkg --backend github bundle -o t.tgz TOOL... # static-asset variant
+    homepkg install-bundle tools.tgz               # target: install offline
+
 Tool names are logical (ripgrep, fd, ...); the registry maps each to its conda
 package and GitHub repo.
 """
@@ -274,19 +279,63 @@ def _ensure_executable(path):
         os.chmod(path, 0o755)
 
 
+def _within(dest_real, path):
+    real = os.path.realpath(path)
+    return real == dest_real or real.startswith(dest_real + os.sep)
+
+
+def _require_basename(name, what):
+    """Reject manifest-supplied names that aren't a plain filename (absolute,
+    with directory components, or . / ..) -- a bundle can be tampered with."""
+    if not name or name in (".", "..") or name != os.path.basename(name):
+        raise HomepkgError(f"unsafe {what} in bundle: {name!r}")
+
+
+def _safe_extract_tar(tf, dest):
+    """extractall guarding against path traversal and unsafe links. Assets and
+    bundles come from other hosts, so treat their members as untrusted."""
+    dest_real = os.path.realpath(dest)
+    for m in tf.getmembers():
+        if not (m.isdir() or m.isfile() or m.issym() or m.islnk()):
+            raise HomepkgError(f"unsupported member type in archive: {m.name}")
+        if not _within(dest_real, os.path.join(dest, m.name)):
+            raise HomepkgError(f"unsafe path in archive: {m.name}")
+        # A symlink's target resolves relative to the link's own directory; a
+        # hard link's linkname resolves relative to the extraction root.
+        if m.issym():
+            link = os.path.join(dest, os.path.dirname(m.name), m.linkname)
+        elif m.islnk():
+            link = os.path.join(dest, m.linkname)
+        else:
+            continue
+        if not _within(dest_real, link):
+            raise HomepkgError(f"unsafe link in archive: {m.name} -> {m.linkname}")
+    tf.extractall(dest)
+
+
+def _safe_extract_zip(zf, dest):
+    dest_real = os.path.realpath(dest)
+    for name in zf.namelist():
+        if not _within(dest_real, os.path.join(dest, name)):
+            raise HomepkgError(f"unsafe path in archive: {name}")
+    zf.extractall(dest)
+
+
 def github_extract(asset_path, name, prefix, bins):
     """Unpack an asset and copy the wanted binaries into prefix/bin."""
+    for b in bins:
+        _require_basename(b, "binary name")
     bindir = os.path.join(prefix, "bin")
     os.makedirs(bindir, exist_ok=True)
     low = name.lower()
     if low.endswith((".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")):
+        root = os.path.join(os.path.dirname(asset_path), "x")
         with tarfile.open(asset_path) as tf:
-            tf.extractall(os.path.join(os.path.dirname(asset_path), "x"))
-        root = os.path.join(os.path.dirname(asset_path), "x")
+            _safe_extract_tar(tf, root)
     elif low.endswith(".zip"):
-        with zipfile.ZipFile(asset_path) as zf:
-            zf.extractall(os.path.join(os.path.dirname(asset_path), "x"))
         root = os.path.join(os.path.dirname(asset_path), "x")
+        with zipfile.ZipFile(asset_path) as zf:
+            _safe_extract_zip(zf, root)
     else:
         # Raw single binary (e.g. jq-linux-amd64): treat the asset as bins[0].
         dest = os.path.join(bindir, bins[0])
@@ -495,6 +544,200 @@ def remove_mamba(tools, prefix, plat, dry_run):
         _unlink_bins(tools, prefix)
 
 
+# --- push bundles ------------------------------------------------------------
+#
+# Build a self-contained bundle on an online host, copy it to an air-gapped
+# target, install offline. The mamba bundle carries the solved dependency
+# closure plus micromamba, so the target builds a correct env with no network.
+# The github bundle carries static release assets (smaller; self-contained
+# tools only). A bundle is a .tar.gz of manifest.json + a backend payload.
+
+def _write_bundle(out, srcdir):
+    with tarfile.open(out, "w:gz") as tf:
+        for name in sorted(os.listdir(srcdir)):
+            tf.add(os.path.join(srcdir, name), arcname=name)
+
+
+def _mamba_solve(mm, prefix, plat, pkgs):
+    """Solve the full dependency closure for the target platform and return
+    every package in the solved env. Reads the LINK set (the complete env), not
+    FETCH (only the not-yet-cached subset) -- otherwise a warm builder cache
+    drops cached packages from the bundle. Passes --platform so a cross-arch
+    bundle solves the requested subdir, not the builder's."""
+    import subprocess
+    out = subprocess.run(
+        [mm, "create", "--dry-run", "--json", "-p",
+         os.path.join(mamba_root(prefix), "_solve"),
+         "--platform", conda_subdir(*plat), *MAMBA_CHANNEL_ARGS, *pkgs],
+        env=_mamba_env_vars(prefix), stdout=subprocess.PIPE, check=True).stdout
+    link = json.loads(out).get("actions", {}).get("LINK", [])
+    packages = []
+    for rec in link:
+        url = rec.get("url") or f"{CONDA_CHANNEL}/{rec.get('subdir')}/{rec['fn']}"
+        packages.append({"fn": rec["fn"], "url": url,
+                         "md5": rec.get("md5"), "sha256": rec.get("sha256")})
+    return packages
+
+
+def _explicit_frag(entry):
+    # conda explicit files pin each url with a hash fragment; md5 is the widely
+    # supported form, sha256 the modern one. Omit if neither is present.
+    if entry.get("md5"):
+        return "#" + entry["md5"]
+    if entry.get("sha256"):
+        return "#sha256:" + entry["sha256"]
+    return ""
+
+
+def _fetch_micromamba_bin(plat, dest):
+    """Download+extract the micromamba binary for `plat` into <dest>/bin."""
+    index, base = conda_index(conda_subdir(*plat))
+    found = conda_resolve(index, "micromamba")
+    if not found:
+        raise HomepkgError(f"micromamba not on conda-forge for {conda_subdir(*plat)}")
+    fn, pmeta = found
+    with tempfile.TemporaryDirectory() as td:
+        pkg = download(f"{base}/{fn}", os.path.join(td, fn))
+        _verify_sha256("micromamba", pkg, pmeta.get("sha256"))
+        conda_extract(pkg, dest)
+    return os.path.join(dest, "bin", "micromamba")
+
+
+def bundle_mamba(tools, prefix, plat, out, dry_run):
+    # The solver must RUN on this builder, so use the builder's own micromamba;
+    # the bundle needs the TARGET arch's micromamba, which differs under --arch.
+    solver = ensure_micromamba(prefix, detect_platform(), dry_run)
+    pkgs = [TOOLS[t]["conda"] for t in tools]
+    info(f"solving closure for {', '.join(pkgs)} ({conda_subdir(*plat)})")
+    if dry_run:
+        info(f"  would solve, download the closure, and write {out}")
+        return
+    fetch = _mamba_solve(solver, prefix, plat, pkgs)
+    info(f"  {len(fetch)} packages in the closure")
+    with tempfile.TemporaryDirectory() as td:
+        pkgdir = os.path.join(td, "pkgs")
+        os.makedirs(pkgdir)
+        lines = ["@EXPLICIT"]
+        for f in fetch:
+            download(f["url"], os.path.join(pkgdir, f["fn"]))
+            lines.append(f["url"] + _explicit_frag(f))
+        with open(os.path.join(td, "explicit.txt"), "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        # Always ship the conda-forge micromamba for the target arch -- a
+        # static, self-contained binary. Never reuse the solver: it may be an
+        # arbitrary dynamically-linked micromamba from the builder's PATH that
+        # won't run on the air-gapped target.
+        with tempfile.TemporaryDirectory() as mmtmp:
+            shutil.copy2(_fetch_micromamba_bin(plat, mmtmp),
+                         os.path.join(td, "micromamba"))
+        with open(os.path.join(td, "manifest.json"), "w") as fh:
+            json.dump({"format": 1, "backend": "mamba",
+                       "platform": f"{plat[0]}/{plat[1]}", "tools": tools}, fh)
+        _write_bundle(out, td)
+    info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
+
+
+def bundle_github(tools, prefix, plat, out, dry_run):
+    tokens = github_asset_tokens(*plat)
+    info(f"collecting github assets for {', '.join(tools)}")
+    if dry_run:
+        info(f"  would download release assets and write {out}")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        adir = os.path.join(td, "assets")
+        os.makedirs(adir)
+        entries = []
+        for t in tools:
+            tag, assets = github_latest_assets(TOOLS[t]["github"])
+            picked = github_pick_asset(assets, tokens)
+            if not picked:
+                raise HomepkgError(f"{t}: no {plat[0]}/{plat[1]} asset in {TOOLS[t]['github']} {tag}")
+            name, url = picked
+            download(url, os.path.join(adir, name))
+            entries.append({"tool": t, "asset": name, "bins": TOOLS[t]["bins"]})
+        with open(os.path.join(td, "manifest.json"), "w") as fh:
+            json.dump({"format": 1, "backend": "github",
+                       "platform": f"{plat[0]}/{plat[1]}", "tools": entries}, fh)
+        _write_bundle(out, td)
+    info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
+
+
+def _localize_explicit(explicit_path, pkgs_dir):
+    """Rewrite the explicit lockfile's URLs to file:// paths in the bundle."""
+    out = []
+    for line in open(explicit_path):
+        line = line.rstrip("\n")
+        if line.startswith("http"):
+            url, _, frag = line.partition("#")
+            local = os.path.join(pkgs_dir, os.path.basename(url))
+            out.append("file://" + local + (("#" + frag) if frag else ""))
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def _install_bundle_mamba(td, manifest, prefix, dry_run):
+    env = mamba_env(prefix)
+    # A bundle's explicit lock is a complete env solved only for its own tools.
+    # Replaying it into an existing env would replace/downgrade shared deps and
+    # could break tools already there, so require a fresh env: bundle all tools
+    # together, or install into a clean prefix.
+    if os.path.isdir(os.path.join(env, "conda-meta")):
+        raise HomepkgError(
+            f"{env} already has a homepkg env; install-bundle needs a fresh env "
+            "(bundle all tools together, or use a different --prefix)")
+    # Use a prefix-owned micromamba only: an already-installed one here, else
+    # the static binary shipped in the bundle. Never an arbitrary PATH one,
+    # which may be wrong-arch, old, or dynamically linked.
+    mm = os.path.join(prefix, "bin", "micromamba")
+    if not os.path.exists(mm) and not dry_run:
+        os.makedirs(os.path.dirname(mm), exist_ok=True)
+        shutil.copy2(os.path.join(td, "micromamba"), mm)
+        _ensure_executable(mm)
+    offline = os.path.join(td, "offline.txt")
+    with open(offline, "w") as fh:
+        fh.write(_localize_explicit(os.path.join(td, "explicit.txt"),
+                                    os.path.join(td, "pkgs")))
+    info(f"installing {', '.join(manifest['tools'])} offline into {env}")
+    if dry_run:
+        info(f"  would run micromamba create --offline -p {env} --file {offline}")
+        return
+    _run_mamba(mm, prefix, ["create", "-y", "-p", env, "--offline",
+                            "--file", offline], False)
+    _link_bins(manifest["tools"], prefix)
+
+
+def _install_bundle_github(td, manifest, prefix, dry_run):
+    for e in manifest["tools"]:
+        _require_basename(e["asset"], "asset name")
+        info(f"{e['tool']}: {e['asset']}")
+        if dry_run:
+            continue
+        github_extract(os.path.join(td, "assets", e["asset"]),
+                       e["asset"], prefix, e["bins"])
+
+
+def install_bundle(bundle_file, prefix, plat, dry_run):
+    with tempfile.TemporaryDirectory() as td:
+        with tarfile.open(bundle_file) as tf:
+            _safe_extract_tar(tf, td)
+        manifest = json.load(open(os.path.join(td, "manifest.json")))
+        backend = manifest.get("backend")
+        want = f"{plat[0]}/{plat[1]}"
+        got = manifest.get("platform")
+        if got != want:
+            raise HomepkgError(
+                f"bundle is for {got}, but this host is {want} "
+                "(pass --arch to override)")
+        info(f"bundle: {backend}, platform {got}")
+        if backend == "mamba":
+            _install_bundle_mamba(td, manifest, prefix, dry_run)
+        elif backend == "github":
+            _install_bundle_github(td, manifest, prefix, dry_run)
+        else:
+            raise HomepkgError(f"unknown bundle backend: {backend}")
+
+
 # --- CLI ---------------------------------------------------------------------
 
 def _resolve_plat(p, arch):
@@ -526,10 +769,21 @@ def main(argv=None):
                    help="override platform as OS/ARCH, e.g. linux/x86_64")
     p.add_argument("--dry-run", action="store_true",
                    help="resolve and report, but don't download or install")
+    p.add_argument("-o", "--output", default=None,
+                   help="output file for 'bundle'")
     p.add_argument("command",
-                   choices=["install", "update", "remove", "bootstrap", "list"])
-    p.add_argument("tools", nargs="*", help="logical tool names (see 'list')")
-    args = p.parse_args(argv)
+                   choices=["install", "update", "remove", "bootstrap", "list",
+                            "bundle", "install-bundle"])
+    p.add_argument("tools", nargs="*",
+                   help="logical tool names, or the bundle file for install-bundle")
+    # parse_intermixed_args so options can appear after the command, e.g.
+    # `homepkg bundle -o out.tgz jq` (a plain parse_args mis-binds the trailing
+    # positional when an option splits it from the command). Added in 3.7; on
+    # 3.6 fall back to parse_args (put options before the command there).
+    if hasattr(p, "parse_intermixed_args"):
+        args = p.parse_intermixed_args(argv)
+    else:
+        args = p.parse_args(argv)
 
     if args.command == "list":
         for name in sorted(TOOLS):
@@ -540,6 +794,36 @@ def main(argv=None):
     if args.command == "bootstrap":
         try:
             bootstrap_micromamba(args.prefix, _resolve_plat(p, args.arch), args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+
+    # install-bundle takes a bundle file path (not a tool name), so handle it
+    # before the tool-name resolution below.
+    if args.command == "install-bundle":
+        if len(args.tools) != 1:
+            p.error("install-bundle takes exactly one bundle file")
+        try:
+            install_bundle(args.tools[0], args.prefix,
+                           _resolve_plat(p, args.arch), args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+
+    if args.command == "bundle":
+        if not args.output:
+            p.error("bundle requires -o/--output FILE")
+        if not args.tools:
+            p.error("bundle requires at least one tool")
+        if args.backend == "conda":
+            p.error("bundle supports --backend mamba (default) or github, not conda")
+        _require_known(p, args.tools)
+        plat = _resolve_plat(p, args.arch)
+        try:
+            builder = bundle_github if args.backend == "github" else bundle_mamba
+            builder(args.tools, args.prefix, plat, args.output, args.dry_run)
         except Exception as e:
             warn(str(e))
             return 1

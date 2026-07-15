@@ -54,6 +54,25 @@ payloads (and the channel index) need zstd (the python `zstandard` module or
 a `zstd`/`unzstd` CLI; the code falls back to the uncompressed index). The
 GitHub backend needs neither.
 
+### Push bundles (air-gapped installs)
+
+Build a self-contained bundle on an online host, copy it to a machine with no
+internet, and install offline:
+
+```sh
+# online builder
+homepkg bundle -o tools.tgz ripgrep fd jq     # solve closure + micromamba
+homepkg --backend github bundle -o tools.tgz ripgrep fd jq   # static-asset variant
+
+# air-gapped target (no network)
+homepkg install-bundle tools.tgz
+```
+
+The default (`mamba`) bundle carries the full dependency closure plus the
+micromamba binary, so the target builds a correct environment with no network
+and micromamba relocates it into the target's prefix. The `github` variant
+carries static release assets — smaller, but only for self-contained tools.
+
 ## Third-party code
 
 This repository vendors [pidcat](https://github.com/JakeWharton/pidcat)
