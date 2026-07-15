@@ -292,25 +292,24 @@ def _require_basename(name, what):
 
 
 def _safe_extract_tar(tf, dest):
-    """extractall guarding against path traversal and unsafe links. Assets and
-    bundles come from other hosts, so treat their members as untrusted."""
+    """Extract a tar treating members as untrusted. Only directories and
+    regular files are created, each validated to stay within dest; special
+    files are rejected and links are skipped -- never materialized. Members are
+    extracted one-by-one, so no symlink is ever created for a later member to
+    traverse through (the validate-then-extractall path-traversal). Our bundles
+    contain no links; release tarballs may, but we only need their binaries."""
     dest_real = os.path.realpath(dest)
     for m in tf.getmembers():
-        if not (m.isdir() or m.isfile() or m.issym() or m.islnk()):
+        if m.issym() or m.islnk():
+            continue  # never materialize a link from an untrusted archive
+        if not (m.isdir() or m.isfile()):
             raise HomepkgError(f"unsupported member type in archive: {m.name}")
-        if not _within(dest_real, os.path.join(dest, m.name)):
+        # Reject absolute paths and any '..' component outright (clean archives
+        # have neither), then belt-and-suspenders check the resolved path.
+        if (os.path.isabs(m.name) or ".." in m.name.split("/")
+                or not _within(dest_real, os.path.join(dest, m.name))):
             raise HomepkgError(f"unsafe path in archive: {m.name}")
-        # A symlink's target resolves relative to the link's own directory; a
-        # hard link's linkname resolves relative to the extraction root.
-        if m.issym():
-            link = os.path.join(dest, os.path.dirname(m.name), m.linkname)
-        elif m.islnk():
-            link = os.path.join(dest, m.linkname)
-        else:
-            continue
-        if not _within(dest_real, link):
-            raise HomepkgError(f"unsafe link in archive: {m.name} -> {m.linkname}")
-    tf.extractall(dest)
+        tf.extract(m, dest)
 
 
 def _safe_extract_zip(zf, dest):
