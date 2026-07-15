@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""homepkg -- install prebuilt CLI tools into a home prefix, no root.
+
+For machines where apt/dnf need root: fetch prebuilt binaries and unpack them
+into a home prefix (default ~/.local), which the conf repo already puts on
+PATH. Two backends:
+
+  conda   conda-forge packages from conda.anaconda.org -- one host, uniform
+          across every tool, sha256-verified (the default)
+  github  release assets from each tool's GitHub repo
+
+Usage:
+    homepkg [--backend conda|github] [--prefix DIR] [--arch TRIPLE]
+            [--dry-run] install TOOL...
+    homepkg list
+
+`list` prints the known tools. Tool names are logical (ripgrep, fd, ...); the
+registry maps each to its conda package and GitHub repo.
+"""
+
+import argparse
+import hashlib
+import io
+import json
+import os
+import platform
+import shutil
+import sys
+import tarfile
+import tempfile
+import urllib.request
+import zipfile
+
+# --- Tool registry -----------------------------------------------------------
+#
+# conda:  conda-forge package name (verified against current_repodata).
+# github: "owner/repo" for the release backend.
+# bins:   binary basenames to expose on PATH (default: the tool name). A conda
+#         package is unpacked whole (bin/lib/share); for github we locate these
+#         names in the extracted asset.
+TOOLS = {
+    "ripgrep": {"conda": "ripgrep",   "github": "BurntSushi/ripgrep", "bins": ["rg"]},
+    "fd":      {"conda": "fd",         "github": "sharkdp/fd",         "bins": ["fd"]},
+    "bat":     {"conda": "bat",        "github": "sharkdp/bat",        "bins": ["bat"]},
+    "fzf":     {"conda": "fzf",        "github": "junegunn/fzf",       "bins": ["fzf"]},
+    "jq":      {"conda": "jq",         "github": "jqlang/jq",          "bins": ["jq"]},
+    "delta":   {"conda": "git-delta",  "github": "dandavison/delta",   "bins": ["delta"]},
+    "gh":      {"conda": "gh",         "github": "cli/cli",            "bins": ["gh"]},
+    "helix":   {"conda": "helix",      "github": "helix-editor/helix", "bins": ["hx"]},
+    "jj":      {"conda": "jujutsu",    "github": "jj-vcs/jj",          "bins": ["jj"]},
+    "nu":      {"conda": "nushell",    "github": "nushell/nushell",    "bins": ["nu"]},
+}
+
+
+def info(msg):
+    print(msg, file=sys.stderr)
+
+
+def warn(msg):
+    print("Warning: " + msg, file=sys.stderr)
+
+
+class HomepkgError(Exception):
+    pass
+
+
+# --- Platform ----------------------------------------------------------------
+
+def detect_platform():
+    """Return (os, arch) normalised: os in {linux, macos}, arch in
+    {x86_64, aarch64}."""
+    sysname = platform.system()
+    osname = {"Linux": "linux", "Darwin": "macos"}.get(sysname)
+    if osname is None:
+        raise HomepkgError(f"unsupported OS: {sysname}")
+    machine = platform.machine().lower()
+    arch = {
+        "x86_64": "x86_64", "amd64": "x86_64",
+        "aarch64": "aarch64", "arm64": "aarch64",
+    }.get(machine)
+    if arch is None:
+        raise HomepkgError(f"unsupported architecture: {machine}")
+    return osname, arch
+
+
+def conda_subdir(osname, arch):
+    return {
+        ("linux", "x86_64"): "linux-64",
+        ("linux", "aarch64"): "linux-aarch64",
+        ("macos", "x86_64"): "osx-64",
+        ("macos", "aarch64"): "osx-arm64",
+    }[(osname, arch)]
+
+
+# Tokens used to pick a GitHub release asset for this platform. Ordered by
+# preference (first match wins), so a musl build beats gnu on Linux.
+def github_asset_tokens(osname, arch):
+    if osname == "linux":
+        archtok = ["x86_64", "amd64"] if arch == "x86_64" else ["aarch64", "arm64"]
+        return {"os": ["linux", "unknown-linux"], "arch": archtok,
+                "prefer": ["musl", "gnu"]}
+    archtok = ["x86_64", "amd64"] if arch == "x86_64" else ["aarch64", "arm64"]
+    return {"os": ["apple-darwin", "darwin", "macos", "apple"], "arch": archtok,
+            "prefer": ["", ""]}
+
+
+# --- HTTP --------------------------------------------------------------------
+
+def http_get(url, accept=None):
+    req = urllib.request.Request(url, headers={"User-Agent": "homepkg"})
+    if accept:
+        req.add_header("Accept", accept)
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        return resp.read()
+
+
+def download(url, dest):
+    info(f"  downloading {url}")
+    data = http_get(url)
+    with open(dest, "wb") as f:
+        f.write(data)
+    return dest
+
+
+# --- zstd (for conda .zst payloads) -----------------------------------------
+
+def zstd_decompress(data, max_output_size):
+    """Decompress zstd via the zstandard module or a zstd/unzstd CLI."""
+    try:
+        import zstandard
+        return zstandard.ZstdDecompressor().decompress(
+            data, max_output_size=max_output_size)
+    except ImportError:
+        pass
+    for exe in ("zstd", "unzstd"):
+        if shutil.which(exe):
+            import subprocess
+            return subprocess.run(
+                [exe, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
+    raise HomepkgError(
+        "zstd support is required for conda packages: install the python "
+        "'zstandard' module or the 'zstd' CLI, or use --backend github")
+
+
+# --- conda backend -----------------------------------------------------------
+
+CONDA_CHANNEL = "https://conda.anaconda.org/conda-forge"
+
+
+def conda_index(subdir):
+    """Fetch current_repodata for a subdir (latest build of each package)."""
+    base = f"{CONDA_CHANNEL}/{subdir}"
+    try:
+        raw = http_get(f"{base}/current_repodata.json.zst")
+        raw = zstd_decompress(raw, 400_000_000)
+    except Exception:
+        # Fall back to the uncompressed index (no zstd needed to *read* it).
+        raw = http_get(f"{base}/current_repodata.json")
+    return json.loads(raw), base
+
+
+def _version_key(v):
+    parts = []
+    for tok in v.replace("-", ".").split("."):
+        parts.append((1, int(tok)) if tok.isdigit() else (0, tok))
+    return parts
+
+
+def conda_resolve(index, pkg):
+    """Return (filename, meta) for the newest build of pkg, or None."""
+    best = None
+    for key in ("packages", "packages.conda"):
+        for fn, meta in index.get(key, {}).items():
+            if meta.get("name") != pkg:
+                continue
+            rank = (_version_key(meta["version"]), meta.get("build_number", 0))
+            if best is None or rank > best[0]:
+                best = (rank, fn, meta)
+    return (best[1], best[2]) if best else None
+
+
+def conda_extract(pkg_path, prefix):
+    """Unpack a .conda or .tar.bz2 package into prefix, skipping info/."""
+    installed = []
+    if pkg_path.endswith(".conda"):
+        with zipfile.ZipFile(pkg_path) as zf:
+            inner = next(n for n in zf.namelist()
+                         if n.startswith("pkg-") and n.endswith(".tar.zst"))
+            tar_bytes = zstd_decompress(zf.read(inner), 500_000_000)
+        tf = tarfile.open(fileobj=io.BytesIO(tar_bytes))
+    else:  # .tar.bz2
+        tf = tarfile.open(pkg_path, "r:bz2")
+    with tf:
+        for m in tf.getmembers():
+            if m.name.startswith("info/") or not (m.isfile() or m.issym()):
+                continue
+            tf.extract(m, path=prefix)
+            installed.append(m.name)
+    return installed
+
+
+def install_conda(tool, meta, prefix, plat, dry_run):
+    pkg = meta["conda"]
+    subdir = conda_subdir(*plat)
+    index, base = conda_index(subdir)
+    found = conda_resolve(index, pkg)
+    if not found:
+        raise HomepkgError(f"{tool}: conda-forge package '{pkg}' not found for {subdir}")
+    fn, pmeta = found
+    url = f"{base}/{fn}"
+    info(f"{tool}: conda-forge {pkg} {pmeta['version']} ({subdir})")
+    if dry_run:
+        info(f"  would install from {url}")
+        return
+    os.makedirs(prefix, exist_ok=True)
+    with tempfile.TemporaryDirectory() as td:
+        pkg_path = download(url, os.path.join(td, fn))
+        want = pmeta.get("sha256")
+        if want:
+            got = hashlib.sha256(open(pkg_path, "rb").read()).hexdigest()
+            if got != want:
+                raise HomepkgError(f"{tool}: sha256 mismatch ({got} != {want})")
+        else:
+            warn(f"{tool}: no sha256 in index; skipping verification")
+        conda_extract(pkg_path, prefix)
+    for b in meta["bins"]:
+        _ensure_executable(os.path.join(prefix, "bin", b))
+    info(f"  installed {', '.join(meta['bins'])} into {prefix}/bin")
+
+
+# --- github backend ----------------------------------------------------------
+
+def github_latest_assets(repo):
+    data = json.loads(http_get(
+        f"https://api.github.com/repos/{repo}/releases/latest",
+        accept="application/vnd.github+json"))
+    return data.get("tag_name", "?"), [
+        (a["name"], a["browser_download_url"]) for a in data.get("assets", [])]
+
+
+def github_pick_asset(assets, tokens):
+    """Choose the best asset for this platform from (name, url) pairs."""
+    def score(name):
+        low = name.lower()
+        if not any(t in low for t in tokens["arch"]):
+            return None
+        if tokens["os"] and not any(t in low for t in tokens["os"]):
+            return None
+        # Skip checksums/signatures/source archives.
+        if any(low.endswith(x) for x in (".sha256", ".asc", ".sig", ".txt", ".sbom")):
+            return None
+        s = 0
+        for i, pref in enumerate(tokens["prefer"]):
+            if pref and pref in low:
+                s = len(tokens["prefer"]) - i
+        return s
+    best = None
+    for name, url in assets:
+        sc = score(name)
+        if sc is not None and (best is None or sc > best[0]):
+            best = (sc, name, url)
+    return (best[1], best[2]) if best else None
+
+
+def _ensure_executable(path):
+    if os.path.exists(path):
+        os.chmod(path, 0o755)
+
+
+def github_extract(asset_path, name, prefix, bins):
+    """Unpack an asset and copy the wanted binaries into prefix/bin."""
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir, exist_ok=True)
+    low = name.lower()
+    if low.endswith((".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")):
+        with tarfile.open(asset_path) as tf:
+            tf.extractall(os.path.join(os.path.dirname(asset_path), "x"))
+        root = os.path.join(os.path.dirname(asset_path), "x")
+    elif low.endswith(".zip"):
+        with zipfile.ZipFile(asset_path) as zf:
+            zf.extractall(os.path.join(os.path.dirname(asset_path), "x"))
+        root = os.path.join(os.path.dirname(asset_path), "x")
+    else:
+        # Raw single binary (e.g. jq-linux-amd64): treat the asset as bins[0].
+        dest = os.path.join(bindir, bins[0])
+        shutil.copy2(asset_path, dest)
+        _ensure_executable(dest)
+        return [bins[0]]
+    placed = []
+    for b in bins:
+        src = _find_file(root, b)
+        if src is None:
+            warn(f"binary '{b}' not found in {name}")
+            continue
+        dest = os.path.join(bindir, b)
+        shutil.copy2(src, dest)
+        _ensure_executable(dest)
+        placed.append(b)
+    return placed
+
+
+def _find_file(root, name):
+    for dirpath, _dirs, files in os.walk(root):
+        if name in files:
+            return os.path.join(dirpath, name)
+    return None
+
+
+def install_github(tool, meta, prefix, plat, dry_run):
+    repo = meta["github"]
+    tokens = github_asset_tokens(*plat)
+    tag, assets = github_latest_assets(repo)
+    picked = github_pick_asset(assets, tokens)
+    if not picked:
+        raise HomepkgError(f"{tool}: no matching {plat[0]}/{plat[1]} asset in {repo} {tag}")
+    name, url = picked
+    info(f"{tool}: github {repo} {tag} -> {name}")
+    if dry_run:
+        info(f"  would install from {url}")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        asset_path = download(url, os.path.join(td, name))
+        placed = github_extract(asset_path, name, prefix, meta["bins"])
+    info(f"  installed {', '.join(placed)} into {prefix}/bin")
+
+
+BACKENDS = {"conda": install_conda, "github": install_github}
+
+
+# --- CLI ---------------------------------------------------------------------
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="homepkg", add_help=True,
+                                description="Install prebuilt CLI tools into a home prefix.")
+    p.add_argument("--backend", choices=sorted(BACKENDS), default="conda",
+                   help="where to fetch prebuilt binaries (default: conda)")
+    p.add_argument("--prefix", default=os.path.expanduser("~/.local"),
+                   help="install prefix (default: ~/.local)")
+    p.add_argument("--arch", default=None,
+                   help="override platform as OS/ARCH, e.g. linux/x86_64")
+    p.add_argument("--dry-run", action="store_true",
+                   help="resolve and report, but don't download or install")
+    p.add_argument("command", choices=["install", "list"])
+    p.add_argument("tools", nargs="*", help="logical tool names (see 'list')")
+    args = p.parse_args(argv)
+
+    if args.command == "list":
+        for name in sorted(TOOLS):
+            m = TOOLS[name]
+            print(f"{name:10} conda={m['conda']:12} github={m['github']}")
+        return 0
+
+    if not args.tools:
+        p.error("install requires at least one tool")
+    if args.arch:
+        try:
+            plat = tuple(args.arch.split("/", 1))
+            assert len(plat) == 2
+        except Exception:
+            p.error("--arch must be OS/ARCH, e.g. linux/x86_64")
+    else:
+        plat = detect_platform()
+
+    unknown = [t for t in args.tools if t not in TOOLS]
+    if unknown:
+        p.error(f"unknown tool(s): {', '.join(unknown)} (see 'homepkg list')")
+
+    install = BACKENDS[args.backend]
+    failed = []
+    for tool in args.tools:
+        try:
+            install(tool, TOOLS[tool], args.prefix, plat, args.dry_run)
+        except HomepkgError as e:
+            warn(str(e))
+            failed.append(tool)
+        except Exception as e:  # network, extraction, ...
+            warn(f"{tool}: {e}")
+            failed.append(tool)
+    if failed:
+        warn(f"failed: {', '.join(failed)}")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

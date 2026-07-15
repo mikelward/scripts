@@ -11,6 +11,7 @@ test:
 	./mdf_test
 	./pa_test
 	./package_test
+	./homepkg_test
 	./gittossh_test
 	./runenv_test
 	./setup_test

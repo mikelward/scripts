@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Tests for homepkg.
+
+Offline unit tests for the pure logic -- platform mapping, conda version
+resolution, GitHub asset selection, and archive extraction -- plus a few CLI
+argument-parsing checks. The network-dependent install paths are exercised
+manually (conda against conda.anaconda.org); here we drive extraction with
+locally built archives so the suite needs no network.
+"""
+
+import io
+import os
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+# Load the extensionless homepkg script as a module without running main().
+_here = os.path.dirname(os.path.abspath(__file__))
+_hp_path = os.path.join(_here, "homepkg")
+hp = type(sys)("homepkg")
+hp.__dict__["__name__"] = "homepkg"
+exec(compile(open(_hp_path).read(), _hp_path, "exec"), hp.__dict__)
+
+RUN = PASS = FAIL = 0
+
+
+def check(name, cond):
+    global RUN, PASS, FAIL
+    RUN += 1
+    if cond:
+        PASS += 1
+        print(f"ok {RUN} - {name}")
+    else:
+        FAIL += 1
+        print(f"not ok {RUN} - {name}")
+
+
+# --- platform / subdir -------------------------------------------------------
+
+check("conda_subdir linux x86_64", hp.conda_subdir("linux", "x86_64") == "linux-64")
+check("conda_subdir macos aarch64", hp.conda_subdir("macos", "aarch64") == "osx-arm64")
+
+# --- conda version resolution ------------------------------------------------
+
+check("version_key orders numerically",
+      hp._version_key("15.1.0") > hp._version_key("9.2.0"))
+
+_index = {
+    "packages": {
+        "ripgrep-13.0.0-0.tar.bz2": {"name": "ripgrep", "version": "13.0.0", "build_number": 0},
+    },
+    "packages.conda": {
+        "ripgrep-14.1.0-0.conda": {"name": "ripgrep", "version": "14.1.0", "build_number": 0},
+        "ripgrep-14.1.0-1.conda": {"name": "ripgrep", "version": "14.1.0", "build_number": 1},
+        "other-1.0-0.conda": {"name": "other", "version": "1.0", "build_number": 0},
+    },
+}
+_r = hp.conda_resolve(_index, "ripgrep")
+check("conda_resolve picks newest version+build", _r is not None and _r[0] == "ripgrep-14.1.0-1.conda")
+check("conda_resolve returns None for unknown pkg", hp.conda_resolve(_index, "nope") is None)
+
+# --- github asset selection --------------------------------------------------
+
+_linux = hp.github_asset_tokens("linux", "x86_64")
+_assets = [
+    ("rg-14.1.0-x86_64-unknown-linux-gnu.tar.gz", "u1"),
+    ("rg-14.1.0-x86_64-unknown-linux-musl.tar.gz", "u2"),
+    ("rg-14.1.0-aarch64-unknown-linux-gnu.tar.gz", "u3"),
+    ("rg-14.1.0-x86_64-apple-darwin.tar.gz", "u4"),
+    ("rg-14.1.0-x86_64-unknown-linux-musl.tar.gz.sha256", "u5"),
+]
+_pick = hp.github_pick_asset(_assets, _linux)
+check("github_pick_asset prefers musl on linux", _pick is not None and _pick[1] == "u2")
+check("github_pick_asset skips .sha256", _pick[0].endswith(".tar.gz"))
+
+_mac = hp.github_asset_tokens("macos", "aarch64")
+_pick_mac = hp.github_pick_asset(_assets + [
+    ("rg-14.1.0-aarch64-apple-darwin.tar.gz", "m1")], _mac)
+check("github_pick_asset picks macos arm64", _pick_mac is not None and _pick_mac[1] == "m1")
+
+_jq = [("jq-linux-amd64", "j1"), ("jq-macos-arm64", "j2"), ("jq-windows-amd64.exe", "j3")]
+_pick_jq = hp.github_pick_asset(_jq, _linux)
+check("github_pick_asset matches single-binary amd64", _pick_jq is not None and _pick_jq[1] == "j1")
+
+check("github_pick_asset returns None when nothing matches",
+      hp.github_pick_asset([("tool-win.zip", "x")], _linux) is None)
+
+# --- github extraction -------------------------------------------------------
+
+def _make_targz(path, members):
+    with tarfile.open(path, "w:gz") as tf:
+        for arcname, data in members.items():
+            ti = tarfile.TarInfo(arcname)
+            ti.size = len(data)
+            ti.mode = 0o755
+            tf.addfile(ti, io.BytesIO(data))
+
+
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "rg-x86_64-unknown-linux-musl.tar.gz")
+    _make_targz(asset, {"ripgrep-14.1.0-x86_64/rg": b"#!/bin/sh\necho rg\n",
+                        "ripgrep-14.1.0-x86_64/doc/rg.1": b"man page"})
+    placed = hp.github_extract(asset, os.path.basename(asset), prefix, ["rg"])
+    rg = os.path.join(prefix, "bin", "rg")
+    check("github_extract places binary from tar.gz subdir", placed == ["rg"] and os.path.exists(rg))
+    check("github_extract makes the binary executable", os.access(rg, os.X_OK))
+
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "jq-linux-amd64")
+    with open(asset, "wb") as f:
+        f.write(b"#!/bin/sh\necho jq\n")
+    placed = hp.github_extract(asset, os.path.basename(asset), prefix, ["jq"])
+    jq = os.path.join(prefix, "bin", "jq")
+    check("github_extract treats a raw asset as the binary", placed == ["jq"] and os.access(jq, os.X_OK))
+
+# --- conda extraction (.tar.bz2, no zstd needed) -----------------------------
+
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(prefix)
+    pkg = os.path.join(td, "foo-1.0-0.tar.bz2")
+    with tarfile.open(pkg, "w:bz2") as tf:
+        for arcname, data in {"bin/foo": b"#!/bin/sh\necho foo\n",
+                              "info/index.json": b"{}"}.items():
+            ti = tarfile.TarInfo(arcname)
+            ti.size = len(data)
+            ti.mode = 0o755
+            tf.addfile(ti, io.BytesIO(data))
+    installed = hp.conda_extract(pkg, prefix)
+    check("conda_extract unpacks bin/", os.path.exists(os.path.join(prefix, "bin", "foo")))
+    check("conda_extract skips info/", "info/index.json" not in installed
+          and not os.path.exists(os.path.join(prefix, "info")))
+
+# --- CLI argument parsing ----------------------------------------------------
+
+def _run(*args):
+    return subprocess.run([sys.executable, _hp_path, *args],
+                          capture_output=True, text=True)
+
+_list = _run("list")
+check("list exits 0", _list.returncode == 0)
+check("list shows every registered tool",
+      all(t in _list.stdout for t in hp.TOOLS))
+
+check("unknown tool errors", _run("install", "bogustool").returncode != 0)
+check("install with no tools errors", _run("install").returncode != 0)
+check("bad --arch errors", _run("--arch", "weird", "install", "jq").returncode != 0)
+check("dry-run unknown backend errors", _run("--backend", "apt", "install", "jq").returncode != 0)
+
+print()
+print(f"{RUN} tests, {PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)
