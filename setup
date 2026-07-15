@@ -871,7 +871,9 @@ install_nushell() {
 install_uv() {
     if command -v uv >/dev/null 2>&1; then
         info "Updating uv"
-        uv self update
+        # uv self update reruns the installer, which edits the shell rc/profile
+        # files unless UV_NO_MODIFY_PATH is set; PATH is managed by the conf repo.
+        UV_NO_MODIFY_PATH=1 uv self update
     else
         info "Installing uv"
         # --no-modify-path keeps the uv installer out of the shell rc/profile

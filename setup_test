@@ -296,11 +296,14 @@ test_rust_installs_without_modifying_path() {
 
 # --- uv ---
 
-# The uv installer also edits shell rc/profile files by default. --no-modify-path
-# keeps it out of them; the conf repo already has ~/.local/bin on PATH.
+# The uv installer edits shell rc/profile files by default. --no-modify-path
+# keeps the fresh install out of them; the conf repo already has ~/.local/bin
+# on PATH. `uv self update` reruns the installer on the update path, so it needs
+# UV_NO_MODIFY_PATH=1 to stay out of the config files too.
 test_uv_installs_without_modifying_path() {
     assert_source_contains "uv/install.sh | sh -s -- --no-modify-path" &&
-    assert_source_not_contains "uv/install.sh | sh$"
+    assert_source_not_contains "uv/install.sh | sh$" &&
+    assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update"
 }
 
 # --- SSH key ---
