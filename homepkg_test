@@ -324,22 +324,48 @@ with tempfile.TemporaryDirectory() as td:
         raised = True
     check("install-bundle rejects path-traversal members", raised)
 
-# hard-link linkname resolves relative to the extraction root (not the member's
-# dir), so a d/rg hardlink to ../secret must also be rejected.
+# Links are never materialized -- a sym/hard link member is skipped entirely.
 with tempfile.TemporaryDirectory() as td:
-    hl = os.path.join(td, "hl.tar")
-    with tarfile.open(hl, "w") as tf:
-        ti = tarfile.TarInfo("d/rg")
-        ti.type = tarfile.LNKTYPE
-        ti.linkname = "../secret"
-        tf.addfile(ti)
+    lt = os.path.join(td, "l.tar")
+    with tarfile.open(lt, "w") as tf:
+        s = tarfile.TarInfo("slink")
+        s.type = tarfile.SYMTYPE
+        s.linkname = "/etc/passwd"
+        tf.addfile(s)
+        h = tarfile.TarInfo("hlink")
+        h.type = tarfile.LNKTYPE
+        h.linkname = "../secret"
+        tf.addfile(h)
+    out = os.path.join(td, "out")
+    with tarfile.open(lt) as tf:
+        hp._safe_extract_tar(tf, out)
+    check("_safe_extract_tar skips link members",
+          not os.path.lexists(os.path.join(out, "slink"))
+          and not os.path.lexists(os.path.join(out, "hlink")))
+
+# The validate-then-extractall traversal: a symlink `safe/link -> ..` followed
+# by a file `safe/link/../pwn`. The symlink is skipped and the file member is
+# rejected (it has a `..` component), so nothing escapes.
+with tempfile.TemporaryDirectory() as td:
+    toc = os.path.join(td, "toctou.tar")
+    with tarfile.open(toc, "w") as tf:
+        s = tarfile.TarInfo("safe/link")
+        s.type = tarfile.SYMTYPE
+        s.linkname = ".."
+        tf.addfile(s)
+        data = b"pwn"
+        f = tarfile.TarInfo("safe/link/../pwn")
+        f.size = len(data)
+        tf.addfile(f, io.BytesIO(data))
+    out = os.path.join(td, "out")
     raised = False
     try:
-        with tarfile.open(hl) as tf:
-            hp._safe_extract_tar(tf, os.path.join(td, "out"))
+        with tarfile.open(toc) as tf:
+            hp._safe_extract_tar(tf, out)
     except hp.HomepkgError:
         raised = True
-    check("_safe_extract_tar rejects escaping hard links", raised)
+    check("_safe_extract_tar can't escape via a symlinked component",
+          raised and not os.path.exists(os.path.join(td, "pwn")))
 
 # special files (FIFO/device) are rejected -- a FIFO named manifest.json would
 # otherwise block install_bundle when it opens the manifest.
