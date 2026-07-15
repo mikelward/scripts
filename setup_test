@@ -306,6 +306,70 @@ test_uv_installs_without_modifying_path() {
     assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update"
 }
 
+# --- Homebrew extras backend ---
+
+# The heavyweight extras (helix, jj, shpool, nushell) can install from Homebrew
+# bottles instead of building from source. --brew / --cargo pick the backend,
+# resolved via EXTRAS_BACKEND, and install_extras dispatches to it.
+test_extras_backend_flags() {
+    assert_source_contains '[-]-brew)' &&
+    assert_source_contains '[-]-cargo)' &&
+    assert_source_contains "EXTRAS_BACKEND" &&
+    assert_source_contains "resolve_extras" &&
+    assert_source_contains "install_extras"
+}
+
+# The brew path installs helix/jj/nushell from homebrew-core, each on its own
+# so one failure doesn't block the rest.
+test_extras_brew_formulae() {
+    assert_source_contains 'for formula in helix jj nushell' &&
+    assert_source_contains 'brew install "$formula"'
+}
+
+# The shell-pool/shpool tap has no bottle (source-only), which would defeat
+# the brew path, so shpool is omitted from the brew extras with a TODO to add
+# it back. It still installs on the cargo path via install_shpool.
+test_shpool_omitted_from_brew_with_todo() {
+    assert_source_not_contains "shell-pool/shpool/shpool" &&
+    assert_source_contains "re-add shpool" &&
+    assert_source_contains "install_shpool"
+}
+
+# When Homebrew can't be made available, the brew path falls back to building
+# the extras from source with cargo/rustup.
+test_extras_brew_falls_back_to_cargo() {
+    assert_source_contains "install_extras_cargo" &&
+    assert_source_contains "Homebrew unavailable; building the extras from source"
+}
+
+# install_homebrew handles the Linuxbrew prefixes too, not just the macOS
+# ones, so the brew path works on Linux.
+test_homebrew_handles_linux_prefix() {
+    assert_source_contains "/home/linuxbrew/.linuxbrew/bin/brew" &&
+    assert_source_contains '$HOME/.linuxbrew/bin/brew'
+}
+
+# Switching cargo -> brew leaves ~/.config/helix/runtime pointing at the
+# source checkout, which hx searches before the bottle's runtime. The brew
+# path removes that stale symlink (only the one install_helix created).
+test_brew_clears_stale_helix_runtime() {
+    assert_source_contains 'helix_runtime=' &&
+    assert_source_contains 'readlink "$helix_runtime"' &&
+    assert_source_contains "Removing stale Helix runtime symlink" &&
+    # Removal is gated on brew actually installing helix, so a failed helix
+    # install doesn't strip a prior cargo hx's runtime.
+    assert_source_contains 'helix_installed=yes' &&
+    assert_source_contains 'test "$helix_installed" = yes'
+}
+
+# The brew path skips the Rust toolchain, so the root-config install falls
+# back to the legacy build. That downgrade must be logged explicitly (with the
+# remedy), not silent.
+test_legacy_root_config_is_logged() {
+    assert_source_contains "installing the legacy root config" &&
+    assert_source_contains "for the primary Rust root config"
+}
+
 # --- SSH key ---
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
@@ -367,6 +431,20 @@ run_test "--ssh overrides the existing-key skip" \
     test_ssh_flag_overrides_existing_key_check
 run_test "setup offers to switch repo remotes to SSH" \
     test_offers_ssh_remote_switch
+run_test "--brew/--cargo select the extras backend" \
+    test_extras_backend_flags
+run_test "brew extras install helix/jj/nushell per formula" \
+    test_extras_brew_formulae
+run_test "shpool is omitted from the brew path with a TODO" \
+    test_shpool_omitted_from_brew_with_todo
+run_test "brew extras fall back to cargo when Homebrew is unavailable" \
+    test_extras_brew_falls_back_to_cargo
+run_test "install_homebrew handles the Linuxbrew prefixes" \
+    test_homebrew_handles_linux_prefix
+run_test "brew path clears the stale cargo Helix runtime symlink" \
+    test_brew_clears_stale_helix_runtime
+run_test "legacy root config fallback is logged with the remedy" \
+    test_legacy_root_config_is_logged
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
