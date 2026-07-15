@@ -1034,6 +1034,32 @@ install_extras() {
     install_extras_cargo
 }
 
+# --- Install CLI tools into a home prefix (no sudo) ---
+
+# Under --no-sudo the apt/dnf package installs are skipped, so the CLI tools
+# they'd provide have to come from somewhere else: homepkg installs prebuilt
+# binaries into a home prefix (~/.local), no root required. Core tools mirror
+# the distro CLI package set; the heavyweight extras (helix, jj, nushell) are
+# added unless the minimal profile is in effect. homepkg resolves them into one
+# home-prefix env; a solve/network failure warns rather than aborting the
+# bootstrap.
+install_home_tools() {
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found at $homepkg; skipping home-prefix tool install"
+        return 0
+    fi
+    tools="ripgrep fd bat fzf jq delta gh"
+    if test "$MINIMAL_ENABLED" -eq 0; then
+        tools="$tools helix jj nu"
+    else
+        info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
+    fi
+    info "Installing CLI tools into a home prefix via homepkg: $tools"
+    "$homepkg" install $tools \
+        || warn "some CLI tools could not be installed via homepkg"
+}
+
 # --- Install uv (Python package manager) ---
 
 install_uv() {
@@ -1305,6 +1331,10 @@ fi
 
 if test "$INSTALL" = no; then
     info "Skipping heavyweight extras (helix, jj, shpool, nushell); --no-install"
+elif test "$SUDO" = no; then
+    # No sudo: apt/dnf were skipped, so install the CLI tools (the core distro
+    # package set plus the extras) into a home prefix with homepkg instead.
+    install_home_tools
 elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
