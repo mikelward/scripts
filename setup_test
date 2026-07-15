@@ -456,15 +456,43 @@ test_no_sudo_skips_command_up_front() {
     esac
 }
 
-# Under --no-sudo the apt/dnf installs are skipped, so setup installs the CLI
+# SUDO is the mechanism (do we invoke sudo); ROOT is the policy (do we have
+# privileges). --no-root sets ROOT=no; --root sets it back. Both default to yes.
+test_no_root_flags() {
+    assert_source_contains 'ROOT="${ROOT:-yes}"' &&
+    assert_source_contains '[-]-no-root)' &&
+    assert_source_contains '[-]-root)' &&
+    assert_source_contains "ROOT=no" &&
+    assert_source_contains "ROOT=yes"
+}
+
+# --no-root (policy) implies --no-sudo (mechanism): an unprivileged user can't
+# escalate. The implication is applied after arg parsing, before the SUDO-keyed
+# desktop forwarding, so --no-root propagates --no-sudo to the helpers too.
+test_no_root_implies_no_sudo() {
+    assert_source_contains 'if test "$ROOT" = no; then' &&
+    assert_source_contains "SUDO=no"
+}
+
+# Under --no-root the apt/dnf installs are skipped, so setup installs the CLI
 # tools into a home prefix with homepkg instead (core set plus the extras).
-# The extras dispatch routes SUDO=no to install_home_tools.
-test_no_sudo_installs_via_homepkg() {
+# The extras dispatch routes ROOT=no to install_home_tools -- so --no-sudo
+# alone (ROOT=yes) still reaches install_extras and honors --cargo/--brew.
+test_no_root_installs_via_homepkg() {
     assert_source_contains "install_home_tools" &&
-    assert_source_contains 'elif test "$SUDO" = no; then' &&
+    assert_source_contains 'elif test "$ROOT" = no; then' &&
     assert_source_contains '"$homepkg" install $tools' &&
     assert_source_contains "ripgrep fd bat fzf jq delta gh" &&
     assert_source_contains 'tools="$tools helix jj nu"'
+}
+
+# --no-root is a known option (accepted, not an "Unknown option" error) and is
+# documented in usage.
+test_no_root_accepted_and_documented() {
+    run_setup --no-root --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup" &&
+    assert_output_contains "--no-root"
 }
 
 # The homepkg tool install degrades: a missing homepkg or a failed install
@@ -475,10 +503,22 @@ test_home_tools_install_degrades() {
 }
 
 # shpool is source-only, so (like the brew path) the homepkg path can't provide
-# it. The full no-sudo run must say so explicitly rather than silently dropping
-# it, since the normal full cargo path installs shpool.
+# it. The full --no-root run must say so explicitly rather than silently
+# dropping it, since the normal full cargo path installs shpool.
 test_home_tools_warns_about_shpool() {
     assert_source_contains "shpool is not available on the homepkg path"
+}
+
+# Switching a prior cargo hx to the homepkg hx leaves ~/.config/helix/runtime
+# pointing at the source checkout, which hx searches first. The homepkg path
+# removes that stale symlink (only the one install_helix created), same as the
+# brew path -- and only after a successful install so a failed run doesn't strip
+# a still-active cargo hx's runtime.
+test_home_tools_clears_stale_helix_runtime() {
+    assert_source_contains 'if "$homepkg" install $tools; then' &&
+    assert_source_contains 'helix_runtime=' &&
+    assert_source_contains 'readlink "$helix_runtime"' &&
+    assert_source_contains "Removing stale Helix runtime symlink"
 }
 
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
@@ -489,12 +529,20 @@ run_test "--no-sudo gate lives in the sudo_or_warn wrapper" \
     test_no_sudo_gate_is_in_the_wrapper
 run_test "--no-sudo skips the command up front without invoking sudo" \
     test_no_sudo_skips_command_up_front
-run_test "--no-sudo installs CLI tools into a home prefix via homepkg" \
-    test_no_sudo_installs_via_homepkg
+run_test "--no-root/--root are the policy flags (SUDO is the mechanism)" \
+    test_no_root_flags
+run_test "--no-root implies --no-sudo" \
+    test_no_root_implies_no_sudo
+run_test "--no-root installs CLI tools into a home prefix via homepkg" \
+    test_no_root_installs_via_homepkg
+run_test "--no-root is accepted and documented" \
+    test_no_root_accepted_and_documented
 run_test "home-prefix tool install degrades on failure" \
     test_home_tools_install_degrades
 run_test "home-prefix full install warns that shpool is unavailable" \
     test_home_tools_warns_about_shpool
+run_test "home-prefix path clears the stale cargo Helix runtime symlink" \
+    test_home_tools_clears_stale_helix_runtime
 
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names

@@ -27,10 +27,12 @@ On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
 tools into a home prefix (default `~/.local`, already on `PATH` via the conf
 repo).
 
-`setup --no-sudo` wires this in automatically: it skips the `apt`/`dnf`
-package installs (and every other privileged step) and installs the CLI tools
-via `homepkg` instead — the core set (`ripgrep fd bat fzf jq delta gh`) plus
-the extras (`helix jj nu`, unless the minimal profile is in effect).
+`setup --no-root` wires this in automatically: it runs unprivileged (implying
+`--no-sudo`, so the `apt`/`dnf` installs and every other privileged step are
+skipped) and installs the CLI tools via `homepkg` instead — the core set
+(`ripgrep fd bat fzf jq delta gh`) plus the extras (`helix jj nu`, unless the
+minimal profile is in effect). `--no-sudo` on its own is just the mechanism
+(skip sudo); it assumes the tools are provided some other way.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
