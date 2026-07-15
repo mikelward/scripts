@@ -120,6 +120,18 @@ NPM=yes
 # Override with --sudo / --no-sudo, or by exporting SUDO before running.
 SUDO="${SUDO:-yes}"
 
+# Whether we have root/admin privileges on this machine (policy, as opposed to
+# SUDO's mechanism). One of:
+#   yes - privileged: install system packages, the root config, etc. (default)
+#   no  - unprivileged (--no-root). Implies --no-sudo (an unprivileged user
+#         can't escalate), and, since the apt/dnf packages are then skipped,
+#         installs the CLI tools into a home prefix with homepkg instead.
+# SUDO is the "do we invoke sudo" mechanism; ROOT is the "do we have privileges"
+# policy. --no-sudo alone just skips sudo (tools assumed provided some other
+# way); --no-root additionally provisions the tools rootlessly via homepkg.
+# Override with --root / --no-root, or by exporting ROOT before running.
+ROOT="${ROOT:-yes}"
+
 # Which Linux desktop to install and configure (ignored on macOS). One of:
 #   kde   - KDE Plasma + Krohnkite, via setup-kde (the default)
 #   hypr  - Hyprland Wayland desktop, via setup-hypr
@@ -140,8 +152,8 @@ EXTRAS=auto
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
-             [--no-install] [--no-sudo] [--ignore-errors] [--ssh | --no-ssh]
-             [--no-npm] [-h | --help]
+             [--no-install] [--no-sudo] [--no-root] [--ignore-errors]
+             [--ssh | --no-ssh] [--no-npm] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -167,6 +179,10 @@ Options:
                    box that allows only "sudo apt" needs nothing special --
                    leave sudo on and the denials warn and skip themselves.
                    Forwarded to the desktop setup helpers
+  --no-root        Unprivileged install. Implies --no-sudo, and since the
+                   apt/dnf packages are then skipped, installs the CLI tools
+                   (core set plus extras) into a home prefix with homepkg
+                   instead. For machines where you have no root at all
   --ignore-errors  Keep going past failures instead of aborting on the first
                    one. Forwarded to setup-kde/macos
   --ssh            Generate an SSH key even if one is already available
@@ -291,6 +307,12 @@ while test $# -gt 0; do
         --no-sudo)
             SUDO=no
             ;;
+        --root)
+            ROOT=yes
+            ;;
+        --no-root)
+            ROOT=no
+            ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
             ;;
@@ -324,6 +346,13 @@ done
 # parsing args, so an unknown option above still exits non-zero.
 if test "$IGNORE_ERRORS" = no; then
     set -e
+fi
+
+# --no-root is a policy that implies the no-sudo mechanism: an unprivileged
+# user can't escalate. (--no-sudo alone leaves ROOT=yes -- just the mechanism.)
+# Set this before the SUDO-keyed forwarding below so it propagates too.
+if test "$ROOT" = no; then
+    SUDO=no
 fi
 
 # Flags to forward to the desktop setup helpers (setup-kde / setup-macos).
@@ -1034,9 +1063,9 @@ install_extras() {
     install_extras_cargo
 }
 
-# --- Install CLI tools into a home prefix (no sudo) ---
+# --- Install CLI tools into a home prefix (--no-root) ---
 
-# Under --no-sudo the apt/dnf package installs are skipped, so the CLI tools
+# Under --no-root the apt/dnf package installs are skipped, so the CLI tools
 # they'd provide have to come from somewhere else: homepkg installs prebuilt
 # binaries into a home prefix (~/.local), no root required. Core tools mirror
 # the distro CLI package set; the heavyweight extras (helix, jj, nushell) are
@@ -1055,15 +1084,29 @@ install_home_tools() {
         # shpool is source-only (no conda-forge/prebuilt artifact), so the
         # homepkg path can't provide it -- same as the brew path. start_services
         # skips its user service when shpool is absent, so the shell falls back
-        # to tmux. (--cargo/apt would build it, but both are unavailable in this
-        # mode: --no-sudo routes here before install_extras, and apt needs sudo.)
+        # to tmux.
         warn "shpool is not available on the homepkg path (source-only); sessions fall back to tmux"
     else
         info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
     fi
     info "Installing CLI tools into a home prefix via homepkg: $tools"
-    "$homepkg" install $tools \
-        || warn "some CLI tools could not be installed via homepkg"
+    if "$homepkg" install $tools; then
+        # A prior cargo run points ~/.config/helix/runtime at the source
+        # checkout, and hx searches that before the prebuilt runtime -- so drop
+        # the stale symlink (only the one install_helix created), same as the
+        # brew path. Gated on a successful install so a prior cargo hx keeps its
+        # runtime if homepkg failed; and only when helix was in this run's list.
+        if test "$MINIMAL_ENABLED" -eq 0; then
+            helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
+            if test -L "$helix_runtime" \
+                    && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
+                info "Removing stale Helix runtime symlink from the cargo build"
+                rm -f "$helix_runtime"
+            fi
+        fi
+    else
+        warn "some CLI tools could not be installed via homepkg"
+    fi
 }
 
 # --- Install uv (Python package manager) ---
@@ -1337,9 +1380,11 @@ fi
 
 if test "$INSTALL" = no; then
     info "Skipping heavyweight extras (helix, jj, shpool, nushell); --no-install"
-elif test "$SUDO" = no; then
-    # No sudo: apt/dnf were skipped, so install the CLI tools (the core distro
-    # package set plus the extras) into a home prefix with homepkg instead.
+elif test "$ROOT" = no; then
+    # Unprivileged (--no-root): apt/dnf were skipped, so install the CLI tools
+    # (the core distro package set plus the extras) into a home prefix with
+    # homepkg instead. --no-sudo alone (ROOT=yes) leaves this to install_extras
+    # below, whose cargo/brew builds are themselves rootless.
     install_home_tools
 elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
