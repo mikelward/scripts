@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 """homepkg -- install prebuilt CLI tools into a home prefix, no root.
 
-For machines where apt/dnf need root: fetch prebuilt binaries and unpack them
-into a home prefix (default ~/.local), which the conf repo already puts on
-PATH. Two backends:
+For machines where apt/dnf need root. Installs into a home prefix (default
+~/.local), which the conf repo already puts on PATH. Backends:
 
-  conda   conda-forge packages from conda.anaconda.org -- one host, uniform
-          across every tool, sha256-verified (the default)
-  github  release assets from each tool's GitHub repo
+  mamba   (default) a rootless micromamba manages one conda environment, so we
+          get a real solver (full dependency closure), native `update`, and
+          clean `remove`. Tools live in <prefix>/share/homepkg/env and are
+          symlinked into <prefix>/bin. micromamba is itself bootstrapped from
+          conda-forge.
+  conda   unpack a single conda-forge package (sha256-verified) -- stateless,
+          no dependency resolution; for one-shots and building push-bundles.
+  github  unpack a release asset from the tool's GitHub repo -- stateless.
 
 Usage:
-    homepkg [--backend conda|github] [--prefix DIR] [--arch TRIPLE]
-            [--dry-run] install TOOL...
+    homepkg bootstrap                       # fetch micromamba into ~/.local/bin
+    homepkg install TOOL...                 # mamba env (default)
+    homepkg update [TOOL...]                # native micromamba update (all if none)
+    homepkg remove TOOL...
+    homepkg --backend conda|github install TOOL...
     homepkg list
 
-`list` prints the known tools. Tool names are logical (ripgrep, fd, ...); the
-registry maps each to its conda package and GitHub repo.
+Tool names are logical (ripgrep, fd, ...); the registry maps each to its conda
+package and GitHub repo.
 """
 
 import argparse
@@ -324,23 +331,203 @@ def install_github(tool, meta, prefix, plat, dry_run):
     info(f"  installed {', '.join(placed)} into {prefix}/bin")
 
 
-BACKENDS = {"conda": install_conda, "github": install_github}
+# The per-tool extract backends: fetch one prebuilt artifact and unpack it.
+# Good for one-shot installs and for building push-bundles, but they carry no
+# state and don't resolve dependencies. For the well-lit interactive path use
+# the mamba backend below.
+EXTRACT_BACKENDS = {"conda": install_conda, "github": install_github}
+
+
+# --- micromamba backend ------------------------------------------------------
+#
+# The well-lit path on Linux: a rootless micromamba manages one conda
+# environment, so we inherit a real solver (full dependency closure), native
+# `update`, and clean `remove` instead of reinventing them. micromamba itself
+# is just another conda-forge package, so we bootstrap it with the resolver
+# above. The tools live in <prefix>/share/homepkg/env; their binaries are
+# symlinked into <prefix>/bin (conda's $ORIGIN/../lib rpaths keep them working
+# through the symlink, so no activation is needed).
+
+def _homepkg_root(prefix):
+    return os.path.join(prefix, "share", "homepkg")
+
+
+def mamba_root(prefix):
+    return os.path.join(_homepkg_root(prefix), "mamba")
+
+
+def mamba_env(prefix):
+    return os.path.join(_homepkg_root(prefix), "env")
+
+
+def micromamba_path(prefix):
+    local = os.path.join(prefix, "bin", "micromamba")
+    if os.path.exists(local):
+        return local
+    return shutil.which("micromamba")
+
+
+def _verify_sha256(label, path, want):
+    if not want:
+        warn(f"{label}: no sha256 in index; skipping verification")
+        return
+    got = hashlib.sha256(open(path, "rb").read()).hexdigest()
+    if got != want:
+        raise HomepkgError(f"{label}: sha256 mismatch ({got} != {want})")
+
+
+def bootstrap_micromamba(prefix, plat, dry_run):
+    """Install micromamba into <prefix>/bin (it's a conda-forge package)."""
+    existing = micromamba_path(prefix)
+    if existing:
+        info(f"micromamba already available ({existing})")
+        return existing
+    index, base = conda_index(conda_subdir(*plat))
+    found = conda_resolve(index, "micromamba")
+    if not found:
+        raise HomepkgError("micromamba not found on conda-forge for this platform")
+    fn, pmeta = found
+    info(f"micromamba {pmeta['version']}")
+    if dry_run:
+        info(f"  would install from {base}/{fn}")
+        # Return where it *would* land so downstream dry-run commands can print
+        # the planned micromamba invocation instead of hitting a None.
+        return os.path.join(prefix, "bin", "micromamba")
+    os.makedirs(prefix, exist_ok=True)
+    with tempfile.TemporaryDirectory() as td:
+        pkg_path = download(f"{base}/{fn}", os.path.join(td, fn))
+        _verify_sha256("micromamba", pkg_path, pmeta.get("sha256"))
+        conda_extract(pkg_path, prefix)
+    mm = os.path.join(prefix, "bin", "micromamba")
+    _ensure_executable(mm)
+    info(f"  installed micromamba into {prefix}/bin")
+    return mm
+
+
+def ensure_micromamba(prefix, plat, dry_run):
+    mm = micromamba_path(prefix)
+    return mm if mm else bootstrap_micromamba(prefix, plat, dry_run)
+
+
+def _mamba_env_vars(prefix):
+    env = dict(os.environ)
+    env["MAMBA_ROOT_PREFIX"] = mamba_root(prefix)
+    return env
+
+
+def _run_mamba(mm, prefix, args, dry_run):
+    import subprocess
+    cmd = [mm, *args]
+    if dry_run:
+        info("  " + " ".join(cmd))
+        return
+    subprocess.run(cmd, env=_mamba_env_vars(prefix), check=True)
+
+
+def _link_bins(tools, prefix):
+    """Symlink each tool's binaries from the env into <prefix>/bin."""
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir, exist_ok=True)
+    for tool in tools:
+        for b in TOOLS[tool]["bins"]:
+            src = os.path.join(mamba_env(prefix), "bin", b)
+            dst = os.path.join(bindir, b)
+            if not os.path.exists(src):
+                warn(f"{tool}: {b} not found in the env after install")
+                continue
+            if os.path.islink(dst) or not os.path.exists(dst):
+                if os.path.islink(dst):
+                    os.unlink(dst)
+                os.symlink(src, dst)
+            elif os.path.realpath(dst) != os.path.realpath(src):
+                warn(f"{tool}: {dst} exists and isn't our symlink; leaving it")
+
+
+def _unlink_bins(tools, prefix):
+    for tool in tools:
+        for b in TOOLS[tool]["bins"]:
+            dst = os.path.join(prefix, "bin", b)
+            if os.path.islink(dst):
+                os.unlink(dst)
+
+
+MAMBA_CHANNEL_ARGS = ["-c", "conda-forge", "--override-channels"]
+
+
+def _mamba_subcommand(prefix):
+    # A fresh env must be created; an existing one gets packages added to it.
+    env = mamba_env(prefix)
+    return "install" if os.path.isdir(os.path.join(env, "conda-meta")) else "create"
+
+
+def install_mamba(tools, prefix, plat, dry_run):
+    mm = ensure_micromamba(prefix, plat, dry_run)
+    pkgs = [TOOLS[t]["conda"] for t in tools]
+    env = mamba_env(prefix)
+    subcmd = _mamba_subcommand(prefix)
+    info(f"micromamba {subcmd}: {', '.join(pkgs)} -> {env}")
+    _run_mamba(mm, prefix, [subcmd, "-y", "-p", env,
+                            *MAMBA_CHANNEL_ARGS, *pkgs], dry_run)
+    if not dry_run:
+        _link_bins(tools, prefix)
+        info(f"  linked {', '.join(sum((TOOLS[t]['bins'] for t in tools), []))} "
+             f"into {prefix}/bin")
+
+
+def update_mamba(tools, prefix, plat, dry_run):
+    mm = ensure_micromamba(prefix, plat, dry_run)
+    # No tools named -> update the whole env. Binaries keep the same env path,
+    # so the existing symlinks stay valid; no re-link needed.
+    spec = [TOOLS[t]["conda"] for t in tools] if tools else ["--all"]
+    info(f"micromamba update: {' '.join(spec)}")
+    _run_mamba(mm, prefix, ["update", "-y", "-p", mamba_env(prefix),
+                            *MAMBA_CHANNEL_ARGS, *spec], dry_run)
+
+
+def remove_mamba(tools, prefix, plat, dry_run):
+    mm = micromamba_path(prefix)
+    if mm is None:
+        raise HomepkgError("micromamba is not installed; nothing to remove")
+    pkgs = [TOOLS[t]["conda"] for t in tools]
+    info(f"micromamba remove: {', '.join(pkgs)}")
+    _run_mamba(mm, prefix, ["remove", "-y", "-p", mamba_env(prefix), *pkgs], dry_run)
+    if not dry_run:
+        _unlink_bins(tools, prefix)
 
 
 # --- CLI ---------------------------------------------------------------------
 
+def _resolve_plat(p, arch):
+    if not arch:
+        return detect_platform()
+    plat = tuple(arch.split("/", 1))
+    if len(plat) != 2:
+        p.error("--arch must be OS/ARCH, e.g. linux/x86_64")
+    return plat
+
+
+def _require_known(p, tools):
+    unknown = [t for t in tools if t not in TOOLS]
+    if unknown:
+        p.error(f"unknown tool(s): {', '.join(unknown)} (see 'homepkg list')")
+
+
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="homepkg", add_help=True,
-                                description="Install prebuilt CLI tools into a home prefix.")
-    p.add_argument("--backend", choices=sorted(BACKENDS), default="conda",
-                   help="where to fetch prebuilt binaries (default: conda)")
+    p = argparse.ArgumentParser(
+        prog="homepkg", add_help=True,
+        description="Install prebuilt CLI tools into a home prefix, no root.")
+    p.add_argument("--backend", choices=["mamba", "conda", "github"], default="mamba",
+                   help="install backend (default: mamba -- a managed micromamba "
+                        "env with native update/remove; conda/github unpack a "
+                        "single artifact with no state)")
     p.add_argument("--prefix", default=os.path.expanduser("~/.local"),
                    help="install prefix (default: ~/.local)")
     p.add_argument("--arch", default=None,
                    help="override platform as OS/ARCH, e.g. linux/x86_64")
     p.add_argument("--dry-run", action="store_true",
                    help="resolve and report, but don't download or install")
-    p.add_argument("command", choices=["install", "list"])
+    p.add_argument("command",
+                   choices=["install", "update", "remove", "bootstrap", "list"])
     p.add_argument("tools", nargs="*", help="logical tool names (see 'list')")
     args = p.parse_args(argv)
 
@@ -350,22 +537,47 @@ def main(argv=None):
             print(f"{name:10} conda={m['conda']:12} github={m['github']}")
         return 0
 
-    if not args.tools:
-        p.error("install requires at least one tool")
-    if args.arch:
+    if args.command == "bootstrap":
         try:
-            plat = tuple(args.arch.split("/", 1))
-            assert len(plat) == 2
-        except Exception:
-            p.error("--arch must be OS/ARCH, e.g. linux/x86_64")
-    else:
-        plat = detect_platform()
+            bootstrap_micromamba(args.prefix, _resolve_plat(p, args.arch), args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
 
-    unknown = [t for t in args.tools if t not in TOOLS]
-    if unknown:
-        p.error(f"unknown tool(s): {', '.join(unknown)} (see 'homepkg list')")
+    plat = _resolve_plat(p, args.arch)
 
-    install = BACKENDS[args.backend]
+    # update with no tools means "the whole env"; everything else needs names.
+    if not args.tools and args.command != "update":
+        p.error(f"{args.command} requires at least one tool")
+    _require_known(p, args.tools)
+
+    # update/remove operate on the managed mamba env regardless of --backend.
+    if args.command == "update":
+        try:
+            update_mamba(args.tools, args.prefix, plat, args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+    if args.command == "remove":
+        try:
+            remove_mamba(args.tools, args.prefix, plat, args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+
+    # install
+    if args.backend == "mamba":
+        try:
+            install_mamba(args.tools, args.prefix, plat, args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+
+    install = EXTRACT_BACKENDS[args.backend]
     failed = []
     for tool in args.tools:
         try:
