@@ -1052,6 +1052,11 @@ install_home_tools() {
     tools="ripgrep fd bat fzf jq delta gh"
     if test "$MINIMAL_ENABLED" -eq 0; then
         tools="$tools helix jj nu"
+        # shpool is source-only (no conda-forge/prebuilt artifact), so the
+        # homepkg path can't provide it -- same as the brew path. start_services
+        # skips its user service when shpool is absent and the shell falls back
+        # to tmux; use --cargo (or apt) if you want shpool itself.
+        warn "shpool is not available on the homepkg path; use --cargo (or apt) for it (sessions fall back to tmux)"
     else
         info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
     fi
