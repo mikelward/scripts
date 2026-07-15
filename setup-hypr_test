@@ -202,6 +202,19 @@ test_no_install_skips_system_changes() {
     assert_output_contains "Skipping logind"
 }
 
+# --no-sudo skips the same privileged steps (the logind drop-in and enabling
+# power-profiles-daemon both need sudo) -- no sudo is called -- while the
+# user-level config.local seeding still runs.
+test_no_sudo_skips_privileged_steps() {
+    mkdir -p "$XDG_CONFIG_HOME/hypr"
+    echo "# template body" > "$XDG_CONFIG_HOME/hypr/hyprland.conf.local.template"
+    run_hypr --no-sudo
+    assert_status 0 &&
+    assert_not_called "sudo" &&
+    assert_output_contains "needs sudo; --no-sudo" &&
+    assert_file_contains "$XDG_CONFIG_HOME/hypr/hyprland.conf.local" "template body"
+}
+
 # --- per-machine hyprland.conf.local seeding ---
 
 assert_file_contains() {
@@ -291,6 +304,8 @@ run_test "commented lid entry does not skip the drop-in" \
 run_test "reloads logind" test_reloads_logind
 run_test "enables power-profiles-daemon" test_enables_power_profiles_daemon
 run_test "no-install skips system changes" test_no_install_skips_system_changes
+run_test "no-sudo skips privileged steps, keeps user config" \
+    test_no_sudo_skips_privileged_steps
 run_test "seeds hyprland.conf.local from the template" \
     test_seeds_conf_local_from_template
 run_test "creates an empty hyprland.conf.local without the template" \

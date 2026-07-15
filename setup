@@ -36,6 +36,15 @@
 # instead of aborting on the first one. Both flags are forwarded to
 # setup-kde / setup-macos.
 #
+# Every privileged command runs through sudo_or_warn, so an unexpected sudo
+# denial already degrades to a warning instead of aborting the bootstrap --
+# which means a box that only permits "sudo apt" works as-is (the package
+# installs succeed and the other privileged steps warn and skip). Pass
+# --no-sudo when the box has no sudo at all: sudo_or_warn then skips every
+# privileged command up front, package installs included, so setup never
+# prompts for a password or stalls on a command it can't run. --no-sudo is
+# forwarded to setup-kde / setup-hypr / setup-sway / setup-macos.
+#
 # An SSH key is generated only when one isn't already available -- the
 # check skips generation when ssh-add -l lists a key (e.g. a forwarded
 # agent) or a key file already exists. Pass --ssh to generate one anyway,
@@ -98,6 +107,19 @@ SSH=auto
 #         (nvm, fnm, corepack, a standalone pnpm, etc.)
 NPM=yes
 
+# Whether to run sudo at all. One of:
+#   yes - sudo is available; run every privileged step (the default). An
+#         unexpected sudo failure is still folded into a warning by
+#         sudo_or_warn and the bootstrap continues -- so a box that only lets
+#         you "sudo apt" already works in this mode: the package installs
+#         succeed and every other privileged step warns and skips on the denial.
+#   no  - no sudo (--no-sudo). sudo_or_warn skips every privileged command up
+#         front instead of attempting it -- so setup never prompts for a
+#         password or stalls on a command it can't run. For machines with no
+#         sudo at all (packages preinstalled or provided some other way).
+# Override with --sudo / --no-sudo, or by exporting SUDO before running.
+SUDO="${SUDO:-yes}"
+
 # Which Linux desktop to install and configure (ignored on macOS). One of:
 #   kde   - KDE Plasma + Krohnkite, via setup-kde (the default)
 #   hypr  - Hyprland Wayland desktop, via setup-hypr
@@ -118,8 +140,8 @@ EXTRAS=auto
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
-             [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm]
-             [-h | --help]
+             [--no-install] [--no-sudo] [--ignore-errors] [--ssh | --no-ssh]
+             [--no-npm] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -139,6 +161,12 @@ Options:
   --cargo          Build the heavyweight extras from source via rustup + cargo
   --no-install     Skip every install step (packages, fonts, uv, extras, root
                    config) and only (re)apply config. Forwarded to setup-kde/macos
+  --no-sudo        Run no sudo at all: every privileged command (package
+                   installs included) is skipped up front instead of attempted,
+                   so setup never prompts or stalls. For boxes with no sudo. A
+                   box that allows only "sudo apt" needs nothing special --
+                   leave sudo on and the denials warn and skip themselves.
+                   Forwarded to the desktop setup helpers
   --ignore-errors  Keep going past failures instead of aborting on the first
                    one. Forwarded to setup-kde/macos
   --ssh            Generate an SSH key even if one is already available
@@ -169,8 +197,20 @@ warn() {
 # line is folded into a concise warning. Shell-standard 126/127 statuses are
 # more useful than some sudo implementations' diagnostics, so name those
 # explicitly.
+#
+# Under --no-sudo (SUDO=no) the command is skipped up front rather than
+# attempted, and reported with a non-zero return so a caller's `|| warn` or
+# `if sudo_or_warn ...` guard skips the dependent work. This is the single
+# choke point for every privileged command, so gating it here is all it takes
+# to make setup never invoke sudo. (A box that allows only "sudo apt" doesn't
+# need this: leave sudo on and the reactive path below warns and skips on the
+# denials by itself.)
 sudo_or_warn() {
     _sudo_name=${1##*/}
+    if test "$SUDO" = no; then
+        warn "skipping 'sudo $_sudo_name' (--no-sudo)"
+        return 1
+    fi
     _sudo_stderr=$(mktemp) || {
         warn "sudo $_sudo_name: could not create a temporary error log"
         return 1
@@ -245,6 +285,12 @@ while test $# -gt 0; do
         --no-install)
             INSTALL=no
             ;;
+        --sudo)
+            SUDO=yes
+            ;;
+        --no-sudo)
+            SUDO=no
+            ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
             ;;
@@ -284,6 +330,9 @@ fi
 DESKTOP_SETUP_FLAGS=""
 if test "$INSTALL" = no; then
     DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --no-install"
+fi
+if test "$SUDO" = no; then
+    DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --no-sudo"
 fi
 if test "$IGNORE_ERRORS" = yes; then
     DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --ignore-errors"

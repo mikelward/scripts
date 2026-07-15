@@ -14,11 +14,16 @@
 #           .kwinscript), go-task (preferred build tool), p7zip
 #
 # Usage:
-#     setup-kde [--no-install] [--ignore-errors] [-h | --help]
+#     setup-kde [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 #
 # --no-install skips building/installing Krohnkite and only (re)applies the
 # KDE configuration. --ignore-errors keeps going past failures instead of
 # aborting on the first one. setup forwards both flags here.
+#
+# --no-sudo is accepted (and forwarded by setup) for consistency with the
+# other setup helpers, but has nothing to skip: as noted above this helper
+# uses no sudo, so it already runs unchanged on a machine with restricted
+# sudo.
 #
 # Krohnkite comes from my fork's mikel branch by default; set KROHNKITE_REPO
 # (any git URL or local path) and/or KROHNKITE_BRANCH to clone something
@@ -69,12 +74,14 @@ is_command() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-kde [--no-install] [--ignore-errors] [-h | --help]
+Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
 Options:
   --no-install     Skip building/installing Krohnkite; only (re)apply config
+  --no-sudo        Accepted for consistency with setup; setup-kde uses no
+                   sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
   -h, --help       Show this help and exit
 USAGE
@@ -89,6 +96,10 @@ while test $# -gt 0; do
             ;;
         --no-install)
             INSTALL=no
+            ;;
+        --sudo|--no-sudo)
+            # setup-kde performs no privileged operations, so --no-sudo is
+            # accepted (and forwarded by setup) but has nothing to skip.
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes

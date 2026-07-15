@@ -63,6 +63,10 @@ assert_source_not_contains() {
 # tests the diagnostics without executing the bootstrap's system changes.
 run_sudo_helper() {
     sudo_mode="$1"
+    # Optional: the SUDO setting (yes/no) the wrapper runs under. Defaults to
+    # yes so the existing diagnostics tests exercise the real sudo path; pass
+    # "no" to check the --no-sudo short-circuit.
+    sudo_setting="${2:-yes}"
     sudo_tmpdir="$(mktemp -d)"
     cat > "$sudo_tmpdir/sudo" <<'MOCK'
 #!/bin/sh
@@ -91,7 +95,7 @@ MOCK
     ' "$SETUP")
 
     set +e
-    output="$(SUDO_MODE="$sudo_mode" PATH="$sudo_tmpdir:$PATH" \
+    output="$(SUDO_MODE="$sudo_mode" SUDO="$sudo_setting" PATH="$sudo_tmpdir:$PATH" \
         sh -c "$sudo_functions
 sudo_or_warn apt-get update" 2>&1)"
     status=$?
@@ -399,6 +403,67 @@ test_offers_ssh_remote_switch() {
     assert_source_contains "gittossh" &&
     assert_source_contains "from HTTPS to SSH?"
 }
+
+# --- no-sudo mode ---
+
+# --no-sudo is a known option: it's accepted (not an "Unknown option" error),
+# so a later --help is still reached and prints usage with exit 0.
+test_no_sudo_flag_accepted() {
+    run_setup --no-sudo --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup"
+}
+
+# --no-sudo is documented in usage.
+test_no_sudo_in_usage() {
+    run_setup --help
+    assert_status 0 &&
+    assert_output_contains "--no-sudo"
+}
+
+# --no-sudo sets SUDO=no and --sudo sets it back; setup forwards --no-sudo to
+# the desktop helpers so they skip their own privileged steps too.
+test_no_sudo_parsing_and_forwarding() {
+    assert_source_contains 'SUDO="${SUDO:-yes}"' &&
+    assert_source_contains '[-]-no-sudo)' &&
+    assert_source_contains "SUDO=no" &&
+    assert_source_contains "SUDO=yes" &&
+    assert_source_contains 'DESKTOP_SETUP_FLAGS --no-sudo'
+}
+
+# The whole --no-sudo behaviour lives in one place: sudo_or_warn skips the
+# command up front when SUDO=no. There are no scattered per-call guards -- the
+# single choke point is all it takes to make setup never invoke sudo.
+test_no_sudo_gate_is_in_the_wrapper() {
+    assert_source_contains 'if test "$SUDO" = no; then' &&
+    assert_source_contains "skipping 'sudo"
+}
+
+# Behavioural: under SUDO=no the wrapper skips the command up front and returns
+# non-zero WITHOUT invoking sudo -- even when the mocked sudo would have
+# succeeded/denied. The skip warning names the command, not a sudo diagnostic.
+test_no_sudo_skips_command_up_front() {
+    run_sudo_helper denied no
+    assert_status 1 &&
+    assert_output_contains "skipping 'sudo apt-get' (--no-sudo)" &&
+    # the mock sudo's own message must NOT appear: sudo was never called
+    case "$output" in
+        *"permission denied"*)
+            echo "  FAIL: sudo was invoked under --no-sudo"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
+run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
+run_test "--no-sudo parses and forwards to desktop helpers" \
+    test_no_sudo_parsing_and_forwarding
+run_test "--no-sudo gate lives in the sudo_or_warn wrapper" \
+    test_no_sudo_gate_is_in_the_wrapper
+run_test "--no-sudo skips the command up front without invoking sudo" \
+    test_no_sudo_skips_command_up_front
 
 run_test "--sway flag dispatches to setup-sway" test_sway_flag_and_dispatch
 run_test "Sway package names are the upstream ones" test_sway_package_names
