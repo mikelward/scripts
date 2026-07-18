@@ -375,9 +375,21 @@ clone_or_pull() {
 
     if test -d "$dir/.git"; then
         info "$dir already exists, pulling latest changes"
-        git -C "$dir" pull
-        git -C "$dir" submodule update --init --recursive
+        # A failed pull (e.g. no network) must not abort the bootstrap: the
+        # existing checkout is enough to keep going. This is also what lets an
+        # offline "setup --no-root" reach the homepkg bundle install, which runs
+        # after these repo refreshes -- warn and continue rather than exiting
+        # under set -e.
+        if git -C "$dir" pull; then
+            git -C "$dir" submodule update --init --recursive \
+                || warn "could not update submodules in $dir; using the existing checkout"
+        else
+            warn "could not pull $dir (offline?); using the existing checkout"
+        fi
     else
+        # No existing checkout, so a failed clone stays fatal: there's nothing
+        # to fall back to, and later steps (confinst, the root build) need the
+        # repo. An offline box must therefore pre-stage the repos it needs.
         info "Cloning $repo into $dir"
         git clone --recurse-submodules "$repo" "$dir"
     fi
@@ -1086,7 +1098,9 @@ install_extras() {
 # the distro CLI package set; the node toolchain (node/npm/tsc) is added
 # unless --no-npm, and the heavyweight extras (helix, jj, nushell) unless the
 # minimal profile is in effect. homepkg resolves them into one home-prefix env;
-# a solve/network failure warns rather than aborting the bootstrap.
+# a solve/network failure warns rather than aborting the bootstrap. When a
+# prebuilt bundle is present it's used first (so a fresh box provisions fully
+# offline), then refreshed online best-effort -- see the provisioning block.
 install_home_tools() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
@@ -1105,57 +1119,106 @@ install_home_tools() {
     fi
     if test "$MINIMAL_ENABLED" -eq 0; then
         tools="$tools helix jj nu"
-        # shpool is source-only (no conda-forge/prebuilt artifact), so the
-        # homepkg path can't provide it -- same as the brew path. start_services
-        # skips its user service when shpool is absent, so the shell falls back
-        # to tmux.
+        # shpool is source-only (no conda-forge/prebuilt artifact), so neither
+        # the homepkg nor the brew path can provide it. start_services skips its
+        # user service when shpool is absent, so the shell falls back to tmux.
         warn "shpool is not available on the homepkg path (source-only); sessions fall back to tmux"
-    else
-        info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
     fi
-    info "Installing CLI tools into a home prefix via homepkg: $tools"
-    if "$homepkg" install $tools; then
-        # homepkg links the tools into ~/.local/bin. Put that on PATH for the
-        # rest of THIS run so later steps and child processes find them --
-        # notably setup-kde, which needs tsc on PATH to build Krohnkite. The
-        # conf repo already puts ~/.local/bin on PATH for interactive shells;
-        # this covers the non-interactive bootstrap however setup was invoked.
-        case ":$PATH:" in
-            *":$HOME/.local/bin:"*) ;;
-            *) PATH="$HOME/.local/bin:$PATH" ;;
-        esac
-        # A prior cargo run points ~/.config/helix/runtime at the source
-        # checkout, and hx searches that before the prebuilt runtime -- so drop
-        # the stale symlink (only the one install_helix created), same as the
-        # brew path. Gated on a successful install so a prior cargo hx keeps its
-        # runtime if homepkg failed; and only when helix was in this run's list.
-        if test "$MINIMAL_ENABLED" -eq 0; then
-            helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
-            if test -L "$helix_runtime" \
-                    && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
-                info "Removing stale Helix runtime symlink from the cargo build"
-                rm -f "$helix_runtime"
-            fi
+
+    # Optimistic provisioning. On a FRESH env, prefer a prebuilt bundle (which
+    # installs fully offline); otherwise install the requested set online.
+    # install-bundle needs a fresh env, so the bundle only applies on the first
+    # provision. Look for a bundle at $HOMEPKG_BUNDLE, then homepkg-bundle.tgz
+    # beside the scripts repo or in $HOME. Build one on an online host with
+    # "homepkg bundle -o homepkg-bundle.tgz" (no args = every tool).
+    #
+    # TODO: a pinned/--frozen (+ --no-bundle) flag pair to skip the optimistic
+    #   online reconcile/refresh, for a reproducible bundle-exact install.
+    env_dir="$HOME/.local/share/homepkg/env"   # mirrors homepkg's <prefix>/share/homepkg/env
+    bundle=""
+    for cand in "${HOMEPKG_BUNDLE:-}" "$SCRIPTS_DIR/homepkg-bundle.tgz" "$HOME/homepkg-bundle.tgz"; do
+        if test -n "$cand" && test -f "$cand"; then
+            bundle="$cand"
+            break
         fi
-    else
-        warn "some CLI tools could not be installed via homepkg"
+    done
+
+    provisioned=no
+    if test -n "$bundle" && ! test -d "$env_dir/conda-meta"; then
+        # A bundle installs its FULL contents in one shot (install-bundle can't
+        # cherry-pick), so --minimal/--no-npm don't trim it. Then reconcile the
+        # requested set online with `install $tools`: this ADDS any requested
+        # tool the bundle lacked -- e.g. a partial $HOMEPKG_BUNDLE missing tsc,
+        # which a bare `update` would never add since it only touches packages
+        # already in the env -- and freshens them. Offline it warns and we rely
+        # on whatever the bundle carried.
+        info "Installing CLI tools from bundle (offline-capable): $bundle"
+        info "  a bundle installs its full contents; --minimal/--no-npm don't trim it"
+        if "$homepkg" install-bundle "$bundle"; then
+            provisioned=yes
+            "$homepkg" install $tools \
+                || warn "installed the bundle; couldn't reconcile the requested tools online (offline?)"
+        else
+            warn "install-bundle failed; falling back to an online install"
+        fi
+    fi
+    if test "$provisioned" = no; then
+        test "$MINIMAL_ENABLED" -eq 0 \
+            || info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
+        info "Installing CLI tools into a home prefix via homepkg: $tools"
+        if "$homepkg" install $tools; then
+            provisioned=yes
+        else
+            warn "some CLI tools could not be installed via homepkg"
+        fi
+    fi
+
+    test "$provisioned" = yes || return 0
+
+    # homepkg links the tools into ~/.local/bin. Put that on PATH for the rest
+    # of THIS run so later steps and child processes find them -- notably
+    # setup-kde, which needs tsc on PATH to build Krohnkite. The conf repo
+    # already puts ~/.local/bin on PATH for interactive shells; this covers the
+    # non-interactive bootstrap however setup was invoked.
+    case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) PATH="$HOME/.local/bin:$PATH" ;;
+    esac
+
+    # A prior cargo run points ~/.config/helix/runtime at the source checkout,
+    # and hx searches that before the prebuilt runtime -- so drop the stale
+    # symlink (only the one install_helix created). Gate on hx actually being
+    # installed by homepkg (which links it into ~/.local/bin) rather than the
+    # minimal profile: a full bundle can install helix even under --minimal.
+    helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
+    if test -x "$HOME/.local/bin/hx" \
+            && test -L "$helix_runtime" \
+            && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
+        info "Removing stale Helix runtime symlink from the cargo build"
+        rm -f "$helix_runtime"
     fi
 }
 
 # --- Install uv (Python package manager) ---
 
 install_uv() {
+    # Both paths are non-fatal: a failed update/install (e.g. no network) must
+    # not abort the bootstrap. install_uv runs before install_home_tools, so on
+    # an offline "setup --no-root" a hard failure here would kill the run before
+    # the homepkg bundle install -- where uv can instead come from the bundle.
     if command -v uv >/dev/null 2>&1; then
         info "Updating uv"
         # uv self update reruns the installer, which edits the shell rc/profile
         # files unless UV_NO_MODIFY_PATH is set; PATH is managed by the conf repo.
-        UV_NO_MODIFY_PATH=1 uv self update
+        UV_NO_MODIFY_PATH=1 uv self update \
+            || warn "could not update uv (offline?); keeping the installed version"
     else
         info "Installing uv"
         # --no-modify-path keeps the uv installer out of the shell rc/profile
         # files; PATH is managed by the conf repo. uv installs to ~/.local/bin
         # (or ~/.cargo/bin), which the conf repo already puts on PATH.
-        curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path
+        curl -LsSf https://astral.sh/uv/install.sh | sh -s -- --no-modify-path \
+            || warn "could not install uv (offline?); it may come from a homepkg bundle instead"
     fi
 }
 

@@ -22,7 +22,8 @@ Usage:
     homepkg list
 
 Push bundles (build on an online host, install on an air-gapped target):
-    homepkg bundle -o tools.tgz TOOL...            # online: solve + download
+    homepkg bundle -o tools.tgz                     # online: bundle ALL tools
+    homepkg bundle -o tools.tgz TOOL...            # ...or just the named ones
     homepkg --backend github bundle -o t.tgz TOOL... # static-asset variant
     homepkg install-bundle tools.tgz               # target: install offline
 
@@ -61,6 +62,7 @@ TOOLS = {
     "helix":   {"conda": "helix",      "github": "helix-editor/helix", "bins": ["hx"]},
     "jj":      {"conda": "jujutsu",    "github": "jj-vcs/jj",          "bins": ["jj"]},
     "nu":      {"conda": "nushell",    "github": "nushell/nushell",    "bins": ["nu"]},
+    "uv":      {"conda": "uv",         "github": "astral-sh/uv",       "bins": ["uv", "uvx"]},
     # Node toolchain for the setup --no-root path: node/npm/tsc from conda-forge
     # instead of a distro package, plus fnm (which on root boxes comes from its
     # own curl installer -- no conda there yet). npm/npx ride along in the nodejs
@@ -621,14 +623,16 @@ def _fetch_micromamba_bin(plat, dest):
 
 
 def bundle_mamba(tools, prefix, plat, out, dry_run):
+    pkgs = [TOOLS[t]["conda"] for t in tools]
+    # Report before touching the network so --dry-run needs no micromamba.
+    if dry_run:
+        info(f"would solve closure for {', '.join(pkgs)} ({conda_subdir(*plat)}), "
+             f"download it, and write {out}")
+        return
     # The solver must RUN on this builder, so use the builder's own micromamba;
     # the bundle needs the TARGET arch's micromamba, which differs under --arch.
     solver = ensure_micromamba(prefix, detect_platform(), dry_run)
-    pkgs = [TOOLS[t]["conda"] for t in tools]
     info(f"solving closure for {', '.join(pkgs)} ({conda_subdir(*plat)})")
-    if dry_run:
-        info(f"  would solve, download the closure, and write {out}")
-        return
     fetch = _mamba_solve(solver, prefix, plat, pkgs)
     info(f"  {len(fetch)} packages in the closure")
     with tempfile.TemporaryDirectory() as td:
@@ -832,15 +836,26 @@ def main(argv=None):
     if args.command == "bundle":
         if not args.output:
             p.error("bundle requires -o/--output FILE")
-        if not args.tools:
-            p.error("bundle requires at least one tool")
         if args.backend == "conda":
             p.error("bundle supports --backend mamba (default) or github, not conda")
-        _require_known(p, args.tools)
+        if args.tools:
+            tools = args.tools
+        elif args.backend == "github":
+            # No "bundle everything" for github: not every registered tool has a
+            # static release asset (e.g. typescript is npm-only), so an all-tools
+            # github bundle would abort partway. Require explicit names there.
+            p.error("bundle --backend github needs explicit tool names "
+                    "(no-args = all is mamba-only)")
+        else:
+            # No tool names on the mamba backend means "bundle everything
+            # registered" -- the easy way to stage a complete offline toolchain
+            # without listing packages by hand.
+            tools = sorted(TOOLS)
+        _require_known(p, tools)
         plat = _resolve_plat(p, args.arch)
         try:
             builder = bundle_github if args.backend == "github" else bundle_mamba
-            builder(args.tools, args.prefix, plat, args.output, args.dry_run)
+            builder(tools, args.prefix, plat, args.output, args.dry_run)
         except Exception as e:
             warn(str(e))
             return 1
