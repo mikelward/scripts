@@ -50,12 +50,13 @@
 # agent) or a key file already exists. Pass --ssh to generate one anyway,
 # or --no-ssh to skip it entirely.
 #
-# The distro npm/Node.js package is installed by default, along with the
-# TypeScript compiler (tsc), which setup-kde needs to build Krohnkite from
-# source without fetching from the npm registry at build time. Pass
-# --no-npm to skip both on machines where the npm package fails to install
-# or where Node is provided some other way (nvm, fnm, corepack, a
-# standalone pnpm, etc.) -- then provide tsc yourself.
+# Node.js (node/npm) and the TypeScript compiler (tsc) are installed because
+# setup-kde needs tsc to build Krohnkite from source without fetching from the
+# npm registry at build time. On privileged boxes they come from the distro
+# package (apt/dnf/brew); under --no-root, where the distro installs are
+# skipped, they come from conda-forge via homepkg instead (rootless). Pass
+# --no-npm to skip them where Node is provided some other way (nvm, fnm,
+# corepack, a system package, etc.) -- then provide tsc yourself.
 
 SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
 CONF_REPO="git@github.com:mikelward/conf.git"
@@ -99,12 +100,13 @@ IGNORE_ERRORS=no
 #   no   - never generate (--no-ssh)
 SSH=auto
 
-# Whether to install the npm/Node.js package and the TypeScript compiler
-# (tsc, needed by setup-kde to build Krohnkite). One of:
-#   yes - install them along with the other system packages (the default)
-#   no  - skip them (--no-npm), for machines where the distro npm package
-#         fails to install or where Node is provided some other way
-#         (nvm, fnm, corepack, a standalone pnpm, etc.)
+# Whether to install Node.js (node/npm) and the TypeScript compiler (tsc),
+# needed by setup-kde to build Krohnkite. One of:
+#   yes - install them (the default). Privileged boxes get the distro npm/node
+#         package plus tsc; --no-root boxes get node/npm/tsc from conda-forge
+#         via homepkg instead.
+#   no  - skip them (--no-npm), for machines where Node is provided some other
+#         way (nvm, fnm, corepack, a system package, etc.) -- provide tsc too.
 NPM=yes
 
 # Whether to run sudo at all. One of:
@@ -187,9 +189,9 @@ Options:
                    one. Forwarded to setup-kde/macos
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
-  --no-npm         Skip the distro npm/Node.js package and the TypeScript
-                   compiler (for machines where npm fails to install or Node
-                   is provided another way; provide tsc yourself)
+  --no-npm         Skip installing Node.js (node/npm) and the TypeScript
+                   compiler (for machines where Node is provided another way;
+                   provide tsc yourself)
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
@@ -574,6 +576,10 @@ install_packages() {
                 warn "skipping remaining Debian package installs"
                 return 0
             fi
+            # Node.js + tsc from the distro on the privileged path (setup-kde
+            # needs tsc to build Krohnkite). Under --no-root apt is skipped
+            # above, and these come from conda-forge via homepkg instead
+            # (install_home_tools).
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo_or_warn apt-get install -y --install-recommends npm \
@@ -689,6 +695,10 @@ install_packages() {
                 warn "skipping remaining Fedora package installs"
                 return 0
             fi
+            # Node.js + tsc from the distro on the privileged path (setup-kde
+            # needs tsc to build Krohnkite). Under --no-root dnf is skipped
+            # above, and these come from conda-forge via homepkg instead
+            # (install_home_tools).
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo_or_warn dnf install -y npm \
@@ -810,7 +820,12 @@ install_packages() {
                 unzip \
                 vim \
                 zsh
-            if test "$NPM" = yes; then
+            # Node.js + tsc from Homebrew on the privileged path (setup-kde
+            # needs tsc to build Krohnkite). brew needs no sudo, so unlike the
+            # apt/dnf branches this can't self-skip under --no-root -- gate it on
+            # ROOT so an unprivileged macOS run gets node/tsc from conda-forge
+            # via homepkg (install_home_tools) instead of a second copy here.
+            if test "$NPM" = yes && test "$ROOT" = yes; then
                 info "Installing Node.js (npm)"
                 brew install node
                 # tsc lets setup-kde build Krohnkite from source without
@@ -1068,17 +1083,26 @@ install_extras() {
 # Under --no-root the apt/dnf package installs are skipped, so the CLI tools
 # they'd provide have to come from somewhere else: homepkg installs prebuilt
 # binaries into a home prefix (~/.local), no root required. Core tools mirror
-# the distro CLI package set; the heavyweight extras (helix, jj, nushell) are
-# added unless the minimal profile is in effect. homepkg resolves them into one
-# home-prefix env; a solve/network failure warns rather than aborting the
-# bootstrap.
+# the distro CLI package set; the node toolchain (node/npm/tsc) is added
+# unless --no-npm, and the heavyweight extras (helix, jj, nushell) unless the
+# minimal profile is in effect. homepkg resolves them into one home-prefix env;
+# a solve/network failure warns rather than aborting the bootstrap.
 install_home_tools() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
         warn "homepkg not found at $homepkg; skipping home-prefix tool install"
         return 0
     fi
-    tools="ripgrep fd bat fzf jq delta gh"
+    # fnm (Node version manager) is a convenience tool -- installed regardless
+    # of --no-npm, mirroring the root path's install_fnm (which is skipped under
+    # --no-root, so fnm comes from here instead).
+    tools="ripgrep fd bat fzf jq delta gh fnm"
+    if test "$NPM" = yes; then
+        # node/npm + tsc are the actual build toolchain (setup-kde needs tsc to
+        # build Krohnkite), gated on --no-npm. The --no-root counterpart to the
+        # distro npm/tsc install on the privileged path -- no root, no distro pkg.
+        tools="$tools node typescript"
+    fi
     if test "$MINIMAL_ENABLED" -eq 0; then
         tools="$tools helix jj nu"
         # shpool is source-only (no conda-forge/prebuilt artifact), so the
@@ -1091,6 +1115,15 @@ install_home_tools() {
     fi
     info "Installing CLI tools into a home prefix via homepkg: $tools"
     if "$homepkg" install $tools; then
+        # homepkg links the tools into ~/.local/bin. Put that on PATH for the
+        # rest of THIS run so later steps and child processes find them --
+        # notably setup-kde, which needs tsc on PATH to build Krohnkite. The
+        # conf repo already puts ~/.local/bin on PATH for interactive shells;
+        # this covers the non-interactive bootstrap however setup was invoked.
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) ;;
+            *) PATH="$HOME/.local/bin:$PATH" ;;
+        esac
         # A prior cargo run points ~/.config/helix/runtime at the source
         # checkout, and hx searches that before the prebuilt runtime -- so drop
         # the stale symlink (only the one install_helix created), same as the
@@ -1128,7 +1161,21 @@ install_uv() {
 
 # --- Install fnm (Fast Node Manager) ---
 
+# fnm is installed as a convenience for interactive, per-project Node version
+# switching (the conf repo hooks it into the shell). It is NOT used to provide
+# the build toolchain -- node/npm and tsc come from the distro or, under
+# --no-root, from homepkg (see install_packages / install_home_tools) -- so
+# setup-kde never depends on it. On the privileged path fnm comes from its curl
+# installer here; under --no-root it comes from conda-forge via homepkg instead,
+# so this function skips.
 install_fnm() {
+    # TODO: explore sourcing fnm from conda-forge on root boxes too, to drop
+    # this curl|bash installer for one uniform mechanism. Deferred for now to
+    # avoid bootstrapping micromamba on every root box just for fnm.
+    if test "$ROOT" = no; then
+        info "fnm comes from homepkg under --no-root"
+        return
+    fi
     if command -v fnm >/dev/null 2>&1; then
         info "fnm already installed"
         return
