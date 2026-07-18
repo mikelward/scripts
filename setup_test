@@ -212,11 +212,11 @@ test_swaync_package_names() {
 # --- TypeScript compiler ---
 
 # setup-kde builds Krohnkite from source without fetching from the npm
-# registry at build time, which needs a local tsc -- so setup installs it
-# alongside npm: Debian/Ubuntu package it as node-typescript, Homebrew as
-# typescript, and Fedora ships no rpm so it's a one-time global npm
-# install during bootstrap.
-test_typescript_installed_with_npm() {
+# registry at build time, which needs a local tsc -- so the privileged path
+# installs it alongside node: Debian/Ubuntu package it as node-typescript,
+# Homebrew as typescript, and Fedora ships no rpm so it's a one-time global
+# npm install. (The --no-root path gets tsc from conda-forge via homepkg.)
+test_typescript_installed_from_distro() {
     assert_source_contains "node-typescript" &&
     assert_source_contains "npm install -g typescript" &&
     assert_source_contains "brew install typescript"
@@ -276,16 +276,23 @@ test_unzip_installed() {
 
 # --- fnm ---
 
-# fnm (Fast Node Manager) is installed via its upstream installer during the
-# install phase, alongside uv. --skip-shell keeps the installer out of the
-# shell rc files, which are managed by the conf repo, not setup. The installer
-# is downloaded to a temp file rather than piped into bash: a piped curl
-# failure is masked (bash exits 0 on empty stdin) so set -e wouldn't catch it.
+# fnm (Fast Node Manager) is installed as a standalone convenience for
+# interactive Node version switching -- not to provision the build toolchain
+# (node/npm/tsc come from the distro or homepkg). On the privileged path it's
+# installed via its upstream curl installer with --skip-shell (the conf repo
+# manages the shell rc files); under --no-root that curl path is skipped and
+# fnm comes from homepkg instead. The installer is downloaded to a temp file
+# rather than piped into bash: a piped curl failure is masked (bash exits 0 on
+# empty stdin) so set -e wouldn't catch it.
 test_fnm_installed() {
     assert_source_contains "install_fnm" &&
     assert_source_contains "https://fnm.vercel.app/install -o" &&
     assert_source_contains "skip-shell" &&
-    assert_source_not_contains "fnm.vercel.app/install | bash"
+    assert_source_not_contains "fnm.vercel.app/install | bash" &&
+    assert_source_contains "fnm comes from homepkg under --no-root" &&
+    # fnm must not drive the Node/tsc install anymore -- no fnm-based provisioning.
+    assert_source_not_contains "fnm install --lts" &&
+    assert_source_not_contains "fnm use lts-latest"
 }
 
 # --- Rust / cargo ---
@@ -372,6 +379,15 @@ test_brew_clears_stale_helix_runtime() {
 test_legacy_root_config_is_logged() {
     assert_source_contains "installing the legacy root config" &&
     assert_source_contains "for the primary Rust root config"
+}
+
+# Under --no-root the distro npm/tsc install is skipped (apt/dnf need root);
+# node/npm and tsc come from conda-forge via homepkg instead, gated on the NPM
+# flag. fnm rides along too as a convenience tool, but outside the NPM gate --
+# installed regardless of --no-npm, mirroring the root path's install_fnm.
+test_home_tools_include_node_toolchain() {
+    assert_source_contains "delta gh fnm" &&
+    assert_source_contains 'tools="$tools node typescript"'
 }
 
 # --- SSH key ---
@@ -550,8 +566,8 @@ run_test "shared Wayland stack installs independently of hyprland" \
     test_shared_wayland_stack_decoupled
 run_test "swaync installs under its distro package names, decoupled" \
     test_swaync_package_names
-run_test "tsc installs alongside npm on every platform" \
-    test_typescript_installed_with_npm
+run_test "tsc installs from the distro alongside node" \
+    test_typescript_installed_from_distro
 run_test "sudo warning includes a useful stderr reason" \
     test_sudo_warning_uses_stderr
 run_test "sudo warning recognizes command-not-found status" \
@@ -562,12 +578,14 @@ run_test "successful sudo preserves its stderr" \
     test_sudo_success_preserves_stderr
 run_test "sudo-dependent blocks guard every privileged call" \
     test_sudo_calls_are_guarded
-run_test "fnm installs via its upstream installer with --skip-shell" \
-    test_fnm_installed
 run_test "rustup installs with --no-modify-path" \
     test_rust_installs_without_modifying_path
 run_test "uv installs with --no-modify-path" \
     test_uv_installs_without_modifying_path
+run_test "fnm installs as a tool, not the node provisioner" \
+    test_fnm_installed
+run_test "--no-root node toolchain comes from homepkg" \
+    test_home_tools_include_node_toolchain
 run_test "unzip installs on every platform" test_unzip_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg

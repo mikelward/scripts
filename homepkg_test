@@ -61,6 +61,39 @@ _r = hp.conda_resolve(_index, "ripgrep")
 check("conda_resolve picks newest version+build", _r is not None and _r[0] == "ripgrep-14.1.0-1.conda")
 check("conda_resolve returns None for unknown pkg", hp.conda_resolve(_index, "nope") is None)
 
+# install_conda must look in the noarch subdir too: conda-forge ships
+# pure-language tools (e.g. typescript) as noarch, not under the platform
+# subdir, so a platform-only lookup would fail to resolve them.
+_saved_ci = hp.conda_index
+try:
+    def _index_only_noarch(subdir):
+        if subdir == "noarch":
+            return ({"packages.conda": {"typescript-5.4.5-0.conda": {
+                "name": "typescript", "version": "5.4.5", "build_number": 0}}},
+                f"{hp.CONDA_CHANNEL}/noarch")
+        return ({"packages": {}, "packages.conda": {}}, f"{hp.CONDA_CHANNEL}/{subdir}")
+    hp.conda_index = _index_only_noarch
+    _err = None
+    try:
+        hp.install_conda("typescript", {"conda": "typescript", "bins": ["tsc"]},
+                         "/tmp/homepkg-test-noarch", ("linux", "x86_64"), dry_run=True)
+    except Exception as e:  # noqa: BLE001
+        _err = e
+    check("install_conda resolves a noarch-only package", _err is None)
+
+    hp.conda_index = lambda subdir: ({"packages": {}, "packages.conda": {}},
+                                     f"{hp.CONDA_CHANNEL}/{subdir}")
+    _err2 = None
+    try:
+        hp.install_conda("typescript", {"conda": "typescript", "bins": ["tsc"]},
+                         "/tmp/homepkg-test-noarch", ("linux", "x86_64"), dry_run=True)
+    except hp.HomepkgError as e:
+        _err2 = e
+    check("install_conda error names both platform subdir and noarch",
+          _err2 is not None and "noarch" in str(_err2))
+finally:
+    hp.conda_index = _saved_ci
+
 # --- github asset selection --------------------------------------------------
 
 _linux = hp.github_asset_tokens("linux", "x86_64")
@@ -145,6 +178,18 @@ _list = _run("list")
 check("list exits 0", _list.returncode == 0)
 check("list shows every registered tool",
       all(t in _list.stdout for t in hp.TOOLS))
+
+# The node toolchain is served from conda-forge for the setup --no-root path:
+# node/npm/npx from the nodejs package, tsc from typescript, plus fnm.
+check("registry maps node to conda-forge nodejs",
+      hp.TOOLS["node"]["conda"] == "nodejs")
+check("node exposes npm and npx alongside node",
+      set(hp.TOOLS["node"]["bins"]) == {"node", "npm", "npx"})
+check("registry maps typescript with a tsc bin",
+      hp.TOOLS["typescript"]["conda"] == "typescript"
+      and hp.TOOLS["typescript"]["bins"] == ["tsc"])
+check("registry maps fnm to conda-forge fnm",
+      hp.TOOLS["fnm"]["conda"] == "fnm" and hp.TOOLS["fnm"]["bins"] == ["fnm"])
 
 check("unknown tool errors", _run("install", "bogustool").returncode != 0)
 check("install with no tools errors", _run("install").returncode != 0)

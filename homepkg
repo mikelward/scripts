@@ -61,6 +61,15 @@ TOOLS = {
     "helix":   {"conda": "helix",      "github": "helix-editor/helix", "bins": ["hx"]},
     "jj":      {"conda": "jujutsu",    "github": "jj-vcs/jj",          "bins": ["jj"]},
     "nu":      {"conda": "nushell",    "github": "nushell/nushell",    "bins": ["nu"]},
+    # Node toolchain for the setup --no-root path: node/npm/tsc from conda-forge
+    # instead of a distro package, plus fnm (which on root boxes comes from its
+    # own curl installer -- no conda there yet). npm/npx ride along in the nodejs
+    # package; tsc comes from the typescript package. (github is unused on the
+    # default mamba path -- typescript has no standalone binary release, so
+    # --backend github can't provide it; it errors cleanly if attempted.)
+    "node":       {"conda": "nodejs",     "github": "nodejs/node",          "bins": ["node", "npm", "npx"]},
+    "typescript": {"conda": "typescript", "github": "microsoft/TypeScript", "bins": ["tsc"]},
+    "fnm":        {"conda": "fnm",        "github": "Schniz/fnm",           "bins": ["fnm"]},
 }
 
 
@@ -213,11 +222,20 @@ def conda_extract(pkg_path, prefix):
 
 def install_conda(tool, meta, prefix, plat, dry_run):
     pkg = meta["conda"]
-    subdir = conda_subdir(*plat)
-    index, base = conda_index(subdir)
-    found = conda_resolve(index, pkg)
+    # Check the platform subdir first, then noarch: conda-forge publishes
+    # pure-language packages (e.g. typescript) as noarch, so a package can live
+    # in either subdir. The mamba backend's solver handles this transparently;
+    # the stateless conda backend has to look in both itself.
+    found = None
+    for subdir in (conda_subdir(*plat), "noarch"):
+        index, base = conda_index(subdir)
+        found = conda_resolve(index, pkg)
+        if found:
+            break
     if not found:
-        raise HomepkgError(f"{tool}: conda-forge package '{pkg}' not found for {subdir}")
+        raise HomepkgError(
+            f"{tool}: conda-forge package '{pkg}' not found for "
+            f"{conda_subdir(*plat)} or noarch")
     fn, pmeta = found
     url = f"{base}/{fn}"
     info(f"{tool}: conda-forge {pkg} {pmeta['version']} ({subdir})")
