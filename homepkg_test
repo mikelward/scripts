@@ -190,6 +190,8 @@ check("registry maps typescript with a tsc bin",
       and hp.TOOLS["typescript"]["bins"] == ["tsc"])
 check("registry maps fnm to conda-forge fnm",
       hp.TOOLS["fnm"]["conda"] == "fnm" and hp.TOOLS["fnm"]["bins"] == ["fnm"])
+check("registry maps uv with uv/uvx bins",
+      hp.TOOLS["uv"]["conda"] == "uv" and hp.TOOLS["uv"]["bins"] == ["uv", "uvx"])
 
 check("unknown tool errors", _run("install", "bogustool").returncode != 0)
 check("install with no tools errors", _run("install").returncode != 0)
@@ -197,6 +199,21 @@ check("bad --arch errors", _run("--arch", "weird", "install", "jq").returncode !
 check("unknown backend errors", _run("--backend", "apt", "install", "jq").returncode != 0)
 # These stay subprocesses: argparse rejects them before any backend/network.
 check("remove requires tools", _run("remove").returncode != 0)
+
+# `bundle` with no tool names stages EVERY registered tool -- the easy way to
+# build a complete offline toolchain by hand. --dry-run must stay network-free
+# (it reports the closure without bootstrapping micromamba).
+_bundle_all = _run("bundle", "-o",
+                   os.path.join(tempfile.gettempdir(), "hp-bundle-test.tgz"),
+                   "--dry-run")
+check("bundle with no tools targets every registered package",
+      _bundle_all.returncode == 0
+      and all(hp.TOOLS[t]["conda"] in _bundle_all.stderr for t in hp.TOOLS))
+# ...but no-args "all" is mamba-only: not every tool has a github release asset
+# (typescript is npm-only), so the github backend must require explicit names.
+check("bundle --backend github rejects no-args all-tools",
+      _run("--backend", "github", "bundle", "-o",
+           os.path.join(tempfile.gettempdir(), "hp-gh-test.tgz")).returncode != 0)
 
 # --- micromamba backend: env paths and symlink management --------------------
 

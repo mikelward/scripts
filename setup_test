@@ -310,11 +310,16 @@ test_rust_installs_without_modifying_path() {
 # The uv installer edits shell rc/profile files by default. --no-modify-path
 # keeps the fresh install out of them; the conf repo already has ~/.local/bin
 # on PATH. `uv self update` reruns the installer on the update path, so it needs
-# UV_NO_MODIFY_PATH=1 to stay out of the config files too.
+# UV_NO_MODIFY_PATH=1 to stay out of the config files too. Both paths are
+# non-fatal: install_uv runs before install_home_tools, so a hard failure here
+# (e.g. offline) would kill an offline "setup --no-root" before the bundle
+# install where uv can instead come from the bundle.
 test_uv_installs_without_modifying_path() {
     assert_source_contains "uv/install.sh | sh -s -- --no-modify-path" &&
     assert_source_not_contains "uv/install.sh | sh$" &&
-    assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update"
+    assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update" &&
+    assert_source_contains "could not update uv" &&
+    assert_source_contains "could not install uv"
 }
 
 # --- Homebrew extras backend ---
@@ -531,10 +536,38 @@ test_home_tools_warns_about_shpool() {
 # brew path -- and only after a successful install so a failed run doesn't strip
 # a still-active cargo hx's runtime.
 test_home_tools_clears_stale_helix_runtime() {
-    assert_source_contains 'if "$homepkg" install $tools; then' &&
-    assert_source_contains 'helix_runtime=' &&
+    # Gated on hx being installed (linked into ~/.local/bin), not on the minimal
+    # profile -- a full bundle can install helix even under --minimal.
+    assert_source_contains 'test -x "$HOME/.local/bin/hx"' &&
     assert_source_contains 'readlink "$helix_runtime"' &&
     assert_source_contains "Removing stale Helix runtime symlink"
+}
+
+# On a fresh env, install_home_tools prefers a prebuilt bundle (which installs
+# offline). A bundle installs its full contents, so afterward it reconciles the
+# requested set online with "install $tools" -- adding any requested tool the
+# bundle lacked (a bare "update" wouldn't) and freshening -- rather than only
+# updating what's already present. An existing env or a missing bundle takes the
+# online install. Discovery: $HOMEPKG_BUNDLE, or homepkg-bundle.tgz beside the
+# scripts repo / in $HOME.
+test_home_tools_uses_bundle_optimistically() {
+    assert_source_contains '"$homepkg" install-bundle "$bundle"' &&
+    assert_source_contains 'HOMEPKG_BUNDLE' &&
+    assert_source_contains 'homepkg-bundle.tgz' &&
+    assert_source_contains 'conda-meta' &&
+    assert_source_contains "a bundle installs its full contents" &&
+    assert_source_contains "couldn't reconcile the requested tools online"
+}
+
+# A failed pull on an EXISTING checkout (e.g. offline) must warn and continue,
+# not abort under set -e -- otherwise the offline "setup --no-root" bootstrap
+# dies on the scripts/conf pull before reaching the homepkg bundle install. A
+# failed clone (no checkout to fall back to) stays fatal, so success is never
+# faked when there's nothing usable on disk.
+test_clone_or_pull_degrades_offline() {
+    assert_source_contains "could not pull" &&
+    assert_source_contains "using the existing checkout" &&
+    assert_source_not_contains "could not clone"
 }
 
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
@@ -549,6 +582,10 @@ run_test "--no-root/--root are the policy flags (SUDO is the mechanism)" \
     test_no_root_flags
 run_test "--no-root implies --no-sudo" \
     test_no_root_implies_no_sudo
+run_test "--no-root prefers a prebuilt bundle, then refreshes online" \
+    test_home_tools_uses_bundle_optimistically
+run_test "clone_or_pull warns and continues on an offline failure" \
+    test_clone_or_pull_degrades_offline
 run_test "--no-root installs CLI tools into a home prefix via homepkg" \
     test_no_root_installs_via_homepkg
 run_test "--no-root is accepted and documented" \
