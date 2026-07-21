@@ -26,7 +26,7 @@ setup() {
   mkdir -p "$BIN"
   : > "$CALLS"
   # The dispatcher sources this shared lib from its own directory ($BIN here).
-  cp "$SCRIPT_DIR/sessionbackend" "$BIN/sessionbackend"
+  cp "$SCRIPT_DIR/sessionlib" "$BIN/sessionlib"
   # dirname for the dispatchers; sed/cut/grep for maketmux's session_exists
   # lookup (via autotmux's list_tmux_sessions); cat for the fake tmux's
   # list-sessions fixture.

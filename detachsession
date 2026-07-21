@@ -3,13 +3,13 @@
 #
 # Detaches the current session whichever multiplexer it belongs to, so one
 # command/keybinding works in either world. Backend selection (tmux vs shpool)
-# is shared with the rest of the session family via sessionbackend; see there
+# is shared with the rest of the session family via sessionlib; see there
 # for the cascade.
 #
 # All arguments are passed through to the chosen script.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
-. "$dir/sessionbackend"
+. "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {
   echo "detachsession: no tmux or shpool backend available" >&2

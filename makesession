@@ -3,13 +3,13 @@
 #
 # Creates (and attaches to) a named session with whichever multiplexer this
 # machine uses, so one command works in either world. Backend selection (tmux
-# vs shpool) is shared with the rest of the session family via sessionbackend;
+# vs shpool) is shared with the rest of the session family via sessionlib;
 # see there for the cascade.
 #
 # All arguments (the session name, and any further pass-through) are forwarded.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
-. "$dir/sessionbackend"
+. "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {
   echo "makesession: no tmux or shpool backend available" >&2

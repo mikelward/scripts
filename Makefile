@@ -3,7 +3,6 @@ test:
 	./autotmux_test
 	./autosession_test
 	./sessionlib_test
-	./sessionbackend_test
 	./changeshpool_test
 	./changetmux_test
 	./changesession_test
