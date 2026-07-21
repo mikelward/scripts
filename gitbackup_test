@@ -1,0 +1,127 @@
+#!/bin/bash
+# Tests for gitbackup's repository discovery (find_git_repos): it must emit
+# every bare repo under the source root NUL-delimited, so paths containing
+# spaces -- or even newlines -- survive the pipe into the backup loop.
+#
+# gitbackup wraps its executable flow in main() and only runs it when executed
+# (not sourced), so we source it here to exercise find_git_repos in isolation.
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# gitbackup sources $HOME/bin/functions at load time; an empty stub is enough
+# because main() (the only user of that library) never runs when sourced.
+STUB_HOME="$(mktemp -d)"
+mkdir -p "$STUB_HOME/bin"
+: > "$STUB_HOME/bin/functions"
+export HOME="$STUB_HOME"
+. "$SCRIPT_DIR/gitbackup"
+# Sourcing gitbackup sets IFS to space/tab/newline; that is the default anyway,
+# but be explicit so the harness below is unaffected.
+IFS=$' \t\n'
+
+trap 'rm -rf "$STUB_HOME" "${SRCROOT:-}"' EXIT
+
+# Collect find_git_repos' NUL-delimited output into the RESULT array, the way
+# the real backup loop consumes it.
+collect() {
+  RESULT=()
+  local d
+  while IFS= read -r -d '' d; do
+    RESULT+=("$d")
+  done < <(find_git_repos "$1")
+}
+
+assert_count() {
+  if test "${#RESULT[@]}" -ne "$1"; then
+    echo "  FAIL: expected $1 repo(s), got ${#RESULT[@]}"
+    printf '  got: %q\n' "${RESULT[@]}"
+    TEST_FAILED=1
+  fi
+}
+
+assert_contains() {
+  local want="$1" d
+  for d in "${RESULT[@]}"; do
+    test "$d" = "$want" && return 0
+  done
+  echo "  FAIL: expected repo not found:"
+  printf '  want: %q\n' "$want"
+  printf '  got:  %q\n' "${RESULT[@]}"
+  TEST_FAILED=1
+}
+
+new_srcroot() {
+  SRCROOT="$(mktemp -d)"
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  TEST_FAILED=
+  SRCROOT=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  rm -rf "$SRCROOT"
+}
+
+test_finds_flat_repos() {
+  new_srcroot
+  mkdir -p "$SRCROOT/proj1.git" "$SRCROOT/proj2.git"
+  collect "$SRCROOT"
+  assert_count 2
+  assert_contains "$SRCROOT/proj1.git"
+  assert_contains "$SRCROOT/proj2.git"
+}
+
+test_finds_nested_repos() {
+  new_srcroot
+  mkdir -p "$SRCROOT/proj1.git" "$SRCROOT/group/proj2a.git" "$SRCROOT/group/proj2b.git"
+  collect "$SRCROOT"
+  assert_count 3
+  assert_contains "$SRCROOT/group/proj2a.git"
+  assert_contains "$SRCROOT/group/proj2b.git"
+}
+
+test_ignores_non_git_dirs() {
+  new_srcroot
+  mkdir -p "$SRCROOT/repo.git" "$SRCROOT/notarepo" "$SRCROOT/docs"
+  collect "$SRCROOT"
+  assert_count 1
+  assert_contains "$SRCROOT/repo.git"
+}
+
+test_repo_name_with_spaces() {
+  new_srcroot
+  mkdir -p "$SRCROOT/my project.git"
+  collect "$SRCROOT"
+  assert_count 1
+  assert_contains "$SRCROOT/my project.git"
+}
+
+test_repo_name_with_newline() {
+  # The regression the NUL delimiter buys us: a newline in a repo path used to
+  # split one repo into two bogus entries with newline-delimited reads.
+  new_srcroot
+  local weird
+  weird="$SRCROOT/$(printf 'weird\nname').git"
+  mkdir -p "$weird"
+  collect "$SRCROOT"
+  assert_count 1
+  assert_contains "$weird"
+}
+
+run_test "finds flat bare repos" test_finds_flat_repos
+run_test "finds nested bare repos" test_finds_nested_repos
+run_test "ignores non-.git directories" test_ignores_non_git_dirs
+run_test "handles a repo name with spaces" test_repo_name_with_spaces
+run_test "handles a repo name with a newline" test_repo_name_with_newline
+
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

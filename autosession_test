@@ -17,6 +17,8 @@ setup() {
   CALLS="$TEST_TMPDIR/calls"
   mkdir -p "$BIN"
   : > "$CALLS"
+  # The dispatcher sources this shared lib from its own directory ($BIN here).
+  cp "$SCRIPT_DIR/sessionbackend" "$BIN/sessionbackend"
   ln -s "$(command -v dirname)" "$BIN/dirname"
 }
 

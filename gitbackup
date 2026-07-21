@@ -35,6 +35,22 @@ cleanup()
     fi
 }
 
+usage()
+{
+    cat <<EOF 1>&2
+Usage: gitbackup [-h] [-n]
+       gitbackup [--help] [--simulate]
+EOF
+}
+
+# Emit each bare-repo directory under $1, NUL-delimited so that paths
+# containing spaces or newlines survive the pipe into the backup loop. (The
+# consumer must read with `IFS= read -r -d ''`.)
+find_git_repos()
+{
+    find "$1" -type d -name "*.git" -print0
+}
+
 #
 # default configuration
 #
@@ -48,199 +64,201 @@ tmpdir="${TMPDIR:-$HOME/tmp}"
 dstroot=mikelward.homedns.org:/home/mikel/git
 logfile=/home/mikelward/log/gitbackup.log
 
-#
-# start
-#
-trap 'abort' INT TERM
-
-#
-# ensure required programs are available
-#
-if ! silent type git
-then
-    error "Cannot find git in PATH"
-    exit 1
-fi
-
-usage()
+main()
 {
-    cat <<EOF 1>&2
-Usage: gitbackup [-h] [-n]
-       gitbackup [--help] [--simulate]
-EOF
+    #
+    # start
+    #
+    trap 'abort' INT TERM
+
+    #
+    # ensure required programs are available
+    #
+    if ! silent type git
+    then
+        error "Cannot find git in PATH"
+        exit 1
+    fi
+
+    while test $# -gt 0
+    do
+        case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -n|--simulate)
+            simulate=true
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "Invalid option $1" 1>&2
+            usage
+            exit 2
+            ;;
+        *)
+            break
+            ;;
+        esac
+        shift
+    done
+
+    #
+    # normalize paths
+    #
+    dstroot=${dstroot%/}/
+    srcroot=${srcroot%/}/
+
+    info "Starting gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
+
+    if is_remote "$dstroot"
+    then
+        debug "Remote destination"
+        dsthost=$(get_hostname_part "$dstroot")
+        dstbase=$(get_location_part "$dstroot")
+        dstbase=${dstbase%/}/
+        debug "dsthost=$dsthost, dstbase=$dstbase"
+    else
+        error "Local destinations are currently unsupported"
+        exit 1
+    fi
+
+    # assumption: $srcroot contains subdirectiories which are git bare repos
+    # e.g.
+    # srcroot=/srv/git
+    # /srv/git
+    #   /srv/git/proj1.git
+    #   /srv/git/proj2/proj2a.git
+    #   /srv/git/proj2/proj2b.git
+    while IFS= read -r -d '' srcdir
+    do
+        info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+
+        # do each repo in a new subshell so we can call cleanup on error and success via trap
+        (
+
+        trap cleanup EXIT
+
+        tmpdir=$(get_temporary_directory)
+        if test $? -ne 0
+        then
+            error "Cannot determine temporary directory"
+            exit 1
+        fi
+
+        # case 1: srcdir is subdir of srcroot - OK
+        # case 2: srcdir is / - CAN'T HAPPEN
+        # case 3: srcdir = srcroot - NOT SUPPORTED
+        reponame=${srcdir#$srcroot}
+        reponame=${reponame%/}
+        if test "$reponame" = ""
+        then
+            error "Cannot determine repository name: invalid srcdir?"
+            exit 1
+        fi
+
+        #
+        # check disk space requirements
+        #
+        size=$(get_size_of_file_or_directory "$srcdir")
+        if test $? -ne 0
+        then
+            error "Cannot determine disk usage of $srcdir"
+            exit 1
+        fi
+
+        available=$(get_free_space_on_filesystem "$tmpdir")
+        if test $? -ne 0
+        then
+            error "Cannot determine free space on $tmpdir"
+            exit 1
+        fi
+
+        if test $available -lt $size
+        then
+            error "Need at least $size kilobytes free on $tmpdir"
+            exit 1
+        fi
+
+        #
+        # take a snapshot of the repository
+        #
+
+        # turn the path into a single directory so we don't have to mess around with mkdirs
+        dirname=$reponame
+        dirname=${dirname//\//.}
+        if test -z "$dirname"
+        then
+            dirname="root"
+        fi
+        snapdir="$tmpdir"/"$dirname".$$
+        if test -d "$snapdir"
+        then
+            error "Snapshot directory $snapdir already exists"
+            exit 1
+        fi
+
+        info "Cloning $srcdir to $snapdir"
+        run git clone --bare --quiet "$srcdir" "$snapdir"
+        if test $? -ne 0
+        then
+            error "Cannot clone $srcdir"
+            exit 1
+        fi
+
+        #
+        # copy the hot copy to the backup directory
+        #
+        dstdir=$dstbase$reponame
+        dsturl=$dsthost:$dstdir
+        debug "dstdir=$dstdir, dsturl=$dsturl"
+
+        # create the destination directory if it doesn't exist
+        # (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
+        debug "Creating $dstdir on $dsthost"
+        # -n: don't let ssh inherit the find pipe feeding this loop as stdin,
+        # or it drains the remaining repository paths and only the first repo
+        # gets backed up
+        run ssh -n $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
+
+        flags=
+        if test "$debug"
+        then
+            flags="$flags -v"
+        fi
+        if test "$quiet"
+        then
+            flags="$flags -q"
+        fi
+        #scp -C -r $flags "$snapdir" "$dst"
+        # ensure source has a trailing slash so we only copy the directory contents
+        # (local:~/svn.12345/ -> remote:~/svn rather than
+        #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
+        snapdir=${snapdir%/}/
+        info "Syncing $snapdir to $dsturl"
+        run rsync -a --delete $flags "$snapdir" "$dsturl"
+        if test $? -ne 0
+        then
+            error "Error syncing $snapdir to $dsturl"
+            exit 1
+        fi
+
+        )
+
+        info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+    done < <(find_git_repos "$srcroot")
+
+    info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
 }
 
-while test $# -gt 0
-do
-    case "$1" in
-    -h|--help)
-        usage
-        exit 0
-        ;;
-    -n|--simulate)
-        simulate=true
-        ;;
-    --)
-        shift
-        break
-        ;;
-    -*)
-        echo "Invalid option $1" 1>&2
-        usage
-        exit 2
-        ;;
-    *)
-        break
-        ;;
-    esac
-    shift
-done
-
-#
-# normalize paths
-#
-dstroot=${dstroot%/}/
-srcroot=${srcroot%/}/
-
-info "Starting gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
-
-if is_remote "$dstroot"
-then
-    debug "Remote destination"
-    dsthost=$(get_hostname_part "$dstroot")
-    dstbase=$(get_location_part "$dstroot")
-    dstbase=${dstbase%/}/
-    debug "dsthost=$dsthost, dstbase=$dstbase"
-else
-    error "Local destinations are currently unsupported"
-    exit 1
-fi
-
-# assumption: $srcroot contains subdirectiories which are git bare repos
-# e.g.
-# srcroot=/srv/git
-# /srv/git
-#   /srv/git/proj1.git
-#   /srv/git/proj2/proj2a.git
-#   /srv/git/proj2/proj2b.git
-while IFS= read -r srcdir
-do
-    info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
-
-    # do each repo in a new subshell so we can call cleanup on error and success via trap
-    (
-
-    trap cleanup EXIT
-
-    tmpdir=$(get_temporary_directory)
-    if test $? -ne 0
-    then
-        error "Cannot determine temporary directory"
-        exit 1
-    fi
-
-    # case 1: srcdir is subdir of srcroot - OK
-    # case 2: srcdir is / - CAN'T HAPPEN
-    # case 3: srcdir = srcroot - NOT SUPPORTED
-    reponame=${srcdir#$srcroot}
-    reponame=${reponame%/}
-    if test "$reponame" = ""
-    then
-        error "Cannot determine repository name: invalid srcdir?"
-        exit 1
-    fi
-
-    #
-    # check disk space requirements
-    #
-    size=$(get_size_of_file_or_directory "$srcdir")
-    if test $? -ne 0
-    then
-        error "Cannot determine disk usage of $srcdir"
-        exit 1
-    fi
-
-    available=$(get_free_space_on_filesystem "$tmpdir")
-    if test $? -ne 0
-    then
-        error "Cannot determine free space on $tmpdir"
-        exit 1
-    fi
-
-    if test $available -lt $size
-    then
-        error "Need at least $size kilobytes free on $tmpdir"
-        exit 1
-    fi
-
-    #
-    # take a snapshot of the repository
-    #
-
-    # turn the path into a single directory so we don't have to mess around with mkdirs
-    dirname=$reponame
-    dirname=${dirname//\//.}
-    if test -z "$dirname"
-    then
-        dirname="root"
-    fi
-    snapdir="$tmpdir"/"$dirname".$$
-    if test -d "$snapdir"
-    then
-        error "Snapshot directory $snapdir already exists"
-        exit 1
-    fi
-
-    info "Cloning $srcdir to $snapdir"
-    run git clone --bare --quiet "$srcdir" "$snapdir"
-    if test $? -ne 0
-    then
-        error "Cannot clone $srcdir"
-        exit 1
-    fi
-
-    #
-    # copy the hot copy to the backup directory
-    #
-    dstdir=$dstbase$reponame
-    dsturl=$dsthost:$dstdir
-    debug "dstdir=$dstdir, dsturl=$dsturl"
-
-    # create the destination directory if it doesn't exist
-    # (rsync won't create the whole tree because we're only syncing part of the tree on each pass)
-    debug "Creating $dstdir on $dsthost"
-    # -n: don't let ssh inherit the find pipe feeding this loop as stdin,
-    # or it drains the remaining repository paths and only the first repo
-    # gets backed up
-    run ssh -n $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
-
-    flags=
-    if test "$debug"
-    then
-        flags="$flags -v"
-    fi
-    if test "$quiet"
-    then
-        flags="$flags -q"
-    fi
-    #scp -C -r $flags "$snapdir" "$dst"
-    # ensure source has a trailing slash so we only copy the directory contents
-    # (local:~/svn.12345/ -> remote:~/svn rather than
-    #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
-    snapdir=${snapdir%/}/
-    info "Syncing $snapdir to $dsturl"
-    run rsync -a --delete $flags "$snapdir" "$dsturl"
-    if test $? -ne 0
-    then
-        error "Error syncing $snapdir to $dsturl"
-        exit 1
-    fi
-
-    )
-
-    info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
-done < <(find "$srcroot" -type d -name "*.git")
-
-info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
+# Run unless sourced (e.g. by gitbackup_test, which exercises find_git_repos in
+# isolation). When executed, $0 ends in "gitbackup"; when sourced, $0 is the
+# sourcing script.
+case "${0##*/}" in
+gitbackup) main "$@" ;;
+esac
 
 # vim: set ts=4 sw=4 tw=0 et:

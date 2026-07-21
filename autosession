@@ -2,44 +2,20 @@
 # autosession - dispatch to autotmux or autoshpool for the chosen backend
 #
 # A single entry point for the startup auto-attach, so one shrc line works
-# whichever multiplexer a machine uses:
-#   * inside tmux  ($TMUX set)                 -> autotmux
-#   * inside shpool ($SHPOOL_SESSION_NAME set) -> autoshpool
-#   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (shpool first, the
-#     family default -- matching the shell session_backend helper).
-#
-# All arguments are passed through to the chosen script, so "autosession",
-# "autosession switch <target>", and pass-through commands all work. In shrc:
+# whichever multiplexer a machine uses. Backend selection (tmux vs shpool) is
+# shared with the rest of the session family via sessionbackend; see there for
+# the cascade. In shrc:
 #   autosession && exit
 #
-# Shares its backend selection with changesession (the interactive switcher),
-# so $SESSION_BACKEND picks the multiplexer for both.
+# All arguments are passed through to the chosen script, so "autosession",
+# "autosession switch <target>", and pass-through commands all work.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+. "$dir/sessionbackend"
 
-run() {
-  exec "$dir/$1" "${@:2}"
+backend="$(resolve_session_backend)" || {
+  echo "autosession: no tmux or shpool backend available" >&2
+  exit 1
 }
 
-if test -n "$TMUX"; then
-  run autotmux "$@"
-fi
-if test -n "$SHPOOL_SESSION_NAME"; then
-  run autoshpool "$@"
-fi
-
-case "${SESSION_BACKEND:-}" in
-  tmux)   run autotmux "$@" ;;
-  shpool) run autoshpool "$@" ;;
-esac
-
-if command -v shpool >/dev/null 2>&1; then
-  run autoshpool "$@"
-fi
-if command -v tmux >/dev/null 2>&1; then
-  run autotmux "$@"
-fi
-
-echo "autosession: no tmux or shpool backend available" >&2
-exit 1
+exec "$dir/auto$backend" "$@"
