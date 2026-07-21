@@ -1,11 +1,14 @@
 #!/bin/bash
-# Tests for sessionlib's shared picker engine (build_list / run_picker).
+# Tests for sessionlib: the backend selector (resolve_session_backend) and the
+# shared picker engine (build_list / run_picker).
 #
-# These drive sessionlib directly with stub backend_* hooks, so they can cover
-# cases the per-backend scripts can't easily reach -- in particular an auto-name
-# that already exists as an *attached* session (changeshpool/changetmux only
-# ever auto-name a disconnected reuse or a fresh number, so a sessionlib-level
-# stub is the only way to prove the de-dup is status-agnostic).
+# The picker tests drive sessionlib directly with stub backend_* hooks, so they
+# can cover cases the per-backend scripts can't easily reach -- in particular an
+# auto-name that already exists as an *attached* session (changeshpool/changetmux
+# only ever auto-name a disconnected reuse or a fresh number, so a sessionlib-level
+# stub is the only way to prove the de-dup is status-agnostic). The resolver
+# tests exercise resolve_session_backend across the $TMUX / $SHPOOL_SESSION_NAME
+# / $SESSION_BACKEND / installed matrix in controlled subshells.
 
 set -e
 
@@ -13,6 +16,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
+
+# Fake-PATH fixtures so resolve_session_backend's `command -v tmux/shpool`
+# fallback can be driven deterministically (real tmux/shpool can't leak in).
+BIN_NONE="$(mktemp -d)"
+BIN_TMUX="$(mktemp -d)";   printf '#!/bin/sh\n' >"$BIN_TMUX/tmux";     chmod +x "$BIN_TMUX/tmux"
+BIN_SHPOOL="$(mktemp -d)"; printf '#!/bin/sh\n' >"$BIN_SHPOOL/shpool"; chmod +x "$BIN_SHPOOL/shpool"
+BIN_BOTH="$(mktemp -d)"
+printf '#!/bin/sh\n' >"$BIN_BOTH/tmux"; printf '#!/bin/sh\n' >"$BIN_BOTH/shpool"
+chmod +x "$BIN_BOTH/tmux" "$BIN_BOTH/shpool"
+trap 'rm -rf "$BIN_NONE" "$BIN_TMUX" "$BIN_SHPOOL" "$BIN_BOTH"' EXIT
 
 # --- harness ---------------------------------------------------------------
 
@@ -164,6 +177,59 @@ test_picker_query_matches_display_field() {
     || { echo "  FAIL: query 'vim' matches nothing under the picker's search flags"; TEST_FAILED=1; }
   rm -rf "$TMPDIR_FZF"
 }
+
+# --- backend selection: resolve_session_backend ------------------------------
+
+# Run resolve_session_backend under a controlled environment, capturing its
+# stdout in $rb_out and exit status in $rb_rc. Args: <tmux> <shpool_name>
+# <session_backend> <PATH>. The values are set only inside the subshell, so the
+# parent env is untouched; PATH controls which of tmux/shpool looks "installed".
+run_resolve() {
+  set +e
+  rb_out="$(
+    TMUX="$1"; SHPOOL_SESSION_NAME="$2"; SESSION_BACKEND="$3"; PATH="$4"
+    resolve_session_backend
+  )"
+  rb_rc=$?
+  set -e
+}
+assert_resolve() { # <expected-out> <expected-rc>
+  test "$rb_out" = "$1"  || { echo "  FAIL: expected backend '$1', got '$rb_out'"; TEST_FAILED=1; }
+  test "$rb_rc" -eq "$2" || { echo "  FAIL: expected status $2, got $rb_rc"; TEST_FAILED=1; }
+}
+
+test_resolve_inside_tmux()   { run_resolve /tmp/sock ""   ""     "$BIN_BOTH";   assert_resolve tmux 0; }
+test_resolve_inside_shpool() { run_resolve ""        work ""     "$BIN_BOTH";   assert_resolve shpool 0; }
+test_resolve_active_beats_session_backend() {
+  # An active multiplexer wins over $SESSION_BACKEND -- you can't switch backends
+  # from inside a live session.
+  run_resolve /tmp/sock "" shpool "$BIN_BOTH"; assert_resolve tmux 0
+}
+test_resolve_session_backend_tmux()    { run_resolve "" "" tmux   "$BIN_BOTH";   assert_resolve tmux 0; }
+test_resolve_session_backend_shpool()  { run_resolve "" "" shpool "$BIN_BOTH";   assert_resolve shpool 0; }
+test_resolve_fallback_tmux()           { run_resolve "" "" ""     "$BIN_TMUX";   assert_resolve tmux 0; }
+test_resolve_fallback_shpool()         { run_resolve "" "" ""     "$BIN_SHPOOL"; assert_resolve shpool 0; }
+test_resolve_fallback_prefers_shpool() { run_resolve "" "" ""     "$BIN_BOTH";   assert_resolve shpool 0; }
+test_resolve_none()                    { run_resolve "" "" ""     "$BIN_NONE";   assert_resolve "" 1; }
+
+run_test test_resolve_inside_tmux \
+  "resolve: inside tmux -> tmux"
+run_test test_resolve_inside_shpool \
+  "resolve: inside shpool -> shpool"
+run_test test_resolve_active_beats_session_backend \
+  "resolve: an active multiplexer beats SESSION_BACKEND"
+run_test test_resolve_session_backend_tmux \
+  "resolve: SESSION_BACKEND=tmux -> tmux"
+run_test test_resolve_session_backend_shpool \
+  "resolve: SESSION_BACKEND=shpool -> shpool"
+run_test test_resolve_fallback_tmux \
+  "resolve: falls back to installed tmux"
+run_test test_resolve_fallback_shpool \
+  "resolve: falls back to installed shpool"
+run_test test_resolve_fallback_prefers_shpool \
+  "resolve: prefers shpool when both are installed"
+run_test test_resolve_none \
+  "resolve: no backend -> empty, status 1"
 
 run_test test_existing_attached_auto_session_listed_once \
   "build_list: an attached auto session is not listed twice"

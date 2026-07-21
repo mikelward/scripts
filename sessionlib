@@ -1,9 +1,18 @@
 # sessionlib - shared helpers for the tmux/shpool session scripts
 #
-# Sourced by autotmux/autoshpool (the backend modules) and, through them, by
-# tmuxlist/shpoollist and changetmux/changeshpool. Holds the parts that don't
-# depend on which multiplexer is in use:
+# Two sets of consumers source this, keeping the entry scripts thin wrappers:
+#   * the entry-point dispatchers (autosession/makesession/detachsession/
+#     choosesession/changesession) call resolve_session_backend to pick which
+#     multiplexer to hand off to; and
+#   * the backend modules autotmux/autoshpool (and, through them, tmuxlist/
+#     shpoollist and changetmux/changeshpool) use the formatting helpers and the
+#     fzf picker engine.
 #
+# Contents:
+#
+#   * resolve_session_backend - choose tmux vs shpool for the dispatchers. This
+#     is the one helper that is *about* which multiplexer; everything below is
+#     multiplexer-agnostic.
 #   * small formatting/matching helpers (status_icon, dir_vcs_*, shell_matches,
 #     session_matches_prefix), and
 #   * the whole fzf picker engine (compact_line/emit_line/build_list/
@@ -27,6 +36,30 @@
 
 test -n "${_SESSIONLIB_SOURCED:-}" && return
 _SESSIONLIB_SOURCED=1
+
+# --- backend selection (used by the entry-point dispatchers) ---
+
+resolve_session_backend() {
+  # Print "tmux" or "shpool" (returning 0) for the multiplexer the session
+  # dispatchers should hand off to, or print nothing and return 1 when neither
+  # is available:
+  #   * inside tmux   ($TMUX set)                 -> tmux
+  #   * inside shpool ($SHPOOL_SESSION_NAME set)  -> shpool
+  #   * else honour $SESSION_BACKEND (tmux|shpool)
+  #   * else whichever of tmux/shpool is installed (shpool first, the family
+  #     default -- matching the shell session_backend helper).
+  # It prints the bare backend name so each dispatcher composes it with its own
+  # verb: auto$backend, make$backend, detach$backend, change$backend.
+  if test -n "$TMUX"; then echo tmux; return 0; fi
+  if test -n "$SHPOOL_SESSION_NAME"; then echo shpool; return 0; fi
+  case "${SESSION_BACKEND:-}" in
+    tmux)   echo tmux; return 0 ;;
+    shpool) echo shpool; return 0 ;;
+  esac
+  if command -v shpool >/dev/null 2>&1; then echo shpool; return 0; fi
+  if command -v tmux >/dev/null 2>&1; then echo tmux; return 0; fi
+  return 1
+}
 
 # --- formatting / matching helpers (shared verbatim by both backends) ---
 

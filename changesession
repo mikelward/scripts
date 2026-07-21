@@ -15,10 +15,10 @@
 # and an unknown argument errors -- exactly as the backend handles each.
 #
 # Backend selection (tmux vs shpool) is shared with the rest of the session
-# family via sessionbackend; see there for the cascade.
+# family via sessionlib; see there for the cascade.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
-. "$dir/sessionbackend"
+. "$dir/sessionlib"
 
 be="$(resolve_session_backend)" || {
   echo "changesession: no tmux or shpool backend available" >&2

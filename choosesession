@@ -4,14 +4,14 @@
 #
 # Dispatches to changetmux/changeshpool's --choose mode so one command works in
 # either world. Backend selection (tmux vs shpool) is shared with the rest of
-# the session family via sessionbackend; see there for the cascade.
+# the session family via sessionlib; see there for the cascade.
 #
 # Prints the chosen session name and exits 0 when something was picked; prints
 # nothing and exits non-zero on an empty list, a cancel, or a picker error, so
 # changesession knows not to switch. All arguments are passed through.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
-. "$dir/sessionbackend"
+. "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {
   echo "choosesession: no tmux or shpool backend available" >&2
