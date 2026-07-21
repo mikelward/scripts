@@ -2,42 +2,18 @@
 # makesession - dispatch to maketmux or makeshpool for the chosen backend
 #
 # Creates (and attaches to) a named session with whichever multiplexer this
-# machine uses, so one command works in either world:
-#   * inside tmux  ($TMUX set)                 -> maketmux
-#   * inside shpool ($SHPOOL_SESSION_NAME set) -> makeshpool
-#   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (shpool first, the
-#     family default -- matching the shell session_backend helper).
+# machine uses, so one command works in either world. Backend selection (tmux
+# vs shpool) is shared with the rest of the session family via sessionbackend;
+# see there for the cascade.
 #
 # All arguments (the session name, and any further pass-through) are forwarded.
-#
-# Shares its backend selection with autosession/changesession/detachsession, so
-# $SESSION_BACKEND picks the multiplexer for the whole family.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+. "$dir/sessionbackend"
 
-run() {
-  exec "$dir/$1" "${@:2}"
+backend="$(resolve_session_backend)" || {
+  echo "makesession: no tmux or shpool backend available" >&2
+  exit 1
 }
 
-if test -n "$TMUX"; then
-  run maketmux "$@"
-fi
-if test -n "$SHPOOL_SESSION_NAME"; then
-  run makeshpool "$@"
-fi
-
-case "${SESSION_BACKEND:-}" in
-  tmux)   run maketmux "$@" ;;
-  shpool) run makeshpool "$@" ;;
-esac
-
-if command -v shpool >/dev/null 2>&1; then
-  run makeshpool "$@"
-fi
-if command -v tmux >/dev/null 2>&1; then
-  run maketmux "$@"
-fi
-
-echo "makesession: no tmux or shpool backend available" >&2
-exit 1
+exec "$dir/make$backend" "$@"

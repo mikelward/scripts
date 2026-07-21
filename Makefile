@@ -3,6 +3,7 @@ test:
 	./autotmux_test
 	./autosession_test
 	./sessionlib_test
+	./sessionbackend_test
 	./changeshpool_test
 	./changetmux_test
 	./changesession_test
@@ -13,6 +14,7 @@ test:
 	./package_test
 	./homepkg_test
 	./gittossh_test
+	./gitbackup_test
 	./runenv_test
 	./setup_test
 	./setup-hypr_test

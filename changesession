@@ -14,34 +14,17 @@
 # non-interactively, --choose prints a name, --list/--preview/-h/--help print,
 # and an unknown argument errors -- exactly as the backend handles each.
 #
-# Backend selection matches choosesession/detachsession/...:
-#   * inside tmux  ($TMUX set)                 -> changetmux
-#   * inside shpool ($SHPOOL_SESSION_NAME set) -> changeshpool
-#   * outside both: honour $SESSION_BACKEND (tmux|shpool); otherwise use
-#     whichever of tmux/shpool is installed (shpool first, the
-#     family default -- matching the shell session_backend helper).
+# Backend selection (tmux vs shpool) is shared with the rest of the session
+# family via sessionbackend; see there for the cascade.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+. "$dir/sessionbackend"
 
-# Echo the change* backend for the active multiplexer, or nothing if neither
-# tmux nor shpool is available. (exit inside a $() would only leave the subshell,
-# so the caller checks for an empty result rather than this bailing out.)
-resolve_backend() {
-  if test -n "$TMUX"; then echo changetmux; return; fi
-  if test -n "$SHPOOL_SESSION_NAME"; then echo changeshpool; return; fi
-  case "${SESSION_BACKEND:-}" in
-    tmux)   echo changetmux; return ;;
-    shpool) echo changeshpool; return ;;
-  esac
-  if command -v shpool >/dev/null 2>&1; then echo changeshpool; return; fi
-  if command -v tmux >/dev/null 2>&1; then echo changetmux; return; fi
-}
-
-backend="$(resolve_backend)"
-if test -z "$backend"; then
+be="$(resolve_session_backend)" || {
   echo "changesession: no tmux or shpool backend available" >&2
   exit 1
-fi
+}
+backend="change$be"
 
 # An explicit subcommand/argument has nothing to pick: forward it to the backend
 # (--switch <name> switches non-interactively, --list/--choose/... print, an

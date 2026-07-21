@@ -1,0 +1,37 @@
+# sessionbackend - shared backend selection for the session dispatchers.
+#
+# autosession/makesession/detachsession/choosesession/changesession all pick
+# between a tmux and a shpool implementation the same way. This holds that one
+# cascade so each dispatcher doesn't reimplement it (and drift). Sourced, not
+# executed:
+#
+#   dir="$(cd "$(dirname "$0")" && pwd)"
+#   . "$dir/sessionbackend"
+#   backend="$(resolve_session_backend)" || exit 1   # "tmux" or "shpool"
+#
+# resolve_session_backend prints "tmux" or "shpool" and returns 0, or prints
+# nothing and returns 1 when neither backend is available:
+#   * inside tmux   ($TMUX set)                 -> tmux
+#   * inside shpool ($SHPOOL_SESSION_NAME set)  -> shpool
+#   * else honour $SESSION_BACKEND (tmux|shpool)
+#   * else whichever of tmux/shpool is installed (shpool first, the family
+#     default -- matching the shell session_backend helper).
+#
+# It prints the bare backend name ("tmux"/"shpool") rather than a full command
+# so every dispatcher can compose it with its own verb: auto$backend,
+# make$backend, detach$backend, change$backend.
+
+test -n "${_SESSIONBACKEND_SOURCED:-}" && return
+_SESSIONBACKEND_SOURCED=1
+
+resolve_session_backend() {
+  if test -n "$TMUX"; then echo tmux; return 0; fi
+  if test -n "$SHPOOL_SESSION_NAME"; then echo shpool; return 0; fi
+  case "${SESSION_BACKEND:-}" in
+    tmux)   echo tmux; return 0 ;;
+    shpool) echo shpool; return 0 ;;
+  esac
+  if command -v shpool >/dev/null 2>&1; then echo shpool; return 0; fi
+  if command -v tmux >/dev/null 2>&1; then echo tmux; return 0; fi
+  return 1
+}

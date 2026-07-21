@@ -21,6 +21,8 @@ setup() {
   CALLS="$TEST_TMPDIR/calls"
   mkdir -p "$BIN"
   : > "$CALLS"
+  # The dispatchers source this shared lib from their own directory ($BIN here).
+  cp "$SCRIPT_DIR/sessionbackend" "$BIN/sessionbackend"
   # The dispatchers need only `dirname` as an external. Isolating PATH to $BIN
   # lets each test control tmux/shpool "installed" detection precisely.
   ln -s "$(command -v dirname)" "$BIN/dirname"
