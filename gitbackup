@@ -255,10 +255,11 @@ main()
 }
 
 # Run unless sourced (e.g. by gitbackup_test, which exercises find_git_repos in
-# isolation). When executed, $0 ends in "gitbackup"; when sourced, $0 is the
-# sourcing script.
-case "${0##*/}" in
-gitbackup) main "$@" ;;
-esac
+# isolation). Compare BASH_SOURCE to $0 rather than matching a fixed basename,
+# so execution still works when invoked through a symlink or alias with a
+# different name (when sourced, BASH_SOURCE is this file but $0 is the caller).
+if test "${BASH_SOURCE[0]}" = "$0"; then
+    main "$@"
+fi
 
 # vim: set ts=4 sw=4 tw=0 et:

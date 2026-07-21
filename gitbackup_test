@@ -117,11 +117,35 @@ test_repo_name_with_newline() {
   assert_contains "$weird"
 }
 
+test_runs_main_under_a_different_name() {
+  # The source/execute guard keys off BASH_SOURCE vs $0, not a fixed basename,
+  # so running through a symlink/alias named something other than "gitbackup"
+  # still executes main. (A basename guard would silently skip main and exit 0,
+  # backing up nothing.) main needs only `silent` from the functions library
+  # before it parses --help, so a tiny stub library is enough.
+  local home out rc
+  home="$(mktemp -d)"
+  mkdir -p "$home/bin"
+  printf '%s\n' 'silent() { "$@" >/dev/null 2>&1; }' > "$home/bin/functions"
+  ln -s "$SCRIPT_DIR/gitbackup" "$home/renamed-backup"
+  out="$(HOME="$home" "$home/renamed-backup" --help 2>&1)"
+  rc=$?
+  rm -rf "$home"
+  case "$out" in
+    *"Usage: gitbackup"*) ;;
+    *) echo "  FAIL: main did not run under an alternate name"; echo "  output: $out"; TEST_FAILED=1 ;;
+  esac
+  if test "$rc" -ne 0; then
+    echo "  FAIL: expected exit 0 from --help, got $rc"; TEST_FAILED=1
+  fi
+}
+
 run_test "finds flat bare repos" test_finds_flat_repos
 run_test "finds nested bare repos" test_finds_nested_repos
 run_test "ignores non-.git directories" test_ignores_non_git_dirs
 run_test "handles a repo name with spaces" test_repo_name_with_spaces
 run_test "handles a repo name with a newline" test_repo_name_with_newline
+run_test "runs main when invoked under a different name" test_runs_main_under_a_different_name
 
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
 test "$TESTS_FAILED" -eq 0
