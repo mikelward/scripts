@@ -1,0 +1,67 @@
+#!/bin/sh
+# Place a phone call using the Termux telephony API.
+#
+# Options:
+#   -t, --toast          show a toast saying "Calling using <SIM name>"
+#   -d, --delay <secs>   wait that many seconds before calling (Ctrl-C to cancel)
+
+usage() {
+    printf 'Usage: call [-t|--toast] [-d|--delay <seconds>] <number>\n' 1>&2
+    exit "${1:-1}"
+}
+
+toast=
+delay=0
+
+while test $# -gt 0; do
+    case $1 in
+        -h|--help)
+            usage 0;;
+        -t|--toast)
+            toast=1;;
+        -d|--delay)
+            shift
+            case $1 in
+                ''|*[!0-9]*)
+                    printf 'call: delay must be a whole number of seconds\n' 1>&2
+                    exit 1;;
+            esac
+            delay=$1;;
+        --)
+            shift
+            break;;
+        -*)
+            printf 'call: unknown option %s\n' "$1" 1>&2
+            usage;;
+        *)
+            break;;
+    esac
+    shift
+done
+
+test $# -eq 1 || usage
+
+number=$1
+
+# The name of the SIM the call will go out on, per the telephony API.
+# Empty if termux-api is missing or the phone reports no operator name.
+sim_name() {
+    termux-telephony-deviceinfo 2>/dev/null |
+        sed -n 's/.*"sim_operator_name": *"\([^"]*\)".*/\1/p'
+}
+
+if test -n "$toast"; then
+    sim=$(sim_name)
+    test -n "$sim" || sim="default SIM"
+    if test "$delay" -gt 0; then
+        termux-toast "Calling using $sim in $delay seconds"
+    else
+        termux-toast "Calling using $sim"
+    fi
+fi
+
+if test "$delay" -gt 0; then
+    sleep "$delay"
+fi
+
+exec termux-telephony-call "$number"
