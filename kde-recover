@@ -1,0 +1,148 @@
+#!/bin/bash
+# Recover a wedged KDE Plasma 6 session.
+#
+# For when plasmashell has crashed or hung (commonly after resume from
+# sleep or a monitor hotplug), or a hotplug left the session with no
+# enabled outputs. Steps, each best-effort:
+#
+# 1. Re-enable outputs when EVERY connected output ended up disabled (a
+#    single disabled output may be deliberate, e.g. a closed laptop lid on
+#    a dock; zero enabled outputs never is).
+# 2. Restart plasmashell -- via its systemd user unit when available
+#    (clearing any exhausted start-rate limit first), otherwise by
+#    quitting and relaunching it directly.
+# 3. Restart kded, which hosts the kscreen module that applies display
+#    profiles on hotplug.
+# 4. Ask KWin to reload its configuration.
+#
+# setup-kde binds this to Meta+Shift+R. kglobalaccel runs inside kwin, so
+# the shortcut works even when plasmashell is dead and there is no panel
+# left to click -- whenever this script can help, kwin is still alive.
+#
+# Usage:
+#     kde-recover [-h | --help]
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+usage() {
+    cat <<'USAGE'
+Usage: kde-recover [-h | --help]
+
+Recover a wedged KDE Plasma session: re-enable outputs when all are
+disabled, restart plasmashell and kded, and reload KWin's configuration.
+USAGE
+}
+
+while test $# -gt 0; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+qdbus_cmd() {
+    if command -v qdbus6 >/dev/null 2>&1; then
+        qdbus6 "$@"
+    elif command -v qdbus >/dev/null 2>&1; then
+        qdbus "$@"
+    else
+        return 1
+    fi
+}
+
+# When no connected output is enabled, enable them all. kscreen-doctor -j
+# reports every output; filter in python3 rather than parsing the colored
+# human-readable output.
+reenable_outputs() {
+    command -v kscreen-doctor >/dev/null 2>&1 || return 0
+    json="$(kscreen-doctor -j 2>/dev/null)" || return 0
+    test -n "$json" || return 0
+    to_enable="$(printf '%s' "$json" | python3 -c '
+import json, sys
+try:
+    outputs = json.load(sys.stdin).get("outputs", [])
+except Exception:
+    sys.exit(0)
+connected = [o for o in outputs if o.get("connected")]
+if any(o.get("enabled") for o in connected):
+    sys.exit(0)
+for o in connected:
+    if o.get("name"):
+        print(o["name"])
+')"
+    test -n "$to_enable" || return 0
+    for name in $to_enable; do
+        info "No outputs enabled; re-enabling $name"
+        kscreen-doctor "output.$name.enable" \
+            || warn "could not enable output $name"
+    done
+}
+
+# True when the plasmashell systemd user unit exists (Plasma 6's default
+# systemd-managed session).
+have_plasmashell_unit() {
+    command -v systemctl >/dev/null 2>&1 \
+        && systemctl --user cat plasma-plasmashell.service >/dev/null 2>&1
+}
+
+restart_plasmashell() {
+    if have_plasmashell_unit; then
+        info "Restarting plasmashell via systemd"
+        # reset-failed clears an exhausted start-rate limit, without which
+        # the restart of a crash-looped unit is refused.
+        systemctl --user reset-failed plasma-plasmashell.service 2>/dev/null
+        systemctl --user restart plasma-plasmashell.service \
+            && return 0
+        warn "systemctl restart failed; falling back to a direct relaunch"
+    fi
+    info "Restarting plasmashell directly"
+    if command -v kquitapp6 >/dev/null 2>&1; then
+        kquitapp6 plasmashell >/dev/null 2>&1
+    else
+        pkill -x plasmashell 2>/dev/null
+    fi
+    # Give the old instance a moment to release its Wayland/X resources.
+    sleep 1
+    if command -v kstart >/dev/null 2>&1; then
+        kstart plasmashell >/dev/null 2>&1 \
+            || warn "kstart plasmashell failed"
+    else
+        (setsid plasmashell >/dev/null 2>&1 &)
+    fi
+}
+
+# kded hosts the kscreen module that applies saved display profiles on
+# hotplug; a dead or wedged kded is a common reason hotplug "does nothing".
+# try-restart only touches it if it's running. The unit has been named both
+# plasma-kded6 and plasma-kded across distros/releases; try both.
+restart_kded() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    systemctl --user try-restart plasma-kded6.service 2>/dev/null \
+        || systemctl --user try-restart plasma-kded.service 2>/dev/null \
+        || true
+}
+
+reload_kwin() {
+    qdbus_cmd org.kde.KWin /KWin reconfigure >/dev/null 2>&1 \
+        || warn "could not ask KWin to reconfigure"
+}
+
+reenable_outputs
+restart_plasmashell
+restart_kded
+reload_kwin
+info "Recovery steps complete"

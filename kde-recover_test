@@ -1,0 +1,224 @@
+#!/bin/sh
+# Tests for kde-recover
+#
+# Runs kde-recover against mocked KDE/systemd CLI tools and checks the
+# recovery steps: plasmashell restarts through systemd when its unit
+# exists (clearing the start-rate limit first) and falls back to
+# kquitapp6/kstart when it doesn't, KWin is asked to reconfigure, and
+# outputs are re-enabled only when kscreen-doctor reports that every
+# connected output is disabled.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    CALLS="$TEST_TMPDIR/calls"
+    rm -f "$CALLS"
+    mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
+    SCRIPT="$SCRIPT_DIR/kde-recover"
+
+    # Simple mocks: record argv, touch nothing real.
+    for cmd in qdbus6 kstart kquitapp6; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+
+    # systemctl: records and succeeds for every subcommand, so
+    # `systemctl --user cat plasma-plasmashell.service` reports the unit
+    # as present and the systemd restart path is taken.
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+echo "systemctl \$*" >> "$CALLS"
+exit 0
+MOCK
+
+    # kscreen-doctor: -j replays a canned JSON report (written per-test by
+    # set_outputs); every call is recorded.
+    cat > "$TEST_TMPDIR/bin/kscreen-doctor" <<MOCK
+#!/bin/sh
+echo "kscreen-doctor \$*" >> "$CALLS"
+if test "\$1" = -j; then
+    cat "$TEST_TMPDIR/kscreen.json" 2>/dev/null
+fi
+exit 0
+MOCK
+
+    chmod +x "$TEST_TMPDIR"/bin/*
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+# Make `systemctl --user cat ...` fail, simulating a session where the
+# plasmashell unit doesn't exist (non-systemd Plasma startup).
+remove_plasmashell_unit() {
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+echo "systemctl \$*" >> "$CALLS"
+case "\$*" in
+    *" cat "*) exit 1 ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/systemctl"
+}
+
+# Write the JSON that the kscreen-doctor mock replays for -j.
+set_outputs() {
+    printf '%s' "$1" > "$TEST_TMPDIR/kscreen.json"
+}
+
+run_recover() {
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        "$SCRIPT" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: expected call '$1' not found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_not_called() {
+    if grep -q "$1" "$CALLS" 2>/dev/null; then
+        echo "  FAIL: unexpected call '$1' found"
+        echo "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_recover --help
+    assert_status 0 &&
+    assert_output_contains "Usage: kde-recover"
+}
+
+test_unknown_option() {
+    run_recover --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# --- plasmashell restart ---
+
+# With the systemd unit present, restart goes through systemctl, clearing
+# any exhausted start-rate limit first; no direct kill/relaunch happens.
+test_restarts_plasmashell_via_systemd() {
+    set_outputs '{"outputs":[{"name":"eDP-1","connected":true,"enabled":true}]}'
+    run_recover
+    assert_status 0 &&
+    assert_called "systemctl --user reset-failed plasma-plasmashell.service" &&
+    assert_called "systemctl --user restart plasma-plasmashell.service" &&
+    assert_not_called "kstart plasmashell" &&
+    assert_called "qdbus6 org.kde.KWin /KWin reconfigure"
+}
+
+# Without the unit, plasmashell is quit and relaunched directly.
+test_restarts_plasmashell_directly_without_unit() {
+    remove_plasmashell_unit
+    set_outputs '{"outputs":[{"name":"eDP-1","connected":true,"enabled":true}]}'
+    run_recover
+    assert_status 0 &&
+    assert_called "kquitapp6 plasmashell" &&
+    assert_called "kstart plasmashell" &&
+    assert_not_called "systemctl --user restart plasma-plasmashell.service"
+}
+
+# --- output re-enabling ---
+
+# All connected outputs disabled: every connected one is re-enabled, but
+# never a disconnected port.
+test_reenables_outputs_when_all_disabled() {
+    set_outputs '{"outputs":[
+        {"name":"eDP-1","connected":true,"enabled":false},
+        {"name":"DP-1","connected":true,"enabled":false},
+        {"name":"HDMI-A-1","connected":false,"enabled":false}]}'
+    run_recover
+    assert_status 0 &&
+    assert_called "kscreen-doctor output.eDP-1.enable" &&
+    assert_called "kscreen-doctor output.DP-1.enable" &&
+    assert_not_called "kscreen-doctor output.HDMI-A-1.enable"
+}
+
+# At least one output still enabled: a disabled output may be deliberate
+# (closed laptop lid on a dock), so nothing is touched.
+test_leaves_outputs_alone_when_one_enabled() {
+    set_outputs '{"outputs":[
+        {"name":"eDP-1","connected":true,"enabled":false},
+        {"name":"DP-1","connected":true,"enabled":true}]}'
+    run_recover
+    assert_status 0 &&
+    assert_not_called "kscreen-doctor output.eDP-1.enable" &&
+    assert_not_called "kscreen-doctor output.DP-1.enable"
+}
+
+run_test "help flag" test_help_flag
+run_test "unknown option errors" test_unknown_option
+run_test "restarts plasmashell via systemd" \
+    test_restarts_plasmashell_via_systemd
+run_test "restarts plasmashell directly without a systemd unit" \
+    test_restarts_plasmashell_directly_without_unit
+run_test "re-enables outputs when all are disabled" \
+    test_reenables_outputs_when_all_disabled
+run_test "leaves outputs alone when one is still enabled" \
+    test_leaves_outputs_alone_when_one_enabled
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

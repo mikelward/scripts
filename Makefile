@@ -19,3 +19,4 @@ test:
 	./setup-hypr_test
 	./setup-sway_test
 	./setup-kde_test
+	./kde-recover_test
