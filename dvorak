@@ -7,12 +7,14 @@
 # Wayland desktop (GNOME/KDE), and whether or not an input method (IBus) is
 # running.
 #
-# The headline case -- the Linux virtual console -- does NOT need root. The
-# command is simply `loadkeys dvorak`. loadkeys only needs to own the tty (it
-# does: it's your login console) or CAP_SYS_TTY_CONFIG, not full root, so no
-# sudo and no dpkg-reconfigure required. The US Dvorak console keymap is just
-# named "dvorak"; loadkeys finds /usr/share/keymaps/i386/dvorak/dvorak.map.gz
-# for you.
+# The headline case -- the Linux virtual console -- does NOT need root. loadkeys
+# only needs to own the tty (it does: it's your login console) or
+# CAP_SYS_TTY_CONFIG, not full root, so no sudo and no dpkg-reconfigure. It does
+# need a keymap to load, though: `loadkeys dvorak` finds the system keymap when
+# the kbd keymap data is installed, but many minimal systems ship no
+# /usr/share/keymaps at all. For those, this script bundles a self-contained
+# dvorak.kmap alongside it and loads that instead, so the console works with
+# neither root nor the keymap package.
 #
 # IBus is only touched if it is already running; this script never starts it.
 
@@ -20,6 +22,14 @@ set -u
 
 progname=${0##*/}
 applied=0
+
+# Directory holding this script, resolving symlinks, so we can find the bundled
+# dvorak.kmap next to it even when invoked via a symlink on PATH.
+self=${BASH_SOURCE[0]}
+if command -v readlink >/dev/null 2>&1; then
+    self=$(readlink -f "$self" 2>/dev/null || printf '%s' "$self")
+fi
+selfdir=$(cd "$(dirname "$self")" 2>/dev/null && pwd)
 
 have() {
     command -v "$1" >/dev/null 2>&1
@@ -29,8 +39,14 @@ note() {
     printf '%s: %s\n' "$progname" "$*" >&2
 }
 
-# Linux text console: loadkeys dvorak. Works without root on your own VT.
-# Gated on TERM=linux so we don't poke the console keymap from an X terminal.
+# Linux text console. Works without root on your own VT (loadkeys only needs to
+# own the tty or have CAP_SYS_TTY_CONFIG). Gated on TERM=linux so we don't poke
+# the console keymap from an X terminal.
+#
+# First try the system keymap named "dvorak"; if that's not installed (many
+# minimal systems ship no /usr/share/keymaps at all), fall back to the
+# self-contained dvorak.kmap bundled next to this script, which carries the
+# whole layout inline and so needs no keymap package.
 maybe_console() {
     test "${TERM:-}" = linux || return 1
     have loadkeys || return 1
@@ -38,7 +54,12 @@ maybe_console() {
         note "Linux console set to Dvorak (loadkeys dvorak)"
         return 0
     fi
-    note "loadkeys dvorak failed (need to own this VT or have CAP_SYS_TTY_CONFIG)"
+    if test -f "$selfdir/dvorak.kmap" \
+        && loadkeys "$selfdir/dvorak.kmap" >/dev/null 2>&1; then
+        note "Linux console set to Dvorak (bundled dvorak.kmap)"
+        return 0
+    fi
+    note "loadkeys failed (are you on your own VT? is the loadkeys binary present?)"
     return 1
 }
 
@@ -70,9 +91,14 @@ maybe_gnome() {
     return 1
 }
 
-# KDE Plasma (X11 or Wayland): persist in kxkbrc, then ask kded to reload it.
-# On X11 setxkbmap has usually applied it live already; on Wayland the reload
-# below (or the next login) makes it take effect.
+# KDE Plasma (X11 or Wayland): persist the layout in kxkbrc. On X11 the
+# setxkbmap call above has usually applied it live already; modern Plasma's
+# keyboard daemon watches kxkbrc and re-reads it on change, so a fresh login
+# picks it up otherwise.
+#
+# (We deliberately don't poke org.kde.KeyboardLayouts.setLayout: that method
+# takes a layout *name*, not an index, and its signature/behaviour varies
+# across Plasma versions, so an index-based call is both wrong and unreliable.)
 maybe_kde() {
     case "${XDG_CURRENT_DESKTOP:-}" in
         *KDE*) ;;
@@ -89,13 +115,7 @@ maybe_kde() {
         note "KDE: writing kxkbrc failed (read-only \$HOME, full disk?)"
         return 1
     fi
-    for qd in qdbus6 qdbus-qt6 qdbus; do
-        if have "$qd"; then
-            "$qd" org.kde.keyboard /Layouts org.kde.KeyboardLayouts.setLayout 0 \
-                >/dev/null 2>&1 && break
-        fi
-    done
-    note "KDE configured for Dvorak (kxkbrc; relog if not applied live)"
+    note "KDE set to Dvorak in kxkbrc (live on X11; relog on Wayland if not picked up)"
     return 0
 }
 
@@ -121,7 +141,8 @@ Usage: $progname
 
 Switch the keyboard layout to US Dvorak using every method that applies to the
 current environment:
-  - Linux text console  : loadkeys dvorak      (no root needed on your own VT)
+  - Linux text console  : loadkeys dvorak, or the bundled dvorak.kmap if the
+                          system keymaps aren't installed (no root on your VT)
   - X11                 : setxkbmap -layout us -variant dvorak
   - GNOME session       : gsettings input-sources -> us+dvorak
   - KDE Plasma session  : kxkbrc -> us/dvorak
@@ -144,7 +165,7 @@ maybe_ibus    && applied=1
 
 if test "$applied" -eq 0; then
     note "could not set Dvorak by any method here"
-    note "on a Linux console try: loadkeys dvorak"
+    note "on a Linux console try: loadkeys dvorak (or loadkeys $selfdir/dvorak.kmap)"
     note "under X11 try:          setxkbmap -layout us -variant dvorak"
     exit 1
 fi
