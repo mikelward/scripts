@@ -4,7 +4,7 @@
 # Usage:
 #     setup [--gui | --no-gui] [--kde | --hypr] [--minimal | --full] \
 #           [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm] \
-#           [-h | --help]
+#           [--github PREFIX] [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -57,10 +57,29 @@
 # skipped, they come from conda-forge via homepkg instead (rootless). Pass
 # --no-npm to skip them where Node is provided some other way (nvm, fnm,
 # corepack, a system package, etc.) -- then provide tsc yourself.
+#
+# The scripts/conf/root repos clone from github.com over SSH by default. Behind
+# a corporate network that mirrors GitHub at an internal host -- or serves it
+# over HTTPS -- pass --github PREFIX to point the clones there, e.g.
+#     setup --github git@ghe.corp.example.com    (internal SSH host)
+#     setup --github https://ghe.corp.example.com (internal HTTPS mirror)
+# PREFIX is the part before OWNER/REPO; a bare host is treated as SSH, and its
+# trailing separator (: or /) is supplied for you. GITHUB_PREFIX in the
+# environment does the same, which is handy when piping setup from a mirror.
 
-SCRIPTS_REPO="git@github.com:mikelward/scripts.git"
-CONF_REPO="git@github.com:mikelward/conf.git"
-ROOT_REPO="git@github.com:mikelward/root.git"
+# The three repositories setup clones, kept as OWNER/REPO paths. The host and
+# protocol come from GITHUB_PREFIX, which defaults to GitHub over SSH and can be
+# pointed at an internal mirror with --github (e.g. behind a corporate network
+# that proxies github.com at a different host, or serves it over HTTPS). One
+# flag carries the whole prefix because SSH and HTTPS remotes are shaped
+# differently -- git@HOST: vs https://HOST/ -- so a bare host couldn't tell them
+# apart. The path is appended to the prefix; the URLs themselves are assembled
+# after argument parsing (see normalize_github_prefix). Override the default
+# host by exporting GITHUB_PREFIX, or per-run with --github.
+GITHUB_PREFIX="${GITHUB_PREFIX:-git@github.com:}"
+SCRIPTS_REPO_PATH="mikelward/scripts.git"
+CONF_REPO_PATH="mikelward/conf.git"
+ROOT_REPO_PATH="mikelward/root.git"
 
 SCRIPTS_DIR="$HOME/scripts"
 CONF_DIR="$HOME/conf"
@@ -155,7 +174,7 @@ usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
              [--no-install] [--no-sudo] [--no-root] [--ignore-errors]
-             [--ssh | --no-ssh] [--no-npm] [-h | --help]
+             [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -192,6 +211,13 @@ Options:
   --no-npm         Skip installing Node.js (node/npm) and the TypeScript
                    compiler (for machines where Node is provided another way;
                    provide tsc yourself)
+  --github PREFIX  Clone the scripts/conf/root repos from PREFIX instead of
+                   github.com over SSH -- for an internal GitHub mirror. PREFIX
+                   is the host or full prefix before OWNER/REPO; its protocol is
+                   taken as given, e.g. an internal SSH host (git@ghe.corp or
+                   git@ghe.corp:) or an HTTPS mirror (https://ghe.corp). A bare
+                   host is treated as SSH. Also settable via the GITHUB_PREFIX
+                   environment variable
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
@@ -266,6 +292,21 @@ error() {
     printf "Error: %s\n" "$*" >&2
 }
 
+# normalize_github_prefix PREFIX: echo PREFIX with a trailing separator so a
+# repo path (OWNER/REPO.git) can be appended directly. A prefix that already
+# ends in ':' or '/' is used unchanged; a URL-scheme prefix (https://host,
+# ssh://git@host) gets a trailing '/'; an scp-style or bare host (git@host,
+# host) gets a trailing ':'. This lets --github accept the target in whatever
+# form its protocol wants -- with or without the separator the user would
+# otherwise have to remember -- without a second flag to say which protocol.
+normalize_github_prefix() {
+    case "$1" in
+        */ | *:) printf '%s' "$1" ;;
+        *://*)   printf '%s/' "$1" ;;
+        *)       printf '%s:' "$1" ;;
+    esac
+}
+
 # --- Parse arguments ---
 
 while test $# -gt 0; do
@@ -330,6 +371,18 @@ while test $# -gt 0; do
         --no-npm)
             NPM=no
             ;;
+        --github)
+            shift
+            if test $# -eq 0; then
+                error "--github requires a host/prefix argument"
+                usage >&2
+                exit 1
+            fi
+            GITHUB_PREFIX="$1"
+            ;;
+        --github=*)
+            GITHUB_PREFIX="${1#--github=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -342,6 +395,14 @@ while test $# -gt 0; do
     esac
     shift
 done
+
+# Assemble the repo URLs now that --github (if any) has been parsed. The prefix
+# is normalized to end in the right separator so github.com stays the default
+# and an internal mirror needs only --github HOST (or a full https://HOST/).
+GITHUB_PREFIX=$(normalize_github_prefix "$GITHUB_PREFIX")
+SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"
+CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"
+ROOT_REPO="${GITHUB_PREFIX}${ROOT_REPO_PATH}"
 
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the bootstrap pushes through failing steps. We toggle this only after

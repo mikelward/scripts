@@ -59,6 +59,14 @@ assert_source_not_contains() {
     fi
 }
 
+assert_eq() {
+    if test "$1" != "$2"; then
+        echo "  FAIL: got '$1', expected '$2'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
 # Run setup's sudo wrapper in isolation against a controlled sudo mock. This
 # tests the diagnostics without executing the bootstrap's system changes.
 run_sudo_helper() {
@@ -569,6 +577,65 @@ test_clone_or_pull_degrades_offline() {
     assert_source_contains "using the existing checkout" &&
     assert_source_not_contains "could not clone"
 }
+
+# --- --github internal-mirror flag ---
+
+# --github takes a value and is a known option: setup consumes the argument and
+# then reaches --help (exit 0), so it neither errors as unknown nor swallows the
+# following flag. The equals form parses too.
+test_github_flag_accepted() {
+    run_setup --github git@ghe.corp.example.com --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup" &&
+    assert_output_contains "--github"
+}
+
+test_github_equals_form_accepted() {
+    run_setup --github=https://ghe.corp.example.com --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup"
+}
+
+# --github with no following argument is an error, not a silent no-op that would
+# leave GITHUB_PREFIX as the default and clone from github.com anyway.
+test_github_requires_argument() {
+    run_setup --github
+    assert_status 1 &&
+    assert_output_contains "requires a host/prefix argument"
+}
+
+# The repos are assembled from GITHUB_PREFIX + path, defaulting to GitHub over
+# SSH, so an unset --github clones from github.com exactly as before.
+test_github_default_and_assembly() {
+    assert_source_contains 'GITHUB_PREFIX="${GITHUB_PREFIX:-git@github.com:}"' &&
+    assert_source_contains 'SCRIPTS_REPO_PATH="mikelward/scripts.git"' &&
+    assert_source_contains 'SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"' &&
+    assert_source_contains 'CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"' &&
+    assert_source_contains 'ROOT_REPO="${GITHUB_PREFIX}${ROOT_REPO_PATH}"' &&
+    assert_source_contains 'normalize_github_prefix "$GITHUB_PREFIX"'
+}
+
+# Exercise the real normalize_github_prefix by extracting it from setup: a
+# prefix that already ends in a separator is left alone, a URL-scheme prefix
+# gets a trailing '/', and an scp-style or bare host gets a trailing ':'. This
+# is what lets one flag carry either an SSH or an HTTPS target.
+test_normalize_github_prefix() {
+    eval "$(sed -n '/^normalize_github_prefix() {/,/^}/p' "$SETUP")"
+    assert_eq "$(normalize_github_prefix 'git@github.com:')" 'git@github.com:' &&
+    assert_eq "$(normalize_github_prefix 'git@ghe.corp:')" 'git@ghe.corp:' &&
+    assert_eq "$(normalize_github_prefix 'git@ghe.corp')" 'git@ghe.corp:' &&
+    assert_eq "$(normalize_github_prefix 'https://ghe.corp/')" 'https://ghe.corp/' &&
+    assert_eq "$(normalize_github_prefix 'https://ghe.corp')" 'https://ghe.corp/' &&
+    assert_eq "$(normalize_github_prefix 'ssh://git@ghe.corp')" 'ssh://git@ghe.corp/'
+}
+
+run_test "--github is accepted and takes an argument" test_github_flag_accepted
+run_test "--github=VALUE form parses" test_github_equals_form_accepted
+run_test "--github without an argument errors" test_github_requires_argument
+run_test "repos default to github.com over SSH via GITHUB_PREFIX" \
+    test_github_default_and_assembly
+run_test "normalize_github_prefix appends the right separator" \
+    test_normalize_github_prefix
 
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
