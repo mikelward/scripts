@@ -83,9 +83,12 @@ maybe_kde() {
         if have "$cmd"; then kw=$cmd; break; fi
     done
     test -n "$kw" || return 1
-    "$kw" --file kxkbrc --group Layout --key Use true
-    "$kw" --file kxkbrc --group Layout --key LayoutList us
-    "$kw" --file kxkbrc --group Layout --key VariantList dvorak
+    if ! { "$kw" --file kxkbrc --group Layout --key Use true \
+        && "$kw" --file kxkbrc --group Layout --key LayoutList us \
+        && "$kw" --file kxkbrc --group Layout --key VariantList dvorak; }; then
+        note "KDE: writing kxkbrc failed (read-only \$HOME, full disk?)"
+        return 1
+    fi
     for qd in qdbus6 qdbus-qt6 qdbus; do
         if have "$qd"; then
             "$qd" org.kde.keyboard /Layouts org.kde.KeyboardLayouts.setLayout 0 \
