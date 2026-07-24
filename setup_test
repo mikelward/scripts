@@ -614,6 +614,15 @@ test_github_rejects_option_as_value() {
     assert_output_contains "requires a host/prefix argument"
 }
 
+# The equals form must apply the same validation: "--github=" is an empty
+# required value that would otherwise normalize to ":" and clone from
+# ":mikelward/...", so it errors immediately like the separate-argument form.
+test_github_rejects_empty_equals() {
+    run_setup --github=
+    assert_status 1 &&
+    assert_output_contains "requires a host/prefix argument"
+}
+
 # The repos are assembled from GITHUB_PREFIX + path, defaulting to GitHub over
 # SSH, so an unset --github clones from github.com exactly as before.
 test_github_default_and_assembly() {
@@ -644,6 +653,7 @@ run_test "--github=VALUE form parses" test_github_equals_form_accepted
 run_test "--github without an argument errors" test_github_requires_argument
 run_test "--github rejects an option-looking value" \
     test_github_rejects_option_as_value
+run_test "--github= rejects an empty value" test_github_rejects_empty_equals
 run_test "repos default to github.com over SSH via GITHUB_PREFIX" \
     test_github_default_and_assembly
 run_test "normalize_github_prefix appends the right separator" \

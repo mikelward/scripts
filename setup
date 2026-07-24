@@ -307,6 +307,24 @@ normalize_github_prefix() {
     esac
 }
 
+# require_github_prefix VALUE: abort with the usage error unless VALUE is a
+# usable --github argument. Both flag forms route through this so they can't
+# drift. Two shapes are rejected up front rather than failing later at clone
+# time: an empty value ("--github=" or a bare "--github" with no following
+# word, which would normalize to ":" and clone from ":mikelward/..."), and an
+# option-looking value (a real host/prefix never starts with '-', so
+# "setup --github --no-install" is a forgotten value that would otherwise
+# swallow the flag and clone from "--no-install:mikelward/...").
+require_github_prefix() {
+    case "$1" in
+        "" | -*)
+            error "--github requires a host/prefix argument"
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
 # --- Parse arguments ---
 
 while test $# -gt 0; do
@@ -373,22 +391,12 @@ while test $# -gt 0; do
             ;;
         --github)
             shift
-            # Reject a missing value or an option-looking one. A real
-            # host/prefix never starts with '-', so "setup --github --no-install"
-            # is a forgotten value, not a request to clone from "--no-install":
-            # swallowing the flag would silently drop it and then fail at clone
-            # time on a bogus "--no-install:mikelward/..." remote.
-            case "${1:-}" in
-                "" | -*)
-                    error "--github requires a host/prefix argument"
-                    usage >&2
-                    exit 1
-                    ;;
-            esac
+            require_github_prefix "${1:-}"
             GITHUB_PREFIX="$1"
             ;;
         --github=*)
             GITHUB_PREFIX="${1#--github=}"
+            require_github_prefix "$GITHUB_PREFIX"
             ;;
         -h|--help)
             usage
