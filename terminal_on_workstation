@@ -1,6 +1,8 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 . "$HOME"/.shrc
-export WORKSTATION="$(workstation)"
+WORKSTATION="$(workstation)"
+export WORKSTATION
 if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else

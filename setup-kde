@@ -600,6 +600,7 @@ reload_kglobalaccel
 
 if is_command setup-kde.local; then
     info "Sourcing setup-kde.local"
+    # shellcheck source=/dev/null
     source setup-kde.local
 fi
 

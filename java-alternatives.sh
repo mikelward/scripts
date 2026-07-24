@@ -115,6 +115,7 @@ if test -z "$basedir"; then
 fi
 debug "basedir is $basedir"
 
+# shellcheck disable=SC2034  # referenced indirectly by name in in_array/add_to_array via ${!array}
 names=
 
 ###
@@ -133,7 +134,7 @@ add_to_array()
 	local array=$1
 	local value=$2
 	
-	eval $array="\${$array:+\$$array
+	eval "$array=\${$array:+\$$array
 }\$value"
 
 	IFS=$OIFS
@@ -184,7 +185,7 @@ get_destination_path()
 		return 1
 	fi
 
-	local subdir=${path#$base}
+	local subdir=${path#"$base"}
 	if test "$subdir" = "$path"; then
 		error "Cannot determine subdirectory for $path"
 		return 1
@@ -200,14 +201,14 @@ get_destination_path()
 		return 1
 	fi
 
-	dirmap=$(get_mapped_directory $subdir $dirmap)
+	dirmap=$(get_mapped_directory "$subdir" "$dirmap")
 
 	if test $? -eq 0 -a -n "$dirmap"; then
 		local dest
-		dest=${path#$base}
-		dest=${dest#/$subdir}
+		dest=${path#"$base"}
+		dest=${dest#/"$subdir"}
 		dest=$dirmap$dest
-		echo $dest
+		echo "$dest"
 		return 0
 	else
 		error "Cannot get target directory for $path"
@@ -242,7 +243,7 @@ get_mapped_directory()
 		fi
 		if test "$subdir" = "$key"; then
 			local val
-			val=${dir#$key=}
+			val=${dir#"$key"=}
 			if test "$val" = "$dir"; then
 				error "Skipping invalid dirmap entry $dir with key=$key"
 				continue
@@ -257,7 +258,7 @@ get_mapped_directory()
 	IFS=$OIFS
 
 	if test -n "$result"; then
-		echo $result
+		echo "$result"
 		return 0
 	else
 		notice "Missing dirmap for $subdir"
@@ -275,7 +276,7 @@ get_mapped_directory()
 # update-alternatives --install...
 install=
 slaves=
-files=$(for subdir in $subdirs; do find $basedir/$subdir -type f -print; done)
+files=$(for subdir in $subdirs; do find "$basedir/$subdir" -type f -print; done)
 for file in $files; do
   
 	# We might get /usr/java/share/man/man1/java.1 and
@@ -304,15 +305,15 @@ for file in $files; do
 		error "Cannot determine filename for $file"
 		continue
 	fi
-	dest=$(get_destination_path $basedir $file $dirmap)
+	dest=$(get_destination_path "$basedir" "$file" "$dirmap")
 	if test -z "$dest"; then
 		error "Cannot determine target for $file"
 		continue
 	fi
 
 
-	if ! in_array names $name; then
-		add_to_array names $name
+	if ! in_array names "$name"; then
+		add_to_array names "$name"
 
 		case $file in */bin/java)
 			# the main java program should be specified via --install
@@ -341,6 +342,9 @@ if $simulate; then
 	echo "/usr/sbin/update-alternatives 
 $install $priority $slaves"
 else
+	# Intentional word splitting: $install and $slaves each expand to several
+	# update-alternatives arguments, and $priority is a bare number.
+	# shellcheck disable=SC2086
 	run sudo /usr/sbin/update-alternatives \
 $install $priority $slaves
 fi

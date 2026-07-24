@@ -4,7 +4,9 @@
 # For example, if the current directory has a BUILD file, maketasks will copy
 # ~/templates/tasks.json.BUILD to .vscode/tasks.json.
 
+# shellcheck source=/dev/null
 source "$HOME/.shrc"
+# shellcheck source=/dev/null
 source "$HOME/.shrc.vcs"
 
 set -e
@@ -18,7 +20,7 @@ builddir="$(builddir)"
 
 for f in "$HOME/.templates/tasks.json."*; do
   test -f "$f" || break  # no templates => f == tasks.json.*
-  if test -f "${f#$HOME/.templates/tasks.json.}"; then
+  if test -f "${f#"$HOME/.templates/tasks.json."}"; then
     sed -e "s#@BUILDDIR@#$builddir#" "$f" > .vscode/tasks.json
     exit 0
   fi

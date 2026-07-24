@@ -8,6 +8,6 @@
 # ln /usr/bin/logexec /usr/bin/gnome-keyring-daemon
 
 ppid="$(ps -o ppid= -p $$)"
-pcomm="$(ps -o comm= -p $ppid)"
+pcomm="$(ps -o comm= -p "$ppid")"
 logger -s -t "$0" "started by pid $ppid ($pcomm) with args $*"
 exec "$0".distrib "$@"

@@ -30,6 +30,7 @@ trap 'rm -rf "$BIN_NONE" "$BIN_TMUX" "$BIN_SHPOOL" "$BIN_BOTH"' EXIT
 # --- harness ---------------------------------------------------------------
 
 setup() {
+  # shellcheck disable=SC2034  # read by the sessionlib engine sourced below
   SESSION_SEP="/"
   # Defaults the stubs read; each test overrides what it needs.
   STUB_PREFIX="proj/"
@@ -39,6 +40,7 @@ setup() {
   # Pull in the engine under test (idempotent guard means a fresh shell per test
   # is unnecessary, but we re-source for clarity/isolation of the stubs above).
   unset _SESSIONLIB_SOURCED
+  # shellcheck source=/dev/null
   source "$SCRIPT_DIR/sessionlib"
 }
 
@@ -187,7 +189,7 @@ test_picker_query_matches_display_field() {
 run_resolve() {
   set +e
   rb_out="$(
-    TMUX="$1"; SHPOOL_SESSION_NAME="$2"; SESSION_BACKEND="$3"; PATH="$4"
+    export TMUX="$1" SHPOOL_SESSION_NAME="$2" SESSION_BACKEND="$3" PATH="$4"
     resolve_session_backend
   )"
   rb_rc=$?

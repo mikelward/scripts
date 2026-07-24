@@ -1039,6 +1039,7 @@ SERVICE
 install_rust() {
     # Ensure cargo/rustup are on PATH even if profile hasn't been sourced
     if test -f "$HOME/.cargo/env"; then
+        # shellcheck source=/dev/null
         . "$HOME/.cargo/env"
     fi
 
@@ -1051,6 +1052,7 @@ install_rust() {
         # rc/profile files, since PATH is managed by the conf repo. We source
         # ~/.cargo/env below so cargo is on PATH for the rest of this run.
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+        # shellcheck source=/dev/null
         . "$HOME/.cargo/env"
     fi
 }
@@ -1232,6 +1234,7 @@ install_home_tools() {
         info "  a bundle installs its full contents; --minimal/--no-npm don't trim it"
         if "$homepkg" install-bundle "$bundle"; then
             provisioned=yes
+            # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
             "$homepkg" install $tools \
                 || warn "installed the bundle; couldn't reconcile the requested tools online (offline?)"
         else
@@ -1242,6 +1245,7 @@ install_home_tools() {
         test "$MINIMAL_ENABLED" -eq 0 \
             || info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
         info "Installing CLI tools into a home prefix via homepkg: $tools"
+        # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
         if "$homepkg" install $tools; then
             provisioned=yes
         else
@@ -1385,10 +1389,10 @@ generate_ssh_key() {
     # can't read user input.  Open /dev/tty to read from the terminal.
     if test -t 0; then
         printf "Press Enter after adding the key to GitHub and Codeberg..."
-        read _
+        read -r _
     elif test -e /dev/tty; then
         printf "Press Enter after adding the key to GitHub and Codeberg..."
-        read _ < /dev/tty
+        read -r _ < /dev/tty
     else
         warn "Cannot prompt for input; add the key to GitHub and Codeberg manually before cloning SSH repos"
     fi
@@ -1418,10 +1422,10 @@ offer_ssh_remotes() {
     reply=n
     if test -t 0; then
         printf "%s" "$prompt"
-        read reply
+        read -r reply
     elif test -e /dev/tty; then
         printf "%s" "$prompt"
-        read reply < /dev/tty
+        read -r reply < /dev/tty
     else
         info "Non-interactive; leaving repo remotes as-is (run gittossh later to switch)"
         return 0
@@ -1583,15 +1587,19 @@ start_services
 if test "$GUI_ENABLED" -eq 1; then
     if test "$OS" = "macos"; then
         info "Configuring macOS desktop environment"
+        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-macos" $DESKTOP_SETUP_FLAGS
     elif test "$DESKTOP" = hypr; then
         info "Configuring Hyprland desktop environment"
+        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-hypr" $DESKTOP_SETUP_FLAGS
     elif test "$DESKTOP" = sway; then
         info "Configuring Sway desktop environment"
+        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-sway" $DESKTOP_SETUP_FLAGS
     else
         info "Configuring KDE desktop environment"
+        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS
     fi
 else
@@ -1611,6 +1619,7 @@ if test "$INSTALL" = yes; then
     # instead. Source ~/.cargo/env first so a previously installed toolchain
     # still counts as available even on a run that skipped install_rust.
     if test -f "$HOME/.cargo/env"; then
+        # shellcheck source=/dev/null
         . "$HOME/.cargo/env"
     fi
     if command -v cargo >/dev/null 2>&1; then

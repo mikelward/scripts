@@ -24,7 +24,7 @@ list_pointing_devices() {
 }
 
 # Symlinks called "left" and "right" determine which button map to use.
-handedness=$(basename $0)
+handedness=$(basename "$0")
 case $handedness in left|right)
     ;;
 *)
@@ -49,7 +49,7 @@ list_pointing_devices |
 while IFS=$'\t' read -r name id; do
     printf '%s (%d)\n' "$name" "$id"
 done
-printf "Enter the number of the device to make $handedness-handed: "
+printf 'Enter the number of the device to make %s-handed: ' "$handedness"
 read -r id
 if test -n "$id"; then
     $handedness "$id"

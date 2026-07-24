@@ -19,6 +19,7 @@ fi
 if test -z "${DOTENV_SOURCED:-}"; then
     set -a
     for _dotenv in "$HOME/.env" "$HOME/.env.local"; do
+        # shellcheck source=/dev/null
         test -f "$_dotenv" && . "$_dotenv"
     done
     unset _dotenv

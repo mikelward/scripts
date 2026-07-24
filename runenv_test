@@ -159,6 +159,7 @@ test_no_arguments_is_a_usage_error() {
 
 run_test "runs a command found via ~/.env's PATH" test_runs_command_via_env_path
 run_test "passes arguments through" test_passes_arguments_through
+# shellcheck disable=SC2088  # the tildes are literal display text in this test label, not paths to expand
 run_test "~/.env.local prepend beats ~/.env" test_env_local_prepend_wins
 run_test "plain assignments are exported to the command" test_plain_assignments_are_exported
 run_test "DOTENV_SOURCED skips re-sourcing" test_dotenv_sourced_skips_the_files

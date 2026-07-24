@@ -596,6 +596,7 @@ test_switch_normalizes_leading_dollar() {
   # session named "$0", so a generated "$0" must be normalized to "_0".
   export TMUX="/tmp/fake,1,0"
   export TMUX_S="other/1"
+  # shellcheck disable=SC2016  # '$0' is a deliberate literal session name for the test
   run_autotmux switch '$0'
   assert_status 0
   assert_called "tmux new-session -d -s _0"

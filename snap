@@ -8,10 +8,12 @@ xorigin=0
 yorigin=0
 width=640
 height=480
-while read desktop current dg resolution vp vporigin wa waorigin waresolution name; do
+# The field names document the `wmctrl -d` output columns; only a few are used.
+# shellcheck disable=SC2034
+while read -r desktop current dg resolution vp vporigin wa waorigin waresolution name; do
   if test "$current" = "*"; then
-    IFS='x' read width height <<<"$waresolution"
-    IFS=',' read xorigin yorigin <<<"$waorigin"
+    IFS='x' read -r width height <<<"$waresolution"
+    IFS=',' read -r xorigin yorigin <<<"$waorigin"
     break
   fi
 done <<<"$(wmctrl -d)"
@@ -33,5 +35,5 @@ right)
 esac
 wmctrl -r :ACTIVE: -b remove,maximized_horz
 wmctrl -r :ACTIVE: -b add,maximized_vert
-wmctrl -r :ACTIVE: -e $coords
+wmctrl -r :ACTIVE: -e "$coords"
 

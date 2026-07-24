@@ -7,9 +7,11 @@
 # directory, a one-line process-tree summary, and any vcs unmerged items.
 
 # Reuse the shell-enumeration and formatting helpers from autoshpool.
+# shellcheck source=/dev/null
 source "$(dirname "$0")/autoshpool"
 
 # Load the user's vcs helper (best-effort) for the vcs root/unmerged fields.
+# shellcheck source=/dev/null
 test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
 listing="$(shpool list 2>/dev/null)"

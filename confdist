@@ -30,9 +30,9 @@ scp()
 	local scpflags=-Bq
 	if test "$verbose" -gt 0
 	then
-		command scp $ssh_mux_opts $scpflags "$@"
+		command scp "${ssh_mux_opts[@]}" "$scpflags" "$@"
 	else
-		command scp $ssh_mux_opts $scpflags "$@" 2>/dev/null
+		command scp "${ssh_mux_opts[@]}" "$scpflags" "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -41,9 +41,9 @@ ssh()
 {
 	if test "$verbose" -gt 0
 	then
-		command ssh $ssh_mux_opts "$@"
+		command ssh "${ssh_mux_opts[@]}" "$@"
 	else
-		command ssh $ssh_mux_opts "$@" 2>/dev/null
+		command ssh "${ssh_mux_opts[@]}" "$@" 2>/dev/null
 	fi
 	return $?
 }
@@ -54,7 +54,7 @@ ssh()
 setup_ssh_mux()
 {
 	ssh_mux_dir=$(mktemp -d "${TMPDIR:-/tmp}/confdist-XXXXXX") || return
-	ssh_mux_opts="-o ControlMaster=auto -o ControlPath=$ssh_mux_dir/%C -o ControlPersist=60"
+	ssh_mux_opts=(-o ControlMaster=auto -o "ControlPath=$ssh_mux_dir/%C" -o ControlPersist=60)
 	trap 'teardown_ssh_mux' EXIT
 }
 
@@ -79,6 +79,8 @@ read_defaults()
 {
 	hosts=
 	verbose=0
+	simulate=0
+	# shellcheck source=/dev/null
 	test -f "$HOME"/.confdist && . "$HOME"/.confdist
 }
 
@@ -98,7 +100,7 @@ read_options()
 			exit 0
 			;;
 		-v|--verbose)
-			verbose=$(($verbose + 1))
+			verbose=$((verbose + 1))
 			;;
 		--)
 			shift
@@ -117,7 +119,7 @@ read_options()
 	done
 	[ $verbose -gt 1 ] && set -x
 
-	test $# -gt 0 && hosts="$@"
+	test $# -gt 0 && hosts="$*"
 }
 
 copy_to()
@@ -133,8 +135,8 @@ copy_to()
 		test -f "$conffile" || continue
 		confname=$(basename "$conffile")
 		info "Copying $confname to $host"
-		printf "Copying $confname to $host... "
-		scp "$conffile" $host:~
+		printf 'Copying %s to %s... ' "$confname" "$host"
+		scp "$conffile" "$host:~"
 		if test $? -ne 0
 		then
 			printf "failure\n"
@@ -145,8 +147,9 @@ copy_to()
 		case "$confname" in
 		scripts.tar.gz)
 			dir=${confname%.tar.gz}
-			printf "Extracting $confname on $host... "
-			ssh $host "mkdir -p $dir && tar -C $dir -xzf $confname"
+			printf 'Extracting %s on %s... ' "$confname" "$host"
+			# shellcheck disable=SC2029  # $dir/$confname are intentionally expanded locally to build the remote command
+			ssh "$host" "mkdir -p $dir && tar -C $dir -xzf $confname"
 			if test $? -ne 0
 			then
 				printf "failure\n"
@@ -161,8 +164,8 @@ copy_to()
 install_on()
 {
 	local host=$1
-	printf "Installing on $host... "
-	ssh $host "scripts/confinst" -e
+	printf 'Installing on %s... ' "$host"
+	ssh "$host" "scripts/confinst" -e
 	if test $? -ne 0
 	then
 		printf "failure running remote install script\n"
@@ -174,7 +177,7 @@ install_on()
 distribute_from()
 {
 	local host=$1
-	ssh $host confdist
+	ssh "$host" confdist
 }
 
 # Refuse early when either base archive is missing: scripts.tar.gz carries
@@ -198,7 +201,7 @@ require_tarballs()
 open_ssh_master()
 {
 	local host=$1
-	printf "Connecting to $host... "
+	printf 'Connecting to %s... ' "$host"
 	if ssh "$host" true
 	then
 		printf "success\n"
@@ -217,7 +220,8 @@ setup_ssh_mux
 
 for host in $hosts
 do
-	open_ssh_master $host && copy_to $host && install_on $host && distribute_from $host || true
+	# shellcheck disable=SC2015  # trailing `|| true` deliberately lets the loop continue past a failing host
+	open_ssh_master "$host" && copy_to "$host" && install_on "$host" && distribute_from "$host" || true
 done
 
 # vim: set ts=4 sw=4 tw=0 noet:

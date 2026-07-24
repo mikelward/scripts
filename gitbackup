@@ -2,12 +2,12 @@
 # back up a git repository tree
 # $Id$
 
-OIFS="$IFS"
 IFS=" 	
 "
 
 if test -f "$HOME/bin/functions"
 then
+    # shellcheck source=/dev/null
     . "$HOME/bin/functions"
 else
     echo "Cannot open functions library $HOME/bin/functions" 1>&2
@@ -22,12 +22,6 @@ abort()
 
 cleanup()
 {
-    if test -f "$dfout"
-    then
-        info "Cleaning up $dfout"
-        run rm -rf -- "$dfout"
-    fi
-
     if test -d "$snapdir"
     then
         info "Cleaning up $snapdir"
@@ -56,12 +50,14 @@ find_git_repos()
 #
 debug=
 quiet=true
+# shellcheck disable=SC2034  # read by run() in the sourced functions library
 simulate=                       # empty means false
 dateformat='%-e %B %Y'
 timeformat='%H:%M:%S'
 srcroot=/home/mikelward/git
 tmpdir="${TMPDIR:-$HOME/tmp}"
 dstroot=mikelward.homedns.org:/home/mikel/git
+# shellcheck disable=SC2034  # read by the logging helpers in the functions library
 logfile=/home/mikelward/log/gitbackup.log
 
 main()
@@ -88,6 +84,7 @@ main()
             exit 0
             ;;
         -n|--simulate)
+            # shellcheck disable=SC2034  # read by run() in the sourced functions library
             simulate=true
             ;;
         --)
@@ -112,7 +109,7 @@ main()
     dstroot=${dstroot%/}/
     srcroot=${srcroot%/}/
 
-    info "Starting gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
+    info "Starting gitbackup on $(date +"$dateformat") at $(date +"$timeformat")"
 
     if is_remote "$dstroot"
     then
@@ -135,7 +132,7 @@ main()
     #   /srv/git/proj2/proj2b.git
     while IFS= read -r -d '' srcdir
     do
-        info "Starting backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+        info "Starting backup of $srcdir on $(date +"$dateformat") at $(date +"$timeformat")"
 
         # do each repo in a new subshell so we can call cleanup on error and success via trap
         (
@@ -152,7 +149,7 @@ main()
         # case 1: srcdir is subdir of srcroot - OK
         # case 2: srcdir is / - CAN'T HAPPEN
         # case 3: srcdir = srcroot - NOT SUPPORTED
-        reponame=${srcdir#$srcroot}
+        reponame=${srcdir#"$srcroot"}
         reponame=${reponame%/}
         if test "$reponame" = ""
         then
@@ -177,7 +174,7 @@ main()
             exit 1
         fi
 
-        if test $available -lt $size
+        if test "$available" -lt "$size"
         then
             error "Need at least $size kilobytes free on $tmpdir"
             exit 1
@@ -222,16 +219,16 @@ main()
         # -n: don't let ssh inherit the find pipe feeding this loop as stdin,
         # or it drains the remaining repository paths and only the first repo
         # gets backed up
-        run ssh -n $dsthost 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
+        run ssh -n "$dsthost" 'dstdir="'"$dstdir"'"; test -d "$dstdir" || mkdir -p "$dstdir"'
 
-        flags=
+        flags=()
         if test "$debug"
         then
-            flags="$flags -v"
+            flags+=(-v)
         fi
         if test "$quiet"
         then
-            flags="$flags -q"
+            flags+=(-q)
         fi
         #scp -C -r $flags "$snapdir" "$dst"
         # ensure source has a trailing slash so we only copy the directory contents
@@ -239,7 +236,7 @@ main()
         #  local:~/svn.12345/ -> remote:~/svn/svn.12345)
         snapdir=${snapdir%/}/
         info "Syncing $snapdir to $dsturl"
-        run rsync -a --delete $flags "$snapdir" "$dsturl"
+        run rsync -a --delete "${flags[@]}" "$snapdir" "$dsturl"
         if test $? -ne 0
         then
             error "Error syncing $snapdir to $dsturl"
@@ -248,10 +245,10 @@ main()
 
         )
 
-        info "Finished backup of $srcdir on "$(date +"$dateformat")" at "$(date +"$timeformat")
+        info "Finished backup of $srcdir on $(date +"$dateformat") at $(date +"$timeformat")"
     done < <(find_git_repos "$srcroot")
 
-    info "Finished gitbackup on "$(date +"$dateformat")" at "$(date +"$timeformat")
+    info "Finished gitbackup on $(date +"$dateformat") at $(date +"$timeformat")"
 }
 
 # Run unless sourced (e.g. by gitbackup_test, which exercises find_git_repos in

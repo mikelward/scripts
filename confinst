@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck shell=dash  # relies on `local`, provided by dash and other /bin/sh implementations
 # installs UNIX configuration files
 
 create_dir()
@@ -54,7 +55,8 @@ extract()
 backup()
 {
 	local path="$1"
-	local backuppath="$path.$(date +%Y%m%d%H%M%S)"
+	local backuppath
+	backuppath="$path.$(date +%Y%m%d%H%M%S)"
 	info "Moving $path to $backuppath"
 	run mv "$path" "$backuppath"
 }
@@ -106,7 +108,6 @@ get_link()
 	local sourcefile
 	local destdir
 	local prefix
-	local destfile
 
 	sourcefile="$1"
 	destdir="$2"
@@ -225,7 +226,7 @@ make_links()
 				run mkdir -p "$link"
 				if test $? -ne 0
 				then
-					printf "Error creating $link, skipping $file\n" 1>&2
+					printf 'Error creating %s, skipping %s\n' "$link" "$file" 1>&2
 					continue
 				fi
 			fi

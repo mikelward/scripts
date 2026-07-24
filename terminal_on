@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 . "$HOME"/.shrc
 set -eu
 destination="${1:-}"
@@ -14,5 +15,6 @@ fi
 if command -v rw >/dev/null 2>&1; then
   terminal rw -r "$destination"
 else
+  # shellcheck disable=SC2016  # $1 is expanded by the inner bash -c, not this shell
   terminal bash -i -c 'need_auth && auth; ssh -n "$1" true; ssh "$1"' bash "$destination"
 fi

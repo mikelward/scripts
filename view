@@ -12,4 +12,9 @@ case $editor in
     ;;
 esac
 
-"$editor" $readonlyflag "$@"
+if test -n "$readonlyflag"
+then
+    "$editor" "$readonlyflag" "$@"
+else
+    "$editor" "$@"
+fi

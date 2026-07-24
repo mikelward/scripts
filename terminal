@@ -24,7 +24,7 @@ exec_positional() {
   exec "$program" -- "$@"
 }
 
-cd
+cd || exit
 exists kitty && exec_positional kitty "$@"
 exists xfce4-terminal && exec_dash_e xfce4-terminal "$@"
 exists mate-terminal && exec_dash_e mate-terminal "$@"

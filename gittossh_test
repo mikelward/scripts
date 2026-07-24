@@ -127,6 +127,7 @@ test_converts_push_url() {
     git -C "$repo" remote add origin "https://github.com/mikelward/scripts.git"
     git -C "$repo" remote set-url --push origin "https://github.com/mikelward/scripts.git"
     run_convert "$repo"
+    # shellcheck disable=SC2015  # test-assertion idiom: the || block runs on any failed assertion, which is intended
     assert_status 0 &&
     assert_url "$repo" origin "git@github.com:mikelward/scripts.git" &&
     test "$(git -C "$repo" config --get remote.origin.pushurl)" = "git@github.com:mikelward/scripts.git" || {

@@ -7,9 +7,11 @@
 # items.
 
 # Reuse the enumeration and formatting helpers from autotmux.
+# shellcheck source=/dev/null
 source "$(dirname "$0")/autotmux"
 
 # Load the user's vcs helper (best-effort) for the vcs root/unmerged fields.
+# shellcheck source=/dev/null
 test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
 first_pane_path() {

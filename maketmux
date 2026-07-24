@@ -32,6 +32,7 @@
 
 # Pull in sanitize_session_name/session_exists from the tmux backend module.
 # autotmux's is_sourced guard makes sourcing it define functions only.
+# shellcheck source=/dev/null
 source "$(dirname "$0")/autotmux"
 
 if test -z "$1"; then
