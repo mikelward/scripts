@@ -281,5 +281,5 @@ fi
 
 info "Sway desktop configured."
 info "Per-host values (output names, idle tweaks) live in"
-info "~/.config/sway/config.local -- see conf/config/sway/README.md."
+info "$HOME/.config/sway/config.local -- see conf/config/sway/README.md."
 info "Log in and pick the Sway session (or run 'sway' from a TTY)."

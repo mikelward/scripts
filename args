@@ -4,5 +4,5 @@ echo 0: "$0"
 i=1
 for arg; do
     echo "$i: $arg"
-    i=$(expr $i + 1)
+    i=$((i + 1))
 done

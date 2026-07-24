@@ -38,7 +38,7 @@ option="${2:-$default_section}"
 # handle manpage(number)
 case $manpage in *\(*\))
     page=${manpage%\(*\)}
-    section=${manpage#$page}
+    section=${manpage#"$page"}
     section=${section#\(}
     section=${section%\)}
     manpage=$page

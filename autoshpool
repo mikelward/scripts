@@ -49,6 +49,7 @@ switch_file_suffix() {
 # Shared helpers and the fzf picker engine. SESSION_SEP tells the library which
 # separator this backend uses (for session_matches_prefix).
 SESSION_SEP=":"
+# shellcheck source=/dev/null
 source "$(dirname "$0")/sessionlib"
 
 get_current_shpool_session() {
@@ -124,7 +125,8 @@ get_prefix() {
   # Use the current project name with a colon at the end, or empty string.
   # Silence rootdir like autotmux's get_prefix: without ~/.shrc.vcs it doesn't
   # exist, and "command not found" noise on stderr isn't an error here.
-  local prefix="$(basename "$(rootdir 2>/dev/null)")"
+  local prefix
+  prefix="$(basename "$(rootdir 2>/dev/null)")"
   test -n "$prefix" && echo "$prefix:"
 }
 
@@ -495,6 +497,7 @@ clear_switch() {
 autoshpool_loop() {
   #exec >>"$HOME/.autoshpool.log" 2>>"$HOME/.autoshpool.log"
 
+  # shellcheck source=/dev/null
   test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
   SHPOOL_PREFIX="${SHPOOL_PREFIX:-$(get_prefix)}"
@@ -603,6 +606,7 @@ case "$1" in
   switch)
     # Load the user's vcs helper (best-effort) so vcs rootdir/unmerged work when
     # matching and describing shells.
+    # shellcheck source=/dev/null
     test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
     if test -z "$2"; then
       # No target: switch to the session that fits this directory's project --

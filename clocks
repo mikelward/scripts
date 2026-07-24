@@ -12,11 +12,10 @@ if test -n "$when" && ! date -d "$when $localzone" >/dev/null 2>&1; then
 fi
 
 IFS='|'
-while read timezone description
+while read -r timezone description
 do
 	if test -n "$timezone"
 	then
-		continent=${timezone%/*}
 		city=${timezone#*/}
 		city=$(echo "$city" | tr '_' ' ')
 		if test -z "$description"

@@ -24,14 +24,12 @@ cleanup()
 
 get_cpp_output()
 {
-    local headers="$@"
-
     sourcefile=$(mktemp)
     if test $? -ne 0; then
         echo "Error: Cannot create source file" 1>&2
         exit 1
     fi
-    for header in $headers; do
+    for header in "$@"; do
         echo "#include <$header>" >> "$sourcefile"
     done
     # TODO: Do we need -D_GNU_SOURCE?
@@ -54,7 +52,6 @@ print_definitions()
 {
     local identifier="$1"
     shift
-    local headers="$@"
 
     local filenamepattern definepattern typedefpattern declarepattern
     filenamepattern='^# [0-9]+ "([^"]*)"'
@@ -134,11 +131,11 @@ main()
 
             headers=$(get_headers "$page$section")
             for header in $headers; do
-                args[$i]=$header
+                args[i]=$header
                 i=$((i+1))
             done
         else
-            args[$i]=$arg
+            args[i]=$arg
             i=$((i+1))
         fi
     done

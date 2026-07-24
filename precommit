@@ -2,6 +2,7 @@
 # precommit hook for git, hg, etc.
 set -e
 
+# shellcheck source=/dev/null
 source ~/.shrc.vcs
 
 allknown

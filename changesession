@@ -18,6 +18,7 @@
 # family via sessionlib; see there for the cascade.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
 . "$dir/sessionlib"
 
 be="$(resolve_session_backend)" || {

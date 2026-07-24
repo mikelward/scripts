@@ -1,3 +1,4 @@
+# shellcheck shell=bash  # sourced by the bash entry scripts; has no shebang of its own
 # sessionlib - shared helpers for the tmux/shpool session scripts
 #
 # Two sets of consumers source this, keeping the entry scripts thin wrappers:

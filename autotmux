@@ -40,7 +40,9 @@ TMUX_SEP="${TMUX_SEP:-/}"
 
 # Shared helpers and the fzf picker engine. SESSION_SEP tells the library which
 # separator this backend uses (for session_matches_prefix).
+# shellcheck disable=SC2034  # consumed by session_matches_prefix in the sourced sessionlib
 SESSION_SEP="$TMUX_SEP"
+# shellcheck source=/dev/null
 source "$(dirname "$0")/sessionlib"
 
 sanitize_session_name() {
@@ -366,6 +368,7 @@ resolve_switch_target() {
 # Detach if the user cleanly exited; stay if there was an error so the user can
 # see and fix it (autotmux returns non-zero, so the caller's `&& exit` won't fire).
 autotmux_main() {
+  # shellcheck source=/dev/null
   test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
   TMUX_PREFIX="${TMUX_PREFIX:-$(get_prefix)}"
@@ -407,6 +410,7 @@ case "$1" in
   switch)
     # Load the user's vcs helper (best-effort) so vcs rootdir/unmerged work when
     # matching and describing sessions.
+    # shellcheck source=/dev/null
     test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
     if test -z "$2"; then
       # No target: switch to the session that fits this directory's project --

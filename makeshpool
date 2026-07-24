@@ -21,6 +21,7 @@
 
 # Pull in the shpool backend helpers for request_switch. autoshpool's is_sourced
 # guard makes sourcing it define functions without running the loop.
+# shellcheck source=/dev/null
 source "$(dirname "$0")/autoshpool"
 
 # A name is required. Refusing here matters most inside a session: with no

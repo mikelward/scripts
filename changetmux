@@ -17,11 +17,14 @@
 # Override the picker with CHANGESESSION_FZF (e.g. for tests).
 
 # Pull in the tmux backend helpers (which in turn source sessionlib's engine).
+# shellcheck source=/dev/null
 source "$(dirname "$0")/autotmux"
+# shellcheck source=/dev/null
 test -r "$HOME/.shrc.vcs" && source "$HOME/.shrc.vcs"
 
 # Absolute path to this script, so the fzf preview can call back in regardless
 # of how changetmux was invoked.
+# shellcheck disable=SC2034  # read by the fzf --preview command in the sourced sessionlib
 SESSION_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 # Resolve the project prefix once, here, so it persists for both backend_prefix

@@ -9,6 +9,7 @@
 # All arguments are passed through to the chosen script.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
 . "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {

@@ -9,7 +9,7 @@ SUDO=sudo                    # empty is false, non-empty is true
 EDITOR=${EDITOR:-vi}
 
 error() {
-    printf "$*\n"
+    printf '%s\n' "$*"
     false
 }
 
@@ -30,7 +30,7 @@ else
       ;;
     *)
       if test "$line" != "$1"; then
-        file=${1%:$line}
+        file=${1%:"$line"}
       else
         file=$1
         line=

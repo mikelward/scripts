@@ -9,6 +9,7 @@
 # All arguments (the session name, and any further pass-through) are forwarded.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
 . "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {

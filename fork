@@ -16,7 +16,7 @@ case "$url" in
     ;;
 esac
 echo "Press ENTER when done"
-read
+read -r
 git remote remove origin
 git remote add origin "git@github.com:mikelward/$dir"
 git push origin

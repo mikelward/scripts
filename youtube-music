@@ -1,3 +1,4 @@
 #!/bin/bash
+# shellcheck source=/dev/null
 . "$HOME/.shrc"
 exec chrome --app="https://music.youtube.com" ${CHROME_MUSIC_USER_DATA_DIR:+--user-data-dir="$CHROME_MUSIC_USER_DATA_DIR"}

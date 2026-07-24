@@ -222,7 +222,7 @@ configure_amethyst() {
     # Amethyst config lives in ~/conf/amethyst.yml and is symlinked
     # to ~/.amethyst.yml by confinst. Nothing to do here.
     if ! test -f "$HOME/.amethyst.yml"; then
-        warn "~/.amethyst.yml not found; run confinst after cloning the conf repo"
+        warn "$HOME/.amethyst.yml not found; run confinst after cloning the conf repo"
     fi
 
     # Enable focus follows mouse

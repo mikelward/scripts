@@ -28,6 +28,7 @@ maybe_xsecurelock() {
   local lock_command="xsecurelock"
   have_command "$init_command" || return 1
   if test -f "$HOME/.xsecurelockrc"; then
+      # shellcheck source=/dev/null
       . "$HOME/.xsecurelockrc"
   fi
   case $1 in

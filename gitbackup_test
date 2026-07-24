@@ -19,6 +19,7 @@ STUB_HOME="$(mktemp -d)"
 mkdir -p "$STUB_HOME/bin"
 : > "$STUB_HOME/bin/functions"
 export HOME="$STUB_HOME"
+# shellcheck source=/dev/null
 . "$SCRIPT_DIR/gitbackup"
 # Sourcing gitbackup sets IFS to space/tab/newline; that is the default anyway,
 # but be explicit so the harness below is unaffected.

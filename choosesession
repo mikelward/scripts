@@ -11,6 +11,7 @@
 # changesession knows not to switch. All arguments are passed through.
 
 dir="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=/dev/null
 . "$dir/sessionlib"
 
 backend="$(resolve_session_backend)" || {

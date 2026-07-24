@@ -3,7 +3,9 @@
 # This is a workaround for VSCode issue 17634, allowing separate work and home
 # overrides to the global settings.json.
 
+# shellcheck source=/dev/null
 source "$HOME/.shrc"
+# shellcheck source=/dev/null
 source "$HOME/.shrc.vcs"
 
 set -e
