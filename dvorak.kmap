@@ -1,22 +1,39 @@
 # US Dvorak keymap for the Linux text console (self-contained).
 #
-# This is a partial keymap: it remaps only the keys whose output differs
-# between US QWERTY and US Dvorak, layered on top of the kernel's current
-# keymap. Because it defines the keys inline (no `include` of a base map), it
-# needs nothing from /usr/share/keymaps -- so it loads on minimal systems that
-# don't have the kbd keymap data installed, and without root as long as you
-# own the tty (e.g. you're logged in on the VT):
+# This defines the whole character block inline (no `include` of a base map),
+# so it needs nothing from /usr/share/keymaps -- it loads on minimal systems
+# that don't have the kbd keymap data installed, and without root as long as
+# you own the tty (e.g. you're logged in on the VT):
 #
 #     loadkeys dvorak.kmap
 #
+# Every letter, number and symbol key is defined here rather than inherited, so
+# the result is correct US Dvorak regardless of which layout was previously
+# active (a partial "only the changed keys" map would silently produce a hybrid
+# if the current base were, say, German or Colemak). What is intentionally NOT
+# defined -- Esc/Tab/Enter/Space/Backspace, the modifier keys, the function
+# keys and the keypad -- is layout-independent (identical across Latin console
+# maps), so inheriting it from the active keymap is safe. The AltGr/third level
+# is likewise left alone; US Dvorak doesn't use it.
+#
 # Letters use the `+` prefix so CapsLock treats them as letters and Shift/Ctrl
 # entries are generated automatically. Symbol keys list plain then Shift.
-# Numbers, backtick, backslash, space and the modifiers are identical in
-# Dvorak, so they are intentionally left untouched.
 
-# number row: only the two keys right of 0 change ( -= becomes [] )
+# number row (pinned to US so a non-US base can't leak through)
+keycode   2 = one           exclam
+keycode   3 = two           at
+keycode   4 = three         numbersign
+keycode   5 = four          dollar
+keycode   6 = five          percent
+keycode   7 = six           asciicircum
+keycode   8 = seven         ampersand
+keycode   9 = eight         asterisk
+keycode  10 = nine          parenleft
+keycode  11 = zero          parenright
 keycode  12 = bracketleft   braceleft
 keycode  13 = bracketright  braceright
+keycode  41 = grave         asciitilde
+keycode  43 = backslash     bar
 
 # top letter row: q w e r t y u i o p [ ]  ->  ' , . p y f g c r l / =
 keycode  16 = apostrophe    quotedbl
