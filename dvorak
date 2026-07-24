@@ -1,0 +1,148 @@
+#!/bin/bash
+# dvorak - switch the keyboard layout to US Dvorak using whatever mechanism
+# fits the current environment.
+#
+# It tries every method that applies and applies as many as it can, so it works
+# whether you're on the bare Linux text console, in an X11 session, or in a
+# Wayland desktop (GNOME/KDE), and whether or not an input method (IBus) is
+# running.
+#
+# The headline case -- the Linux virtual console -- does NOT need root. The
+# command is simply `loadkeys dvorak`. loadkeys only needs to own the tty (it
+# does: it's your login console) or CAP_SYS_TTY_CONFIG, not full root, so no
+# sudo and no dpkg-reconfigure required. The US Dvorak console keymap is just
+# named "dvorak"; loadkeys finds /usr/share/keymaps/i386/dvorak/dvorak.map.gz
+# for you.
+#
+# IBus is only touched if it is already running; this script never starts it.
+
+set -u
+
+progname=${0##*/}
+applied=0
+
+have() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+note() {
+    printf '%s: %s\n' "$progname" "$*" >&2
+}
+
+# Linux text console: loadkeys dvorak. Works without root on your own VT.
+# Gated on TERM=linux so we don't poke the console keymap from an X terminal.
+maybe_console() {
+    test "${TERM:-}" = linux || return 1
+    have loadkeys || return 1
+    if loadkeys dvorak >/dev/null 2>&1; then
+        note "Linux console set to Dvorak (loadkeys dvorak)"
+        return 0
+    fi
+    note "loadkeys dvorak failed (need to own this VT or have CAP_SYS_TTY_CONFIG)"
+    return 1
+}
+
+# X11 (including X clients under XWayland): setxkbmap.
+maybe_x11() {
+    test -n "${DISPLAY:-}" || return 1
+    have setxkbmap || return 1
+    if setxkbmap -layout us -variant dvorak 2>/dev/null \
+        || setxkbmap dvorak 2>/dev/null; then
+        note "X11 keyboard set to Dvorak (setxkbmap)"
+        return 0
+    fi
+    return 1
+}
+
+# GNOME (X11 or Wayland): the session input source lives in gsettings.
+maybe_gnome() {
+    have gsettings || return 1
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *GNOME*|*Unity*|*Cinnamon*) ;;
+        *) return 1 ;;
+    esac
+    schema=org.gnome.desktop.input-sources
+    gsettings get "$schema" sources >/dev/null 2>&1 || return 1
+    if gsettings set "$schema" sources "[('xkb', 'us+dvorak')]" 2>/dev/null; then
+        note "GNOME input source set to Dvorak (gsettings)"
+        return 0
+    fi
+    return 1
+}
+
+# KDE Plasma (X11 or Wayland): persist in kxkbrc, then ask kded to reload it.
+# On X11 setxkbmap has usually applied it live already; on Wayland the reload
+# below (or the next login) makes it take effect.
+maybe_kde() {
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *KDE*) ;;
+        *) return 1 ;;
+    esac
+    kw=
+    for cmd in kwriteconfig6 kwriteconfig5 kwriteconfig; do
+        if have "$cmd"; then kw=$cmd; break; fi
+    done
+    test -n "$kw" || return 1
+    "$kw" --file kxkbrc --group Layout --key Use true
+    "$kw" --file kxkbrc --group Layout --key LayoutList us
+    "$kw" --file kxkbrc --group Layout --key VariantList dvorak
+    for qd in qdbus6 qdbus-qt6 qdbus; do
+        if have "$qd"; then
+            "$qd" org.kde.keyboard /Layouts org.kde.KeyboardLayouts.setLayout 0 \
+                >/dev/null 2>&1 && break
+        fi
+    done
+    note "KDE configured for Dvorak (kxkbrc; relog if not applied live)"
+    return 0
+}
+
+# IBus: only if it is already running -- never start it.
+maybe_ibus() {
+    have ibus || return 1
+    if ! { pgrep -x ibus-daemon >/dev/null 2>&1 \
+        || test -n "${IBUS_ADDRESS:-}" \
+        || ibus address >/dev/null 2>&1; }; then
+        return 1
+    fi
+    if ibus engine xkb:us:dvorak:eng >/dev/null 2>&1; then
+        note "IBus engine set to US Dvorak (xkb:us:dvorak:eng)"
+        return 0
+    fi
+    return 1
+}
+
+case "${1:-}" in
+    -h|--help)
+        cat >&2 <<EOF
+Usage: $progname
+
+Switch the keyboard layout to US Dvorak using every method that applies to the
+current environment:
+  - Linux text console  : loadkeys dvorak      (no root needed on your own VT)
+  - X11                 : setxkbmap -layout us -variant dvorak
+  - GNOME session       : gsettings input-sources -> us+dvorak
+  - KDE Plasma session  : kxkbrc -> us/dvorak
+  - IBus                : xkb:us:dvorak:eng     (only if IBus already running)
+EOF
+        exit 0
+        ;;
+    "") ;;
+    *)
+        note "unexpected argument: $1 (try --help)"
+        exit 2
+        ;;
+esac
+
+maybe_console && applied=1
+maybe_x11     && applied=1
+maybe_gnome   && applied=1
+maybe_kde     && applied=1
+maybe_ibus    && applied=1
+
+if test "$applied" -eq 0; then
+    note "could not set Dvorak by any method here"
+    note "on a Linux console try: loadkeys dvorak"
+    note "under X11 try:          setxkbmap -layout us -variant dvorak"
+    exit 1
+fi
+exit 0
