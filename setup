@@ -373,11 +373,18 @@ while test $# -gt 0; do
             ;;
         --github)
             shift
-            if test $# -eq 0; then
-                error "--github requires a host/prefix argument"
-                usage >&2
-                exit 1
-            fi
+            # Reject a missing value or an option-looking one. A real
+            # host/prefix never starts with '-', so "setup --github --no-install"
+            # is a forgotten value, not a request to clone from "--no-install":
+            # swallowing the flag would silently drop it and then fail at clone
+            # time on a bogus "--no-install:mikelward/..." remote.
+            case "${1:-}" in
+                "" | -*)
+                    error "--github requires a host/prefix argument"
+                    usage >&2
+                    exit 1
+                    ;;
+            esac
             GITHUB_PREFIX="$1"
             ;;
         --github=*)

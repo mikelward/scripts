@@ -604,6 +604,16 @@ test_github_requires_argument() {
     assert_output_contains "requires a host/prefix argument"
 }
 
+# A forgotten value before another flag (setup --github --no-install) must be
+# rejected, not swallow the next flag as the prefix -- otherwise --no-install is
+# silently dropped and setup clones from a bogus "--no-install:mikelward/..."
+# remote. A real host/prefix never starts with '-'.
+test_github_rejects_option_as_value() {
+    run_setup --github --no-install
+    assert_status 1 &&
+    assert_output_contains "requires a host/prefix argument"
+}
+
 # The repos are assembled from GITHUB_PREFIX + path, defaulting to GitHub over
 # SSH, so an unset --github clones from github.com exactly as before.
 test_github_default_and_assembly() {
@@ -632,6 +642,8 @@ test_normalize_github_prefix() {
 run_test "--github is accepted and takes an argument" test_github_flag_accepted
 run_test "--github=VALUE form parses" test_github_equals_form_accepted
 run_test "--github without an argument errors" test_github_requires_argument
+run_test "--github rejects an option-looking value" \
+    test_github_rejects_option_as_value
 run_test "repos default to github.com over SSH via GITHUB_PREFIX" \
     test_github_default_and_assembly
 run_test "normalize_github_prefix appends the right separator" \
