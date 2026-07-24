@@ -1,0 +1,58 @@
+# US Dvorak keymap for the Linux text console (self-contained).
+#
+# This is a partial keymap: it remaps only the keys whose output differs
+# between US QWERTY and US Dvorak, layered on top of the kernel's current
+# keymap. Because it defines the keys inline (no `include` of a base map), it
+# needs nothing from /usr/share/keymaps -- so it loads on minimal systems that
+# don't have the kbd keymap data installed, and without root as long as you
+# own the tty (e.g. you're logged in on the VT):
+#
+#     loadkeys dvorak.kmap
+#
+# Letters use the `+` prefix so CapsLock treats them as letters and Shift/Ctrl
+# entries are generated automatically. Symbol keys list plain then Shift.
+# Numbers, backtick, backslash, space and the modifiers are identical in
+# Dvorak, so they are intentionally left untouched.
+
+# number row: only the two keys right of 0 change ( -= becomes [] )
+keycode  12 = bracketleft   braceleft
+keycode  13 = bracketright  braceright
+
+# top letter row: q w e r t y u i o p [ ]  ->  ' , . p y f g c r l / =
+keycode  16 = apostrophe    quotedbl
+keycode  17 = comma         less
+keycode  18 = period        greater
+keycode  19 = +p
+keycode  20 = +y
+keycode  21 = +f
+keycode  22 = +g
+keycode  23 = +c
+keycode  24 = +r
+keycode  25 = +l
+keycode  26 = slash         question
+keycode  27 = equal         plus
+
+# home row: a s d f g h j k l ; '  ->  a o e u i d h t n s -
+keycode  30 = +a
+keycode  31 = +o
+keycode  32 = +e
+keycode  33 = +u
+keycode  34 = +i
+keycode  35 = +d
+keycode  36 = +h
+keycode  37 = +t
+keycode  38 = +n
+keycode  39 = +s
+keycode  40 = minus         underscore
+
+# bottom row: z x c v b n m , . /  ->  ; q j k x b m w v z
+keycode  44 = semicolon     colon
+keycode  45 = +q
+keycode  46 = +j
+keycode  47 = +k
+keycode  48 = +x
+keycode  49 = +b
+keycode  50 = +m
+keycode  51 = +w
+keycode  52 = +v
+keycode  53 = +z
