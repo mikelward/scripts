@@ -63,6 +63,12 @@ TOOLS = {
     "jj":      {"conda": "jujutsu",    "github": "jj-vcs/jj",          "bins": ["jj"]},
     "nu":      {"conda": "nushell",    "github": "nushell/nushell",    "bins": ["nu"]},
     "uv":      {"conda": "uv",         "github": "astral-sh/uv",       "bins": ["uv", "uvx"]},
+    # Interactive shell tools (see the conf repo's shrc/fish/nushell config).
+    # atuin and carapace have no conda-forge feedstock, so conda is None and
+    # they install from their GitHub releases; see conda_pkgs.
+    "zoxide":   {"conda": "zoxide",   "github": "ajeetdsouza/zoxide", "bins": ["zoxide"]},
+    "atuin":    {"conda": None,       "github": "atuinsh/atuin",      "bins": ["atuin"]},
+    "carapace": {"conda": None,       "github": "carapace-sh/carapace-bin", "bins": ["carapace"]},
     # Node toolchain for the setup --no-root path: node/npm/tsc from conda-forge
     # instead of a distro package, plus fnm (which on root boxes comes from its
     # own curl installer -- no conda there yet). npm/npx ride along in the nodejs
@@ -85,6 +91,25 @@ def warn(msg):
 
 class HomepkgError(Exception):
     pass
+
+
+def conda_pkgs(tools, skip_missing=False):
+    """conda-forge package names for `tools`.
+
+    A few tools ship only as GitHub release assets and have no conda-forge
+    feedstock; they carry conda=None. Naming one explicitly on a conda path is
+    an error -- dropping it silently would report a successful install of
+    something that never landed -- while operations over the whole registry
+    (bundle --all) skip it with a warning and carry on.
+    """
+    missing = [t for t in tools if not TOOLS[t].get("conda")]
+    if missing and not skip_missing:
+        raise HomepkgError(
+            f"no conda-forge package for: {', '.join(missing)}; "
+            f"install with --backend github")
+    if missing:
+        warn(f"no conda-forge package, skipping: {', '.join(missing)}")
+    return [TOOLS[t]["conda"] for t in tools if TOOLS[t].get("conda")]
 
 
 # --- Platform ----------------------------------------------------------------
@@ -530,7 +555,7 @@ def _mamba_subcommand(prefix):
 
 def install_mamba(tools, prefix, plat, dry_run):
     mm = ensure_micromamba(prefix, plat, dry_run)
-    pkgs = [TOOLS[t]["conda"] for t in tools]
+    pkgs = conda_pkgs(tools)
     env = mamba_env(prefix)
     subcmd = _mamba_subcommand(prefix)
     info(f"micromamba {subcmd}: {', '.join(pkgs)} -> {env}")
@@ -546,7 +571,7 @@ def update_mamba(tools, prefix, plat, dry_run):
     mm = ensure_micromamba(prefix, plat, dry_run)
     # No tools named -> update the whole env. Binaries keep the same env path,
     # so the existing symlinks stay valid; no re-link needed.
-    spec = [TOOLS[t]["conda"] for t in tools] if tools else ["--all"]
+    spec = conda_pkgs(tools) if tools else ["--all"]
     info(f"micromamba update: {' '.join(spec)}")
     _run_mamba(mm, prefix, ["update", "-y", "-p", mamba_env(prefix),
                             *MAMBA_CHANNEL_ARGS, *spec], dry_run)
@@ -556,7 +581,7 @@ def remove_mamba(tools, prefix, plat, dry_run):
     mm = micromamba_path(prefix)
     if mm is None:
         raise HomepkgError("micromamba is not installed; nothing to remove")
-    pkgs = [TOOLS[t]["conda"] for t in tools]
+    pkgs = conda_pkgs(tools)
     info(f"micromamba remove: {', '.join(pkgs)}")
     _run_mamba(mm, prefix, ["remove", "-y", "-p", mamba_env(prefix), *pkgs], dry_run)
     if not dry_run:
@@ -623,7 +648,9 @@ def _fetch_micromamba_bin(plat, dest):
 
 
 def bundle_mamba(tools, prefix, plat, out, dry_run):
-    pkgs = [TOOLS[t]["conda"] for t in tools]
+    # `bundle` with no tools means the whole registry, which includes the
+    # github-only ones -- skip those rather than refusing to build a bundle.
+    pkgs = conda_pkgs(tools, skip_missing=True)
     # Report before touching the network so --dry-run needs no micromamba.
     if dry_run:
         info(f"would solve closure for {', '.join(pkgs)} ({conda_subdir(*plat)}), "
@@ -809,7 +836,10 @@ def main(argv=None):
     if args.command == "list":
         for name in sorted(TOOLS):
             m = TOOLS[name]
-            print(f"{name:10} conda={m['conda']:12} github={m['github']}")
+            # conda is None for tools with no conda-forge feedstock; show a
+            # dash so `list` says which ones need --backend github.
+            conda = m["conda"] or "-"
+            print(f"{name:10} conda={conda:12} github={m['github']}")
         return 0
 
     if args.command == "bootstrap":

@@ -660,6 +660,7 @@ install_packages() {
                     shellcheck \
                     unzip \
                     vim \
+                    zoxide \
                     zsh; then
                 warn "skipping remaining Debian package installs"
                 return 0
@@ -779,6 +780,7 @@ install_packages() {
                     ShellCheck \
                     unzip \
                     vim \
+                    zoxide \
                     zsh; then
                 warn "skipping remaining Fedora package installs"
                 return 0
@@ -907,6 +909,7 @@ install_packages() {
                 shellcheck \
                 unzip \
                 vim \
+                zoxide \
                 zsh
             # Node.js + tsc from Homebrew on the privileged path (setup-kde
             # needs tsc to build Krohnkite). brew needs no sudo, so unlike the
@@ -939,7 +942,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
             ;;
     esac
 }
@@ -1188,7 +1191,7 @@ install_home_tools() {
     # fnm (Node version manager) is a convenience tool -- installed regardless
     # of --no-npm, mirroring the root path's install_fnm (which is skipped under
     # --no-root, so fnm comes from here instead).
-    tools="ripgrep fd bat fzf jq delta gh fnm"
+    tools="ripgrep fd bat fzf jq delta gh fnm zoxide"
     if test "$NPM" = yes; then
         # node/npm + tsc are the actual build toolchain (setup-kde needs tsc to
         # build Krohnkite), gated on --no-npm. The --no-root counterpart to the
@@ -1277,6 +1280,39 @@ install_home_tools() {
         info "Removing stale Helix runtime symlink from the cargo build"
         rm -f "$helix_runtime"
     fi
+}
+
+# --- Install the interactive shell tools with no packaged build ---
+
+# The conf repo's shell config wires up four optional tools. fzf and zoxide
+# are packaged (the distro sets above, or conda-forge via homepkg), but atuin
+# and carapace are in neither the distro repos nor conda-forge, so they come
+# from their GitHub releases through homepkg's stateless github backend. That
+# needs no root, so the same call serves every path -- privileged, --no-root
+# and macOS alike. Each shell config skips whichever tool is missing, so a
+# failure here degrades to "no history search / no extra completions" rather
+# than breaking the shell.
+install_shell_tools() {
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found at $homepkg; skipping atuin and carapace"
+        return 0
+    fi
+    shell_tools=""
+    for tool in atuin carapace; do
+        if command -v "$tool" >/dev/null 2>&1; then
+            info "$tool already installed"
+        else
+            shell_tools="$shell_tools $tool"
+        fi
+    done
+    if test -z "$shell_tools"; then
+        return 0
+    fi
+    info "Installing$shell_tools via homepkg"
+    # shellcheck disable=SC2086  # deliberate word split: one flag per tool
+    "$homepkg" --backend github install $shell_tools \
+        || warn "could not install$shell_tools; the shell config skips whichever is missing"
 }
 
 # --- Install uv (Python package manager) ---
@@ -1580,6 +1616,13 @@ elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
     info "Skipping heavyweight extras (helix, jj, shpool, nushell); minimal profile"
+fi
+
+# atuin/carapace are small static binaries with no packaged build, so they're
+# installed on every profile (including --minimal) once the scripts repo --
+# and with it homepkg -- is on disk.
+if test "$INSTALL" = yes; then
+    install_shell_tools
 fi
 
 start_services

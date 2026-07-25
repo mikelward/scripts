@@ -30,9 +30,14 @@ repo).
 `setup --no-root` wires this in automatically: it runs unprivileged (implying
 `--no-sudo`, so the `apt`/`dnf` installs and every other privileged step are
 skipped) and installs the CLI tools via `homepkg` instead — the core set
-(`ripgrep fd bat fzf jq delta gh`) plus the extras (`helix jj nu`, unless the
-minimal profile is in effect). `--no-sudo` on its own is just the mechanism
+(`ripgrep fd bat fzf jq delta gh zoxide`) plus the extras (`helix jj nu`, unless
+the minimal profile is in effect). `--no-sudo` on its own is just the mechanism
 (skip sudo); it assumes the tools are provided some other way.
+
+`atuin` and `carapace` — the history search and completion engines the conf
+repo's shell config wires up — are in no distro repo and have no conda-forge
+package, so every `setup` run installs them from their GitHub releases with
+`homepkg --backend github`, regardless of profile or privilege.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
