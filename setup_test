@@ -432,6 +432,22 @@ test_shell_tools_install_from_github_releases() {
     assert_source_contains "already installed"
 }
 
+# Offline hosts install from a push bundle instead of the release download,
+# the same way install_home_tools does. These two can't ride in the mamba
+# bundle (no conda-forge package), so it's the github bundle variant, and the
+# online fallback names the command that builds one.
+test_shell_tools_install_from_a_bundle_offline() {
+    assert_source_contains 'HOMEPKG_SHELL_BUNDLE' &&
+    assert_source_contains 'homepkg-shell-tools.tgz' &&
+    assert_source_contains '"$homepkg" install-bundle "$shell_bundle"' &&
+    assert_source_contains "falling back to the release download" &&
+    assert_source_contains "backend github bundle -o homepkg-shell-tools.tgz atuin carapace" &&
+    # The bundle is tried first: a machine with no network must not have to
+    # wait for the download to fail.
+    test "$(grep -n 'install-bundle "\$shell_bundle"' "$SETUP" | cut -d: -f1)" \
+        -lt "$(grep -n 'backend github install \$shell_tools' "$SETUP" | cut -d: -f1)"
+}
+
 # They're small static binaries, so unlike the heavyweight extras they're
 # installed on the minimal profile too -- but still only when installing at
 # all, and only after the scripts repo (which carries homepkg) is on disk.
@@ -778,6 +794,8 @@ run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
 run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
+run_test "the shell tools install from a bundle on an offline host" \
+    test_shell_tools_install_from_a_bundle_offline
 run_test "the shell tools install on every profile, after the clone" \
     test_shell_tools_run_on_every_profile
 

@@ -1292,6 +1292,14 @@ install_home_tools() {
 # and macOS alike. Each shell config skips whichever tool is missing, so a
 # failure here degrades to "no history search / no extra completions" rather
 # than breaking the shell.
+#
+# Offline hosts install from a push bundle instead, the same way
+# install_home_tools does. The mamba bundle can't carry these two (no
+# conda-forge package), so they need the github variant, built on an online
+# host with:
+#     homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
+# Staged at $HOMEPKG_SHELL_BUNDLE, or beside the scripts repo / in $HOME as
+# homepkg-shell-tools.tgz.
 install_shell_tools() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
@@ -1309,10 +1317,30 @@ install_shell_tools() {
     if test -z "$shell_tools"; then
         return 0
     fi
+
+    shell_bundle=""
+    for cand in "${HOMEPKG_SHELL_BUNDLE:-}" \
+            "$SCRIPTS_DIR/homepkg-shell-tools.tgz" \
+            "$HOME/homepkg-shell-tools.tgz"; do
+        if test -n "$cand" && test -f "$cand"; then
+            shell_bundle="$cand"
+            break
+        fi
+    done
+    if test -n "$shell_bundle"; then
+        # A bundle installs its full contents, so it can't be trimmed to the
+        # missing tools; re-installing one that's already present is harmless.
+        info "Installing$shell_tools from $shell_bundle"
+        if "$homepkg" install-bundle "$shell_bundle"; then
+            return 0
+        fi
+        warn "could not install from the bundle; falling back to the release download"
+    fi
+
     info "Installing$shell_tools via homepkg"
     # shellcheck disable=SC2086  # deliberate word split: one flag per tool
     "$homepkg" --backend github install $shell_tools \
-        || warn "could not install$shell_tools; the shell config skips whichever is missing"
+        || warn "could not install$shell_tools (offline? stage a bundle with 'homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace'); the shell config skips whichever is missing"
 }
 
 # --- Install uv (Python package manager) ---
