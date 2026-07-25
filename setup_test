@@ -282,7 +282,7 @@ test_sudo_calls_are_guarded() {
 # manual-install hint for unsupported OSes.
 test_unzip_installed() {
     assert_source_contains "unzip" &&
-    assert_source_contains "typescript unzip zsh"
+    assert_source_contains "typescript unzip zoxide zsh"
 }
 
 # --- fnm ---
@@ -404,6 +404,44 @@ test_legacy_root_config_is_logged() {
 test_home_tools_include_node_toolchain() {
     assert_source_contains "delta gh fnm" &&
     assert_source_contains 'tools="$tools node typescript"'
+}
+
+# --- Interactive shell tools ---
+
+# The conf repo's shell config wires up fzf, zoxide, atuin and carapace. fzf
+# and zoxide are packaged everywhere setup runs, so they ride along in the
+# distro package lists and the homepkg core set. Package names go on their own
+# distro lines: apt/dnf abort the whole transaction on one unknown name.
+test_zoxide_is_a_core_package() {
+    # Once per distro list (apt, dnf, brew) plus the manual-install hint.
+    test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 3 &&
+    assert_source_contains "unzip zoxide zsh" &&
+    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide"'
+}
+
+# atuin and carapace are in no distro repo and have no conda-forge feedstock,
+# so they come from their GitHub releases via homepkg's github backend -- one
+# rootless path that serves the privileged, --no-root and macOS runs alike.
+# Already-installed tools are skipped, and a failure warns instead of aborting
+# the bootstrap: the shell config skips whichever tool is missing.
+test_shell_tools_install_from_github_releases() {
+    assert_source_contains "install_shell_tools" &&
+    assert_source_contains 'for tool in atuin carapace' &&
+    assert_source_contains '"$homepkg" --backend github install $shell_tools' &&
+    assert_source_contains "the shell config skips whichever is missing" &&
+    assert_source_contains "already installed"
+}
+
+# They're small static binaries, so unlike the heavyweight extras they're
+# installed on the minimal profile too -- but still only when installing at
+# all, and only after the scripts repo (which carries homepkg) is on disk.
+test_shell_tools_run_on_every_profile() {
+    assert_source_contains 'if test "$INSTALL" = yes; then
+    install_shell_tools
+fi' &&
+    # After the clone, so $SCRIPTS_DIR/homepkg exists by then.
+    test "$(grep -n 'clone_or_pull "$SCRIPTS_REPO"' "$SETUP" | cut -d: -f1)" \
+        -lt "$(grep -n '^    install_shell_tools$' "$SETUP" | cut -d: -f1)"
 }
 
 # --- SSH key ---
@@ -736,6 +774,12 @@ run_test "brew path clears the stale cargo Helix runtime symlink" \
     test_brew_clears_stale_helix_runtime
 run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
+run_test "zoxide is installed as a core package" \
+    test_zoxide_is_a_core_package
+run_test "atuin and carapace install from their github releases" \
+    test_shell_tools_install_from_github_releases
+run_test "the shell tools install on every profile, after the clone" \
+    test_shell_tools_run_on_every_profile
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
