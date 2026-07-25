@@ -651,10 +651,12 @@ def _fetch_micromamba_bin(plat, dest):
     return os.path.join(dest, "bin", "micromamba")
 
 
-def bundle_mamba(tools, prefix, plat, out, dry_run):
-    # `bundle` with no tools means the whole registry, which includes the
-    # github-only ones -- skip those rather than refusing to build a bundle.
-    pkgs = conda_pkgs(tools, skip_missing=True)
+def bundle_mamba(tools, prefix, plat, out, dry_run, skip_conda_less=False):
+    # Only the whole-registry form (`bundle` with no names) skips the
+    # github-only tools. Naming one explicitly has to fail: the manifest
+    # lists what was asked for, so a silent omission would install clean
+    # and leave the tool missing.
+    pkgs = conda_pkgs(tools, skip_missing=skip_conda_less)
     # Report before touching the network so --dry-run needs no micromamba.
     if dry_run:
         info(f"would solve closure for {', '.join(pkgs)} ({conda_subdir(*plat)}), "
@@ -872,6 +874,7 @@ def main(argv=None):
             p.error("bundle requires -o/--output FILE")
         if args.backend == "conda":
             p.error("bundle supports --backend mamba (default) or github, not conda")
+        whole_registry = not args.tools
         if args.tools:
             tools = args.tools
         elif args.backend == "github":
@@ -888,8 +891,11 @@ def main(argv=None):
         _require_known(p, tools)
         plat = _resolve_plat(p, args.arch)
         try:
-            builder = bundle_github if args.backend == "github" else bundle_mamba
-            builder(tools, args.prefix, plat, args.output, args.dry_run)
+            if args.backend == "github":
+                bundle_github(tools, args.prefix, plat, args.output, args.dry_run)
+            else:
+                bundle_mamba(tools, args.prefix, plat, args.output, args.dry_run,
+                             skip_conda_less=whole_registry)
         except Exception as e:
             warn(str(e))
             return 1

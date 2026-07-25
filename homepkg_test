@@ -248,6 +248,14 @@ check("bundle with no tools targets every registered package",
 check("bundle with no tools reports the tools it can't include",
       all(t in _bundle_all.stderr
           for t in hp.TOOLS if not hp.TOOLS[t]["conda"]))
+# ...but naming one explicitly must fail: the manifest lists what was asked
+# for, so a silent omission would install clean and leave the tool missing.
+_bundle_named = _run("bundle", "-o",
+                     os.path.join(tempfile.gettempdir(), "hp-bundle-named.tgz"),
+                     "--dry-run", "jq", "carapace")
+check("bundle rejects an explicitly named conda-less tool",
+      _bundle_named.returncode != 0
+      and "--backend github" in _bundle_named.stderr)
 # ...but no-args "all" is mamba-only: not every tool has a github release asset
 # (typescript is npm-only), so the github backend must require explicit names.
 check("bundle --backend github rejects no-args all-tools",
