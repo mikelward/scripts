@@ -39,17 +39,18 @@ repo's shell config wires up — are in no distro repo and have no conda-forge
 package, so every `setup` run installs them from their GitHub releases with
 `homepkg --backend github`, regardless of profile or privilege.
 
-On a host with no internet, stage a bundle for them instead. They can't ride
-in the mamba bundle (no conda-forge package), so build the github variant on
-an online machine and drop it beside the scripts repo (or in `$HOME`, or point
-`$HOMEPKG_SHELL_BUNDLE` at it):
+On a host with no internet, stage a bundle instead. The one-shot bundle below
+covers them along with everything else, which is all a `--no-root` machine
+needs. On a privileged machine the distro packages come from apt/dnf and that
+bundle isn't installed, so stage these two on their own — beside the scripts
+repo, in `$HOME`, or wherever `$HOMEPKG_SHELL_BUNDLE` points:
 
 ```sh
 homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
 ```
 
-`setup` prefers that bundle over the download, so an offline run never waits
-for a fetch that can't succeed.
+`setup` prefers a bundle over the download, so an offline run never waits for
+a fetch that can't succeed.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
@@ -85,17 +86,24 @@ internet, and install offline:
 
 ```sh
 # online builder
-homepkg bundle -o tools.tgz ripgrep fd jq     # solve closure + micromamba
+homepkg bundle -o tools.tgz                   # every registered tool
+homepkg bundle -o tools.tgz ripgrep fd jq     # ...or just the named ones
 homepkg --backend github bundle -o tools.tgz ripgrep fd jq   # static-asset variant
 
 # air-gapped target (no network)
 homepkg install-bundle tools.tgz
 ```
 
-The default (`mamba`) bundle carries the full dependency closure plus the
-micromamba binary, so the target builds a correct environment with no network
-and micromamba relocates it into the target's prefix. The `github` variant
-carries static release assets — smaller, but only for self-contained tools.
+`bundle` with no tool names is the one-shot: it covers the whole registry,
+taking each tool from wherever it comes from. Tools with a conda-forge package
+go in as a solved dependency closure alongside the micromamba binary that
+replays it, so the target builds a correct environment with no network at all;
+the few with no feedstock (`atuin`, `carapace`) go in as static release assets.
+`install-bundle` replays whichever payloads the bundle carries.
+
+The `github` variant builds a bundle of release assets only. It needs explicit
+tool names, since not every registered tool publishes one (`typescript` is
+npm-only).
 
 ## Third-party code
 

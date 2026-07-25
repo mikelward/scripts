@@ -249,19 +249,24 @@ check("bundle with no tools targets every registered package",
       _bundle_all.returncode == 0
       and all(hp.TOOLS[t]["conda"] in _bundle_all.stderr
               for t in hp.TOOLS if hp.TOOLS[t]["conda"]))
-# The github-only tools can't be in a mamba bundle; they're named as skipped
-# rather than aborting the whole bundle.
-check("bundle with no tools reports the tools it can't include",
+# The tools with no conda-forge feedstock come from their release assets in
+# the same bundle, so one no-args build covers the whole registry rather than
+# leaving a couple of tools for the caller to chase separately.
+check("bundle with no tools also collects the conda-less tools",
       all(t in _bundle_all.stderr
           for t in hp.TOOLS if not hp.TOOLS[t]["conda"]))
-# ...but naming one explicitly must fail: the manifest lists what was asked
-# for, so a silent omission would install clean and leave the tool missing.
+check("bundle with no tools reports both payloads",
+      "would solve closure" in _bundle_all.stderr
+      and "github release assets" in _bundle_all.stderr)
+# Naming a conda-less tool works the same way: it lands in the bundle's
+# github payload instead of erroring.
 _bundle_named = _run("bundle", "-o",
                      os.path.join(tempfile.gettempdir(), "hp-bundle-named.tgz"),
                      "--dry-run", "jq", "carapace")
-check("bundle rejects an explicitly named conda-less tool",
-      _bundle_named.returncode != 0
-      and "--backend github" in _bundle_named.stderr)
+check("bundle covers an explicitly named conda-less tool",
+      _bundle_named.returncode == 0
+      and "carapace" in _bundle_named.stderr
+      and "jq" in _bundle_named.stderr)
 # ...but no-args "all" is mamba-only: not every tool has a github release asset
 # (typescript is npm-only), so the github backend must require explicit names.
 check("bundle --backend github rejects no-args all-tools",
@@ -352,6 +357,47 @@ with tempfile.TemporaryDirectory() as td:
     check("_localize_explicit keeps @EXPLICIT", res[0] == "@EXPLICIT")
     check("_localize_explicit rewrites url to a local file:// path",
           res[1] == "file:///b/pkgs/jq-1.8.2-h0.conda#abc")
+
+# A combined bundle carries both payloads. Only the github half is exercised
+# end-to-end here (the mamba half needs micromamba and a solved closure), but
+# install_bundle has to find and replay it from the "github" sub-object rather
+# than the top level, and must not trip over a manifest with only one half.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "tool-x86_64-unknown-linux-musl.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset), {"tool-1.0/rg": b"#!/bin/sh\necho rg\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "combined", "platform": "linux/x86_64",
+                   "github": {"tools": [{"tool": "ripgrep", "asset": asset,
+                                         "bins": ["rg"]}]}}, f)
+    bundle = os.path.join(td, "combined.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("install-bundle (combined) unpacks the github half offline",
+          os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+# A combined manifest naming an unknown backend still errors rather than
+# silently installing nothing.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "combined", "platform": "linux/x86_64"}, f)
+    bundle = os.path.join(td, "empty.tar.gz")
+    hp._write_bundle(bundle, src)
+    _err = None
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "prefix"), ("linux", "x86_64"), False)
+    except Exception as e:  # noqa: BLE001
+        _err = e
+    check("install-bundle tolerates a combined bundle with neither half", _err is None)
+
+# The tool split is what makes one bundle enough: everything with a
+# conda-forge package goes through the closure, the rest through releases.
+check("every registered tool has a source for the combined bundle",
+      all(hp.TOOLS[t].get("conda") or hp.TOOLS[t].get("github") for t in hp.TOOLS))
 
 # A github bundle round-trips fully offline: build the tarball by hand, then
 # install-bundle unpacks the asset and places the binary -- no network.

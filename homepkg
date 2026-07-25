@@ -27,6 +27,11 @@ Push bundles (build on an online host, install on an air-gapped target):
     homepkg --backend github bundle -o t.tgz TOOL... # static-asset variant
     homepkg install-bundle tools.tgz               # target: install offline
 
+A bundle carries whatever each tool needs: the solved conda closure for the
+tools with a conda-forge package, release assets for the ones without, and the
+micromamba to replay the closure with. `bundle` with no tool names covers the
+whole registry, so one file provisions a machine with no network at all.
+
 Tool names are logical (ripgrep, fd, ...); the registry maps each to its conda
 package and GitHub repo.
 """
@@ -651,64 +656,106 @@ def _fetch_micromamba_bin(plat, dest):
     return os.path.join(dest, "bin", "micromamba")
 
 
-def bundle_mamba(tools, prefix, plat, out, dry_run, skip_conda_less=False):
-    # Only the whole-registry form (`bundle` with no names) skips the
-    # github-only tools. Naming one explicitly has to fail: the manifest
-    # lists what was asked for, so a silent omission would install clean
-    # and leave the tool missing.
-    pkgs = conda_pkgs(tools, skip_missing=skip_conda_less)
-    # Report before touching the network so --dry-run needs no micromamba.
-    if dry_run:
-        info(f"would solve closure for {', '.join(pkgs)} ({conda_subdir(*plat)}), "
-             f"download it, and write {out}")
-        return
+def _stage_mamba(tools, prefix, plat, td):
+    """Solve and download the conda closure for `tools` into staging dir `td`."""
+    pkgs = conda_pkgs(tools)
     # The solver must RUN on this builder, so use the builder's own micromamba;
     # the bundle needs the TARGET arch's micromamba, which differs under --arch.
-    solver = ensure_micromamba(prefix, detect_platform(), dry_run)
+    solver = ensure_micromamba(prefix, detect_platform(), False)
     info(f"solving closure for {', '.join(pkgs)} ({conda_subdir(*plat)})")
     fetch = _mamba_solve(solver, prefix, plat, pkgs)
     info(f"  {len(fetch)} packages in the closure")
+    pkgdir = os.path.join(td, "pkgs")
+    os.makedirs(pkgdir)
+    lines = ["@EXPLICIT"]
+    for f in fetch:
+        download(f["url"], os.path.join(pkgdir, f["fn"]))
+        lines.append(f["url"] + _explicit_frag(f))
+    with open(os.path.join(td, "explicit.txt"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    # Always ship the conda-forge micromamba for the target arch -- a
+    # static, self-contained binary. Never reuse the solver: it may be an
+    # arbitrary dynamically-linked micromamba from the builder's PATH that
+    # won't run on the air-gapped target.
+    with tempfile.TemporaryDirectory() as mmtmp:
+        shutil.copy2(_fetch_micromamba_bin(plat, mmtmp),
+                     os.path.join(td, "micromamba"))
+    return list(tools)
+
+
+def _stage_github(tools, plat, td, skip_unavailable=False):
+    """Download a release asset per tool in `tools` into staging dir `td`."""
+    tokens = github_asset_tokens(*plat)
+    info(f"collecting github assets for {', '.join(tools)}")
+    adir = os.path.join(td, "assets")
+    os.makedirs(adir, exist_ok=True)
+    entries = []
+    for t in tools:
+        tag, assets = github_latest_assets(TOOLS[t]["github"])
+        picked = github_pick_asset(assets, tokens)
+        if not picked:
+            msg = f"{t}: no {plat[0]}/{plat[1]} asset in {TOOLS[t]['github']} {tag}"
+            # Naming a tool explicitly means it has to be in the bundle; over
+            # the whole registry, one tool without an asset for this platform
+            # must not cost you the other twenty.
+            if not skip_unavailable:
+                raise HomepkgError(msg)
+            warn(msg + "; leaving it out of the bundle")
+            continue
+        name, url = picked
+        download(url, os.path.join(adir, name))
+        entries.append({"tool": t, "asset": name, "bins": TOOLS[t]["bins"]})
+    return entries
+
+
+def bundle_all(tools, prefix, plat, out, dry_run, whole_registry=False):
+    """Bundle `tools` from wherever each one comes from, in one file.
+
+    Most tools come from conda-forge; the few with no feedstock come from their
+    GitHub releases. Splitting that across two bundles would make the caller
+    track which tool went where, so one bundle carries both payloads and
+    install-bundle replays whichever parts are present.
+    """
+    conda_tools = [t for t in tools if TOOLS[t].get("conda")]
+    github_tools = [t for t in tools if not TOOLS[t].get("conda")
+                    and TOOLS[t].get("github")]
+    unavailable = [t for t in tools if t not in conda_tools and t not in github_tools]
+    if unavailable:
+        warn(f"no source for: {', '.join(unavailable)}; leaving them out of the bundle")
+    if not conda_tools and not github_tools:
+        raise HomepkgError("nothing to bundle")
+
+    # Report before touching the network so --dry-run needs no micromamba.
+    if dry_run:
+        if conda_tools:
+            info(f"would solve closure for {', '.join(conda_pkgs(conda_tools))} "
+                 f"({conda_subdir(*plat)}) and download it")
+        if github_tools:
+            info(f"would download github release assets for {', '.join(github_tools)}")
+        info(f"would write {out}")
+        return
+
     with tempfile.TemporaryDirectory() as td:
-        pkgdir = os.path.join(td, "pkgs")
-        os.makedirs(pkgdir)
-        lines = ["@EXPLICIT"]
-        for f in fetch:
-            download(f["url"], os.path.join(pkgdir, f["fn"]))
-            lines.append(f["url"] + _explicit_frag(f))
-        with open(os.path.join(td, "explicit.txt"), "w") as fh:
-            fh.write("\n".join(lines) + "\n")
-        # Always ship the conda-forge micromamba for the target arch -- a
-        # static, self-contained binary. Never reuse the solver: it may be an
-        # arbitrary dynamically-linked micromamba from the builder's PATH that
-        # won't run on the air-gapped target.
-        with tempfile.TemporaryDirectory() as mmtmp:
-            shutil.copy2(_fetch_micromamba_bin(plat, mmtmp),
-                         os.path.join(td, "micromamba"))
+        manifest = {"format": 1, "backend": "combined",
+                    "platform": f"{plat[0]}/{plat[1]}"}
+        if conda_tools:
+            manifest["mamba"] = {"tools": _stage_mamba(conda_tools, prefix, plat, td)}
+        if github_tools:
+            manifest["github"] = {"tools": _stage_github(
+                github_tools, plat, td, skip_unavailable=whole_registry)}
         with open(os.path.join(td, "manifest.json"), "w") as fh:
-            json.dump({"format": 1, "backend": "mamba",
-                       "platform": f"{plat[0]}/{plat[1]}", "tools": tools}, fh)
+            json.dump(manifest, fh)
         _write_bundle(out, td)
     info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
 
 
 def bundle_github(tools, prefix, plat, out, dry_run):
-    tokens = github_asset_tokens(*plat)
     info(f"collecting github assets for {', '.join(tools)}")
     if dry_run:
         info(f"  would download release assets and write {out}")
         return
     with tempfile.TemporaryDirectory() as td:
-        adir = os.path.join(td, "assets")
-        os.makedirs(adir)
-        entries = []
-        for t in tools:
-            tag, assets = github_latest_assets(TOOLS[t]["github"])
-            picked = github_pick_asset(assets, tokens)
-            if not picked:
-                raise HomepkgError(f"{t}: no {plat[0]}/{plat[1]} asset in {TOOLS[t]['github']} {tag}")
-            name, url = picked
-            download(url, os.path.join(adir, name))
-            entries.append({"tool": t, "asset": name, "bins": TOOLS[t]["bins"]})
+        entries = _stage_github(tools, plat, td)
         with open(os.path.join(td, "manifest.json"), "w") as fh:
             json.dump({"format": 1, "backend": "github",
                        "platform": f"{plat[0]}/{plat[1]}", "tools": entries}, fh)
@@ -784,7 +831,14 @@ def install_bundle(bundle_file, prefix, plat, dry_run):
                 f"bundle is for {got}, but this host is {want} "
                 "(pass --arch to override)")
         info(f"bundle: {backend}, platform {got}")
-        if backend == "mamba":
+        if backend == "combined":
+            # One bundle, both payloads: conda tools first (the env install
+            # wants a fresh prefix), then the static release assets.
+            if "mamba" in manifest:
+                _install_bundle_mamba(td, manifest["mamba"], prefix, dry_run)
+            if "github" in manifest:
+                _install_bundle_github(td, manifest["github"], prefix, dry_run)
+        elif backend == "mamba":
             _install_bundle_mamba(td, manifest, prefix, dry_run)
         elif backend == "github":
             _install_bundle_github(td, manifest, prefix, dry_run)
@@ -878,15 +932,16 @@ def main(argv=None):
         if args.tools:
             tools = args.tools
         elif args.backend == "github":
-            # No "bundle everything" for github: not every registered tool has a
-            # static release asset (e.g. typescript is npm-only), so an all-tools
-            # github bundle would abort partway. Require explicit names there.
+            # No "bundle everything" for the github-only variant: not every
+            # registered tool has a static release asset (typescript is
+            # npm-only), and asking for that variant means asking for those
+            # assets specifically. The default backend covers everything.
             p.error("bundle --backend github needs explicit tool names "
-                    "(no-args = all is mamba-only)")
+                    "(no-args = all is the default backend)")
         else:
-            # No tool names on the mamba backend means "bundle everything
-            # registered" -- the easy way to stage a complete offline toolchain
-            # without listing packages by hand.
+            # No tool names means "bundle everything registered" -- one file
+            # that provisions a machine offline, conda closure and release
+            # assets alike.
             tools = sorted(TOOLS)
         _require_known(p, tools)
         plat = _resolve_plat(p, args.arch)
@@ -894,8 +949,8 @@ def main(argv=None):
             if args.backend == "github":
                 bundle_github(tools, args.prefix, plat, args.output, args.dry_run)
             else:
-                bundle_mamba(tools, args.prefix, plat, args.output, args.dry_run,
-                             skip_conda_less=whole_registry)
+                bundle_all(tools, args.prefix, plat, args.output, args.dry_run,
+                           whole_registry=whole_registry)
         except Exception as e:
             warn(str(e))
             return 1
