@@ -39,6 +39,18 @@ repo's shell config wires up — are in no distro repo and have no conda-forge
 package, so every `setup` run installs them from their GitHub releases with
 `homepkg --backend github`, regardless of profile or privilege.
 
+On a host with no internet, stage a bundle for them instead. They can't ride
+in the mamba bundle (no conda-forge package), so build the github variant on
+an online machine and drop it beside the scripts repo (or in `$HOME`, or point
+`$HOMEPKG_SHELL_BUNDLE` at it):
+
+```sh
+homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
+```
+
+`setup` prefers that bundle over the download, so an offline run never waits
+for a fetch that can't succeed.
+
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
 closure), native updates, and clean removal. micromamba is bootstrapped

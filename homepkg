@@ -554,8 +554,11 @@ def _mamba_subcommand(prefix):
 
 
 def install_mamba(tools, prefix, plat, dry_run):
-    mm = ensure_micromamba(prefix, plat, dry_run)
+    # Resolve the package names first: a github-only tool must fail with the
+    # "--backend github" hint rather than after a micromamba bootstrap, which
+    # needs the network -- exactly what an offline host doesn't have.
     pkgs = conda_pkgs(tools)
+    mm = ensure_micromamba(prefix, plat, dry_run)
     env = mamba_env(prefix)
     subcmd = _mamba_subcommand(prefix)
     info(f"micromamba {subcmd}: {', '.join(pkgs)} -> {env}")
@@ -568,10 +571,11 @@ def install_mamba(tools, prefix, plat, dry_run):
 
 
 def update_mamba(tools, prefix, plat, dry_run):
-    mm = ensure_micromamba(prefix, plat, dry_run)
     # No tools named -> update the whole env. Binaries keep the same env path,
-    # so the existing symlinks stay valid; no re-link needed.
+    # so the existing symlinks stay valid; no re-link needed. Resolved before
+    # the bootstrap for the same reason as install_mamba.
     spec = conda_pkgs(tools) if tools else ["--all"]
+    mm = ensure_micromamba(prefix, plat, dry_run)
     info(f"micromamba update: {' '.join(spec)}")
     _run_mamba(mm, prefix, ["update", "-y", "-p", mamba_env(prefix),
                             *MAMBA_CHANNEL_ARGS, *spec], dry_run)
