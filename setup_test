@@ -435,7 +435,20 @@ test_shell_tools_install_from_github_releases() {
     assert_source_contains 'for tool in atuin carapace' &&
     assert_source_contains '"$homepkg" --backend github install $shell_tools' &&
     assert_source_contains "the shell config skips whichever is missing" &&
-    assert_source_contains "already installed"
+    assert_source_contains "already installed" &&
+    # homepkg installs into ~/.local/bin, which setup's own PATH need not
+    # have, so the presence check looks there as well.
+    assert_source_contains 'test -x "$HOME/.local/bin/$tool"'
+}
+
+# A bundle installs its manifest and nothing else, so a partial or stale one
+# (built before the tool set grew) can still leave a tool missing. The set is
+# recomputed after a successful bundle install, and whatever is left falls
+# through to the release download rather than being silently skipped.
+test_shell_tools_reconcile_after_bundle() {
+    assert_source_contains "the bundle did not provide" &&
+    # Recomputed twice: once up front, once after the bundle install.
+    test "$(grep -c 'shell_tools="$(missing_shell_tools)"' "$SETUP")" -eq 2
 }
 
 # Offline hosts install from a push bundle instead of the release download,
@@ -802,6 +815,8 @@ run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
 run_test "the shell tools install from a bundle on an offline host" \
     test_shell_tools_install_from_a_bundle_offline
+run_test "a partial bundle still installs the rest of the shell tools" \
+    test_shell_tools_reconcile_after_bundle
 run_test "the shell tools install on every profile, after the clone" \
     test_shell_tools_run_on_every_profile
 
