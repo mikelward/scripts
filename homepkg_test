@@ -150,6 +150,27 @@ with tempfile.TemporaryDirectory() as td:
     jq = os.path.join(prefix, "bin", "jq")
     check("github_extract treats a raw asset as the binary", placed == ["jq"] and os.access(jq, os.X_OK))
 
+# An asset that's missing one of the binaries the registry names -- a release
+# that changed its layout, or the asset picker choosing the wrong archive --
+# has to be a failure. Warning and returning the rest would let install-bundle
+# exit 0, and setup would then skip the online top-up for a tool that isn't
+# there.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.01/hx": b"#!/bin/sh\necho hx\n"})
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx", "hxdoc"])
+    except hp.HomepkgError as e:
+        _err = e
+    check("github_extract fails when the asset lacks a listed binary",
+          _err is not None and "hxdoc" in str(_err))
+    check("github_extract keeps the binaries the asset did have",
+          os.access(os.path.join(prefix, "bin", "hx"), os.X_OK))
+    check("github_extract says what it kept",
+          _err is not None and "hx" in str(_err).split("kept")[-1])
+
 # --- conda extraction (.tar.bz2, no zstd needed) -----------------------------
 
 with tempfile.TemporaryDirectory() as td:
@@ -377,6 +398,98 @@ with tempfile.TemporaryDirectory() as td:
     hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
     check("install-bundle (combined) unpacks the github half offline",
           os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+# A bundle that lost an asset -- built when the release had none for this
+# platform, or truncated in transit -- still installs everything else, and
+# says what it couldn't install so the caller can fetch it another way.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    good = "tool-x86_64-unknown-linux-musl.tar.gz"
+    _make_targz(os.path.join(src, "assets", good), {"tool-1.0/rg": b"#!/bin/sh\necho rg\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "combined", "platform": "linux/x86_64",
+                   "github": {"tools": [
+                       {"tool": "ripgrep", "asset": good, "bins": ["rg"]},
+                       {"tool": "atuin", "asset": "atuin-missing.tar.gz",
+                        "bins": ["atuin"]}]}}, f)
+    bundle = os.path.join(td, "partial.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    _err = None
+    try:
+        hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    check("a bundle missing one asset still installs the others",
+          os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+    check("a bundle missing one asset reports which tool it skipped",
+          _err is not None and "atuin" in str(_err))
+    check("a bundle missing one asset doesn't claim the others failed",
+          _err is not None and "ripgrep" not in str(_err))
+
+# Same again for an asset that IS in the bundle but doesn't carry the binary
+# it's supposed to. Silent success here is the worse failure of the two: the
+# caller is told everything installed and never tops the tool up.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    good = "tool-x86_64-unknown-linux-musl.tar.gz"
+    hollow = "atuin-x86_64-unknown-linux-musl.tar.gz"
+    _make_targz(os.path.join(src, "assets", good), {"tool-1.0/rg": b"#!/bin/sh\n"})
+    _make_targz(os.path.join(src, "assets", hollow), {"atuin-1.0/README": b"docs\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": [{"tool": "ripgrep", "asset": good, "bins": ["rg"]},
+                             {"tool": "atuin", "asset": hollow,
+                              "bins": ["atuin"]}]}, f)
+    bundle = os.path.join(td, "hollow.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    _err = None
+    try:
+        hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    check("an asset without its binary counts the tool as failed",
+          _err is not None and "atuin" in str(_err))
+    check("an asset without its binary doesn't stop the other tools",
+          os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+# The two halves are independent, and the commonest way the conda half fails
+# is micromamba itself exiting non-zero -- a CalledProcessError, not one of
+# ours. Catching only HomepkgError there would skip the static assets in the
+# same bundle, which is exactly what an offline host has no other way to get.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "tool-x86_64-unknown-linux-musl.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset), {"tool-1.0/atuin": b"#!/bin/sh\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "combined", "platform": "linux/x86_64",
+                   "mamba": {"tools": ["jq"]},
+                   "github": {"tools": [{"tool": "atuin", "asset": asset,
+                                         "bins": ["atuin"]}]}}, f)
+    bundle = os.path.join(td, "replay-fails.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+
+    def _replay_fails(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ["micromamba", "create"])
+
+    _orig = hp._install_bundle_mamba
+    hp._install_bundle_mamba = _replay_fails
+    _err = None
+    try:
+        hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    finally:
+        hp._install_bundle_mamba = _orig
+    check("a failed conda replay still leaves the release assets installed",
+          os.access(os.path.join(prefix, "bin", "atuin"), os.X_OK))
+    check("a failed conda replay reports the tools it couldn't install",
+          _err is not None and "jq" in str(_err))
 
 # A combined manifest naming an unknown backend still errors rather than
 # silently installing nothing.

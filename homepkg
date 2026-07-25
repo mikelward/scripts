@@ -377,6 +377,7 @@ def github_extract(asset_path, name, prefix, bins):
     bindir = os.path.join(prefix, "bin")
     os.makedirs(bindir, exist_ok=True)
     low = name.lower()
+    root = None
     if low.endswith((".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")):
         root = os.path.join(os.path.dirname(asset_path), "x")
         with tarfile.open(asset_path) as tf:
@@ -385,22 +386,32 @@ def github_extract(asset_path, name, prefix, bins):
         root = os.path.join(os.path.dirname(asset_path), "x")
         with zipfile.ZipFile(asset_path) as zf:
             _safe_extract_zip(zf, root)
+    if root is not None:
+        placed = []
+        for b in bins:
+            src = _find_file(root, b)
+            if src is None:
+                continue
+            dest = os.path.join(bindir, b)
+            shutil.copy2(src, dest)
+            _ensure_executable(dest)
+            placed.append(b)
     else:
         # Raw single binary (e.g. jq-linux-amd64): treat the asset as bins[0].
         dest = os.path.join(bindir, bins[0])
         shutil.copy2(asset_path, dest)
         _ensure_executable(dest)
-        return [bins[0]]
-    placed = []
-    for b in bins:
-        src = _find_file(root, b)
-        if src is None:
-            warn(f"binary '{b}' not found in {name}")
-            continue
-        dest = os.path.join(bindir, b)
-        shutil.copy2(src, dest)
-        _ensure_executable(dest)
-        placed.append(b)
+        placed = [bins[0]]
+    # An asset that doesn't carry everything the registry says it does --
+    # a changed release layout, an asset picked by the wrong token -- is a
+    # failed tool, not a warning: the caller has to know to get it another
+    # way. Whatever was found stays, since it works and the reinstall
+    # replaces it.
+    missing = [b for b in bins if b not in placed]
+    if missing:
+        raise HomepkgError(
+            f"{name} doesn't contain {', '.join(missing)}"
+            + (f" (kept {', '.join(placed)})" if placed else ""))
     return placed
 
 
@@ -809,13 +820,29 @@ def _install_bundle_mamba(td, manifest, prefix, dry_run):
 
 
 def _install_bundle_github(td, manifest, prefix, dry_run):
+    """Unpack each tool's asset. Returns the tools that couldn't be installed.
+
+    One tool is not allowed to cost the others: a bundle built when an asset
+    was unavailable, or one that arrived truncated, still installs everything
+    it does carry. The caller reports what was missed.
+    """
+    failed = []
     for e in manifest["tools"]:
         _require_basename(e["asset"], "asset name")
+        asset = os.path.join(td, "assets", e["asset"])
+        if not os.path.exists(asset):
+            warn(f"{e['tool']}: {e['asset']} is not in the bundle; skipping it")
+            failed.append(e["tool"])
+            continue
         info(f"{e['tool']}: {e['asset']}")
         if dry_run:
             continue
-        github_extract(os.path.join(td, "assets", e["asset"]),
-                       e["asset"], prefix, e["bins"])
+        try:
+            github_extract(asset, e["asset"], prefix, e["bins"])
+        except Exception as exc:  # extraction, permissions, truncated asset
+            warn(f"{e['tool']}: {exc}; skipping it")
+            failed.append(e["tool"])
+    return failed
 
 
 def install_bundle(bundle_file, prefix, plat, dry_run):
@@ -831,19 +858,37 @@ def install_bundle(bundle_file, prefix, plat, dry_run):
                 f"bundle is for {got}, but this host is {want} "
                 "(pass --arch to override)")
         info(f"bundle: {backend}, platform {got}")
+        failed = []
         if backend == "combined":
             # One bundle, both payloads: conda tools first (the env install
-            # wants a fresh prefix), then the static release assets.
+            # wants a fresh prefix), then the static release assets. The two
+            # are independent, so a closure that can't be replayed -- an env
+            # already present, say -- mustn't cost you the static binaries.
             if "mamba" in manifest:
-                _install_bundle_mamba(td, manifest["mamba"], prefix, dry_run)
+                try:
+                    _install_bundle_mamba(td, manifest["mamba"], prefix, dry_run)
+                except Exception as exc:
+                    # Anything the replay can raise: our own "env already
+                    # exists", micromamba exiting non-zero (CalledProcessError),
+                    # a truncated payload. Narrowing this to HomepkgError would
+                    # let the commonest failure of all -- the create itself --
+                    # skip the static assets below.
+                    warn(f"conda tools: {exc}")
+                    failed.extend(manifest["mamba"].get("tools", ["conda tools"]))
             if "github" in manifest:
-                _install_bundle_github(td, manifest["github"], prefix, dry_run)
+                failed.extend(_install_bundle_github(
+                    td, manifest["github"], prefix, dry_run))
         elif backend == "mamba":
             _install_bundle_mamba(td, manifest, prefix, dry_run)
         elif backend == "github":
-            _install_bundle_github(td, manifest, prefix, dry_run)
+            failed.extend(_install_bundle_github(td, manifest, prefix, dry_run))
         else:
             raise HomepkgError(f"unknown bundle backend: {backend}")
+        if failed:
+            # Non-zero so the caller can fall back to installing them online
+            # (setup does), while everything the bundle did carry stays put.
+            raise HomepkgError(
+                f"bundle installed without: {', '.join(failed)}")
 
 
 # --- CLI ---------------------------------------------------------------------

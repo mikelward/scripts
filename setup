@@ -1252,14 +1252,29 @@ install_home_tools() {
         info "  a bundle installs its full contents; --minimal/--no-npm don't trim it"
         if "$homepkg" install-bundle "$bundle"; then
             provisioned=yes
-            # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
-            "$homepkg" install $tools \
-                || warn "installed the bundle; couldn't reconcile the requested tools online (offline?)"
         else
-            warn "install-bundle failed; falling back to an online install"
+            # install-bundle exits non-zero when it couldn't install
+            # everything the manifest listed -- a release asset the bundle
+            # was built without, say -- having installed the rest. So what
+            # follows is a top-up rather than a redo.
+            warn "the bundle didn't provide everything; topping up online"
         fi
-    fi
-    if test "$provisioned" = no; then
+        # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
+        if "$homepkg" install $tools; then
+            provisioned=yes
+        elif test "$provisioned" = yes; then
+            warn "installed the bundle; couldn't reconcile the requested tools online (offline?)"
+        elif test -d "$env_dir/conda-meta"; then
+            # A partial install-bundle still built the env out of whatever it
+            # carried, so an offline top-up failure doesn't make this run
+            # unprovisioned: the steps below still have to put ~/.local/bin on
+            # PATH for the tools that did land.
+            warn "couldn't top up the missing tools online (offline?); keeping what the bundle installed"
+            provisioned=yes
+        else
+            warn "the bundle installed nothing and the online top-up failed (offline?)"
+        fi
+    else
         test "$MINIMAL_ENABLED" -eq 0 \
             || info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
         info "Installing CLI tools into a home prefix via homepkg: $tools"
@@ -1364,7 +1379,9 @@ install_shell_tools() {
             fi
             info "the bundle did not provide$shell_tools"
         else
-            warn "could not install from the bundle; falling back to the release download"
+            # Non-zero can mean a partial install -- whatever the bundle did
+        # carry stays put, and the download below covers the rest.
+        warn "the bundle didn't provide everything; falling back to the release download"
         fi
     fi
 
