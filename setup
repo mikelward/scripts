@@ -660,11 +660,18 @@ install_packages() {
                     shellcheck \
                     unzip \
                     vim \
-                    zoxide \
                     zsh; then
                 warn "skipping remaining Debian package installs"
                 return 0
             fi
+            # zoxide is missing from older releases (Ubuntu 20.04 has no
+            # package), and apt rejects the whole transaction on one unknown
+            # name -- which would take git/make down with it. Its own
+            # best-effort step keeps that contained; the shell config skips
+            # zoxide when it isn't installed.
+            info "Installing zoxide"
+            sudo_or_warn apt-get install -y --install-recommends zoxide \
+                || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Node.js + tsc from the distro on the privileged path (setup-kde
             # needs tsc to build Krohnkite). Under --no-root apt is skipped
             # above, and these come from conda-forge via homepkg instead
@@ -780,11 +787,15 @@ install_packages() {
                     ShellCheck \
                     unzip \
                     vim \
-                    zoxide \
                     zsh; then
                 warn "skipping remaining Fedora package installs"
                 return 0
             fi
+            # Its own transaction, for the same reason as the Debian branch:
+            # dnf aborts the lot when one name is unknown.
+            info "Installing zoxide"
+            sudo_or_warn dnf install -y zoxide \
+                || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Node.js + tsc from the distro on the privileged path (setup-kde
             # needs tsc to build Krohnkite). Under --no-root dnf is skipped
             # above, and these come from conda-forge via homepkg instead
@@ -909,8 +920,12 @@ install_packages() {
                 shellcheck \
                 unzip \
                 vim \
-                zoxide \
                 zsh
+            # Separate, so a formula rename or a tap outage can't take the
+            # core package list down with it.
+            info "Installing zoxide"
+            brew install zoxide \
+                || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Node.js + tsc from Homebrew on the privileged path (setup-kde
             # needs tsc to build Krohnkite). brew needs no sudo, so unlike the
             # apt/dnf branches this can't self-skip under --no-root -- gate it on
