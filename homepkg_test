@@ -225,6 +225,12 @@ check("install of a github-only tool on the mamba backend errors",
       _run("install", "carapace").returncode != 0)
 check("install of a github-only tool names the github backend in the error",
       "--backend github" in _run("install", "carapace").stderr)
+# The stateless conda backend has to reject it too, before any index fetch --
+# offline, that fetch would fail first and bury the hint.
+_conda_named = _run("--backend", "conda", "install", "carapace")
+check("conda backend rejects a github-only tool", _conda_named.returncode != 0)
+check("conda backend names the github backend in the error",
+      "--backend github" in _conda_named.stderr)
 
 check("unknown tool errors", _run("install", "bogustool").returncode != 0)
 check("install with no tools errors", _run("install").returncode != 0)
