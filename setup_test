@@ -413,8 +413,14 @@ test_home_tools_include_node_toolchain() {
 # distro package lists and the homepkg core set. Package names go on their own
 # distro lines: apt/dnf abort the whole transaction on one unknown name.
 test_zoxide_is_a_core_package() {
-    # Once per distro list (apt, dnf, brew) plus the manual-install hint.
-    test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 3 &&
+    # In its own best-effort transaction per platform, never in the core
+    # package list: apt/dnf reject the whole request on one unknown name,
+    # and zoxide is missing from older releases -- which would take git and
+    # make down with it. Three install steps (apt, dnf, brew) plus the
+    # manual-install hint and the homepkg core set.
+    test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 3 &&
+    test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
+    assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
     assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide"'
 }
