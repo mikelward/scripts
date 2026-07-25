@@ -643,6 +643,18 @@ test_home_tools_uses_bundle_optimistically() {
     assert_source_contains "couldn't reconcile the requested tools online"
 }
 
+# install-bundle exits non-zero when the bundle was short of a tool, having
+# installed the rest. If the online top-up then fails too (offline), the env
+# is still there with whatever the bundle carried, so the run counts as
+# provisioned -- otherwise install_home_tools returns before putting
+# ~/.local/bin on PATH and later steps (setup-kde needs tsc) can't find the
+# tools that did land.
+test_home_tools_provisioned_by_a_partial_bundle() {
+    assert_source_contains 'elif test -d "\$env_dir/conda-meta"; then' &&
+    assert_source_contains "keeping what the bundle installed" &&
+    assert_source_contains "the bundle installed nothing and the online top-up failed"
+}
+
 # A failed pull on an EXISTING checkout (e.g. offline) must warn and continue,
 # not abort under set -e -- otherwise the offline "setup --no-root" bootstrap
 # dies on the scripts/conf pull before reaching the homepkg bundle install. A
@@ -749,6 +761,8 @@ run_test "--no-root implies --no-sudo" \
     test_no_root_implies_no_sudo
 run_test "--no-root prefers a prebuilt bundle, then refreshes online" \
     test_home_tools_uses_bundle_optimistically
+run_test "a partial bundle provisions the run even with no network" \
+    test_home_tools_provisioned_by_a_partial_bundle
 run_test "clone_or_pull warns and continues on an offline failure" \
     test_clone_or_pull_degrades_offline
 run_test "--no-root installs CLI tools into a home prefix via homepkg" \
