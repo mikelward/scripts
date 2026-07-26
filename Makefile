@@ -1,5 +1,6 @@
 test:
 	./autoshpool_test
+	./call_test
 	./autotmux_test
 	./autosession_test
 	./sessionlib_test

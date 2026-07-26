@@ -1,0 +1,183 @@
+#!/bin/sh
+# Tests for call
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CALL="$SCRIPT_DIR/call"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# Stub the Termux commands (and sleep) so tests can run anywhere.  Each stub
+# appends its invocation to $LOG so tests can assert on what ran and in what
+# order.  termux-telephony-deviceinfo prints $DEVICEINFO, letting tests
+# control the reported SIM name.
+STUBS="$(mktemp -d)"
+trap 'rm -rf "$STUBS"' EXIT
+LOG="$STUBS/log"
+export LOG
+DEVICEINFO=
+export DEVICEINFO
+
+for cmd in termux-toast termux-telephony-call sleep; do
+    cat > "$STUBS/$cmd" <<EOF
+#!/bin/sh
+echo "$cmd \$*" >> "\$LOG"
+EOF
+    chmod +x "$STUBS/$cmd"
+done
+cat > "$STUBS/termux-telephony-deviceinfo" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$DEVICEINFO"
+EOF
+chmod +x "$STUBS/termux-telephony-deviceinfo"
+
+# run_call [args...]: run call with stubbed commands, capture output and status.
+run_call() {
+    : > "$LOG"
+    set +e
+    output="$(PATH="$STUBS:$PATH" "$CALL" "$@" 2>&1)"
+    status=$?
+    set -e
+    log="$(cat "$LOG")"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_log_equals() {
+    expected="$1"
+    if test "$log" != "$expected"; then
+        echo "  FAIL: command log mismatch"
+        echo "  expected: $(printf '%s' "$expected" | sed -n l)"
+        echo "  actual:   $(printf '%s' "$log" | sed -n l)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case $output in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain: $1"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1;;
+    esac
+}
+
+run_test() {
+    name="$1"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=0
+    echo "TEST: $name"
+    "$name" || TEST_FAILED=1
+    if test "$TEST_FAILED" -eq 0; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+test_calls_number() {
+    run_call 5551234
+    assert_status 0
+    assert_log_equals 'termux-telephony-call 5551234'
+}
+
+test_toast_shows_sim_name() {
+    DEVICEINFO='{"sim_operator_name": "TestSIM"}'
+    run_call --toast 5551234
+    DEVICEINFO=
+    assert_status 0
+    assert_log_equals 'termux-toast Calling using TestSIM
+termux-telephony-call 5551234'
+}
+
+test_toast_falls_back_without_sim_name() {
+    run_call -t 5551234
+    assert_status 0
+    assert_log_equals 'termux-toast Calling using default SIM
+termux-telephony-call 5551234'
+}
+
+test_delay_sleeps_before_calling() {
+    run_call --delay 3 5551234
+    assert_status 0
+    assert_log_equals 'sleep 3
+termux-telephony-call 5551234'
+}
+
+test_toast_mentions_delay() {
+    DEVICEINFO='{"sim_operator_name": "TestSIM"}'
+    run_call -t -d 5 5551234
+    DEVICEINFO=
+    assert_status 0
+    assert_log_equals 'termux-toast Calling using TestSIM in 5 seconds
+sleep 5
+termux-telephony-call 5551234'
+}
+
+test_zero_delay_does_not_sleep() {
+    run_call -d 0 5551234
+    assert_status 0
+    assert_log_equals 'termux-telephony-call 5551234'
+}
+
+test_rejects_non_numeric_delay() {
+    run_call -d soon 5551234
+    assert_status 1
+    assert_output_contains 'delay must be a whole number'
+    assert_log_equals ''
+}
+
+test_rejects_missing_delay_value() {
+    run_call -d
+    assert_status 1
+    assert_output_contains 'delay must be a whole number'
+    assert_log_equals ''
+}
+
+test_requires_number() {
+    run_call
+    assert_status 1
+    assert_output_contains 'Usage:'
+    assert_log_equals ''
+}
+
+test_rejects_unknown_option() {
+    run_call --bogus 5551234
+    assert_status 1
+    assert_output_contains 'unknown option --bogus'
+    assert_log_equals ''
+}
+
+test_double_dash_allows_dashed_number() {
+    run_call -- -5551234
+    assert_status 0
+    assert_log_equals 'termux-telephony-call -5551234'
+}
+
+run_test test_calls_number
+run_test test_toast_shows_sim_name
+run_test test_toast_falls_back_without_sim_name
+run_test test_delay_sleeps_before_calling
+run_test test_toast_mentions_delay
+run_test test_zero_delay_does_not_sleep
+run_test test_rejects_non_numeric_delay
+run_test test_rejects_missing_delay_value
+run_test test_requires_number
+run_test test_rejects_unknown_option
+run_test test_double_dash_allows_dashed_number
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
