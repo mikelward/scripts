@@ -1,0 +1,227 @@
+#!/bin/sh
+# Tests for dvorak
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DVORAK="$SCRIPT_DIR/dvorak"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# Each test runs dvorak against a stub PATH holding nothing but the handful of
+# tools it may use, so every layer's outcome is decided here rather than by
+# whatever happens to be installed on the machine running the tests.
+make_stubs() {
+    stubdir="$(mktemp -d)"
+
+    # dvorak itself needs these; everything else stays absent so the console,
+    # X11, GNOME, KDE and IBus layers all skip.
+    for tool in cat dirname readlink; do
+        path="$(command -v "$tool")"
+        ln -s "$path" "$stubdir/$tool"
+    done
+
+    # dvorak asks about ibus-daemon and fcitx5; only fcitx5 can be "running".
+    cat > "$stubdir/pgrep" <<'EOF'
+#!/bin/sh
+case "$2" in
+    fcitx5) test "${STUB_FCITX:-no}" = yes ;;
+    *) exit 1 ;;
+esac
+EOF
+
+    cat > "$stubdir/fcitx5-remote" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$STUB_CALLS"
+case "$1" in
+    -s) exit "${STUB_SET_STATUS:-0}" ;;
+    -n)
+        test -n "${STUB_CURRENT_IM:-}" && printf '%s\n' "$STUB_CURRENT_IM"
+        exit "${STUB_READBACK_STATUS:-0}"
+        ;;
+esac
+EOF
+
+    chmod +x "$stubdir/pgrep" "$stubdir/fcitx5-remote"
+    : > "$stubdir/calls"
+}
+
+cleanup_stubs() {
+    rm -rf "$stubdir"
+}
+
+# run_dvorak [args...]: run dvorak with the stub PATH and a neutral environment,
+# capturing its combined output and exit status.
+run_dvorak() {
+    set +e
+    output="$(
+        PATH="$stubdir" \
+        STUB_CALLS="$stubdir/calls" \
+        STUB_FCITX="${STUB_FCITX:-no}" \
+        STUB_SET_STATUS="${STUB_SET_STATUS:-0}" \
+        STUB_CURRENT_IM="${STUB_CURRENT_IM:-}" \
+        STUB_READBACK_STATUS="${STUB_READBACK_STATUS:-0}" \
+        TERM=xterm \
+        DISPLAY='' \
+        XDG_CURRENT_DESKTOP='' \
+        IBUS_ADDRESS='' \
+        "$DVORAK" "$@" 2>&1
+    )"
+    status=$?
+    set -e
+    calls="$(cat "$stubdir/calls")"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_calls_contain() {
+    case "$calls" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: fcitx5-remote was not called with '$1'"
+            echo "  calls: $calls"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_no_calls() {
+    if test -n "$calls"; then
+        echo "  FAIL: expected no fcitx5-remote calls, got: $calls"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    # TEST_FAILED catches asserts that fail mid-test: running "$func" as an
+    # `if` condition disables `set -e` inside it, so a failed assert that is
+    # not the last statement would otherwise be ignored.
+    TEST_FAILED=
+    STUB_FCITX=no
+    STUB_SET_STATUS=0
+    STUB_CURRENT_IM=
+    STUB_READBACK_STATUS=0
+    make_stubs
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    cleanup_stubs
+}
+
+# --- fcitx5 tests ---
+
+test_fcitx_not_running_is_left_alone() {
+    STUB_FCITX=no
+    run_dvorak
+    # Nothing else applies either, so dvorak reports total failure.
+    assert_status 1 &&
+    assert_no_calls &&
+    assert_output_contains "could not set Dvorak by any method"
+}
+
+test_fcitx_running_switches_layout() {
+    STUB_FCITX=yes
+    STUB_CURRENT_IM=keyboard-us-dvorak
+    run_dvorak
+    assert_status 0 &&
+    assert_calls_contain "-s keyboard-us-dvorak" &&
+    assert_output_contains "Fcitx5 input method set to US Dvorak"
+}
+
+test_fcitx_switch_command_failing_is_reported() {
+    STUB_FCITX=yes
+    STUB_SET_STATUS=1
+    run_dvorak
+    assert_status 1 &&
+    assert_output_contains "switching to keyboard-us-dvorak failed"
+}
+
+test_fcitx_silent_no_op_is_reported() {
+    # -s exits 0 but the layout isn't in the input method group, so the active
+    # method never changes.
+    STUB_FCITX=yes
+    STUB_CURRENT_IM=keyboard-us
+    run_dvorak
+    assert_status 1 &&
+    assert_output_contains "Fcitx5 still on keyboard-us" &&
+    assert_output_contains "could not set Dvorak by any method"
+}
+
+test_unsupported_readback_is_reported() {
+    # Older fcitx5-remote has no -n: it exits non-zero with nothing on stdout.
+    STUB_FCITX=yes
+    STUB_CURRENT_IM=
+    STUB_READBACK_STATUS=1
+    run_dvorak
+    assert_status 0 &&
+    assert_output_contains "reading the active method back failed"
+}
+
+test_empty_readback_is_reported() {
+    # -n exits 0 but names no method, so there is still nothing to verify
+    # against; the switch must not be reported as confirmed.
+    STUB_FCITX=yes
+    STUB_CURRENT_IM=
+    STUB_READBACK_STATUS=0
+    run_dvorak
+    assert_status 0 &&
+    assert_output_contains "reading the active method back failed"
+}
+
+# --- cli tests ---
+
+test_help_lists_fcitx() {
+    run_dvorak --help
+    assert_status 0 &&
+    assert_output_contains "Fcitx5"
+}
+
+test_unexpected_argument_exits_two() {
+    run_dvorak --nonesuch
+    assert_status 2 &&
+    assert_output_contains "unexpected argument"
+}
+
+# --- run ---
+
+run_test "fcitx5 that is not running is left alone" test_fcitx_not_running_is_left_alone
+run_test "running fcitx5 switches to Dvorak" test_fcitx_running_switches_layout
+run_test "failing fcitx5 switch is reported" test_fcitx_switch_command_failing_is_reported
+run_test "fcitx5 switch that does not take is reported" test_fcitx_silent_no_op_is_reported
+run_test "fcitx5 without -n reports the missing confirmation" test_unsupported_readback_is_reported
+run_test "empty readback reports the missing confirmation" test_empty_readback_is_reported
+run_test "help lists fcitx5" test_help_lists_fcitx
+run_test "unexpected argument exits 2" test_unexpected_argument_exits_two
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

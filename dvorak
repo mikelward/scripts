@@ -4,8 +4,8 @@
 #
 # It tries every method that applies and applies as many as it can, so it works
 # whether you're on the bare Linux text console, in an X11 session, or in a
-# Wayland desktop (GNOME/KDE), and whether or not an input method (IBus) is
-# running.
+# Wayland desktop (GNOME/KDE), and whether or not an input method (IBus,
+# Fcitx5) is running.
 #
 # The headline case -- the Linux virtual console -- does NOT need root. loadkeys
 # only needs to own the tty (it does: it's your login console) or
@@ -16,7 +16,8 @@
 # dvorak.kmap alongside it and loads that instead, so the console works with
 # neither root nor the keymap package.
 #
-# IBus is only touched if it is already running; this script never starts it.
+# Input methods are only touched if they are already running; this script never
+# starts one.
 
 set -u
 
@@ -134,6 +135,36 @@ maybe_ibus() {
     return 1
 }
 
+# Fcitx5: only if it is already running -- never start it. `fcitx5-remote -s`
+# switches the active input method to the XKB us(dvorak) one, which Fcitx5 names
+# keyboard-us-dvorak.
+maybe_fcitx() {
+    have fcitx5-remote || return 1
+    pgrep -x fcitx5 >/dev/null 2>&1 || return 1
+    if ! fcitx5-remote -s keyboard-us-dvorak >/dev/null 2>&1; then
+        note "Fcitx5: switching to keyboard-us-dvorak failed"
+        return 1
+    fi
+    # -s exits 0 even when the name isn't in the current input method group, so
+    # read the active method back to see whether it really took.
+    current=$(fcitx5-remote -n 2>/dev/null)
+    readback=$?
+    # An older fcitx5-remote with no -n and a failed call (a dropped session bus,
+    # say) both exit non-zero with nothing on stdout, so we can't tell them
+    # apart. Either way the switch itself succeeded and only the confirmation is
+    # missing -- say that rather than claim a verified switch.
+    if test "$readback" -ne 0 || test -z "$current"; then
+        note "Fcitx5 switched to US Dvorak, but reading the active method back failed"
+        return 0
+    fi
+    if test "$current" != keyboard-us-dvorak; then
+        note "Fcitx5 still on $current -- add US (Dvorak) to your input method group"
+        return 1
+    fi
+    note "Fcitx5 input method set to US Dvorak (keyboard-us-dvorak)"
+    return 0
+}
+
 case "${1:-}" in
     -h|--help)
         cat >&2 <<EOF
@@ -147,6 +178,7 @@ current environment:
   - GNOME session       : gsettings input-sources -> us+dvorak
   - KDE Plasma session  : kxkbrc -> us/dvorak
   - IBus                : xkb:us:dvorak:eng     (only if IBus already running)
+  - Fcitx5              : keyboard-us-dvorak    (only if Fcitx5 already running)
 EOF
         exit 0
         ;;
@@ -162,6 +194,7 @@ maybe_x11     && applied=1
 maybe_gnome   && applied=1
 maybe_kde     && applied=1
 maybe_ibus    && applied=1
+maybe_fcitx   && applied=1
 
 if test "$applied" -eq 0; then
     note "could not set Dvorak by any method here"
