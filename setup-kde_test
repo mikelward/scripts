@@ -632,6 +632,19 @@ test_comma_and_backslash_shortcuts_are_escaped() {
     assert_called 'KrohnkitegrowWidth Meta+\\\\,none,Krohnkite: Grow Width'
 }
 
+# KWin's default for "Walk Through Windows of Current Application" is Alt+`,
+# not Meta+`, so unbinding it never freed the key Krohnkite's Monocle layout
+# wanted -- it just cost the app-window cycling that shortcut does. The other
+# three unbinds are real conflicts and must stay.
+test_does_not_unbind_walk_through_current_application() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "Walk Through Windows of Current Application" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Grid View none,none,Grid View" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Overview none,none,Overview" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Edit Tiles none,none,Edit Tiles"
+}
+
 # Meta+. is Plasma's Emoji Selector by default, and it holds it as a
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
 # Krohnkite's Next Layout needs the launch-shortcut form.
@@ -855,6 +868,8 @@ run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
 run_test "comma and backslash shortcuts are escaped for kglobalaccel" \
     test_comma_and_backslash_shortcuts_are_escaped
+run_test "leaves Alt+\` app-window cycling alone" \
+    test_does_not_unbind_walk_through_current_application
 run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
     test_unbinds_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \

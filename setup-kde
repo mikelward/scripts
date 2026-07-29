@@ -651,7 +651,11 @@ configure_keybindings() {
     unbind_shortcut "Grid View"                                 # Meta+G -> Browser 1
     unbind_shortcut "Overview"                                  # Meta+W -> Terminal on Workstation
     unbind_shortcut "Edit Tiles"                                # Meta+T -> Terminal
-    unbind_shortcut "Walk Through Windows of Current Application" # Meta+` -> Krohnkite Monocle
+    # "Walk Through Windows of Current Application" used to be unbound here on
+    # the grounds that it held Meta+`, which Krohnkite's Monocle layout wants.
+    # It doesn't -- KWin's default for it is Alt+`, so the unbind freed nothing
+    # and cost the app-window cycling that key does. If an earlier run of this
+    # script already cleared yours, System Settings > Shortcuts restores it.
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
     # not a [kwin] action, so it needs the launch-shortcut form.
     unbind_app_shortcut org.kde.plasma.emojier.desktop  # Meta+. -> Krohnkite Next Layout
