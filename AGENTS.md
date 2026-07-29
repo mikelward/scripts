@@ -9,9 +9,9 @@ This repo is a collection of shell utilities. There is no build step — each
 script runs from source. Most are standalone, but not all: `sessionlib` is a
 shared library sourced by the session entry points (`autosession`,
 `makesession`, `autotmux`, `autoshpool`, and their siblings), and `setup`
-dispatches to the per-platform `setup-kde` / `setup-hypr` / `setup-sway` /
-`setup-macos` scripts. When you change a shared contract, follow it through
-every consumer rather than stopping at the file you opened.
+dispatches to the per-platform `setup-kde` / `setup-macos` scripts. When you
+change a shared contract, follow it through every consumer rather than
+stopping at the file you opened.
 
 ## Style
 

@@ -5,9 +5,9 @@
 # Sources ~/.env (the canonical user PATH dirs and shared exports, from the
 # conf repo) and ~/.env.local (per-machine additions such as
 # PATH=$HOME/scripts.work:$PATH), then execs the given command. For callers
-# that don't inherit a login environment, e.g. Hyprland's exec binds: a
-# display-manager or uwsm session never runs .profile/.shrc, so helper
-# scripts in ~/scripts wouldn't resolve without this.
+# that don't inherit a login environment, e.g. a display manager's autostart
+# entries: those never run .profile/.shrc, so helper scripts in ~/scripts
+# wouldn't resolve without this.
 #
 # Same DOTENV_SOURCED sentinel and `set -a` form as zshenv/profile/shrc: an
 # environment that already applied the files (a login shell's children) is
