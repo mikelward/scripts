@@ -1459,6 +1459,10 @@ set_default_terminal() {
 
 # --- Configure keyboard ---
 
+# System-level only: the console keymap, the persistent X11 config, and a live
+# setxkbmap. Plasma overrides the layout at login from kxkbrc, so the matching
+# session-level config is setup-kde's configure_keyboard_layout -- change both
+# or the two drift apart.
 configure_keyboard() {
     case "$OS" in
         debian)

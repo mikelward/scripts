@@ -6,6 +6,7 @@
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
+# - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 #
 # Requires: kpackagetool6, kwriteconfig6
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
@@ -415,6 +416,32 @@ configure_desktops() {
     kwriteconfig6 --file kwinrc --group Desktops --key Rows 1
 }
 
+# --- Configure the keyboard layout ---
+
+# setup already writes the layout at the system level (/etc/default/keyboard
+# or localectl, plus a live setxkbmap), but that isn't enough on Plasma: once
+# kxkbrc has Use=true, Plasma's keyboard daemon reapplies its own layout at
+# every login and the system setting silently loses. Write the session layout
+# here so the two agree.
+#
+# Options/ResetOldOptions mirror setup's "setxkbmap -option '' -option
+# compose:caps": without them Plasma would reapply the layout and leave the
+# XKB options to chance. Setting them explicitly is what keeps Caps Lock as
+# Compose across a relogin.
+#
+# The daemon watches kxkbrc and re-reads it on change, so there's no dbus call
+# here. (Deliberately not org.kde.KeyboardLayouts.setLayout: it takes a layout
+# name rather than an index and its behavior varies across Plasma versions --
+# same reasoning as the dvorak script.)
+configure_keyboard_layout() {
+    info "Configuring keyboard layout: US Dvorak, Caps Lock as Compose"
+    kwriteconfig6 --file kxkbrc --group Layout --key Use true
+    kwriteconfig6 --file kxkbrc --group Layout --key LayoutList us
+    kwriteconfig6 --file kxkbrc --group Layout --key VariantList dvorak
+    kwriteconfig6 --file kxkbrc --group Layout --key Options compose:caps
+    kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true
+}
+
 # --- Configure keybindings ---
 
 # Third arg is the human-readable label written into the value's third
@@ -727,6 +754,7 @@ configure_krohnkite
 configure_focus_follows_mouse
 configure_dim_inactive
 configure_desktops
+configure_keyboard_layout
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings
