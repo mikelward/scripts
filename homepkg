@@ -526,14 +526,17 @@ def _replace_codeberg_asset(dest_dir, name, populate, freshness=None):
     bundle), so a failed refresh -- from either source -- can't destroy a
     previously good cache.
 
-    populate() writes to a temp file inside dest_dir first; only the final
-    os.replace() (atomic on a single filesystem, and dest_dir/tmp_path always
-    share one) touches the name a consumer actually looks for. If populate()
-    raises, dest_dir's existing contents are exactly as they were before this
-    call. Only once the new file is confirmed in place are older-version
-    files (including any orphaned .part left by a process that was killed
-    mid-populate) cleared out, so nothing but the current asset, the lock,
-    and the freshness sidecar ever remain.
+    populate() writes to a temp file inside dest_dir first, and the freshness
+    sidecar is fully written and validated to its own temp file too, before
+    either is renamed into place -- if populate() or the metadata write
+    raises (e.g. the disk fills partway through), dest_dir's existing asset
+    and sidecar are exactly as they were before this call; a consumer never
+    observes a new asset paired with a missing or stale sidecar, or vice
+    versa. Only once both renames succeed (each an atomic os.replace() on a
+    single filesystem, and dest_dir/tmp_path always share one) are
+    older-version files (including any orphaned .part left by a process that
+    was killed mid-populate) cleared out, so nothing but the current asset,
+    the lock, and the freshness sidecar ever remain.
 
     The whole sequence runs under a per-dest_dir flock: two overlapping
     refreshes of the same tool (e.g. a manual `homepkg install` racing
@@ -584,15 +587,19 @@ def _replace_codeberg_asset(dest_dir, name, populate, freshness=None):
 
             tmp_path = os.path.join(dest_dir, f".{name}.part")
             final_path = os.path.join(dest_dir, name)
+            meta_tmp_path = os.path.join(dest_dir, f".{_CODEBERG_ASSET_META}.part")
             try:
                 populate(tmp_path)
+                with open(meta_tmp_path, "w") as f:
+                    json.dump({"published_at": freshness}, f)
                 os.replace(tmp_path, final_path)
+                os.replace(meta_tmp_path, meta_path)
             except BaseException:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
+                if os.path.exists(meta_tmp_path):
+                    os.remove(meta_tmp_path)
                 raise
-            with open(meta_path, "w") as f:
-                json.dump({"published_at": freshness}, f)
             for existing in os.listdir(dest_dir):
                 if existing in (name, _CODEBERG_ASSET_LOCK, _CODEBERG_ASSET_META):
                     continue
