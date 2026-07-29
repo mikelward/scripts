@@ -2,7 +2,7 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [--kde | --hypr] [--minimal | --full] \
+#     setup [--gui | --no-gui] [--kde] [--minimal | --full] \
 #           [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm] \
 #           [--github PREFIX] [-h | --help]
 #
@@ -43,7 +43,7 @@
 # --no-sudo when the box has no sudo at all: sudo_or_warn then skips every
 # privileged command up front, package installs included, so setup never
 # prompts for a password or stalls on a command it can't run. --no-sudo is
-# forwarded to setup-kde / setup-hypr / setup-sway / setup-macos.
+# forwarded to setup-kde / setup-macos.
 #
 # An SSH key is generated only when one isn't already available -- the
 # check skips generation when ssh-add -l lists a key (e.g. a forwarded
@@ -153,14 +153,6 @@ SUDO="${SUDO:-yes}"
 # Override with --root / --no-root, or by exporting ROOT before running.
 ROOT="${ROOT:-yes}"
 
-# Which Linux desktop to install and configure (ignored on macOS). One of:
-#   kde   - KDE Plasma + Krohnkite, via setup-kde (the default)
-#   hypr  - Hyprland Wayland desktop, via setup-hypr
-#   sway  - Sway Wayland desktop, via setup-sway
-# Override with --kde / --hypr / --sway, or by exporting DESKTOP before
-# running.
-DESKTOP="${DESKTOP:-kde}"
-
 # Which backend installs the heavyweight extras (helix, jj, shpool, nushell).
 # One of:
 #   auto  - Homebrew when brew is available or on macOS; else cargo (default)
@@ -172,7 +164,7 @@ EXTRAS=auto
 
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--kde | --hypr | --sway] [--minimal | --full]
+Usage: setup [--gui | --no-gui] [--kde] [--minimal | --full]
              [--no-install] [--no-sudo] [--no-root] [--ignore-errors]
              [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 
@@ -181,9 +173,8 @@ Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 Options:
   --gui            Force installation of graphical packages and desktop config
   --no-gui         Skip all graphical packages and desktop configuration
-  --kde            Install/configure KDE Plasma + Krohnkite (default; Linux)
-  --hypr           Install/configure the Hyprland Wayland desktop (Linux)
-  --sway           Install/configure the Sway Wayland desktop (Linux)
+  --kde            Accepted for compatibility; KDE Plasma + Krohnkite is the
+                   only desktop setup installs/configures (Linux)
   --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
                    nushell), installing only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -336,13 +327,8 @@ while test $# -gt 0; do
             GUI=no
             ;;
         --kde)
-            DESKTOP=kde
-            ;;
-        --hypr)
-            DESKTOP=hypr
-            ;;
-        --sway)
-            DESKTOP=sway
+            # Accepted for compatibility: KDE Plasma + Krohnkite is the only
+            # desktop setup installs/configures, so there's nothing to select.
             ;;
         --minimal)
             MINIMAL=yes
@@ -699,67 +685,10 @@ install_packages() {
                     kwin-dev \
                     plasma-desktop plasma-sdk \
                     || warn "skipping KDE graphical package installation"
-                # Shared Wayland desktop stack, used by BOTH the Hyprland and
-                # Sway builds (bar, launcher, notifications, portal, audio,
-                # applets, fonts). Installed unconditionally alongside KDE so
-                # any desktop is available (--kde/--hypr/--sway only choose
-                # which one to *configure*), and in its OWN transaction: apt
-                # aborts the whole install on one unavailable name, so a
-                # release without hyprland must not take the Sway/Hyprland
-                # shared pieces down with it.
-                info "Installing shared Wayland desktop packages"
-                sudo_or_warn apt-get install -y --install-recommends \
-                    xdg-desktop-portal-gtk \
-                    waybar fuzzel kanshi \
-                    power-profiles-daemon \
-                    pipewire wireplumber pavucontrol \
-                    brightnessctl \
-                    network-manager-gnome blueman \
-                    policykit-1-gnome \
-                    fonts-jetbrains-mono \
-                    || warn "some shared Wayland desktop packages are unavailable via apt"
-                # swaync ships on apt as sway-notification-center (Ubuntu
-                # 24.04, Debian 13); try the upstream name for backports.
-                # Its own transaction so a missing name can't abort the
-                # shared stack above.
-                sudo_or_warn apt-get install -y --install-recommends sway-notification-center \
-                    || sudo_or_warn apt-get install -y --install-recommends swaync \
-                    || warn "swaync unavailable via apt (sway-notification-center); notifications need a manual build"
-                # Hyprland-only packages. `|| warn` because the hypr* tools
-                # may need a backport and shouldn't abort.
-                info "Installing Hyprland desktop packages"
-                sudo_or_warn apt-get install -y --install-recommends \
-                    hyprland hypridle hyprlock \
-                    || warn "some Hyprland packages are unavailable; you may need a backport or manual build (hyprland, hypridle, hyprlock, swww)"
-                # These are in the default repos even where hyprland isn't, so
-                # install them separately -- otherwise a missing hyprland fails
-                # the whole command above and takes these down with it.
-                sudo_or_warn apt-get install -y --install-recommends \
-                    grim slurp wl-clipboard playerctl gnome-calculator \
-                    || warn "screenshot/media/calculator tools unavailable via apt"
-                # Sway Wayland desktop packages, installed unconditionally
-                # alongside KDE/Hyprland for the same reason (--sway only
-                # chooses which desktop to *configure*). All are in the
-                # default repos; the bar/launcher/notification stack above
-                # (waybar, fuzzel, swaync, ...) is shared with Hyprland.
-                info "Installing Sway desktop packages"
-                sudo_or_warn apt-get install -y --install-recommends \
-                    sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
-                    || warn "some Sway packages are unavailable via apt"
-                # autotiling (dwindle-style dynamic tiling) is packaged
-                # separately and missing from some releases; its absence
-                # only costs the dynamic splits, not the desktop.
-                sudo_or_warn apt-get install -y --install-recommends autotiling \
-                    || warn "autotiling unavailable via apt; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) is often not in the default repos;
                 # install it separately so its absence doesn't block the rest.
                 sudo_or_warn apt-get install -y --install-recommends yazi \
                     || warn "yazi unavailable via apt; install with 'cargo install --locked yazi-fm yazi-cli'"
-                # uwsm (opt-in Universal Wayland Session Manager). Installed so
-                # it's available; it does NOT change how you log in unless you
-                # pick the uwsm session -- see conf/config/hypr/README.md.
-                sudo_or_warn apt-get install -y --install-recommends uwsm \
-                    || warn "uwsm unavailable via apt (optional; skip)"
             fi
             ;;
         redhat)
@@ -823,78 +752,10 @@ install_packages() {
                     plasma-desktop \
                     plasma-sdk \
                     || warn "skipping KDE graphical package installation"
-                # Hyprland Wayland desktop packages, installed unconditionally
-                # alongside KDE so either desktop is available (--kde/--hypr
-                # only choose which one to *configure*). `|| warn` because
-                # several hypr* tools may need the COPR and shouldn't abort.
-                # Fedora doesn't ship Hyprland in its default repos, so enable
-                # the lionheartp/Hyprland COPR first (needs the copr dnf plugin).
-                info "Enabling the lionheartp/Hyprland COPR"
-                if sudo_or_warn dnf install -y dnf-plugins-core; then
-                    sudo_or_warn dnf copr enable -y lionheartp/Hyprland \
-                        || warn "could not enable the lionheartp/Hyprland COPR; hyprland may be unavailable"
-                else
-                    warn "skipping COPR enable because the dnf plugin could not be installed"
-                fi
-                # Shared Wayland desktop stack, used by BOTH the Hyprland and
-                # Sway builds. Its own transaction, all default-repo, so a
-                # failed COPR / missing hyprland can't take the bar, launcher,
-                # and power pieces down with it.
-                info "Installing shared Wayland desktop packages"
-                sudo_or_warn dnf install -y \
-                    xdg-desktop-portal-gtk \
-                    waybar fuzzel kanshi \
-                    power-profiles-daemon \
-                    pipewire wireplumber pavucontrol \
-                    brightnessctl \
-                    network-manager-applet blueman \
-                    polkit-gnome \
-                    jetbrains-mono-fonts \
-                    || warn "some shared Wayland desktop packages are unavailable via dnf"
-                # Fedora packages swaync as SwayNotificationCenter; try the
-                # upstream name too in case a COPR provides it. Its own
-                # transaction so a missing name can't abort the shared stack
-                # above.
-                sudo_or_warn dnf install -y SwayNotificationCenter \
-                    || sudo_or_warn dnf install -y swaync \
-                    || warn "swaync unavailable via dnf (SwayNotificationCenter); notifications need a manual build"
-                # Hyprland-only packages (these are the ones that need the
-                # COPR above).
-                info "Installing Hyprland desktop packages"
-                sudo_or_warn dnf install -y \
-                    hyprland hypridle hyprlock \
-                    xdg-desktop-portal-hyprland swww \
-                    || warn "some Hyprland packages are unavailable; check the lionheartp/Hyprland COPR or build manually"
-                # In the default repos even where hyprland isn't, so install
-                # separately -- a missing hyprland above shouldn't take these
-                # down with it.
-                sudo_or_warn dnf install -y \
-                    grim slurp wl-clipboard playerctl gnome-calculator \
-                    || warn "screenshot/media/calculator tools unavailable via dnf"
-                # Sway Wayland desktop packages, installed unconditionally
-                # alongside KDE/Hyprland for the same reason (--sway only
-                # chooses which desktop to *configure*). All are in the
-                # default Fedora repos -- no COPR needed, unlike Hyprland.
-                # The bar/launcher/notification stack above (waybar, fuzzel,
-                # swaync, ...) is shared with Hyprland.
-                info "Installing Sway desktop packages"
-                sudo_or_warn dnf install -y \
-                    sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
-                    || warn "some Sway packages are unavailable via dnf"
-                # autotiling (dwindle-style dynamic tiling) is packaged
-                # separately; its absence only costs the dynamic splits,
-                # not the desktop.
-                sudo_or_warn dnf install -y autotiling \
-                    || warn "autotiling unavailable via dnf; install with 'pipx install autotiling'"
                 # yazi (terminal file manager) may need a COPR; install it
                 # separately so its absence doesn't block the rest.
                 sudo_or_warn dnf install -y yazi \
                     || warn "yazi unavailable via dnf; install with 'cargo install --locked yazi-fm yazi-cli'"
-                # uwsm (opt-in Universal Wayland Session Manager). Installed so
-                # it's available; it does NOT change how you log in unless you
-                # pick the uwsm session -- see conf/config/hypr/README.md.
-                sudo_or_warn dnf install -y uwsm \
-                    || warn "uwsm unavailable via dnf (optional; skip)"
             fi
             ;;
         macos)
@@ -1708,14 +1569,6 @@ if test "$GUI_ENABLED" -eq 1; then
         info "Configuring macOS desktop environment"
         # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-macos" $DESKTOP_SETUP_FLAGS
-    elif test "$DESKTOP" = hypr; then
-        info "Configuring Hyprland desktop environment"
-        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
-        "$SCRIPTS_DIR/setup-hypr" $DESKTOP_SETUP_FLAGS
-    elif test "$DESKTOP" = sway; then
-        info "Configuring Sway desktop environment"
-        # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
-        "$SCRIPTS_DIR/setup-sway" $DESKTOP_SETUP_FLAGS
     else
         info "Configuring KDE desktop environment"
         # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
