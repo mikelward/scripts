@@ -1425,13 +1425,31 @@ offer_ssh_remotes() {
 
 # --- Set kitty as default terminal ---
 
+# The KDE half, shared by both Linux branches. update-alternatives (Debian)
+# only covers x-terminal-emulator; what makes Plasma's own "open terminal"
+# actions use kitty is kdeglobals, so every KDE box needs this, not just
+# Fedora. Nothing here is privileged -- kdeglobals is per-user -- so it runs
+# without sudo_or_warn.
+set_kde_default_terminal() {
+    command -v kwriteconfig6 >/dev/null 2>&1 || return 0
+    # TerminalApplication is what Plasma 6 reads; TerminalService is the
+    # .desktop-based successor. Write both: which one wins varies by version.
+    kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty \
+        || warn "could not set kitty as the KDE terminal application"
+    kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop \
+        || warn "could not set kitty as the KDE terminal service"
+}
+
 set_default_terminal() {
     case "$OS" in
         debian)
-            if command -v update-alternatives >/dev/null 2>&1 && command -v kitty >/dev/null 2>&1; then
+            if command -v kitty >/dev/null 2>&1; then
                 info "Setting kitty as default terminal"
-                sudo_or_warn update-alternatives --set x-terminal-emulator "$(command -v kitty)" \
-                    || warn "skipping default-terminal update"
+                if command -v update-alternatives >/dev/null 2>&1; then
+                    sudo_or_warn update-alternatives --set x-terminal-emulator "$(command -v kitty)" \
+                        || warn "skipping the x-terminal-emulator alternative"
+                fi
+                set_kde_default_terminal
             fi
             ;;
         redhat)
@@ -1440,10 +1458,10 @@ set_default_terminal() {
                 # Set via xdg for Wayland/X11
                 mkdir -p "$HOME/.config"
                 if command -v xdg-mime >/dev/null 2>&1; then
-                    xdg-mime default kitty.desktop x-scheme-handler/terminal
+                    xdg-mime default kitty.desktop x-scheme-handler/terminal \
+                        || warn "could not register kitty as the terminal scheme handler"
                 fi
-                kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty 2>/dev/null || true
-                kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop 2>/dev/null || true
+                set_kde_default_terminal
             fi
             ;;
         macos)
