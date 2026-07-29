@@ -423,6 +423,28 @@ with tempfile.TemporaryDirectory() as td:
                      hp._CODEBERG_ASSET_LOCK, hp._CODEBERG_ASSET_META]))
 
 
+def _wait_for_attempts(attempts, needed, deadline_seconds):
+    """Busy-wait for the shared `attempts` counter to reach `needed`.
+
+    The deadline is purely an infra hang-guard (a process that never even
+    reaches the barrier), not a tunable "probably long enough" threshold --
+    if it's ever hit, the handshake this is meant to prove didn't happen, so
+    this raises instead of letting the caller silently proceed as if it had.
+    A caller that swallowed a timed-out wait here would degrade back into
+    exactly the kind of unproven, timing-dependent pass this handshake
+    exists to rule out.
+    """
+    deadline = time.monotonic() + deadline_seconds
+    while attempts.value < needed and time.monotonic() < deadline:
+        pass
+    if attempts.value < needed:
+        raise RuntimeError(
+            f"concurrency test handshake timed out waiting for "
+            f"attempts>={needed} (got {attempts.value}); this is a test "
+            f"infrastructure problem (e.g. a starved process), not a "
+            f"real assertion about the lock")
+
+
 def _concurrent_replace_worker(dest_dir, name, start_barrier, attempts,
                                 active_count, max_seen, outcome_q):
     start_barrier.wait()  # both processes begin racing for the flock together
@@ -442,12 +464,10 @@ def _concurrent_replace_worker(dest_dir, name, start_barrier, attempts,
         # allowed to finish and release the flock. Since "attempts" is set
         # before either worker even tries the lock (above), this condition
         # is already true almost immediately in the overwhelmingly common
-        # case; the deadline exists purely as an infra hang-guard (a process
-        # that never even reaches the barrier), not as a tunable "probably
-        # long enough" pass/fail threshold like a fixed sleep would be.
-        deadline = time.monotonic() + 10
-        while attempts.value < 2 and time.monotonic() < deadline:
-            pass
+        # case. If it's ever NOT true within the deadline, that's a broken
+        # test environment, not a passing run -- _wait_for_attempts raises
+        # rather than letting this fall through as a false "ok".
+        _wait_for_attempts(attempts, 2, 10)
         with open(tmp, "wb") as f:
             f.write(name.encode())
         with active_count.get_lock():
@@ -457,6 +477,32 @@ def _concurrent_replace_worker(dest_dir, name, start_barrier, attempts,
         outcome_q.put("ok")
     except Exception as e:  # noqa: BLE001 -- reporting to the parent, not handling
         outcome_q.put(f"error: {e}")
+
+
+# Prove _wait_for_attempts' raise-on-timeout directly, with a short deadline,
+# rather than only ever exercising it indirectly through the full 10-second
+# multiprocess handshake below -- a broken version that swallows the timeout
+# (as an earlier round of this test did) would otherwise only show up as a
+# rare, load-dependent false pass in the slow test, not a reliable failure
+# here.
+class _FakeCounter:
+    def __init__(self, value):
+        self.value = value
+
+
+_start = time.monotonic()
+try:
+    _wait_for_attempts(_FakeCounter(0), 2, 0.2)
+    check("_wait_for_attempts raises when the target is never reached", False)
+except RuntimeError:
+    check("_wait_for_attempts raises when the target is never reached", True)
+check("_wait_for_attempts doesn't overrun its own deadline",
+      time.monotonic() - _start < 2)
+
+_start = time.monotonic()
+_wait_for_attempts(_FakeCounter(2), 2, 5)
+check("_wait_for_attempts returns immediately once the target is already met",
+      time.monotonic() - _start < 1)
 
 
 # _replace_codeberg_asset locks per dest_dir: two overlapping installs of the
