@@ -7,11 +7,12 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 #
-# Requires: git, kpackagetool6, kwriteconfig6
+# Requires: kpackagetool6, kwriteconfig6
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
 # for the current user, so setup-kde still works when system sudo is restricted.
-# Optional: tsc (only to build Krohnkite when the checkout has no prebuilt
-#           .kwinscript), go-task (preferred build tool), p7zip
+# Optional: homepkg (fetches Krohnkite's prebuilt .kwinscript release, the
+#           normal path -- see install_krohnkite), git, tsc, go-task, p7zip
+#           (build-from-source fallback when the release can't be fetched)
 #
 # Usage:
 #     setup-kde [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -25,11 +26,18 @@
 # uses no sudo, so it already runs unchanged on a machine with restricted
 # sudo.
 #
-# Krohnkite comes from my fork's mikel branch by default; set KROHNKITE_REPO
-# (any git URL or local path) and/or KROHNKITE_BRANCH to clone something
-# else. The build never talks to the npm registry: a prebuilt .kwinscript
-# committed to the repo installs as-is, and building from source uses the
-# local tsc via an npm shim.
+# Krohnkite normally installs from the prebuilt .kwinscript release asset
+# published on upstream's Codeberg (anametologin/Krohnkite), fetched via
+# homepkg's codeberg backend -- see install_krohnkite. That needs no
+# tsc/go-task/make, and is offline-capable via a homepkg bundle staged at
+# $HOMEPKG_KROHNKITE_BUNDLE, homepkg-krohnkite.tgz beside this script, or in
+# $HOME (build one with 'homepkg --backend codeberg bundle -o
+# homepkg-krohnkite.tgz krohnkite'). If homepkg or the release is unavailable,
+# setup-kde falls back to cloning KROHNKITE_REPO (my fork's mikel branch by
+# default; any git URL or local path, and/or KROHNKITE_BRANCH, override it)
+# and building from source. That build never talks to the npm registry: a
+# prebuilt .kwinscript committed to the checkout installs as-is, and building
+# from source uses the local tsc via an npm shim.
 
 KROHNKITE_DEFAULT_REPO="https://codeberg.org/mikelward/Krohnkite.git"
 KROHNKITE_REPO="${KROHNKITE_REPO:-$KROHNKITE_DEFAULT_REPO}"
@@ -131,19 +139,19 @@ trap cleanup EXIT
 # --- Check prerequisites ---
 
 # kwriteconfig6 is needed for every configuration step, so it's always
-# required. git/kpackagetool6 are only used to fetch and install Krohnkite,
-# so they're only required when actually installing. tsc is checked in
-# build_krohnkite: whether a build is needed at all depends on the checkout
-# (a committed prebuilt .kwinscript installs without one).
+# required. kpackagetool6 installs Krohnkite regardless of where its
+# .kwinscript came from, so it's required whenever actually installing.
+# git/tsc are only needed by the source-build fallback (see
+# install_krohnkite): whether that fallback is even reached depends on
+# whether the prebuilt release can be fetched, so they're warnings, not hard
+# requirements, checked up front only so a fallback failure isn't a surprise.
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
 if test "$INSTALL" = yes; then
-    command -v git >/dev/null 2>&1 || error "git is required"
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
-    # Not fatal here: a checkout that ships a prebuilt .kwinscript installs
-    # without any compiler. But if a build turns out to be needed it will
-    # fail on this, so say so before spending time on the clone.
+    command -v git >/dev/null 2>&1 \
+        || warn "git not found; if the Krohnkite release can't be fetched, the source-build fallback will fail"
     command -v tsc >/dev/null 2>&1 \
-        || warn "tsc not found; the install will fail unless $KROHNKITE_REPO ships a prebuilt .kwinscript"
+        || warn "tsc not found; if the Krohnkite release can't be fetched, the source-build fallback will fail unless $KROHNKITE_REPO ships a prebuilt .kwinscript"
 fi
 
 # --- Install Krohnkite ---
@@ -215,7 +223,13 @@ SHIM
     fi
 }
 
-install_krohnkite() {
+# Clone KROHNKITE_REPO/KROHNKITE_BRANCH and either install a prebuilt
+# .kwinscript already in the checkout, or build one from source. Fallback
+# path, used when the prebuilt release can't be fetched (see
+# install_krohnkite below).
+install_krohnkite_from_source() {
+    command -v git >/dev/null 2>&1 \
+        || error "git is required to build Krohnkite from source (the prebuilt release could not be fetched)"
     if test -n "${KROHNKITE_BRANCH:-}"; then
         info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
         git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
@@ -248,6 +262,60 @@ install_krohnkite() {
             error "Could not find installable Krohnkite package"
         fi
     fi
+}
+
+# Fetch Krohnkite's prebuilt .kwinscript release from upstream's Codeberg
+# releases (anametologin/Krohnkite) via homepkg's codeberg backend -- no
+# tsc/go-task/make needed. Tries a pre-staged offline bundle first (built
+# with 'homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz
+# krohnkite', staged at $HOMEPKG_KROHNKITE_BUNDLE, homepkg-krohnkite.tgz
+# beside this script, or in $HOME), then an online fetch. Falls back to
+# cloning KROHNKITE_REPO and building from source when neither works.
+install_krohnkite() {
+    kwinscript=""
+    homepkg="$SCRIPT_DIR/homepkg"
+    if test -x "$homepkg"; then
+        # homepkg's default --prefix (~/.local); setup-kde doesn't override
+        # it, so the fetched asset always lands here.
+        asset_dir="$HOME/.local/share/homepkg/assets/krohnkite"
+
+        bundle=""
+        for cand in "${HOMEPKG_KROHNKITE_BUNDLE:-}" \
+                "$SCRIPT_DIR/homepkg-krohnkite.tgz" \
+                "$HOME/homepkg-krohnkite.tgz"; do
+            if test -n "$cand" && test -f "$cand"; then
+                bundle="$cand"
+                break
+            fi
+        done
+        if test -n "$bundle"; then
+            info "Fetching the Krohnkite release from bundle: $bundle"
+            "$homepkg" install-bundle "$bundle" \
+                || warn "the Krohnkite bundle didn't provide the release; trying the online fetch"
+        fi
+
+        kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
+        if test -z "$kwinscript"; then
+            info "Fetching the Krohnkite release via homepkg"
+            if "$homepkg" --backend codeberg install krohnkite; then
+                kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
+            fi
+        fi
+        if test -z "$kwinscript"; then
+            warn "could not fetch the Krohnkite release via homepkg (offline? stage a bundle with 'homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz krohnkite'); falling back to building from source"
+        fi
+    else
+        warn "homepkg not found at $homepkg; falling back to building Krohnkite from source"
+    fi
+
+    if test -n "$kwinscript"; then
+        info "Installing Krohnkite from $kwinscript"
+        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
+            kpackagetool6 -t KWin/Script -i "$kwinscript"
+        return
+    fi
+
+    install_krohnkite_from_source
 }
 
 # --- Enable Krohnkite ---

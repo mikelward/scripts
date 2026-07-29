@@ -12,20 +12,26 @@ For machines where apt/dnf need root. Installs into a home prefix (default
   conda   unpack a single conda-forge package (sha256-verified) -- stateless,
           no dependency resolution; for one-shots and building push-bundles.
   github  unpack a release asset from the tool's GitHub repo -- stateless.
+  codeberg  fetch a release asset from the tool's Codeberg repo -- stateless.
+          For artifacts that aren't a CLI binary (e.g. Krohnkite's
+          .kwinscript): unlike github this saves the raw asset under
+          <prefix>/share/homepkg/assets/<tool>/ instead of unpacking named
+          binaries onto PATH.
 
 Usage:
     homepkg bootstrap                       # fetch micromamba into ~/.local/bin
     homepkg install TOOL...                 # mamba env (default)
     homepkg update [TOOL...]                # native micromamba update (all if none)
     homepkg remove TOOL...
-    homepkg --backend conda|github install TOOL...
+    homepkg --backend conda|github|codeberg install TOOL...
     homepkg list
 
 Push bundles (build on an online host, install on an air-gapped target):
-    homepkg bundle -o tools.tgz                     # online: bundle ALL tools
-    homepkg bundle -o tools.tgz TOOL...            # ...or just the named ones
-    homepkg --backend github bundle -o t.tgz TOOL... # static-asset variant
-    homepkg install-bundle tools.tgz               # target: install offline
+    homepkg bundle -o tools.tgz                       # online: bundle ALL tools
+    homepkg bundle -o tools.tgz TOOL...                # ...or just the named ones
+    homepkg --backend github bundle -o t.tgz TOOL...   # static-asset variant
+    homepkg --backend codeberg bundle -o t.tgz TOOL...   # ditto, Codeberg-hosted
+    homepkg install-bundle tools.tgz                  # target: install offline
 
 A bundle carries whatever each tool needs: the solved conda closure for the
 tools with a conda-forge package, release assets for the ones without, and the
@@ -33,7 +39,7 @@ micromamba to replay the closure with. `bundle` with no tool names covers the
 whole registry, so one file provisions a machine with no network at all.
 
 Tool names are logical (ripgrep, fd, ...); the registry maps each to its conda
-package and GitHub repo.
+package and its GitHub or Codeberg repo.
 """
 
 import argparse
@@ -51,11 +57,17 @@ import zipfile
 
 # --- Tool registry -----------------------------------------------------------
 #
-# conda:  conda-forge package name (verified against current_repodata).
-# github: "owner/repo" for the release backend.
-# bins:   binary basenames to expose on PATH (default: the tool name). A conda
-#         package is unpacked whole (bin/lib/share); for github we locate these
-#         names in the extracted asset.
+# conda:       conda-forge package name (verified against current_repodata).
+# github:      "owner/repo" for the GitHub release backend.
+# codeberg:    "owner/repo" for the Codeberg release backend (mutually
+#              exclusive with github -- a tool has at most one release host).
+# codeberg_tag: pin the codeberg backend to a specific release tag instead of
+#              "latest" (Gitea's /releases/latest excludes prereleases, so a
+#              tool whose current usable build is tagged as one needs this).
+# bins:        binary basenames to expose on PATH (default: the tool name). A
+#              conda package is unpacked whole (bin/lib/share); for github we
+#              locate these names in the extracted asset. Omitted for codeberg
+#              tools, which aren't CLI binaries -- see krohnkite below.
 TOOLS = {
     "ripgrep": {"conda": "ripgrep",   "github": "BurntSushi/ripgrep", "bins": ["rg"]},
     "fd":      {"conda": "fd",         "github": "sharkdp/fd",         "bins": ["fd"]},
@@ -83,6 +95,16 @@ TOOLS = {
     "node":       {"conda": "nodejs",     "github": "nodejs/node",          "bins": ["node", "npm", "npx"]},
     "typescript": {"conda": "typescript", "github": "microsoft/TypeScript", "bins": ["tsc"]},
     "fnm":        {"conda": "fnm",        "github": "Schniz/fnm",           "bins": ["fnm"]},
+    # Krohnkite (KDE KWin tiling script). Not a CLI tool -- it installs via
+    # kpackagetool6, not onto PATH -- so it carries no "bins" and has no
+    # conda-forge feedstock. homepkg only fetches its prebuilt .kwinscript
+    # release asset, from upstream's Codeberg releases; setup-kde does the
+    # actual kpackagetool6 install. No codeberg_tag pin: the codeberg backend
+    # already takes the newest release including prereleases (see
+    # codeberg_release_assets), which is what's wanted here -- upstream's last
+    # stable tag is old and buggy on KWin 6, and Gitea's /releases/latest
+    # would otherwise skip past the current beta straight to that stable one.
+    "krohnkite": {"conda": None, "codeberg": "anametologin/Krohnkite"},
 }
 
 
@@ -109,9 +131,10 @@ def conda_pkgs(tools, skip_missing=False):
     """
     missing = [t for t in tools if not TOOLS[t].get("conda")]
     if missing and not skip_missing:
-        raise HomepkgError(
-            f"no conda-forge package for: {', '.join(missing)}; "
-            f"install with --backend github")
+        backends = sorted({b for t in missing for b in ("github", "codeberg")
+                            if TOOLS[t].get(b)})
+        hint = f"; install with --backend {'/'.join(backends)}" if backends else ""
+        raise HomepkgError(f"no conda-forge package for: {', '.join(missing)}{hint}")
     if missing:
         warn(f"no conda-forge package, skipping: {', '.join(missing)}")
     return [TOOLS[t]["conda"] for t in tools if TOOLS[t].get("conda")]
@@ -440,11 +463,80 @@ def install_github(tool, meta, prefix, plat, dry_run):
     info(f"  installed {', '.join(placed)} into {prefix}/bin")
 
 
+# --- codeberg backend ---------------------------------------------------------
+#
+# Codeberg (Gitea) exposes almost the same release shape as GitHub -- "assets":
+# [{"name", "browser_download_url"}] -- so the fetch is a near copy of the
+# github backend above. What differs is the artifact itself: Krohnkite's
+# release is a single, platform-independent .kwinscript file, not an
+# arch-specific archive with binaries inside, so there's no asset-token
+# matching and nothing to unpack. This backend just caches the raw file under
+# <prefix>/share/homepkg/assets/<tool>/; installing it (kpackagetool6) is
+# setup-kde's job, not homepkg's.
+
+def codeberg_release_assets(repo, tag=None):
+    """(tag_name, [(asset name, url), ...]) for a release.
+
+    `tag=None` (the default) means the single newest published release,
+    prereleases included: Gitea's (like GitHub's) /releases/latest skips
+    prereleases, which would silently pick an old stable release over a
+    newer beta -- exactly what Krohnkite needs to avoid, since its last
+    stable tag predates KWin 6 fixes only shipped in the beta line. The
+    releases list is already sorted newest-first, so ?limit=1 is enough.
+    Pass an explicit tag (registry's codeberg_tag) to pin one instead.
+    """
+    if tag:
+        data = json.loads(http_get(
+            f"https://codeberg.org/api/v1/repos/{repo}/releases/tags/{tag}"))
+    else:
+        releases = json.loads(http_get(
+            f"https://codeberg.org/api/v1/repos/{repo}/releases?limit=1"))
+        if not releases:
+            raise HomepkgError(f"no releases found for {repo}")
+        data = releases[0]
+    return data.get("tag_name", "?"), [
+        (a["name"], a["browser_download_url"]) for a in data.get("assets", [])]
+
+
+def codeberg_pick_kwinscript(assets):
+    for name, url in assets:
+        if name.lower().endswith(".kwinscript"):
+            return name, url
+    return None
+
+
+def codeberg_asset_dir(tool, prefix):
+    return os.path.join(prefix, "share", "homepkg", "assets", tool)
+
+
+def install_codeberg(tool, meta, prefix, plat, dry_run):
+    repo = meta["codeberg"]
+    tag, assets = codeberg_release_assets(repo, meta.get("codeberg_tag"))
+    picked = codeberg_pick_kwinscript(assets)
+    if not picked:
+        raise HomepkgError(f"{tool}: no .kwinscript asset in {repo} {tag}")
+    name, url = picked
+    info(f"{tool}: codeberg {repo} {tag} -> {name}")
+    if dry_run:
+        info(f"  would install from {url}")
+        return
+    dest_dir = codeberg_asset_dir(tool, prefix)
+    # Clear any previous asset first: a version bump changes the filename, and
+    # a consumer (setup-kde) that globs this directory for "the" .kwinscript
+    # needs exactly one file here, not old and new coexisting.
+    if os.path.isdir(dest_dir):
+        shutil.rmtree(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+    download(url, os.path.join(dest_dir, name))
+    info(f"  saved {name} to {dest_dir}")
+
+
 # The per-tool extract backends: fetch one prebuilt artifact and unpack it.
 # Good for one-shot installs and for building push-bundles, but they carry no
 # state and don't resolve dependencies. For the well-lit interactive path use
 # the mamba backend below.
-EXTRACT_BACKENDS = {"conda": install_conda, "github": install_github}
+EXTRACT_BACKENDS = {"conda": install_conda, "github": install_github,
+                     "codeberg": install_codeberg}
 
 
 # --- micromamba backend ------------------------------------------------------
@@ -719,21 +811,50 @@ def _stage_github(tools, plat, td, skip_unavailable=False):
     return entries
 
 
+def _stage_codeberg(tools, td, skip_unavailable=False):
+    """Download a release asset per tool in `tools` into staging dir `td`.
+
+    Krohnkite's release asset is platform-independent, so unlike
+    _stage_github this needs no per-arch token matching.
+    """
+    info(f"collecting codeberg assets for {', '.join(tools)}")
+    adir = os.path.join(td, "codeberg-assets")
+    os.makedirs(adir, exist_ok=True)
+    entries = []
+    for t in tools:
+        repo = TOOLS[t]["codeberg"]
+        tag, assets = codeberg_release_assets(repo, TOOLS[t].get("codeberg_tag"))
+        picked = codeberg_pick_kwinscript(assets)
+        if not picked:
+            msg = f"{t}: no .kwinscript asset in {repo} {tag}"
+            if not skip_unavailable:
+                raise HomepkgError(msg)
+            warn(msg + "; leaving it out of the bundle")
+            continue
+        name, url = picked
+        download(url, os.path.join(adir, name))
+        entries.append({"tool": t, "asset": name})
+    return entries
+
+
 def bundle_all(tools, prefix, plat, out, dry_run, whole_registry=False):
     """Bundle `tools` from wherever each one comes from, in one file.
 
-    Most tools come from conda-forge; the few with no feedstock come from their
-    GitHub releases. Splitting that across two bundles would make the caller
-    track which tool went where, so one bundle carries both payloads and
-    install-bundle replays whichever parts are present.
+    Most tools come from conda-forge; the few with no feedstock come from
+    their GitHub or Codeberg releases. Splitting that across separate bundles
+    would make the caller track which tool went where, so one bundle carries
+    every payload and install-bundle replays whichever parts are present.
     """
     conda_tools = [t for t in tools if TOOLS[t].get("conda")]
     github_tools = [t for t in tools if not TOOLS[t].get("conda")
                     and TOOLS[t].get("github")]
-    unavailable = [t for t in tools if t not in conda_tools and t not in github_tools]
+    codeberg_tools = [t for t in tools if not TOOLS[t].get("conda")
+                      and TOOLS[t].get("codeberg")]
+    unavailable = [t for t in tools if t not in conda_tools
+                   and t not in github_tools and t not in codeberg_tools]
     if unavailable:
         warn(f"no source for: {', '.join(unavailable)}; leaving them out of the bundle")
-    if not conda_tools and not github_tools:
+    if not conda_tools and not github_tools and not codeberg_tools:
         raise HomepkgError("nothing to bundle")
 
     # Report before touching the network so --dry-run needs no micromamba.
@@ -743,6 +864,8 @@ def bundle_all(tools, prefix, plat, out, dry_run, whole_registry=False):
                  f"({conda_subdir(*plat)}) and download it")
         if github_tools:
             info(f"would download github release assets for {', '.join(github_tools)}")
+        if codeberg_tools:
+            info(f"would download codeberg release assets for {', '.join(codeberg_tools)}")
         info(f"would write {out}")
         return
 
@@ -754,6 +877,9 @@ def bundle_all(tools, prefix, plat, out, dry_run, whole_registry=False):
         if github_tools:
             manifest["github"] = {"tools": _stage_github(
                 github_tools, plat, td, skip_unavailable=whole_registry)}
+        if codeberg_tools:
+            manifest["codeberg"] = {"tools": _stage_codeberg(
+                codeberg_tools, td, skip_unavailable=whole_registry)}
         with open(os.path.join(td, "manifest.json"), "w") as fh:
             json.dump(manifest, fh)
         _write_bundle(out, td)
@@ -769,6 +895,20 @@ def bundle_github(tools, prefix, plat, out, dry_run):
         entries = _stage_github(tools, plat, td)
         with open(os.path.join(td, "manifest.json"), "w") as fh:
             json.dump({"format": 1, "backend": "github",
+                       "platform": f"{plat[0]}/{plat[1]}", "tools": entries}, fh)
+        _write_bundle(out, td)
+    info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
+
+
+def bundle_codeberg(tools, plat, out, dry_run):
+    info(f"collecting codeberg assets for {', '.join(tools)}")
+    if dry_run:
+        info(f"  would download release assets and write {out}")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        entries = _stage_codeberg(tools, td)
+        with open(os.path.join(td, "manifest.json"), "w") as fh:
+            json.dump({"format": 1, "backend": "codeberg",
                        "platform": f"{plat[0]}/{plat[1]}", "tools": entries}, fh)
         _write_bundle(out, td)
     info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
@@ -845,6 +985,28 @@ def _install_bundle_github(td, manifest, prefix, dry_run):
     return failed
 
 
+def _install_bundle_codeberg(td, manifest, prefix, dry_run):
+    """Copy each tool's cached asset into place. Returns the tools that
+    couldn't be installed, same contract as _install_bundle_github."""
+    failed = []
+    for e in manifest["tools"]:
+        _require_basename(e["asset"], "asset name")
+        asset = os.path.join(td, "codeberg-assets", e["asset"])
+        if not os.path.exists(asset):
+            warn(f"{e['tool']}: {e['asset']} is not in the bundle; skipping it")
+            failed.append(e["tool"])
+            continue
+        info(f"{e['tool']}: {e['asset']}")
+        if dry_run:
+            continue
+        dest_dir = codeberg_asset_dir(e["tool"], prefix)
+        if os.path.isdir(dest_dir):
+            shutil.rmtree(dest_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.copy2(asset, os.path.join(dest_dir, e["asset"]))
+    return failed
+
+
 def install_bundle(bundle_file, prefix, plat, dry_run):
     with tempfile.TemporaryDirectory() as td:
         with tarfile.open(bundle_file) as tf:
@@ -878,10 +1040,15 @@ def install_bundle(bundle_file, prefix, plat, dry_run):
             if "github" in manifest:
                 failed.extend(_install_bundle_github(
                     td, manifest["github"], prefix, dry_run))
+            if "codeberg" in manifest:
+                failed.extend(_install_bundle_codeberg(
+                    td, manifest["codeberg"], prefix, dry_run))
         elif backend == "mamba":
             _install_bundle_mamba(td, manifest, prefix, dry_run)
         elif backend == "github":
             failed.extend(_install_bundle_github(td, manifest, prefix, dry_run))
+        elif backend == "codeberg":
+            failed.extend(_install_bundle_codeberg(td, manifest, prefix, dry_run))
         else:
             raise HomepkgError(f"unknown bundle backend: {backend}")
         if failed:
@@ -912,10 +1079,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(
         prog="homepkg", add_help=True,
         description="Install prebuilt CLI tools into a home prefix, no root.")
-    p.add_argument("--backend", choices=["mamba", "conda", "github"], default="mamba",
+    p.add_argument("--backend", choices=["mamba", "conda", "github", "codeberg"],
+                   default="mamba",
                    help="install backend (default: mamba -- a managed micromamba "
-                        "env with native update/remove; conda/github unpack a "
-                        "single artifact with no state)")
+                        "env with native update/remove; conda/github/codeberg "
+                        "fetch a single artifact with no state)")
     p.add_argument("--prefix", default=os.path.expanduser("~/.local"),
                    help="install prefix (default: ~/.local)")
     p.add_argument("--arch", default=None,
@@ -942,9 +1110,11 @@ def main(argv=None):
         for name in sorted(TOOLS):
             m = TOOLS[name]
             # conda is None for tools with no conda-forge feedstock; show a
-            # dash so `list` says which ones need --backend github.
+            # dash so `list` says which ones need --backend github/codeberg.
             conda = m["conda"] or "-"
-            print(f"{name:10} conda={conda:12} github={m['github']}")
+            release = f"github={m['github']}" if m.get("github") else \
+                      f"codeberg={m['codeberg']}" if m.get("codeberg") else "release=-"
+            print(f"{name:10} conda={conda:12} {release}")
         return 0
 
     if args.command == "bootstrap":
@@ -972,16 +1142,18 @@ def main(argv=None):
         if not args.output:
             p.error("bundle requires -o/--output FILE")
         if args.backend == "conda":
-            p.error("bundle supports --backend mamba (default) or github, not conda")
+            p.error("bundle supports --backend mamba (default), github, or "
+                    "codeberg, not conda")
         whole_registry = not args.tools
         if args.tools:
             tools = args.tools
-        elif args.backend == "github":
-            # No "bundle everything" for the github-only variant: not every
-            # registered tool has a static release asset (typescript is
-            # npm-only), and asking for that variant means asking for those
-            # assets specifically. The default backend covers everything.
-            p.error("bundle --backend github needs explicit tool names "
+        elif args.backend in ("github", "codeberg"):
+            # No "bundle everything" for the static-asset variants: not every
+            # registered tool has a release asset on that host (typescript is
+            # npm-only, most tools aren't on Codeberg), and asking for that
+            # variant means asking for those assets specifically. The default
+            # backend covers everything.
+            p.error(f"bundle --backend {args.backend} needs explicit tool names "
                     "(no-args = all is the default backend)")
         else:
             # No tool names means "bundle everything registered" -- one file
@@ -993,6 +1165,8 @@ def main(argv=None):
         try:
             if args.backend == "github":
                 bundle_github(tools, args.prefix, plat, args.output, args.dry_run)
+            elif args.backend == "codeberg":
+                bundle_codeberg(tools, plat, args.output, args.dry_run)
             else:
                 bundle_all(tools, args.prefix, plat, args.output, args.dry_run,
                            whole_registry=whole_registry)

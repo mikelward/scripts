@@ -120,6 +120,93 @@ check("github_pick_asset matches single-binary amd64", _pick_jq is not None and 
 check("github_pick_asset returns None when nothing matches",
       hp.github_pick_asset([("tool-win.zip", "x")], _linux) is None)
 
+# --- codeberg asset selection -------------------------------------------------
+
+_kw_assets = [
+    ("krohnkite-0.9.9.3_beta.kwinscript", "k1"),
+    ("krohnkite-0.9.9.3_beta.kwinscript.sha256", "k2"),
+    ("Source code (zip)", "k3"),
+]
+_kw_pick = hp.codeberg_pick_kwinscript(_kw_assets)
+check("codeberg_pick_kwinscript picks the .kwinscript asset",
+      _kw_pick is not None and _kw_pick[1] == "k1")
+check("codeberg_pick_kwinscript ignores the checksum and source archive",
+      _kw_pick[0] == "krohnkite-0.9.9.3_beta.kwinscript")
+check("codeberg_pick_kwinscript returns None when nothing matches",
+      hp.codeberg_pick_kwinscript([("Source code (zip)", "x")]) is None)
+
+# codeberg_release_assets requests /releases/tags/<tag> when a tag is given,
+# and /releases?limit=1 (the single newest release, prereleases included)
+# otherwise -- NOT /releases/latest, which (like GitHub's) skips prereleases
+# and would silently prefer an old stable release over a newer beta.
+_saved_http_get = hp.http_get
+_http_get_urls = []
+def _fake_http_get(url, accept=None):
+    _http_get_urls.append(url)
+    if "/releases/tags/" in url:
+        return json.dumps({"tag_name": "1.2.3",
+                           "assets": [{"name": "krohnkite-1.2.3.kwinscript",
+                                       "browser_download_url": "https://example.invalid/pinned"}]}).encode()
+    return json.dumps([{"tag_name": "0.9.9.3_beta",
+                        "assets": [{"name": "krohnkite-0.9.9.3_beta.kwinscript",
+                                    "browser_download_url": "https://example.invalid/newest"}]},
+                       {"tag_name": "0.9.9.2",
+                        "assets": [{"name": "krohnkite-0.9.9.2.kwinscript",
+                                    "browser_download_url": "https://example.invalid/older"}]}]).encode()
+hp.http_get = _fake_http_get
+try:
+    hp.codeberg_release_assets("anametologin/Krohnkite", "1.2.3")
+    check("codeberg_release_assets requests a pinned tag from /releases/tags",
+          _http_get_urls[-1].endswith("/releases/tags/1.2.3"))
+    tag, assets = hp.codeberg_release_assets("anametologin/Krohnkite")
+    check("codeberg_release_assets with no tag requests /releases?limit=1, not /releases/latest",
+          _http_get_urls[-1].endswith("/releases?limit=1"))
+    check("codeberg_release_assets with no tag takes the newest release, prereleases included",
+          tag == "0.9.9.3_beta" and assets[0][0] == "krohnkite-0.9.9.3_beta.kwinscript")
+finally:
+    hp.http_get = _saved_http_get
+
+# install_codeberg saves the raw asset under share/homepkg/assets/<tool>/ --
+# no unpacking, unlike install_github, and no "bins" needed in meta.
+_saved_cra = hp.codeberg_release_assets
+hp.codeberg_release_assets = lambda repo, tag=None: (
+    "0.9.9.3_beta", [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
+try:
+    with tempfile.TemporaryDirectory() as td:
+        prefix = os.path.join(td, "prefix")
+        _saved_download = hp.download
+        hp.download = lambda url, dest: open(dest, "wb").write(b"// kwin script") or dest
+        try:
+            hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"], prefix,
+                                ("linux", "x86_64"), False)
+        finally:
+            hp.download = _saved_download
+        saved = os.path.join(hp.codeberg_asset_dir("krohnkite", prefix),
+                             "krohnkite-0.9.9.3_beta.kwinscript")
+        check("install_codeberg saves the asset under share/homepkg/assets/<tool>/",
+              os.path.exists(saved) and open(saved, "rb").read() == b"// kwin script")
+    # dry-run must not touch the filesystem or need "bins" in meta.
+    with tempfile.TemporaryDirectory() as td:
+        prefix = os.path.join(td, "prefix")
+        hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"], prefix,
+                            ("linux", "x86_64"), True)
+        check("install_codeberg --dry-run writes nothing",
+              not os.path.exists(hp.codeberg_asset_dir("krohnkite", prefix)))
+    # No .kwinscript asset in the release -- e.g. upstream renamed or dropped
+    # it -- has to fail loudly rather than silently install nothing.
+    hp.codeberg_release_assets = lambda repo, tag=None: ("9.9.9", [("Source code (zip)", "u")])
+    _err = None
+    try:
+        hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"],
+                            os.path.join(tempfile.gettempdir(), "hp-cb-noasset"),
+                            ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    check("install_codeberg errors when the release has no .kwinscript asset",
+          _err is not None and "krohnkite" in str(_err))
+finally:
+    hp.codeberg_release_assets = _saved_cra
+
 # --- github extraction -------------------------------------------------------
 
 def _make_targz(path, members):
@@ -228,6 +315,18 @@ check("registry maps carapace to carapace-bin releases",
       and hp.TOOLS["carapace"]["github"] == "carapace-sh/carapace-bin"
       and hp.TOOLS["carapace"]["bins"] == ["carapace"])
 
+# Krohnkite: no conda-forge feedstock, no GitHub repo -- its release lives on
+# Codeberg, pinned to a specific (beta) tag rather than "latest", and it's not
+# a CLI tool so it carries no "bins".
+check("registry maps krohnkite to its codeberg releases only",
+      hp.TOOLS["krohnkite"]["conda"] is None
+      and hp.TOOLS["krohnkite"]["codeberg"] == "anametologin/Krohnkite")
+check("krohnkite has no tag pinned (codeberg backend already takes newest, "
+      "prereleases included)",
+      "codeberg_tag" not in hp.TOOLS["krohnkite"])
+check("krohnkite carries no bins (not a CLI tool)",
+      "bins" not in hp.TOOLS["krohnkite"])
+
 # conda_pkgs is the gate between the registry and every conda/mamba path.
 check("conda_pkgs maps tools to their conda-forge names",
       hp.conda_pkgs(["ripgrep", "delta"]) == ["ripgrep", "git-delta"])
@@ -240,6 +339,13 @@ check("conda_pkgs errors when a named tool has no conda package",
       _conda_pkgs_raised)
 check("conda_pkgs skips conda-less tools for whole-registry operations",
       hp.conda_pkgs(["ripgrep", "carapace"], skip_missing=True) == ["ripgrep"])
+try:
+    hp.conda_pkgs(["krohnkite"])
+    _conda_pkgs_codeberg_raised = False
+except hp.HomepkgError as e:
+    _conda_pkgs_codeberg_raised = "krohnkite" in str(e) and "--backend codeberg" in str(e)
+check("conda_pkgs names the codeberg backend for a codeberg-only tool",
+      _conda_pkgs_codeberg_raised)
 
 # A conda-less tool named explicitly must fail rather than look installed.
 check("install of a github-only tool on the mamba backend errors",
@@ -276,9 +382,10 @@ check("bundle with no tools targets every registered package",
 check("bundle with no tools also collects the conda-less tools",
       all(t in _bundle_all.stderr
           for t in hp.TOOLS if not hp.TOOLS[t]["conda"]))
-check("bundle with no tools reports both payloads",
+check("bundle with no tools reports every payload",
       "would solve closure" in _bundle_all.stderr
-      and "github release assets" in _bundle_all.stderr)
+      and "github release assets" in _bundle_all.stderr
+      and "codeberg release assets" in _bundle_all.stderr)
 # Naming a conda-less tool works the same way: it lands in the bundle's
 # github payload instead of erroring.
 _bundle_named = _run("bundle", "-o",
@@ -288,11 +395,22 @@ check("bundle covers an explicitly named conda-less tool",
       _bundle_named.returncode == 0
       and "carapace" in _bundle_named.stderr
       and "jq" in _bundle_named.stderr)
+# ...and a codeberg-only tool lands in the codeberg payload.
+_bundle_krohnkite = _run("bundle", "-o",
+                         os.path.join(tempfile.gettempdir(), "hp-bundle-krohnkite.tgz"),
+                         "--dry-run", "krohnkite")
+check("bundle covers an explicitly named codeberg-only tool",
+      _bundle_krohnkite.returncode == 0
+      and "codeberg release assets" in _bundle_krohnkite.stderr
+      and "krohnkite" in _bundle_krohnkite.stderr)
 # ...but no-args "all" is mamba-only: not every tool has a github release asset
 # (typescript is npm-only), so the github backend must require explicit names.
 check("bundle --backend github rejects no-args all-tools",
       _run("--backend", "github", "bundle", "-o",
            os.path.join(tempfile.gettempdir(), "hp-gh-test.tgz")).returncode != 0)
+check("bundle --backend codeberg rejects no-args all-tools",
+      _run("--backend", "codeberg", "bundle", "-o",
+           os.path.join(tempfile.gettempdir(), "hp-cb-test.tgz")).returncode != 0)
 
 # --- micromamba backend: env paths and symlink management --------------------
 
@@ -510,7 +628,8 @@ with tempfile.TemporaryDirectory() as td:
 # The tool split is what makes one bundle enough: everything with a
 # conda-forge package goes through the closure, the rest through releases.
 check("every registered tool has a source for the combined bundle",
-      all(hp.TOOLS[t].get("conda") or hp.TOOLS[t].get("github") for t in hp.TOOLS))
+      all(hp.TOOLS[t].get("conda") or hp.TOOLS[t].get("github")
+          or hp.TOOLS[t].get("codeberg") for t in hp.TOOLS))
 
 # A github bundle round-trips fully offline: build the tarball by hand, then
 # install-bundle unpacks the asset and places the binary -- no network.
@@ -528,6 +647,61 @@ with tempfile.TemporaryDirectory() as td:
     hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
     check("install-bundle (github) unpacks the asset offline",
           os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+# A codeberg bundle round-trips the same way: no unpacking, just the raw
+# .kwinscript asset copied into place under share/homepkg/assets/<tool>/.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    asset = "krohnkite-0.9.9.3_beta.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", asset), "wb") as f:
+        f.write(b"// kwin script")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "linux/x86_64",
+                   "tools": [{"tool": "krohnkite", "asset": asset}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    installed = os.path.join(hp.codeberg_asset_dir("krohnkite", prefix), asset)
+    check("install-bundle (codeberg) saves the raw asset offline",
+          os.path.exists(installed) and open(installed, "rb").read() == b"// kwin script")
+
+# A combined bundle's codeberg section is replayed alongside the others --
+# install_bundle has to find it under manifest["codeberg"], not top-level.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    asset = "krohnkite-0.9.9.3_beta.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", asset), "wb") as f:
+        f.write(b"// kwin script")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "combined", "platform": "linux/x86_64",
+                   "codeberg": {"tools": [{"tool": "krohnkite", "asset": asset}]}}, f)
+    bundle = os.path.join(td, "combined-codeberg.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("install-bundle (combined) replays the codeberg section",
+          os.path.exists(os.path.join(hp.codeberg_asset_dir("krohnkite", prefix), asset)))
+
+# A codeberg asset missing from the bundle is reported, not silently skipped
+# -- same contract as the equivalent github-side test above.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "linux/x86_64",
+                   "tools": [{"tool": "krohnkite", "asset": "missing.kwinscript"}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    _err = None
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "prefix"), ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    check("install-bundle (codeberg) reports a missing asset",
+          _err is not None and "krohnkite" in str(_err))
 
 with tempfile.TemporaryDirectory() as td:
     src = os.path.join(td, "src")

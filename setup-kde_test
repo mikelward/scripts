@@ -56,12 +56,52 @@ isolate_script() {
     KDE_SCRIPT="$TEST_TMPDIR/isolated/setup-kde"
 }
 
-# Mocks that let the full install path run: git "clones" by creating the
+# Mocks for the release-first install path (the default now): homepkg is
+# looked up beside setup-kde ($SCRIPT_DIR/homepkg), so it must live in the
+# isolated script dir, not on PATH -- isolate_script sets that up. The mock
+# simulates a successful 'homepkg --backend codeberg install krohnkite' by
+# dropping a fake .kwinscript where homepkg's codeberg backend would put it.
+# git/npm/go-task/tsc are canaries: the release path must never reach the
+# source-build fallback.
+add_release_mocks() {
+    isolate_script
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+if test "\$1" = "--backend" && test "\$2" = codeberg \\
+        && test "\$3" = install && test "\$4" = krohnkite; then
+    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
+    mkdir -p "\$dir"
+    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+fi
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    cat > "$TEST_TMPDIR/bin/kpackagetool6" <<MOCK
+#!/bin/sh
+echo "kpackagetool6 \$*" >> "$CALLS"
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kpackagetool6"
+    for cmd in git npm go-task tsc; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+echo "$cmd \$*" >> "$CALLS"
+exit 1
+MOCK
+        chmod +x "$TEST_TMPDIR/bin/$cmd"
+    done
+}
+
+# Mocks for the source-build fallback path: no homepkg beside the isolated
+# script (isolate_script alone leaves it absent), so install_krohnkite skips
+# straight to install_krohnkite_from_source. git "clones" by creating the
 # target directory with a fake prebuilt .kwinscript (the expected shape of
 # the fork), kpackagetool6 just records. npm is mocked purely as a canary:
 # nothing in the install may ever reach it. This exercises
-# install_krohnkite's cd into the checkout.
+# install_krohnkite_from_source's cd into the checkout.
 add_install_mocks() {
+    isolate_script
     cat > "$TEST_TMPDIR/bin/git" <<MOCK
 #!/bin/sh
 echo "git \$*" >> "$CALLS"
@@ -251,9 +291,151 @@ MOCK
     assert_output_contains "KDE configured successfully"
 }
 
-# --- installation (mocked git/kpackagetool6; npm is a never-called canary) ---
+# --- installation: release path (the default; homepkg's codeberg backend) ---
 
-# The clone must come from my Codeberg fork's mikel branch.
+# The common case: homepkg fetches the prebuilt release and setup-kde
+# installs it directly -- no clone, no build tool ever runs.
+test_release_install_via_homepkg() {
+    add_release_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "homepkg --backend codeberg install krohnkite" &&
+    assert_called "kpackagetool6 -t KWin/Script" &&
+    assert_not_called "git" &&
+    assert_not_called "npm" &&
+    assert_not_called "go-task" &&
+    assert_not_called "tsc "
+}
+
+# A pre-staged bundle (homepkg-krohnkite.tgz beside the script) is tried
+# before the online fetch; when it provides the release, the online fetch
+# never runs.
+test_release_bundle_used_before_online_fetch() {
+    add_release_mocks
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+if test "\$1" = install-bundle; then
+    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
+    mkdir -p "\$dir"
+    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+    exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
+    run_kde
+    assert_status 0 &&
+    assert_called "homepkg install-bundle $TEST_TMPDIR/isolated/homepkg-krohnkite.tgz" &&
+    assert_called "kpackagetool6 -t KWin/Script" &&
+    assert_not_called "--backend codeberg install krohnkite"
+}
+
+# A bundle that doesn't provide the release (partial/stale) falls through to
+# the online fetch rather than treating the bundle as the final answer.
+test_release_bundle_falls_through_to_online_fetch() {
+    add_release_mocks
+    touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
+    # add_release_mocks' homepkg mock already fails install-bundle (falls
+    # into its final "exit 0" only for the codeberg install case) -- rewrite
+    # it to fail install-bundle explicitly and still succeed the online path.
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+if test "\$1" = install-bundle; then
+    exit 1
+fi
+if test "\$1" = "--backend" && test "\$2" = codeberg \\
+        && test "\$3" = install && test "\$4" = krohnkite; then
+    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
+    mkdir -p "\$dir"
+    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+fi
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    run_kde
+    assert_status 0 &&
+    assert_called "homepkg install-bundle $TEST_TMPDIR/isolated/homepkg-krohnkite.tgz" &&
+    assert_called "homepkg --backend codeberg install krohnkite" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
+# HOMEPKG_KROHNKITE_BUNDLE overrides the default bundle search locations.
+test_homepkg_krohnkite_bundle_env_override() {
+    add_release_mocks
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+if test "\$1" = install-bundle; then
+    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
+    mkdir -p "\$dir"
+    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+    exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    touch "$TEST_TMPDIR/custom-bundle.tgz"
+    export HOMEPKG_KROHNKITE_BUNDLE="$TEST_TMPDIR/custom-bundle.tgz"
+    run_kde
+    unset HOMEPKG_KROHNKITE_BUNDLE
+    assert_status 0 &&
+    assert_called "homepkg install-bundle $TEST_TMPDIR/custom-bundle.tgz"
+}
+
+# git not being installed is a warning, not a hard error, when the release
+# path doesn't need it at all. Skipped when the host itself has git on the
+# test PATH -- the script would legitimately find the real one and not warn.
+test_missing_git_warns_but_release_path_still_installs() {
+    if PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+            command -v git >/dev/null 2>&1; then
+        echo "  skip: git present on test PATH"
+        return 0
+    fi
+    add_release_mocks
+    rm "$TEST_TMPDIR/bin/git"
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "git not found" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
+# --- installation: source-build fallback (release unavailable) ---
+#
+# Mocked git/kpackagetool6; npm is a never-called canary.
+
+# When homepkg itself isn't present, install_krohnkite warns and falls
+# straight to install_krohnkite_from_source -- which, by default, clones my
+# Codeberg fork's mikel branch.
+test_homepkg_missing_falls_back_to_source_build() {
+    add_install_mocks
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "homepkg not found at" &&
+    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
+# When homepkg is present but can't fetch the release (offline, no
+# matching asset, ...), the same fallback runs.
+test_homepkg_release_fetch_fails_falls_back_to_source_build() {
+    add_install_mocks
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "could not fetch the Krohnkite release via homepkg" &&
+    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
+# The fallback's clone must come from my Codeberg fork's mikel branch.
 test_clones_fork_by_default() {
     add_install_mocks
     run_kde
@@ -261,8 +443,8 @@ test_clones_fork_by_default() {
     assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git"
 }
 
-# KROHNKITE_REPO and KROHNKITE_BRANCH override the clone source (any git
-# URL or local path) and branch.
+# KROHNKITE_REPO and KROHNKITE_BRANCH override the fallback's clone source
+# (any git URL or local path) and branch.
 test_krohnkite_repo_env_overrides_clone_source() {
     add_install_mocks
     export KROHNKITE_REPO="https://example.test/me/krohnkite.git"
@@ -341,6 +523,23 @@ test_source_build_without_tsc_errors() {
     run_kde
     assert_status 1 &&
     assert_output_contains "tsc is required to build Krohnkite without remote npm"
+}
+
+# Without git at all, the fallback fails with a clear error rather than a
+# raw "command not found" -- but only once the fallback is actually reached
+# (git isn't required up front; see test_missing_git_warns_but_release_path_still_installs).
+# Skipped when the host itself has git on the test PATH, same as above.
+test_missing_git_fallback_errors_clearly() {
+    if PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+            command -v git >/dev/null 2>&1; then
+        echo "  skip: git present on test PATH"
+        return 0
+    fi
+    add_install_mocks
+    rm "$TEST_TMPDIR/bin/git"
+    run_kde
+    assert_status 1 &&
+    assert_output_contains "git is required to build Krohnkite from source"
 }
 
 # --- configuration (with --no-install so nothing is cloned/built) ---
@@ -436,19 +635,35 @@ run_test "unknown option errors" test_unknown_option
 run_test "--no-sudo is accepted as a no-op" test_no_sudo_accepted_noop
 run_test "failing sudo does not affect user-scoped KDE setup" \
     test_failing_sudo_is_not_used
-run_test "clones my krohnkite fork by default" test_clones_fork_by_default
-run_test "KROHNKITE_REPO overrides the clone source" \
+run_test "release install via homepkg's codeberg backend" \
+    test_release_install_via_homepkg
+run_test "pre-staged release bundle is tried before the online fetch" \
+    test_release_bundle_used_before_online_fetch
+run_test "a release bundle that doesn't provide it falls through online" \
+    test_release_bundle_falls_through_to_online_fetch
+run_test "HOMEPKG_KROHNKITE_BUNDLE overrides the bundle search" \
+    test_homepkg_krohnkite_bundle_env_override
+run_test "missing git warns but doesn't block the release path" \
+    test_missing_git_warns_but_release_path_still_installs
+run_test "homepkg missing falls back to the source build" \
+    test_homepkg_missing_falls_back_to_source_build
+run_test "release fetch failure falls back to the source build" \
+    test_homepkg_release_fetch_fails_falls_back_to_source_build
+run_test "clones my krohnkite fork by default (fallback)" test_clones_fork_by_default
+run_test "KROHNKITE_REPO overrides the clone source (fallback)" \
     test_krohnkite_repo_env_overrides_clone_source
-run_test "repo override alone doesn't force the mikel branch" \
+run_test "repo override alone doesn't force the mikel branch (fallback)" \
     test_repo_override_does_not_force_mikel_branch
-run_test "prebuilt package installs without npm" \
+run_test "prebuilt package installs without npm (fallback)" \
     test_prebuilt_package_installs_without_npm
-run_test "source build uses local tsc, never remote npm" \
+run_test "source build uses local tsc, never remote npm (fallback)" \
     test_source_build_uses_local_tsc_not_remote_npm
-run_test "missing tsc warns up front but prebuilt still installs" \
+run_test "missing tsc warns up front but prebuilt still installs (fallback)" \
     test_missing_tsc_warns_but_prebuilt_still_installs
-run_test "source build without tsc errors instead of remote npm" \
+run_test "source build without tsc errors instead of remote npm (fallback)" \
     test_source_build_without_tsc_errors
+run_test "missing git errors clearly once the fallback is reached" \
+    test_missing_git_fallback_errors_clearly
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
 run_test "configures nine desktops" test_configures_nine_desktops
