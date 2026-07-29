@@ -573,6 +573,20 @@ test_configures_nine_desktops() {
 # escaped ("Meta+\,") -- the backslash reaches the file as "\\", which is the
 # escape the list parser needs. Meta+\ (Grow Width) needs two backslashes for
 # the same round trip.
+# setup configures the layout at the system level, but Plasma reapplies its
+# own from kxkbrc at every login, so the session copy has to be written too or
+# the Dvorak setup silently reverts. Options/ResetOldOptions are what keep
+# Caps Lock as Compose across that reapply.
+test_configures_keyboard_layout() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kxkbrc --group Layout --key Use true" &&
+    assert_called "kwriteconfig6 --file kxkbrc --group Layout --key LayoutList us" &&
+    assert_called "kwriteconfig6 --file kxkbrc --group Layout --key VariantList dvorak" &&
+    assert_called "kwriteconfig6 --file kxkbrc --group Layout --key Options compose:caps" &&
+    assert_called "kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true"
+}
+
 test_comma_and_backslash_shortcuts_are_escaped() {
     run_kde --no-install
     assert_status 0 &&
@@ -798,6 +812,8 @@ run_test "missing git errors clearly once the fallback is reached" \
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
 run_test "configures nine desktops" test_configures_nine_desktops
+run_test "configures the session keyboard layout in kxkbrc" \
+    test_configures_keyboard_layout
 run_test "comma and backslash shortcuts are escaped for kglobalaccel" \
     test_comma_and_backslash_shortcuts_are_escaped
 run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
