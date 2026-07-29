@@ -366,6 +366,35 @@ MOCK
     assert_not_called "git clone"
 }
 
+# A staged bundle must still be tried when the online fetch fails, even if
+# something's already cached from an earlier run -- a stale cache sitting
+# there must not short-circuit the bundle check and reinstall the old
+# release when a fresher one is staged and ready.
+test_staged_bundle_tried_even_with_a_stale_cache_present() {
+    add_release_mocks
+    cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
+#!/bin/sh
+echo "homepkg \$*" >> "$CALLS"
+if test "\$1" = install-bundle; then
+    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
+    rm -f "\$dir"/*.kwinscript
+    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+    exit 0
+fi
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
+    mkdir -p "$TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite"
+    touch "$TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.2.kwinscript"
+    run_kde
+    assert_status 0 &&
+    assert_called "homepkg --backend codeberg install krohnkite" &&
+    assert_called "homepkg install-bundle $TEST_TMPDIR/isolated/homepkg-krohnkite.tgz" &&
+    assert_called "kpackagetool6 -t KWin/Script -u $TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.3_beta.kwinscript" &&
+    assert_not_called "krohnkite-0.9.9.2.kwinscript"
+}
+
 # HOMEPKG_KROHNKITE_BUNDLE overrides the default bundle search locations.
 test_homepkg_krohnkite_bundle_env_override() {
     add_release_mocks
@@ -647,6 +676,8 @@ run_test "release bundle used when the online fetch fails" \
     test_release_bundle_used_when_online_fetch_fails
 run_test "a stale cached release is used when the refresh fails entirely" \
     test_stale_cached_release_used_when_refresh_fails
+run_test "a staged bundle is tried even with a stale cache present" \
+    test_staged_bundle_tried_even_with_a_stale_cache_present
 run_test "HOMEPKG_KROHNKITE_BUNDLE overrides the bundle search" \
     test_homepkg_krohnkite_bundle_env_override
 run_test "missing git warns but doesn't block the release path" \

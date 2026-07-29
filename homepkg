@@ -509,6 +509,40 @@ def codeberg_asset_dir(tool, prefix):
     return os.path.join(prefix, "share", "homepkg", "assets", tool)
 
 
+def _replace_codeberg_asset(dest_dir, name, populate):
+    """Atomically replace dest_dir's cached asset with `name`, written by
+    calling populate(tmp_path). Used by both install_codeberg (populate
+    downloads) and _install_bundle_codeberg (populate copies from the
+    bundle), so a failed refresh -- from either source -- can't destroy a
+    previously good cache.
+
+    populate() writes to a temp file inside dest_dir first; only the final
+    os.replace() (atomic on a single filesystem, and dest_dir/tmp_path always
+    share one) touches the name a consumer actually looks for. If populate()
+    raises, dest_dir's existing contents are exactly as they were before this
+    call. Only once the new file is confirmed in place are older-version
+    files in dest_dir cleared out, so old and new never coexist.
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    tmp_path = os.path.join(dest_dir, f".{name}.part")
+    final_path = os.path.join(dest_dir, name)
+    try:
+        populate(tmp_path)
+        os.replace(tmp_path, final_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+    for existing in os.listdir(dest_dir):
+        if existing == name:
+            continue
+        p = os.path.join(dest_dir, existing)
+        if os.path.isdir(p) and not os.path.islink(p):
+            shutil.rmtree(p)
+        else:
+            os.remove(p)
+
+
 def install_codeberg(tool, meta, prefix, plat, dry_run):
     repo = meta["codeberg"]
     tag, assets = codeberg_release_assets(repo, meta.get("codeberg_tag"))
@@ -516,25 +550,18 @@ def install_codeberg(tool, meta, prefix, plat, dry_run):
     if not picked:
         raise HomepkgError(f"{tool}: no .kwinscript asset in {repo} {tag}")
     name, url = picked
+    # name comes straight from the Codeberg API response, not from our own
+    # registry -- validate it the same way a bundle-manifest asset name is,
+    # so a compromised/malicious release can't smuggle a ".."-traversal name
+    # (still ending in .kwinscript, so codeberg_pick_kwinscript would accept
+    # it) into a filesystem path.
+    _require_basename(name, "asset name")
     info(f"{tool}: codeberg {repo} {tag} -> {name}")
     if dry_run:
         info(f"  would install from {url}")
         return
     dest_dir = codeberg_asset_dir(tool, prefix)
-    # Download to a temp location first, and only then replace dest_dir: a
-    # consumer (setup-kde) refreshes by calling this on every run and falls
-    # back to whatever's already cached here when the fetch fails (offline).
-    # Clearing dest_dir before the download would destroy that fallback the
-    # moment the network drops mid-refresh, not just when it's absent
-    # entirely. A version bump changes the filename, so dest_dir is still
-    # cleared on success -- old and new must not coexist, since a consumer
-    # globs this directory for "the" .kwinscript.
-    with tempfile.TemporaryDirectory() as td:
-        downloaded = download(url, os.path.join(td, name))
-        if os.path.isdir(dest_dir):
-            shutil.rmtree(dest_dir)
-        os.makedirs(dest_dir, exist_ok=True)
-        shutil.move(downloaded, os.path.join(dest_dir, name))
+    _replace_codeberg_asset(dest_dir, name, lambda tmp: download(url, tmp))
     info(f"  saved {name} to {dest_dir}")
 
 
@@ -839,6 +866,10 @@ def _stage_codeberg(tools, td, skip_unavailable=False):
             warn(msg + "; leaving it out of the bundle")
             continue
         name, url = picked
+        # Same reasoning as install_codeberg: validate a release-supplied
+        # name before it becomes a filesystem path, here inside the bundle's
+        # staging directory.
+        _require_basename(name, "asset name")
         download(url, os.path.join(adir, name))
         entries.append({"tool": t, "asset": name})
     return entries
@@ -1021,10 +1052,8 @@ def _install_bundle_codeberg(td, manifest, prefix, dry_run):
         if dry_run:
             continue
         dest_dir = codeberg_asset_dir(e["tool"], prefix)
-        if os.path.isdir(dest_dir):
-            shutil.rmtree(dest_dir)
-        os.makedirs(dest_dir, exist_ok=True)
-        shutil.copy2(asset, os.path.join(dest_dir, e["asset"]))
+        _replace_codeberg_asset(dest_dir, e["asset"],
+                                lambda tmp, src=asset: shutil.copy2(src, tmp))
     return failed
 
 

@@ -208,8 +208,83 @@ try:
         _err = e
     check("install_codeberg errors when the release has no .kwinscript asset",
           _err is not None and "krohnkite" in str(_err))
+
+    # A release asset name is attacker-influenced (whoever can publish to the
+    # Codeberg repo), not our own registry -- a traversal name that still
+    # ends in .kwinscript must be rejected before it becomes a path, the same
+    # way a bundle-manifest asset name already is.
+    hp.codeberg_release_assets = lambda repo, tag=None: (
+        "9.9.9", [("../../evil.kwinscript", "https://example.invalid/evil")])
+    with tempfile.TemporaryDirectory() as td:
+        prefix = os.path.join(td, "prefix")
+        _err = None
+        try:
+            hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"], prefix,
+                                ("linux", "x86_64"), False)
+        except hp.HomepkgError as e:
+            _err = e
+        check("install_codeberg rejects a traversal asset name from the release",
+              _err is not None)
+        check("...and writes nothing outside the prefix",
+              not os.path.exists(os.path.join(td, "evil.kwinscript")))
+
+    # _stage_codeberg (used when building a bundle) validates the same way.
+    with tempfile.TemporaryDirectory() as td:
+        _err = None
+        try:
+            hp._stage_codeberg(["krohnkite"], td)
+        except hp.HomepkgError as e:
+            _err = e
+        check("_stage_codeberg rejects a traversal asset name from the release",
+              _err is not None)
 finally:
     hp.codeberg_release_assets = _saved_cra
+
+# --- _replace_codeberg_asset: atomic swap ------------------------------------
+
+# The new asset must land under its final name and any older-version file
+# must be gone -- but only after populate() (the download/copy) succeeds.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    with open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "wb") as f:
+        f.write(b"old")
+    hp._replace_codeberg_asset(
+        dest_dir, "krohnkite-0.9.9.3_beta.kwinscript",
+        lambda tmp: open(tmp, "wb").write(b"new"))
+    check("_replace_codeberg_asset writes the new asset under its final name",
+          open(os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript"), "rb").read()
+          == b"new")
+    check("_replace_codeberg_asset removes the older-version file",
+          not os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript")))
+    check("_replace_codeberg_asset leaves no stray temp file",
+          os.listdir(dest_dir) == ["krohnkite-0.9.9.3_beta.kwinscript"])
+
+# If populate() fails, the old asset must be untouched and no partial temp
+# file left behind -- the swap only happens after populate() succeeds.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    with open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "wb") as f:
+        f.write(b"old")
+
+    def _failing_populate(tmp):
+        with open(tmp, "wb") as f:
+            f.write(b"partial")
+        raise OSError("network unreachable")
+
+    _err = None
+    try:
+        hp._replace_codeberg_asset(
+            dest_dir, "krohnkite-0.9.9.3_beta.kwinscript", _failing_populate)
+    except OSError as e:
+        _err = e
+    check("_replace_codeberg_asset propagates a populate() failure", _err is not None)
+    check("...and leaves the old asset untouched",
+          open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "rb").read()
+          == b"old")
+    check("...and cleans up the partial temp file",
+          os.listdir(dest_dir) == ["krohnkite-0.9.9.2.kwinscript"])
 
 # --- github extraction -------------------------------------------------------
 
