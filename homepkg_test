@@ -10,11 +10,13 @@ locally built archives so the suite needs no network.
 
 import io
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 
 # Load the extensionless homepkg script as a module without running main().
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -258,7 +260,8 @@ with tempfile.TemporaryDirectory() as td:
     check("_replace_codeberg_asset removes the older-version file",
           not os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript")))
     check("_replace_codeberg_asset leaves no stray temp file",
-          os.listdir(dest_dir) == ["krohnkite-0.9.9.3_beta.kwinscript"])
+          sorted(os.listdir(dest_dir))
+          == sorted(["krohnkite-0.9.9.3_beta.kwinscript", hp._CODEBERG_ASSET_LOCK]))
 
 # If populate() fails, the old asset must be untouched and no partial temp
 # file left behind -- the swap only happens after populate() succeeds.
@@ -284,7 +287,50 @@ with tempfile.TemporaryDirectory() as td:
           open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "rb").read()
           == b"old")
     check("...and cleans up the partial temp file",
-          os.listdir(dest_dir) == ["krohnkite-0.9.9.2.kwinscript"])
+          sorted(os.listdir(dest_dir))
+          == sorted(["krohnkite-0.9.9.2.kwinscript", hp._CODEBERG_ASSET_LOCK]))
+
+
+def _concurrent_replace_worker(dest_dir, name, delay, q):
+    def populate(tmp):
+        with open(tmp, "wb") as f:
+            f.write(name.encode())
+        time.sleep(delay)  # widen the window so the two calls actually overlap
+    try:
+        hp._replace_codeberg_asset(dest_dir, name, populate)
+        q.put("ok")
+    except Exception as e:  # noqa: BLE001 -- reporting to the parent, not handling
+        q.put(f"error: {e}")
+
+
+# _replace_codeberg_asset locks per dest_dir: two overlapping installs of the
+# same tool must not race. Without the lock this reproduces as either both
+# final files vanishing (each call's cleanup deletes the other's just-placed
+# file) or a crash (one call's cleanup deletes the other's still-in-flight
+# temp file out from under it, an os.replace FileNotFoundError) -- so the
+# check covers both: neither worker may raise, AND exactly one final asset
+# must remain (the lock's serialization makes the later call supersede the
+# earlier one, same as two sequential refreshes would). Real subprocesses
+# (fork), so the OS flock is actually contended rather than a same-process
+# no-op.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    ctx = multiprocessing.get_context("fork")
+    q = ctx.Queue()
+    p1 = ctx.Process(target=_concurrent_replace_worker,
+                     args=(dest_dir, "krohnkite-a.kwinscript", 0.2, q))
+    p2 = ctx.Process(target=_concurrent_replace_worker,
+                     args=(dest_dir, "krohnkite-b.kwinscript", 0.05, q))
+    p1.start()
+    p2.start()
+    results = [q.get(timeout=10), q.get(timeout=10)]
+    p1.join(timeout=10)
+    p2.join(timeout=10)
+    check("neither concurrent _replace_codeberg_asset call raises",
+          results == ["ok", "ok"])
+    remaining = sorted(f for f in os.listdir(dest_dir) if f != hp._CODEBERG_ASSET_LOCK)
+    check("concurrent _replace_codeberg_asset calls don't both vanish",
+          remaining in (["krohnkite-a.kwinscript"], ["krohnkite-b.kwinscript"]))
 
 # --- github extraction -------------------------------------------------------
 

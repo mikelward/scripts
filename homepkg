@@ -509,6 +509,9 @@ def codeberg_asset_dir(tool, prefix):
     return os.path.join(prefix, "share", "homepkg", "assets", tool)
 
 
+_CODEBERG_ASSET_LOCK = ".lock"
+
+
 def _replace_codeberg_asset(dest_dir, name, populate):
     """Atomically replace dest_dir's cached asset with `name`, written by
     calling populate(tmp_path). Used by both install_codeberg (populate
@@ -522,25 +525,43 @@ def _replace_codeberg_asset(dest_dir, name, populate):
     raises, dest_dir's existing contents are exactly as they were before this
     call. Only once the new file is confirmed in place are older-version
     files in dest_dir cleared out, so old and new never coexist.
+
+    The whole populate/replace/cleanup sequence runs under a per-dest_dir
+    flock: two overlapping refreshes of the same tool (e.g. a manual
+    `homepkg install` racing setup-kde's own fetch) would otherwise each
+    list dest_dir mid-flight and delete the *other* one's just-placed final
+    file -- both report success, but the cache ends up empty. Serializing
+    means the second call only ever sees the first call's fully-finished
+    result. The lock file itself is never removed by the cleanup loop below;
+    deleting it while a process still holds it open would let a later opener
+    take a lock on a different, discarded inode and silently stop
+    contending for it.
     """
+    import fcntl  # POSIX-only, matching this file's Linux/macOS-only scope
     os.makedirs(dest_dir, exist_ok=True)
-    tmp_path = os.path.join(dest_dir, f".{name}.part")
-    final_path = os.path.join(dest_dir, name)
-    try:
-        populate(tmp_path)
-        os.replace(tmp_path, final_path)
-    except BaseException:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
-        raise
-    for existing in os.listdir(dest_dir):
-        if existing == name:
-            continue
-        p = os.path.join(dest_dir, existing)
-        if os.path.isdir(p) and not os.path.islink(p):
-            shutil.rmtree(p)
-        else:
-            os.remove(p)
+    lock_path = os.path.join(dest_dir, _CODEBERG_ASSET_LOCK)
+    with open(lock_path, "a+") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            tmp_path = os.path.join(dest_dir, f".{name}.part")
+            final_path = os.path.join(dest_dir, name)
+            try:
+                populate(tmp_path)
+                os.replace(tmp_path, final_path)
+            except BaseException:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                raise
+            for existing in os.listdir(dest_dir):
+                if existing in (name, _CODEBERG_ASSET_LOCK):
+                    continue
+                p = os.path.join(dest_dir, existing)
+                if os.path.isdir(p) and not os.path.islink(p):
+                    shutil.rmtree(p)
+                else:
+                    os.remove(p)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def install_codeberg(tool, meta, prefix, plat, dry_run):
