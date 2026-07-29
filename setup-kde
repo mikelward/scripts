@@ -479,33 +479,35 @@ unbind_app_shortcut() {
         --group services --group "$1" --key _launch none
 }
 
+# Collect the action IDs first, then unbind them -- never write from inside
+# the read loop. unbind_shortcut runs kwriteconfig6 against this same file, so
+# the old shape had the loop's open descriptor racing KConfig's rewrite of the
+# file underneath it. It happened to survive because KConfig replaces by
+# rename and the descriptor kept the original inode, but that's the write
+# strategy of a dependency, not something this script gets to rely on.
+#
+# The awk matches both the older "Krohnkite: Foo Bar=..." keys and the newer
+# "KrohnkiteFooBar=..." ones. Action IDs contain spaces, so the results are
+# iterated a line at a time rather than word-split.
 unbind_all_krohnkite_shortcuts() {
     config_file="${XDG_CONFIG_HOME:-$HOME/.config}/kglobalshortcutsrc"
     test -f "$config_file" || return 0
 
-    in_kwin=false
-    while IFS= read -r line; do
-        case "$line" in
-            "[kwin]")
-                in_kwin=true
-                ;;
-            "["*)
-                in_kwin=false
-                ;;
-            *)
-                if $in_kwin; then
-                    # Matches both the older "Krohnkite: Foo Bar=..." keys
-                    # and the newer "KrohnkiteFooBar=..." keys.
-                    case "$line" in
-                        "Krohnkite"*=*)
-                            action="${line%%=*}"
-                            unbind_shortcut "$action"
-                            ;;
-                    esac
-                fi
-                ;;
-        esac
-    done < "$config_file"
+    krohnkite_actions=$(awk '
+        /^\[kwin\]$/ { in_kwin = 1; next }
+        /^\[/        { in_kwin = 0; next }
+        in_kwin && /^Krohnkite/ && /=/ { sub(/=.*/, ""); print }
+    ' "$config_file") || {
+        warn "could not read kglobalshortcutsrc; leaving stale Krohnkite shortcuts bound"
+        return 0
+    }
+
+    while IFS= read -r action; do
+        test -n "$action" || continue
+        unbind_shortcut "$action"
+    done <<EOF
+$krohnkite_actions
+EOF
 }
 
 # --- Application launch shortcuts ---

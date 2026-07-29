@@ -645,6 +645,59 @@ test_does_not_unbind_walk_through_current_application() {
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Edit Tiles none,none,Edit Tiles"
 }
 
+# Seed a config with several Krohnkite entries and make kwriteconfig6 rewrite
+# it IN PLACE on the first Krohnkite unbind -- truncate-and-write on the same
+# inode, which is the KConfig behavior the old code happened not to hit.
+#
+# That is what makes this a regression test rather than a characterization
+# one. The old code wrote from inside "while read < $config_file", so the
+# first unbind emptied the file under the loop's own descriptor and every
+# later entry was lost: 1 of 3 unbound. Collecting the IDs in one awk pass
+# first means the file is closed before anything writes, so all 3 are.
+add_rewriting_kwriteconfig6() {
+    cat > "$TEST_TMPDIR/bin/kwriteconfig6" <<MOCK
+#!/bin/sh
+printf '%s\n' "kwriteconfig6 \$*" >> "$CALLS"
+config="$TEST_TMPDIR/home/.config/kglobalshortcutsrc"
+case "\$*" in
+    *"--key Krohnkite"*)
+        if test -f "\$config" && ! test -f "$TEST_TMPDIR/rewritten"; then
+            : > "\$config"
+            touch "$TEST_TMPDIR/rewritten"
+        fi
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kwriteconfig6"
+}
+
+test_krohnkite_sweep_survives_config_rewrite() {
+    config_dir="$TEST_TMPDIR/home/.config"
+    mkdir -p "$config_dir"
+    cat > "$config_dir/kglobalshortcutsrc" <<'CONF'
+[kwin]
+Krohnkite: Grow Width=Meta+\\\\,none,Krohnkite: Grow Width
+KrohnkiteShrinkWidth=Meta+/,none,Krohnkite: Shrink Width
+KrohnkiteSetMaster=Meta+Return,none,Krohnkite: Set master
+Window Close=Meta+Backspace,none,Window Close
+
+[plasmashell]
+KrohnkiteNotInKwin=Meta+Z,none,should not be touched
+CONF
+    add_rewriting_kwriteconfig6
+    run_kde --no-install
+    assert_status 0 &&
+    # All three [kwin] entries unbound despite the rewrite mid-sweep. The
+    # older "Krohnkite: ..." key also covers IDs containing spaces.
+    assert_called "--key Krohnkite: Grow Width none,none,Krohnkite: Grow Width" &&
+    assert_called "--key KrohnkiteShrinkWidth none,none,KrohnkiteShrinkWidth" &&
+    assert_called "--key KrohnkiteSetMaster none,none,KrohnkiteSetMaster" &&
+    # Scoping still holds: [plasmashell] keys and non-Krohnkite keys are left be.
+    assert_not_called "KrohnkiteNotInKwin" &&
+    assert_not_called "--key Window Close none,none"
+}
+
 # Meta+. is Plasma's Emoji Selector by default, and it holds it as a
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
 # Krohnkite's Next Layout needs the launch-shortcut form.
@@ -870,6 +923,8 @@ run_test "comma and backslash shortcuts are escaped for kglobalaccel" \
     test_comma_and_backslash_shortcuts_are_escaped
 run_test "leaves Alt+\` app-window cycling alone" \
     test_does_not_unbind_walk_through_current_application
+run_test "Krohnkite sweep survives the config being rewritten mid-sweep" \
+    test_krohnkite_sweep_survives_config_rewrite
 run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
     test_unbinds_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \
