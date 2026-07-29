@@ -317,7 +317,7 @@ install_krohnkite() {
             warn "could not fetch the Krohnkite release via homepkg (offline? stage a bundle with 'homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz krohnkite'); falling back to building from source"
         fi
     else
-        warn "homepkg not found at $homepkg; falling back to building Krohnkite from source"
+        warn "homepkg not found beside this script; falling back to building Krohnkite from source"
     fi
 
     if test -n "$kwinscript"; then
@@ -527,7 +527,7 @@ add_app_shortcut() {
         if test -x "$SCRIPT_DIR/$name"; then
             command="$SCRIPT_DIR/$name"
         else
-            warn "$name not found on PATH or in $SCRIPT_DIR; skipping its launch shortcut"
+            warn "$name not found on PATH or beside this script; skipping its launch shortcut"
             return 0
         fi
     fi

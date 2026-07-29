@@ -1080,7 +1080,7 @@ install_extras() {
 install_home_tools() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
-        warn "homepkg not found at $homepkg; skipping home-prefix tool install"
+        warn "homepkg not found in the scripts repo; skipping home-prefix tool install"
         return 0
     fi
     # fnm (Node version manager) is a convenience tool -- installed regardless
@@ -1229,7 +1229,7 @@ missing_shell_tools() {
 install_shell_tools() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
-        warn "homepkg not found at $homepkg; skipping atuin and carapace"
+        warn "homepkg not found in the scripts repo; skipping atuin and carapace"
         return 0
     fi
     shell_tools="$(missing_shell_tools)"

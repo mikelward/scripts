@@ -229,6 +229,17 @@ assert_not_called() {
     fi
 }
 
+assert_output_lacks() {
+    case "$output" in
+        *"$1"*)
+            printf "%s\n" "  FAIL: output unexpectedly contains '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
 assert_file_exists() {
     if ! test -f "$1"; then
         echo "  FAIL: expected file '$1' to exist"
@@ -454,7 +465,7 @@ test_homepkg_missing_falls_back_to_source_build() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_output_contains "homepkg not found at" &&
+    assert_output_contains "homepkg not found beside this script" &&
     assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
@@ -832,7 +843,12 @@ test_missing_launcher_skipped_not_fatal() {
     # browser2, terminal, terminal_on_workstation, music left missing.
     run_kde --no-install
     assert_status 0 &&
-    assert_output_contains "browser2 not found on PATH" &&
+    # The whole warning, not just its prefix: the earlier version appended the
+    # absolute $SCRIPT_DIR, so a prefix match couldn't tell the two apart. The
+    # script directory is under the sandbox HOME here, standing in for the real
+    # home directory the old message leaked.
+    assert_output_contains "browser2 not found on PATH or beside this script; skipping its launch shortcut" &&
+    assert_output_lacks "$TEST_TMPDIR/isolated" &&
     assert_output_contains "KDE configured successfully" &&
     assert_file_not_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser2.desktop" &&
     assert_file_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"

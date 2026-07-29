@@ -200,6 +200,35 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$macos_tmpdir"
 }
 
+# Run the two "homepkg is missing" warning paths with SCRIPTS_DIR pointed at a
+# home-shaped path that doesn't exist. Both functions bail right after warning,
+# so this exercises exactly the messages under test -- and the path is what the
+# assertions check for the absence of.
+run_missing_homepkg_warnings() {
+    homepkg_tmpdir="$(mktemp -d)"
+    missing_scripts_dir="$homepkg_tmpdir/home/testuser/scripts"
+
+    set +e
+    output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
+$(extract_functions "info warn install_home_tools install_shell_tools")
+install_home_tools
+install_shell_tools" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$homepkg_tmpdir"
+}
+
+assert_output_lacks() {
+    case "$output" in
+        *"$1"*)
+            echo "  FAIL: output unexpectedly contains '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
 assert_calls_contain() {
     case "$calls" in
         *"$1"*) ;;
@@ -551,6 +580,21 @@ test_no_unguarded_brew_install_remains() {
     test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0
 }
 
+# AGENTS.md applies the Privacy rule to warnings too, and homepkg's absolute
+# path carries the user's home directory for no diagnostic gain -- there is
+# only one homepkg, and it lives in the scripts repo. Run both warning paths
+# rather than grepping: a source check stays green if the sanitized string
+# becomes unreachable, or if some other path-bearing expression is emitted
+# alongside it.
+test_missing_homepkg_warnings_name_no_absolute_path() {
+    run_missing_homepkg_warnings
+    assert_status 0 &&
+    assert_output_contains "homepkg not found in the scripts repo; skipping home-prefix tool install" &&
+    assert_output_contains "homepkg not found in the scripts repo; skipping atuin and carapace" &&
+    assert_output_lacks "$missing_scripts_dir" &&
+    assert_output_lacks "/home/testuser"
+}
+
 # atuin and carapace are in no distro repo and have no conda-forge feedstock,
 # so they come from their GitHub releases via homepkg's github backend -- one
 # rootless path that serves the privileged, --no-root and macOS runs alike.
@@ -729,7 +773,7 @@ test_no_root_accepted_and_documented() {
 # The homepkg tool install degrades: a missing homepkg or a failed install
 # warns and continues rather than aborting the bootstrap.
 test_home_tools_install_degrades() {
-    assert_source_contains "homepkg not found at" &&
+    assert_source_contains "homepkg not found in the scripts repo" &&
     assert_source_contains "some CLI tools could not be installed via homepkg"
 }
 
@@ -962,6 +1006,8 @@ run_test "macOS without Homebrew skips the arm and continues" \
     test_macos_without_homebrew_skips_the_arm
 run_test "no unguarded brew install remains" \
     test_no_unguarded_brew_install_remains
+run_test "missing-homepkg warnings name no absolute path" \
+    test_missing_homepkg_warnings_name_no_absolute_path
 run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
 run_test "the shell tools install from a bundle on an offline host" \
