@@ -112,6 +112,72 @@ sudo_or_warn apt-get update" 2>&1)"
     rm -rf "$sudo_tmpdir"
 }
 
+# Print the named top-level functions from setup, so a test can run one in
+# isolation. The full bootstrap can't run in CI, but an individual function
+# can -- given mocks for what it shells out to and stubs for the helpers it
+# calls. Generalizes what run_sudo_helper does by hand above.
+extract_functions() {
+    awk -v names="$1" '
+        BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+        /^[a-z_]+\(\) \{$/ { fname = $0; sub(/\(\) \{$/, "", fname); copying = want[fname] }
+        copying { print }
+        /^\}$/ { copying = 0 }
+    ' "$SETUP"
+}
+
+# Run set_default_terminal for one OS against mocked KDE/xdg tools.
+# terminal_mode=fail makes kwriteconfig6 and xdg-mime exit non-zero, so the
+# tests can check that a failure is reported rather than swallowed -- and that
+# the bootstrap keeps going, which is what the trailing marker proves.
+run_terminal_helper() {
+    terminal_os="$1"
+    terminal_mode="${2:-ok}"
+    terminal_tmpdir="$(mktemp -d)"
+    terminal_calls="$terminal_tmpdir/calls"
+
+    for cmd in kitty update-alternatives; do
+        cat > "$terminal_tmpdir/$cmd" <<MOCK
+#!/bin/sh
+printf '%s\n' "$cmd \$*" >> "$terminal_calls"
+exit 0
+MOCK
+    done
+    for cmd in kwriteconfig6 xdg-mime; do
+        cat > "$terminal_tmpdir/$cmd" <<MOCK
+#!/bin/sh
+printf '%s\n' "$cmd \$*" >> "$terminal_calls"
+test "$terminal_mode" = fail && exit 1
+exit 0
+MOCK
+    done
+    chmod +x "$terminal_tmpdir"/*
+
+    set +e
+    output="$(PATH="$terminal_tmpdir:$PATH" HOME="$terminal_tmpdir" \
+        sh -c "set -e
+OS=$terminal_os
+sudo_or_warn() { \"\$@\"; }
+$(extract_functions "info warn set_kde_default_terminal set_default_terminal")
+set_default_terminal
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$terminal_calls" 2>/dev/null)"
+    rm -rf "$terminal_tmpdir"
+}
+
+assert_calls_contain() {
+    case "$calls" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: calls do not contain '$1'"
+            echo "  calls: $calls"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
 run_test() {
     name="$1"
     func="$2"
@@ -359,6 +425,49 @@ test_zoxide_is_a_core_package() {
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
     assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide"'
+}
+
+# update-alternatives only covers x-terminal-emulator. What makes Plasma's own
+# "open terminal" actions use kitty is kdeglobals, which is per-user and needs
+# no sudo -- so it belongs on the Debian path too, not just Fedora's. Run the
+# Debian dispatch and check it reaches both: the alternative AND kdeglobals.
+test_kde_terminal_set_on_debian() {
+    run_terminal_helper debian
+    assert_status 0 &&
+    assert_calls_contain "update-alternatives --set x-terminal-emulator" &&
+    assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty" &&
+    assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop"
+}
+
+# The Fedora path keeps its xdg-mime registration and reaches the same shared
+# kdeglobals helper.
+test_kde_terminal_set_on_fedora() {
+    run_terminal_helper redhat
+    assert_status 0 &&
+    assert_calls_contain "xdg-mime default kitty.desktop x-scheme-handler/terminal" &&
+    assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty" &&
+    assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop"
+}
+
+# The kdeglobals writes used to end in "2>/dev/null || true", which hides a
+# real failure and is exactly what AGENTS.md's error-handling rule forbids.
+# Run with every KDE/xdg tool failing: each step must say what went wrong, and
+# the run must still get past set_default_terminal rather than aborting under
+# set -e.
+test_terminal_failures_are_reported_not_swallowed() {
+    run_terminal_helper debian fail
+    assert_status 0 &&
+    assert_output_contains "could not set kitty as the KDE terminal application" &&
+    assert_output_contains "could not set kitty as the KDE terminal service" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+test_fedora_terminal_failures_are_reported() {
+    run_terminal_helper redhat fail
+    assert_status 0 &&
+    assert_output_contains "could not register kitty as the terminal scheme handler" &&
+    assert_output_contains "could not set kitty as the KDE terminal application" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
 # atuin and carapace are in no distro repo and have no conda-forge feedstock,
@@ -756,6 +865,14 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
+run_test "kitty is set as the KDE terminal on Debian" \
+    test_kde_terminal_set_on_debian
+run_test "kitty is set as the KDE terminal on Fedora" \
+    test_kde_terminal_set_on_fedora
+run_test "Debian terminal failures are reported, not swallowed" \
+    test_terminal_failures_are_reported_not_swallowed
+run_test "Fedora terminal failures are reported, not swallowed" \
+    test_fedora_terminal_failures_are_reported
 run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
 run_test "the shell tools install from a bundle on an offline host" \
