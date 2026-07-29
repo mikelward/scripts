@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 
 # Load the extensionless homepkg script as a module without running main().
@@ -290,44 +291,103 @@ with tempfile.TemporaryDirectory() as td:
           sorted(os.listdir(dest_dir))
           == sorted(["krohnkite-0.9.9.2.kwinscript", hp._CODEBERG_ASSET_LOCK]))
 
+# A staged bundle, built at some earlier point, must not downgrade a cache
+# that was refreshed more recently online -- e.g. the cache holds 0.9.9.3
+# (fetched today) but a bootstrap bundle sitting around still carries
+# 0.9.9.2 (built weeks ago). populate() here simulates a bundle-copy that
+# preserves the source's (older) mtime, the same way shutil.copy2 does.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    newer_path = os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript")
+    with open(newer_path, "wb") as f:
+        f.write(b"newer, already cached")
 
-def _concurrent_replace_worker(dest_dir, name, delay, q):
+    def _populate_older(tmp):
+        with open(tmp, "wb") as f:
+            f.write(b"older, from a stale bundle")
+        os.utime(tmp, (time.time() - 3600, time.time() - 3600))  # 1h in the past
+
+    applied = hp._replace_codeberg_asset(
+        dest_dir, "krohnkite-0.9.9.2.kwinscript", _populate_older)
+    check("_replace_codeberg_asset reports the older asset was not applied",
+          applied is False)
+    check("_replace_codeberg_asset keeps the newer cached asset",
+          open(newer_path, "rb").read() == b"newer, already cached")
+    check("_replace_codeberg_asset doesn't leave the older asset behind either",
+          not os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript")))
+
+# ...but the online path is never blocked by this: download() always writes
+# with the current time, so a genuinely fresh fetch always wins even if it
+# happens to resolve to a name that would sort "older" as a plain string.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    with open(os.path.join(dest_dir, "krohnkite-0.9.9.9.kwinscript"), "wb") as f:
+        f.write(b"cached")
+    applied = hp._replace_codeberg_asset(
+        dest_dir, "krohnkite-0.9.9.10.kwinscript",
+        lambda tmp: open(tmp, "wb").write(b"freshly fetched"))
+    check("a freshly-populated asset (current mtime) always applies",
+          applied is True
+          and open(os.path.join(dest_dir, "krohnkite-0.9.9.10.kwinscript"), "rb").read()
+          == b"freshly fetched")
+
+
+def _concurrent_replace_worker(dest_dir, name, barrier, barrier_q, outcome_q):
     def populate(tmp):
         with open(tmp, "wb") as f:
             f.write(name.encode())
-        time.sleep(delay)  # widen the window so the two calls actually overlap
+        # If the lock holds, only one worker is ever inside populate() at a
+        # time, so its partner can never reach this barrier concurrently and
+        # wait() must time out (BrokenBarrierError). If the lock were
+        # missing, both workers would be here together and the barrier would
+        # release normally for both -- that's the race, detected
+        # deterministically instead of via sleep timing that CI scheduling
+        # could make miss the overlap entirely.
+        try:
+            barrier.wait(timeout=2)
+            barrier_q.put("released")
+        except threading.BrokenBarrierError:
+            barrier_q.put("timed-out")
     try:
         hp._replace_codeberg_asset(dest_dir, name, populate)
-        q.put("ok")
+        outcome_q.put("ok")
     except Exception as e:  # noqa: BLE001 -- reporting to the parent, not handling
-        q.put(f"error: {e}")
+        outcome_q.put(f"error: {e}")
 
 
 # _replace_codeberg_asset locks per dest_dir: two overlapping installs of the
-# same tool must not race. Without the lock this reproduces as either both
-# final files vanishing (each call's cleanup deletes the other's just-placed
-# file) or a crash (one call's cleanup deletes the other's still-in-flight
-# temp file out from under it, an os.replace FileNotFoundError) -- so the
-# check covers both: neither worker may raise, AND exactly one final asset
-# must remain (the lock's serialization makes the later call supersede the
-# earlier one, same as two sequential refreshes would). Real subprocesses
-# (fork), so the OS flock is actually contended rather than a same-process
-# no-op.
+# same tool must not run their populate() calls concurrently (proven above
+# via the barrier), and the overall operation must still behave correctly:
+# neither call may raise, and exactly one final asset must remain (the
+# lock's serialization makes the later call supersede the earlier one, same
+# as two sequential refreshes would -- without the lock this reproduces as
+# either both final files vanishing, each call's cleanup deleting the
+# other's just-placed file, or a crash from one call's cleanup deleting the
+# other's still-in-flight temp file). Real subprocesses (fork), so the OS
+# flock and the barrier are both actually contended, not same-process no-ops.
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     ctx = multiprocessing.get_context("fork")
-    q = ctx.Queue()
+    barrier = ctx.Barrier(2)
+    barrier_q = ctx.Queue()
+    outcome_q = ctx.Queue()
     p1 = ctx.Process(target=_concurrent_replace_worker,
-                     args=(dest_dir, "krohnkite-a.kwinscript", 0.2, q))
+                     args=(dest_dir, "krohnkite-a.kwinscript", barrier, barrier_q, outcome_q))
     p2 = ctx.Process(target=_concurrent_replace_worker,
-                     args=(dest_dir, "krohnkite-b.kwinscript", 0.05, q))
+                     args=(dest_dir, "krohnkite-b.kwinscript", barrier, barrier_q, outcome_q))
     p1.start()
     p2.start()
-    results = [q.get(timeout=10), q.get(timeout=10)]
+    barrier_signals = sorted([barrier_q.get(timeout=10), barrier_q.get(timeout=10)])
+    outcomes = sorted([outcome_q.get(timeout=10), outcome_q.get(timeout=10)])
     p1.join(timeout=10)
     p2.join(timeout=10)
+    check("the lock keeps populate() calls from ever overlapping "
+          "(neither finds a partner at the barrier)",
+          barrier_signals == ["timed-out", "timed-out"])
     check("neither concurrent _replace_codeberg_asset call raises",
-          results == ["ok", "ok"])
+          outcomes == ["ok", "ok"])
     remaining = sorted(f for f in os.listdir(dest_dir) if f != hp._CODEBERG_ASSET_LOCK)
     check("concurrent _replace_codeberg_asset calls don't both vanish",
           remaining in (["krohnkite-a.kwinscript"], ["krohnkite-b.kwinscript"]))

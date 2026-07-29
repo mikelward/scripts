@@ -536,6 +536,16 @@ def _replace_codeberg_asset(dest_dir, name, populate):
     deleting it while a process still holds it open would let a later opener
     take a lock on a different, discarded inode and silently stop
     contending for it.
+
+    If dest_dir already holds an asset newer (by mtime) than the one
+    populate() just produced, the existing asset is kept and this returns
+    False instead of replacing it -- a staged bundle, built at some earlier
+    point, must not downgrade a cache that was refreshed more recently
+    online. download() always writes with the current time, so the online
+    path never loses this comparison; a bundle's asset mtime survives from
+    whenever the bundle was built (preserved through tarfile extraction and
+    shutil.copy2), so it can correctly lose to a fresher cache. Returns True
+    if the new asset was applied.
     """
     import fcntl  # POSIX-only, matching this file's Linux/macOS-only scope
     os.makedirs(dest_dir, exist_ok=True)
@@ -547,11 +557,19 @@ def _replace_codeberg_asset(dest_dir, name, populate):
             final_path = os.path.join(dest_dir, name)
             try:
                 populate(tmp_path)
-                os.replace(tmp_path, final_path)
             except BaseException:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
                 raise
+            others = [f for f in os.listdir(dest_dir)
+                      if f not in (name, _CODEBERG_ASSET_LOCK, os.path.basename(tmp_path))]
+            newest_existing = max(
+                (os.path.getmtime(os.path.join(dest_dir, f)) for f in others),
+                default=None)
+            if newest_existing is not None and newest_existing > os.path.getmtime(tmp_path):
+                os.remove(tmp_path)
+                return False
+            os.replace(tmp_path, final_path)
             for existing in os.listdir(dest_dir):
                 if existing in (name, _CODEBERG_ASSET_LOCK):
                     continue
@@ -560,6 +578,7 @@ def _replace_codeberg_asset(dest_dir, name, populate):
                     shutil.rmtree(p)
                 else:
                     os.remove(p)
+            return True
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
@@ -582,8 +601,10 @@ def install_codeberg(tool, meta, prefix, plat, dry_run):
         info(f"  would install from {url}")
         return
     dest_dir = codeberg_asset_dir(tool, prefix)
-    _replace_codeberg_asset(dest_dir, name, lambda tmp: download(url, tmp))
-    info(f"  saved {name} to {dest_dir}")
+    if _replace_codeberg_asset(dest_dir, name, lambda tmp: download(url, tmp)):
+        info(f"  saved {name} to {dest_dir}")
+    else:
+        info(f"  {dest_dir} already has a newer asset; keeping it")
 
 
 # The per-tool extract backends: fetch one prebuilt artifact and unpack it.
@@ -1073,8 +1094,11 @@ def _install_bundle_codeberg(td, manifest, prefix, dry_run):
         if dry_run:
             continue
         dest_dir = codeberg_asset_dir(e["tool"], prefix)
-        _replace_codeberg_asset(dest_dir, e["asset"],
-                                lambda tmp, src=asset: shutil.copy2(src, tmp))
+        if not _replace_codeberg_asset(dest_dir, e["asset"],
+                                       lambda tmp, src=asset: shutil.copy2(src, tmp)):
+            # Not a failure: the tool still has a valid (just newer) asset --
+            # this bundle's copy simply lost to a fresher cache.
+            info(f"  {e['tool']}: keeping the newer cached asset over this bundle's")
     return failed
 
 
