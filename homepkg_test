@@ -366,6 +366,38 @@ with tempfile.TemporaryDirectory() as td:
     check("no existing sidecar means the new asset always applies",
           applied is True)
 
+# ...but the reverse must NOT hold: a candidate with unknown freshness (a
+# legacy bundle manifest from before _stage_codeberg recorded published_at)
+# must not downgrade a cache whose sidecar proves a known freshness. Only
+# "unknown vs unknown" defaults to applying; "unknown vs known" must keep
+# the known-good one.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    known_good = os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript")
+    with open(known_good, "wb") as f:
+        f.write(b"known-fresh cache")
+    with open(os.path.join(dest_dir, hp._CODEBERG_ASSET_META), "w") as f:
+        json.dump({"published_at": "2026-07-01T00:00:00Z"}, f)
+
+    def _populate_should_not_run2(tmp):
+        raise AssertionError("populate() must not run for an unknown-freshness "
+                              "candidate against a known-fresh cache")
+
+    try:
+        applied = hp._replace_codeberg_asset(
+            dest_dir, "krohnkite-0.9.9.2.kwinscript", _populate_should_not_run2,
+            None)  # unknown freshness, e.g. a legacy bundle
+        _wrongly_called = False
+    except AssertionError:
+        applied = False
+        _wrongly_called = True
+    check("an unknown-freshness candidate never calls populate() against a known-fresh cache",
+          not _wrongly_called)
+    check("an unknown-freshness candidate does not replace a known-fresh cache",
+          applied is False
+          and open(known_good, "rb").read() == b"known-fresh cache")
+
 # A process killed mid-populate() (e.g. SIGKILL) leaves an orphaned
 # .NAME.part behind -- its cleanup-on-exception path never runs. That orphan
 # must not count as "an existing asset" for freshness purposes (its recent
@@ -391,23 +423,33 @@ with tempfile.TemporaryDirectory() as td:
                      hp._CODEBERG_ASSET_LOCK, hp._CODEBERG_ASSET_META]))
 
 
-def _concurrent_replace_worker(dest_dir, name, start_barrier, active_count, max_seen, outcome_q):
+def _concurrent_replace_worker(dest_dir, name, start_barrier, attempts,
+                                active_count, max_seen, outcome_q):
     start_barrier.wait()  # both processes begin racing for the flock together
+    # Signal "attempting" immediately, entirely independent of the flock:
+    # this increment doesn't wait to win any lock, so it lands for both
+    # workers within microseconds of leaving the barrier, regardless of
+    # which one (if either) ends up holding the flock. It's the handshake
+    # populate() waits on below.
+    with attempts.get_lock():
+        attempts.value += 1
     def populate(tmp):
-        # Directly, atomically observe how many workers are inside
-        # populate() at once -- not inferred from timeouts or sleep
-        # ordering, which can give a false "exclusive" reading purely from
-        # scheduler delay. If the lock holds, max_seen can never exceed 1,
-        # full stop, regardless of timing; if it were missing, two workers
-        # synchronized by start_barrier are very likely to be here together
-        # and max_seen would show it.
         with active_count.get_lock():
             active_count.value += 1
             with max_seen.get_lock():
                 max_seen.value = max(max_seen.value, active_count.value)
+        # Prove the OTHER worker has also attempted entry before this one is
+        # allowed to finish and release the flock. Since "attempts" is set
+        # before either worker even tries the lock (above), this condition
+        # is already true almost immediately in the overwhelmingly common
+        # case; the deadline exists purely as an infra hang-guard (a process
+        # that never even reaches the barrier), not as a tunable "probably
+        # long enough" pass/fail threshold like a fixed sleep would be.
+        deadline = time.monotonic() + 10
+        while attempts.value < 2 and time.monotonic() < deadline:
+            pass
         with open(tmp, "wb") as f:
             f.write(name.encode())
-        time.sleep(0.1)  # widen the window a broken lock would need to be caught in
         with active_count.get_lock():
             active_count.value -= 1
     try:
@@ -419,33 +461,38 @@ def _concurrent_replace_worker(dest_dir, name, start_barrier, active_count, max_
 
 # _replace_codeberg_asset locks per dest_dir: two overlapping installs of the
 # same tool must not run their populate() calls concurrently (proven above
-# via the shared counter), and the overall operation must still behave
-# correctly: neither call may raise, and exactly one final asset must remain
-# (the lock's serialization makes the later call supersede the earlier one,
-# same as two sequential refreshes would -- without the lock this reproduces
-# as either both final files vanishing, each call's cleanup deleting the
-# other's just-placed file, or a crash from one call's cleanup deleting the
-# other's still-in-flight temp file). Real subprocesses (fork), so the OS
-# flock and the shared counter are both actually contended, not
-# same-process no-ops.
+# via the shared counter -- and, since "attempts" proves the second worker
+# had genuinely started racing for the flock before the first was allowed to
+# leave populate(), this holds regardless of scheduling: if the lock were
+# missing, the second worker -- already known to be attempting -- would have
+# nothing to gate it and would show up in max_seen too), and the overall
+# operation must still behave correctly: neither call may raise, and exactly
+# one final asset must remain (the lock's serialization makes the later call
+# supersede the earlier one, same as two sequential refreshes would --
+# without the lock this reproduces as either both final files vanishing,
+# each call's cleanup deleting the other's just-placed file, or a crash from
+# one call's cleanup deleting the other's still-in-flight temp file). Real
+# subprocesses (fork), so the OS flock and the shared counters are all
+# actually contended, not same-process no-ops.
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     ctx = multiprocessing.get_context("fork")
     start_barrier = ctx.Barrier(2)
+    attempts = ctx.Value('i', 0)
     active_count = ctx.Value('i', 0)
     max_seen = ctx.Value('i', 0)
     outcome_q = ctx.Queue()
     p1 = ctx.Process(target=_concurrent_replace_worker,
                      args=(dest_dir, "krohnkite-a.kwinscript", start_barrier,
-                           active_count, max_seen, outcome_q))
+                           attempts, active_count, max_seen, outcome_q))
     p2 = ctx.Process(target=_concurrent_replace_worker,
                      args=(dest_dir, "krohnkite-b.kwinscript", start_barrier,
-                           active_count, max_seen, outcome_q))
+                           attempts, active_count, max_seen, outcome_q))
     p1.start()
     p2.start()
-    outcomes = sorted([outcome_q.get(timeout=10), outcome_q.get(timeout=10)])
-    p1.join(timeout=10)
-    p2.join(timeout=10)
+    outcomes = sorted([outcome_q.get(timeout=15), outcome_q.get(timeout=15)])
+    p1.join(timeout=15)
+    p2.join(timeout=15)
     check("the lock keeps populate() calls from ever overlapping "
           "(a shared counter never observes more than 1 concurrently)",
           max_seen.value == 1)
@@ -964,6 +1011,36 @@ with tempfile.TemporaryDirectory() as td:
     check("install-bundle (codeberg) doesn't downgrade a newer cache end-to-end",
           open(newer_asset, "rb").read() == b"newer, already cached"
           and not os.path.exists(os.path.join(dest_dir, older_asset_name)))
+
+# End-to-end: a LEGACY bundle manifest (built before _stage_codeberg recorded
+# published_at, so the tool entry has no "published_at" key at all) must not
+# downgrade a cache with a known freshness either -- e.get("published_at")
+# resolves to None, and unknown-vs-known must keep the known-good cache.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    dest_dir = hp.codeberg_asset_dir("krohnkite", prefix)
+    os.makedirs(dest_dir)
+    newer_asset = os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript")
+    with open(newer_asset, "wb") as f:
+        f.write(b"newer, already cached")
+    with open(os.path.join(dest_dir, hp._CODEBERG_ASSET_META), "w") as f:
+        json.dump({"published_at": "2026-07-01T00:00:00Z"}, f)
+
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    legacy_asset_name = "krohnkite-0.9.9.2.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", legacy_asset_name), "wb") as f:
+        f.write(b"from a legacy bundle with no published_at")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "linux/x86_64",
+                   "tools": [{"tool": "krohnkite", "asset": legacy_asset_name}]}, f)
+    bundle = os.path.join(td, "legacy.tar.gz")
+    hp._write_bundle(bundle, src)
+
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("install-bundle (codeberg) doesn't let a legacy bundle downgrade a known-fresh cache",
+          open(newer_asset, "rb").read() == b"newer, already cached"
+          and not os.path.exists(os.path.join(dest_dir, legacy_asset_name)))
 
 # A codeberg asset missing from the bundle is reported, not silently skipped
 # -- same contract as the equivalent github-side test above.
