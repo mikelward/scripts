@@ -548,16 +548,20 @@ def _replace_codeberg_asset(dest_dir, name, populate, freshness=None):
     `freshness` is an opaque, lexicographically-comparable token -- in
     practice Codeberg's release `published_at` (RFC3339, sorts correctly as
     a plain string) -- persisted in a small sidecar file next to the asset.
-    If the sidecar's stored value is already >= `freshness`, populate() is
-    skipped entirely (no download/copy) and this returns False: a bundle
-    built at some earlier point must not downgrade a cache that was
-    refreshed more recently online. This deliberately does NOT use local
-    file mtimes: a bundle built on one host and installed on another has no
-    shared clock, so an older bundle from a host with a clock skewed ahead
-    could otherwise look newer than a genuinely fresher cache -- and worse,
-    a bogus future mtime could then block every later legitimate refresh
-    until the local clock caught up to it. `freshness=None` (unknown) always
-    applies, matching the old no-comparison-possible behavior. Returns True
+    If the sidecar records a known freshness and the candidate isn't clearly
+    newer (its own freshness is unknown, or known but not later), populate()
+    is skipped entirely (no download/copy) and this returns False: a bundle
+    built at some earlier point -- or a legacy bundle from before this
+    mechanism existed, whose manifest carries no freshness at all -- must
+    not downgrade a cache with a known, established freshness. This
+    deliberately does NOT use local file mtimes: a bundle built on one host
+    and installed on another has no shared clock, so an older bundle from a
+    host with a clock skewed ahead could otherwise look newer than a
+    genuinely fresher cache -- and worse, a bogus future mtime could then
+    block every later legitimate refresh until the local clock caught up to
+    it. Only when the EXISTING asset's freshness is itself unknown (nothing
+    to compare against -- e.g. a cache from before this mechanism existed)
+    does an unknown-freshness candidate apply unconditionally. Returns True
     if the new asset was applied.
     """
     import fcntl  # POSIX-only, matching this file's Linux/macOS-only scope
@@ -574,8 +578,8 @@ def _replace_codeberg_asset(dest_dir, name, populate, freshness=None):
                         existing_freshness = json.load(f).get("published_at")
                 except (OSError, ValueError):
                     existing_freshness = None
-            if (existing_freshness is not None and freshness is not None
-                    and existing_freshness >= freshness):
+            if existing_freshness is not None and (
+                    freshness is None or existing_freshness >= freshness):
                 return False
 
             tmp_path = os.path.join(dest_dir, f".{name}.part")
