@@ -50,11 +50,13 @@
 # agent) or a key file already exists. Pass --ssh to generate one anyway,
 # or --no-ssh to skip it entirely.
 #
-# Node.js (node/npm) and the TypeScript compiler (tsc) are installed because
-# setup-kde needs tsc to build Krohnkite from source without fetching from the
-# npm registry at build time. On privileged boxes they come from the distro
-# package (apt/dnf/brew); under --no-root, where the distro installs are
-# skipped, they come from conda-forge via homepkg instead (rootless). Pass
+# Node.js (node/npm) and the TypeScript compiler (tsc) are installed as a
+# fallback for setup-kde: it normally fetches Krohnkite's prebuilt release,
+# but falls back to building from source (which needs tsc, without fetching
+# from the npm registry at build time) when that release can't be fetched.
+# On privileged boxes they come from the distro package (apt/dnf/brew); under
+# --no-root, where the distro installs are skipped, they come from
+# conda-forge via homepkg instead (rootless). Pass
 # --no-npm to skip them where Node is provided some other way (nvm, fnm,
 # corepack, a system package, etc.) -- then provide tsc yourself.
 #
@@ -120,7 +122,8 @@ IGNORE_ERRORS=no
 SSH=auto
 
 # Whether to install Node.js (node/npm) and the TypeScript compiler (tsc),
-# needed by setup-kde to build Krohnkite. One of:
+# needed by setup-kde's source-build fallback for Krohnkite (its normal path
+# fetches a prebuilt release and needs neither). One of:
 #   yes - install them (the default). Privileged boxes get the distro npm/node
 #         package plus tsc; --no-root boxes get node/npm/tsc from conda-forge
 #         via homepkg instead.
@@ -658,22 +661,23 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn apt-get install -y --install-recommends zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # Node.js + tsc from the distro on the privileged path (setup-kde
-            # needs tsc to build Krohnkite). Under --no-root apt is skipped
-            # above, and these come from conda-forge via homepkg instead
-            # (install_home_tools).
+            # Node.js + tsc from the distro on the privileged path (setup-kde's
+            # source-build fallback for Krohnkite needs tsc; its normal path
+            # fetches a prebuilt release and needs neither). Under --no-root
+            # apt is skipped above, and these come from conda-forge via
+            # homepkg instead (install_home_tools).
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo_or_warn apt-get install -y --install-recommends npm \
                     || warn "could not install the distro npm package; continuing with the TypeScript attempt"
-                # tsc lets setup-kde build Krohnkite from source without
-                # fetching typescript from the npm registry at build time.
-                # Debian/Ubuntu package it as node-typescript; fall back to
-                # a one-time global npm install where that's unavailable.
+                # tsc lets setup-kde's fallback build Krohnkite from source
+                # without fetching typescript from the npm registry at build
+                # time. Debian/Ubuntu package it as node-typescript; fall
+                # back to a one-time global npm install where unavailable.
                 info "Installing TypeScript (tsc)"
                 sudo_or_warn apt-get install -y --install-recommends node-typescript \
                     || sudo_or_warn npm install -g typescript \
-                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
+                    || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
@@ -725,21 +729,22 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn dnf install -y zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # Node.js + tsc from the distro on the privileged path (setup-kde
-            # needs tsc to build Krohnkite). Under --no-root dnf is skipped
-            # above, and these come from conda-forge via homepkg instead
-            # (install_home_tools).
+            # Node.js + tsc from the distro on the privileged path (setup-kde's
+            # source-build fallback for Krohnkite needs tsc; its normal path
+            # fetches a prebuilt release and needs neither). Under --no-root
+            # dnf is skipped above, and these come from conda-forge via
+            # homepkg instead (install_home_tools).
             if test "$NPM" = yes; then
                 info "Installing npm"
                 sudo_or_warn dnf install -y npm \
                     || warn "could not install the distro npm package; continuing with the TypeScript attempt"
-                # tsc lets setup-kde build Krohnkite from source without
-                # fetching typescript from the npm registry at build time.
-                # Fedora ships no typescript rpm, so this is a one-time
+                # tsc lets setup-kde's fallback build Krohnkite from source
+                # without fetching typescript from the npm registry at build
+                # time. Fedora ships no typescript rpm, so this is a one-time
                 # global npm install during bootstrap.
                 info "Installing TypeScript (tsc)"
                 sudo_or_warn npm install -g typescript \
-                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
+                    || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing kitty"
@@ -787,20 +792,22 @@ install_packages() {
             info "Installing zoxide"
             brew install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # Node.js + tsc from Homebrew on the privileged path (setup-kde
-            # needs tsc to build Krohnkite). brew needs no sudo, so unlike the
-            # apt/dnf branches this can't self-skip under --no-root -- gate it on
-            # ROOT so an unprivileged macOS run gets node/tsc from conda-forge
-            # via homepkg (install_home_tools) instead of a second copy here.
+            # Node.js + tsc from Homebrew on the privileged path (setup-kde's
+            # source-build fallback for Krohnkite needs tsc; its normal path
+            # fetches a prebuilt release and needs neither). brew needs no
+            # sudo, so unlike the apt/dnf branches this can't self-skip under
+            # --no-root -- gate it on ROOT so an unprivileged macOS run gets
+            # node/tsc from conda-forge via homepkg (install_home_tools)
+            # instead of a second copy here.
             if test "$NPM" = yes && test "$ROOT" = yes; then
                 info "Installing Node.js (npm)"
                 brew install node
-                # tsc lets setup-kde build Krohnkite from source without
-                # fetching typescript from the npm registry at build time.
-                # Installed on macOS too so the toolchain matches Linux.
+                # tsc lets setup-kde's fallback build Krohnkite from source
+                # without fetching typescript from the npm registry at build
+                # time. Installed on macOS too so the toolchain matches Linux.
                 info "Installing TypeScript (tsc)"
                 brew install typescript \
-                    || warn "could not install tsc; setup-kde needs it to build Krohnkite"
+                    || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
@@ -1069,9 +1076,11 @@ install_home_tools() {
     # --no-root, so fnm comes from here instead).
     tools="ripgrep fd bat fzf jq delta gh fnm zoxide"
     if test "$NPM" = yes; then
-        # node/npm + tsc are the actual build toolchain (setup-kde needs tsc to
-        # build Krohnkite), gated on --no-npm. The --no-root counterpart to the
-        # distro npm/tsc install on the privileged path -- no root, no distro pkg.
+        # node/npm + tsc are the actual build toolchain for setup-kde's
+        # Krohnkite source-build fallback (its normal path fetches a
+        # prebuilt release and needs neither), gated on --no-npm. The
+        # --no-root counterpart to the distro npm/tsc install on the
+        # privileged path -- no root, no distro pkg.
         tools="$tools node typescript"
     fi
     if test "$MINIMAL_ENABLED" -eq 0; then
@@ -1151,9 +1160,9 @@ install_home_tools() {
 
     # homepkg links the tools into ~/.local/bin. Put that on PATH for the rest
     # of THIS run so later steps and child processes find them -- notably
-    # setup-kde, which needs tsc on PATH to build Krohnkite. The conf repo
-    # already puts ~/.local/bin on PATH for interactive shells; this covers the
-    # non-interactive bootstrap however setup was invoked.
+    # setup-kde's Krohnkite source-build fallback, which needs tsc on PATH.
+    # The conf repo already puts ~/.local/bin on PATH for interactive shells;
+    # this covers the non-interactive bootstrap however setup was invoked.
     case ":$PATH:" in
         *":$HOME/.local/bin:"*) ;;
         *) PATH="$HOME/.local/bin:$PATH" ;;
