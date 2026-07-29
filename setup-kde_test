@@ -307,10 +307,23 @@ test_release_install_via_homepkg() {
     assert_not_called "tsc "
 }
 
-# A pre-staged bundle (homepkg-krohnkite.tgz beside the script) is tried
-# before the online fetch; when it provides the release, the online fetch
-# never runs.
-test_release_bundle_used_before_online_fetch() {
+# The online fetch is tried FIRST and, when it succeeds, a pre-staged bundle
+# is never even touched -- refreshing from the network beats reusing
+# whatever a bundle happens to carry, so a machine that already has a bundle
+# staged still gets newer Krohnkite releases as they're published.
+test_online_fetch_preferred_over_staged_bundle() {
+    add_release_mocks
+    touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
+    run_kde
+    assert_status 0 &&
+    assert_called "homepkg --backend codeberg install krohnkite" &&
+    assert_not_called "install-bundle" &&
+    assert_called "kpackagetool6 -t KWin/Script"
+}
+
+# When the online fetch fails, a pre-staged bundle (homepkg-krohnkite.tgz
+# beside the script) is tried as a fallback source for the release.
+test_release_bundle_used_when_online_fetch_fails() {
     add_release_mocks
     cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
 #!/bin/sh
@@ -327,39 +340,30 @@ MOCK
     touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
     run_kde
     assert_status 0 &&
+    assert_called "homepkg --backend codeberg install krohnkite" &&
     assert_called "homepkg install-bundle $TEST_TMPDIR/isolated/homepkg-krohnkite.tgz" &&
-    assert_called "kpackagetool6 -t KWin/Script" &&
-    assert_not_called "--backend codeberg install krohnkite"
+    assert_called "kpackagetool6 -t KWin/Script"
 }
 
-# A bundle that doesn't provide the release (partial/stale) falls through to
-# the online fetch rather than treating the bundle as the final answer.
-test_release_bundle_falls_through_to_online_fetch() {
+# When both the online fetch and the bundle are unavailable, a release
+# cached by an earlier successful run is still used rather than falling all
+# the way back to a source build -- homepkg's codeberg backend never wipes a
+# good cache on a failed refresh (see install_codeberg's atomic replace).
+test_stale_cached_release_used_when_refresh_fails() {
     add_release_mocks
-    touch "$TEST_TMPDIR/isolated/homepkg-krohnkite.tgz"
-    # add_release_mocks' homepkg mock already fails install-bundle (falls
-    # into its final "exit 0" only for the codeberg install case) -- rewrite
-    # it to fail install-bundle explicitly and still succeed the online path.
     cat > "$TEST_TMPDIR/isolated/homepkg" <<MOCK
 #!/bin/sh
 echo "homepkg \$*" >> "$CALLS"
-if test "\$1" = install-bundle; then
-    exit 1
-fi
-if test "\$1" = "--backend" && test "\$2" = codeberg \\
-        && test "\$3" = install && test "\$4" = krohnkite; then
-    dir="\$HOME/.local/share/homepkg/assets/krohnkite"
-    mkdir -p "\$dir"
-    touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
-fi
-exit 0
+exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/isolated/homepkg"
+    mkdir -p "$TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite"
+    touch "$TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.2.kwinscript"
     run_kde
     assert_status 0 &&
-    assert_called "homepkg install-bundle $TEST_TMPDIR/isolated/homepkg-krohnkite.tgz" &&
     assert_called "homepkg --backend codeberg install krohnkite" &&
-    assert_called "kpackagetool6 -t KWin/Script"
+    assert_called "kpackagetool6 -t KWin/Script" &&
+    assert_not_called "git clone"
 }
 
 # HOMEPKG_KROHNKITE_BUNDLE overrides the default bundle search locations.
@@ -637,10 +641,12 @@ run_test "failing sudo does not affect user-scoped KDE setup" \
     test_failing_sudo_is_not_used
 run_test "release install via homepkg's codeberg backend" \
     test_release_install_via_homepkg
-run_test "pre-staged release bundle is tried before the online fetch" \
-    test_release_bundle_used_before_online_fetch
-run_test "a release bundle that doesn't provide it falls through online" \
-    test_release_bundle_falls_through_to_online_fetch
+run_test "online fetch is preferred over a pre-staged bundle" \
+    test_online_fetch_preferred_over_staged_bundle
+run_test "release bundle used when the online fetch fails" \
+    test_release_bundle_used_when_online_fetch_fails
+run_test "a stale cached release is used when the refresh fails entirely" \
+    test_stale_cached_release_used_when_refresh_fails
 run_test "HOMEPKG_KROHNKITE_BUNDLE overrides the bundle search" \
     test_homepkg_krohnkite_bundle_env_override
 run_test "missing git warns but doesn't block the release path" \

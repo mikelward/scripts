@@ -521,13 +521,20 @@ def install_codeberg(tool, meta, prefix, plat, dry_run):
         info(f"  would install from {url}")
         return
     dest_dir = codeberg_asset_dir(tool, prefix)
-    # Clear any previous asset first: a version bump changes the filename, and
-    # a consumer (setup-kde) that globs this directory for "the" .kwinscript
-    # needs exactly one file here, not old and new coexisting.
-    if os.path.isdir(dest_dir):
-        shutil.rmtree(dest_dir)
-    os.makedirs(dest_dir, exist_ok=True)
-    download(url, os.path.join(dest_dir, name))
+    # Download to a temp location first, and only then replace dest_dir: a
+    # consumer (setup-kde) refreshes by calling this on every run and falls
+    # back to whatever's already cached here when the fetch fails (offline).
+    # Clearing dest_dir before the download would destroy that fallback the
+    # moment the network drops mid-refresh, not just when it's absent
+    # entirely. A version bump changes the filename, so dest_dir is still
+    # cleared on success -- old and new must not coexist, since a consumer
+    # globs this directory for "the" .kwinscript.
+    with tempfile.TemporaryDirectory() as td:
+        downloaded = download(url, os.path.join(td, name))
+        if os.path.isdir(dest_dir):
+            shutil.rmtree(dest_dir)
+        os.makedirs(dest_dir, exist_ok=True)
+        shutil.move(downloaded, os.path.join(dest_dir, name))
     info(f"  saved {name} to {dest_dir}")
 
 
@@ -880,6 +887,12 @@ def bundle_all(tools, prefix, plat, out, dry_run, whole_registry=False):
         if codeberg_tools:
             manifest["codeberg"] = {"tools": _stage_codeberg(
                 codeberg_tools, td, skip_unavailable=whole_registry)}
+        # A bundle carrying ONLY codeberg assets has nothing platform-specific
+        # in it (see bundle_codeberg) -- tag it platform-neutral rather than
+        # pinning it to whichever host happened to build it, the same
+        # exemption install_bundle gives bundle_codeberg's own output.
+        if codeberg_tools and not conda_tools and not github_tools:
+            manifest["platform"] = "any"
         with open(os.path.join(td, "manifest.json"), "w") as fh:
             json.dump(manifest, fh)
         _write_bundle(out, td)
@@ -900,7 +913,7 @@ def bundle_github(tools, prefix, plat, out, dry_run):
     info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
 
 
-def bundle_codeberg(tools, plat, out, dry_run):
+def bundle_codeberg(tools, out, dry_run):
     info(f"collecting codeberg assets for {', '.join(tools)}")
     if dry_run:
         info(f"  would download release assets and write {out}")
@@ -908,8 +921,12 @@ def bundle_codeberg(tools, plat, out, dry_run):
     with tempfile.TemporaryDirectory() as td:
         entries = _stage_codeberg(tools, td)
         with open(os.path.join(td, "manifest.json"), "w") as fh:
+            # .kwinscript assets are platform-independent (see
+            # codeberg_release_assets), so this bundle is too -- "any" tells
+            # install_bundle to skip the OS/arch check that would otherwise
+            # tie it to whichever host happened to build it.
             json.dump({"format": 1, "backend": "codeberg",
-                       "platform": f"{plat[0]}/{plat[1]}", "tools": entries}, fh)
+                       "platform": "any", "tools": entries}, fh)
         _write_bundle(out, td)
     info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
 
@@ -991,6 +1008,10 @@ def _install_bundle_codeberg(td, manifest, prefix, dry_run):
     failed = []
     for e in manifest["tools"]:
         _require_basename(e["asset"], "asset name")
+        # e["tool"] feeds codeberg_asset_dir() below, same as asset name --
+        # a tampered manifest with e.g. "../../etc" would otherwise let
+        # rmtree() delete an arbitrary directory outside the prefix.
+        _require_basename(e.get("tool", ""), "tool name")
         asset = os.path.join(td, "codeberg-assets", e["asset"])
         if not os.path.exists(asset):
             warn(f"{e['tool']}: {e['asset']} is not in the bundle; skipping it")
@@ -1015,7 +1036,10 @@ def install_bundle(bundle_file, prefix, plat, dry_run):
         backend = manifest.get("backend")
         want = f"{plat[0]}/{plat[1]}"
         got = manifest.get("platform")
-        if got != want:
+        # "any" marks a bundle with nothing platform-specific in it (a
+        # codeberg-only payload -- see bundle_codeberg/bundle_all), which
+        # installs on any host regardless of what built it.
+        if got != want and got != "any":
             raise HomepkgError(
                 f"bundle is for {got}, but this host is {want} "
                 "(pass --arch to override)")
@@ -1166,7 +1190,7 @@ def main(argv=None):
             if args.backend == "github":
                 bundle_github(tools, args.prefix, plat, args.output, args.dry_run)
             elif args.backend == "codeberg":
-                bundle_codeberg(tools, plat, args.output, args.dry_run)
+                bundle_codeberg(tools, args.output, args.dry_run)
             else:
                 bundle_all(tools, args.prefix, plat, args.output, args.dry_run,
                            whole_registry=whole_registry)

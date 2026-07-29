@@ -266,11 +266,17 @@ install_krohnkite_from_source() {
 
 # Fetch Krohnkite's prebuilt .kwinscript release from upstream's Codeberg
 # releases (anametologin/Krohnkite) via homepkg's codeberg backend -- no
-# tsc/go-task/make needed. Tries a pre-staged offline bundle first (built
+# tsc/go-task/make needed. Always tries the online fetch first, so a machine
+# that's already installed Krohnkite once still picks up newer releases on
+# later runs rather than reusing whatever it cached the first time. Only
+# when that fails does it fall back to a pre-staged offline bundle (built
 # with 'homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz
 # krohnkite', staged at $HOMEPKG_KROHNKITE_BUNDLE, homepkg-krohnkite.tgz
-# beside this script, or in $HOME), then an online fetch. Falls back to
-# cloning KROHNKITE_REPO and building from source when neither works.
+# beside this script, or in $HOME) or, failing that, whatever homepkg's
+# codeberg backend already has cached from a previous successful fetch (it
+# never wipes that cache on a failed refresh -- see install_codeberg).
+# Falls back to cloning KROHNKITE_REPO and building from source when none of
+# that produces a usable .kwinscript.
 install_krohnkite() {
     kwinscript=""
     homepkg="$SCRIPT_DIR/homepkg"
@@ -279,25 +285,25 @@ install_krohnkite() {
         # it, so the fetched asset always lands here.
         asset_dir="$HOME/.local/share/homepkg/assets/krohnkite"
 
-        bundle=""
-        for cand in "${HOMEPKG_KROHNKITE_BUNDLE:-}" \
-                "$SCRIPT_DIR/homepkg-krohnkite.tgz" \
-                "$HOME/homepkg-krohnkite.tgz"; do
-            if test -n "$cand" && test -f "$cand"; then
-                bundle="$cand"
-                break
-            fi
-        done
-        if test -n "$bundle"; then
-            info "Fetching the Krohnkite release from bundle: $bundle"
-            "$homepkg" install-bundle "$bundle" \
-                || warn "the Krohnkite bundle didn't provide the release; trying the online fetch"
-        fi
-
+        info "Fetching the Krohnkite release via homepkg"
+        "$homepkg" --backend codeberg install krohnkite \
+            || warn "could not fetch the Krohnkite release online; trying a staged bundle or the last cached copy"
         kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
+
         if test -z "$kwinscript"; then
-            info "Fetching the Krohnkite release via homepkg"
-            if "$homepkg" --backend codeberg install krohnkite; then
+            bundle=""
+            for cand in "${HOMEPKG_KROHNKITE_BUNDLE:-}" \
+                    "$SCRIPT_DIR/homepkg-krohnkite.tgz" \
+                    "$HOME/homepkg-krohnkite.tgz"; do
+                if test -n "$cand" && test -f "$cand"; then
+                    bundle="$cand"
+                    break
+                fi
+            done
+            if test -n "$bundle"; then
+                info "Fetching the Krohnkite release from bundle: $bundle"
+                "$homepkg" install-bundle "$bundle" \
+                    || warn "the Krohnkite bundle didn't provide the release either"
                 kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
             fi
         fi
