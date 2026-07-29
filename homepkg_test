@@ -175,7 +175,11 @@ try:
     with tempfile.TemporaryDirectory() as td:
         prefix = os.path.join(td, "prefix")
         _saved_download = hp.download
-        hp.download = lambda url, dest: open(dest, "wb").write(b"// kwin script") or dest
+        def _fake_download(url, dest):
+            with open(dest, "wb") as f:
+                f.write(b"// kwin script")
+            return dest
+        hp.download = _fake_download
         try:
             hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"], prefix,
                                 ("linux", "x86_64"), False)
@@ -703,6 +707,65 @@ with tempfile.TemporaryDirectory() as td:
     check("install-bundle (codeberg) reports a missing asset",
           _err is not None and "krohnkite" in str(_err))
 
+# A tampered codeberg manifest with a path-traversal tool name must be
+# rejected before it's ever joined into a filesystem path -- e["tool"] feeds
+# codeberg_asset_dir(), and dest_dir there gets rmtree'd, so an unvalidated
+# "../../etc"-style value could delete an arbitrary directory.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    asset = "krohnkite-0.9.9.3_beta.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", asset), "wb") as f:
+        f.write(b"// kwin script")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "linux/x86_64",
+                   "tools": [{"tool": "../../evil", "asset": asset}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    raised = False
+    try:
+        hp.install_bundle(bundle, os.path.join(td, "prefix"), ("linux", "x86_64"), False)
+    except hp.HomepkgError:
+        raised = True
+    check("install-bundle rejects a codeberg manifest tool name that escapes the prefix",
+          raised)
+    check("...and nothing was written outside the prefix",
+          not os.path.exists(os.path.join(td, "evil")))
+
+# install_codeberg downloads to a temp location and only replaces dest_dir on
+# success -- a failed refresh (network drops mid-download) must leave a
+# previously-cached asset intact, since setup-kde falls back to whatever's
+# cached when the online fetch fails.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    dest_dir = hp.codeberg_asset_dir("krohnkite", prefix)
+    os.makedirs(dest_dir)
+    with open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "wb") as f:
+        f.write(b"old cached release")
+    _saved_cra2 = hp.codeberg_release_assets
+    _saved_dl2 = hp.download
+    hp.codeberg_release_assets = lambda repo, tag=None: (
+        "0.9.9.3_beta", [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
+    def _failing_download(url, dest):
+        raise OSError("network unreachable")
+    hp.download = _failing_download
+    try:
+        _err = None
+        try:
+            hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"], prefix,
+                                ("linux", "x86_64"), False)
+        except OSError as e:
+            _err = e
+        check("install_codeberg propagates a download failure",
+              _err is not None)
+        check("...but leaves the previously cached asset in place",
+              os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"))
+              and open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "rb").read()
+              == b"old cached release")
+    finally:
+        hp.codeberg_release_assets = _saved_cra2
+        hp.download = _saved_dl2
+
 with tempfile.TemporaryDirectory() as td:
     src = os.path.join(td, "src")
     os.makedirs(src)
@@ -733,6 +796,67 @@ with tempfile.TemporaryDirectory() as td:
     except hp.HomepkgError:
         raised = True
     check("install-bundle rejects a platform mismatch", raised)
+
+# ...but "any" (a codeberg-only bundle, which carries nothing
+# platform-specific -- see bundle_codeberg) installs regardless of platform.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    asset = "krohnkite-0.9.9.3_beta.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", asset), "wb") as f:
+        f.write(b"// kwin script")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "any",
+                   "tools": [{"tool": "krohnkite", "asset": asset}]}, f)
+    bundle = os.path.join(td, "b.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("macos", "aarch64"), False)
+    check("a platform: any bundle installs regardless of the host platform",
+          os.path.exists(os.path.join(hp.codeberg_asset_dir("krohnkite", prefix), asset)))
+
+# bundle_codeberg writes platform: "any" itself, not the builder's platform.
+with tempfile.TemporaryDirectory() as td:
+    _saved_sc = hp._stage_codeberg
+    hp._stage_codeberg = lambda tools, td_: [{"tool": "krohnkite", "asset": "x.kwinscript"}]
+    try:
+        out = os.path.join(td, "b.tgz")
+        hp.bundle_codeberg(["krohnkite"], out, False)
+        with tarfile.open(out) as tf:
+            manifest = json.loads(tf.extractfile("manifest.json").read())
+        check("bundle_codeberg tags its manifest platform: any",
+              manifest["platform"] == "any")
+    finally:
+        hp._stage_codeberg = _saved_sc
+
+# bundle_all does the same when the bundle ends up codeberg-only (no
+# conda/github tools alongside it) -- but NOT when it's mixed with tools
+# that do carry platform-specific data.
+with tempfile.TemporaryDirectory() as td:
+    _saved_sc2 = hp._stage_codeberg
+    hp._stage_codeberg = lambda tools, td_, skip_unavailable=False: [
+        {"tool": "krohnkite", "asset": "x.kwinscript"}]
+    try:
+        out = os.path.join(td, "b.tgz")
+        hp.bundle_all(["krohnkite"], td, ("linux", "x86_64"), out, False)
+        with tarfile.open(out) as tf:
+            manifest = json.loads(tf.extractfile("manifest.json").read())
+        check("bundle_all tags a codeberg-only combined bundle platform: any",
+              manifest["platform"] == "any")
+
+        out2 = os.path.join(td, "b2.tgz")
+        _saved_stage_mamba = hp._stage_mamba
+        hp._stage_mamba = lambda tools, prefix, plat, td_: list(tools)
+        try:
+            hp.bundle_all(["jq", "krohnkite"], td, ("linux", "x86_64"), out2, False)
+        finally:
+            hp._stage_mamba = _saved_stage_mamba
+        with tarfile.open(out2) as tf:
+            manifest2 = json.loads(tf.extractfile("manifest.json").read())
+        check("bundle_all keeps the real platform when mixed with a conda tool",
+              manifest2["platform"] == "linux/x86_64")
+    finally:
+        hp._stage_codeberg = _saved_sc2
 
 # _mamba_solve must pass --platform for the target subdir (so cross-arch
 # bundles solve the right arch) and build from the LINK set, not FETCH (which
