@@ -160,9 +160,16 @@ MOCK
 # Run setup-kde in the sandbox: fresh HOME, and a PATH of just the mock bin
 # plus the system directories -- so the real ~/scripts (if it's on the
 # caller's PATH) can't satisfy the launcher lookups.
+#
+# XDG_CONFIG_HOME is pinned, not just inherited: setup-kde resolves
+# kglobalshortcutsrc as ${XDG_CONFIG_HOME:-$HOME/.config}, so on a machine
+# that exports it, overriding HOME alone leaves the script reading -- and
+# remove_stale_app_shortcut_groups rewriting -- the caller's real KDE config
+# while the assertions look at the sandbox.
 run_kde() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" "$@" 2>&1)"
@@ -175,6 +182,7 @@ run_kde() {
 run_kde_relative() {
     set +e
     output="$(cd "$(dirname "$KDE_SCRIPT")" && HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         ./setup-kde "$@" 2>&1)"
