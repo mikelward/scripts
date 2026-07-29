@@ -764,9 +764,15 @@ install_packages() {
             fi
             ;;
         macos)
-            install_homebrew
+            # Every brew step below warns and continues rather than aborting,
+            # matching the apt/dnf branches: one renamed formula or one tap
+            # outage shouldn't take the whole bootstrap down under set -e.
+            if ! install_homebrew; then
+                warn "Homebrew unavailable; skipping macOS package installation"
+                return 0
+            fi
             info "Installing system packages"
-            brew install \
+            if ! brew install \
                 autoconf \
                 automake \
                 bat \
@@ -786,7 +792,9 @@ install_packages() {
                 shellcheck \
                 unzip \
                 vim \
-                zsh
+                zsh; then
+                warn "some core Homebrew packages could not be installed"
+            fi
             # Separate, so a formula rename or a tap outage can't take the
             # core package list down with it.
             info "Installing zoxide"
@@ -801,7 +809,8 @@ install_packages() {
             # instead of a second copy here.
             if test "$NPM" = yes && test "$ROOT" = yes; then
                 info "Installing Node.js (npm)"
-                brew install node
+                brew install node \
+                    || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
                 # tsc lets setup-kde's fallback build Krohnkite from source
                 # without fetching typescript from the npm registry at build
                 # time. Installed on macOS too so the toolchain matches Linux.
@@ -812,15 +821,18 @@ install_packages() {
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
             # Linux paths which keep adb/android-tools as core packages.
-            brew install --cask android-platform-tools
+            brew install --cask android-platform-tools \
+                || warn "could not install android-platform-tools; adb/fastboot will be unavailable"
             if test "$GUI_ENABLED" -eq 1; then
                 info "Installing graphical packages"
-                brew install kitty
+                brew install kitty \
+                    || warn "skipping kitty installation"
                 info "Installing macOS applications"
                 brew install --cask \
                     amethyst \
                     iterm2 \
-                    rectangle
+                    rectangle \
+                    || warn "some macOS applications could not be installed"
             fi
             ;;
         *)

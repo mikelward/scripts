@@ -166,6 +166,40 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$terminal_tmpdir"
 }
 
+# Run install_packages' macOS arm against a brew that always fails, or against
+# an unavailable Homebrew. Asserting the run survives is the whole point: this
+# arm used to abort the bootstrap under set -e, so the tests run with set -e on
+# and look for the marker after the call.
+run_macos_packages() {
+    # homebrew_status: 0 = installed, 1 = Homebrew unavailable
+    homebrew_status="$1"
+    macos_tmpdir="$(mktemp -d)"
+    macos_calls="$macos_tmpdir/calls"
+    cat > "$macos_tmpdir/brew" <<MOCK
+#!/bin/sh
+printf '%s\n' "brew \$*" >> "$macos_calls"
+exit 1
+MOCK
+    chmod +x "$macos_tmpdir/brew"
+
+    set +e
+    output="$(PATH="$macos_tmpdir:$PATH" \
+        sh -c "set -e
+OS=macos
+NPM=yes
+ROOT=yes
+GUI_ENABLED=1
+sudo_or_warn() { \"\$@\"; }
+install_homebrew() { return $homebrew_status; }
+$(extract_functions "info warn install_packages")
+install_packages
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$macos_calls" 2>/dev/null)"
+    rm -rf "$macos_tmpdir"
+}
+
 assert_calls_contain() {
     case "$calls" in
         *"$1"*) ;;
@@ -468,6 +502,53 @@ test_fedora_terminal_failures_are_reported() {
     assert_output_contains "could not register kitty as the terminal scheme handler" &&
     assert_output_contains "could not set kitty as the KDE terminal application" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# The macOS branch used to run install_homebrew and every brew install
+# unguarded, so a single renamed formula or tap outage aborted the whole
+# bootstrap under set -e -- while the apt/dnf branches warned and carried on.
+# Run the arm with a brew that fails every invocation: each step must report
+# itself, and the run must reach the end rather than dying on the first one.
+test_macos_brew_failures_are_not_fatal() {
+    run_macos_packages 0
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "some core Homebrew packages could not be installed" &&
+    assert_output_contains "could not install zoxide" &&
+    assert_output_contains "could not install node" &&
+    assert_output_contains "could not install tsc" &&
+    assert_output_contains "could not install android-platform-tools" &&
+    assert_output_contains "skipping kitty installation" &&
+    assert_output_contains "some macOS applications could not be installed"
+}
+
+# A failing brew must not stop the arm early either: the later steps have to
+# be attempted, not skipped because an earlier one failed.
+test_macos_brew_failure_still_attempts_later_steps() {
+    run_macos_packages 0
+    assert_status 0 &&
+    assert_calls_contain "brew install zoxide" &&
+    assert_calls_contain "brew install --cask android-platform-tools" &&
+    assert_calls_contain "brew install kitty"
+}
+
+# When Homebrew itself can't be made available there is nothing to install
+# from, so the arm bows out with a warning instead of running brew at all --
+# and, again, without taking the bootstrap down.
+test_macos_without_homebrew_skips_the_arm() {
+    run_macos_packages 1
+    assert_status 0 &&
+    assert_output_contains "Homebrew unavailable; skipping macOS package installation" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    test -z "$calls"
+}
+
+# Complements the behavioral tests above, which can only see the steps they
+# execute: no bare, unguarded "brew install" may be reintroduced anywhere.
+test_no_unguarded_brew_install_remains() {
+    test "$(grep -c '^ *brew install --cask android-platform-tools$' "$SETUP")" -eq 0 &&
+    test "$(grep -c '^ *brew install kitty$' "$SETUP")" -eq 0 &&
+    test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0
 }
 
 # atuin and carapace are in no distro repo and have no conda-forge feedstock,
@@ -873,6 +954,14 @@ run_test "Debian terminal failures are reported, not swallowed" \
     test_terminal_failures_are_reported_not_swallowed
 run_test "Fedora terminal failures are reported, not swallowed" \
     test_fedora_terminal_failures_are_reported
+run_test "macOS brew failures warn instead of aborting the bootstrap" \
+    test_macos_brew_failures_are_not_fatal
+run_test "a failing brew still attempts the later macOS steps" \
+    test_macos_brew_failure_still_attempts_later_steps
+run_test "macOS without Homebrew skips the arm and continues" \
+    test_macos_without_homebrew_skips_the_arm
+run_test "no unguarded brew install remains" \
+    test_no_unguarded_brew_install_remains
 run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
 run_test "the shell tools install from a bundle on an offline host" \
