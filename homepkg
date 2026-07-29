@@ -475,7 +475,7 @@ def install_github(tool, meta, prefix, plat, dry_run):
 # setup-kde's job, not homepkg's.
 
 def codeberg_release_assets(repo, tag=None):
-    """(tag_name, [(asset name, url), ...]) for a release.
+    """(tag_name, published_at, [(asset name, url), ...]) for a release.
 
     `tag=None` (the default) means the single newest published release,
     prereleases included: Gitea's (like GitHub's) /releases/latest skips
@@ -484,6 +484,11 @@ def codeberg_release_assets(repo, tag=None):
     stable tag predates KWin 6 fixes only shipped in the beta line. The
     releases list is already sorted newest-first, so ?limit=1 is enough.
     Pass an explicit tag (registry's codeberg_tag) to pin one instead.
+
+    published_at is Codeberg's own RFC3339 timestamp for the release --
+    server-authoritative, unlike any local machine's clock, and lexically
+    comparable as a plain string. It's the freshness signal
+    _replace_codeberg_asset uses instead of filesystem mtimes.
     """
     if tag:
         data = json.loads(http_get(
@@ -494,8 +499,9 @@ def codeberg_release_assets(repo, tag=None):
         if not releases:
             raise HomepkgError(f"no releases found for {repo}")
         data = releases[0]
-    return data.get("tag_name", "?"), [
-        (a["name"], a["browser_download_url"]) for a in data.get("assets", [])]
+    published_at = data.get("published_at") or data.get("created_at")
+    return (data.get("tag_name", "?"), published_at,
+            [(a["name"], a["browser_download_url"]) for a in data.get("assets", [])])
 
 
 def codeberg_pick_kwinscript(assets):
@@ -510,9 +516,10 @@ def codeberg_asset_dir(tool, prefix):
 
 
 _CODEBERG_ASSET_LOCK = ".lock"
+_CODEBERG_ASSET_META = ".meta.json"
 
 
-def _replace_codeberg_asset(dest_dir, name, populate):
+def _replace_codeberg_asset(dest_dir, name, populate, freshness=None):
     """Atomically replace dest_dir's cached asset with `name`, written by
     calling populate(tmp_path). Used by both install_codeberg (populate
     downloads) and _install_bundle_codeberg (populate copies from the
@@ -524,27 +531,33 @@ def _replace_codeberg_asset(dest_dir, name, populate):
     share one) touches the name a consumer actually looks for. If populate()
     raises, dest_dir's existing contents are exactly as they were before this
     call. Only once the new file is confirmed in place are older-version
-    files in dest_dir cleared out, so old and new never coexist.
+    files (including any orphaned .part left by a process that was killed
+    mid-populate) cleared out, so nothing but the current asset, the lock,
+    and the freshness sidecar ever remain.
 
-    The whole populate/replace/cleanup sequence runs under a per-dest_dir
-    flock: two overlapping refreshes of the same tool (e.g. a manual
-    `homepkg install` racing setup-kde's own fetch) would otherwise each
-    list dest_dir mid-flight and delete the *other* one's just-placed final
-    file -- both report success, but the cache ends up empty. Serializing
-    means the second call only ever sees the first call's fully-finished
-    result. The lock file itself is never removed by the cleanup loop below;
-    deleting it while a process still holds it open would let a later opener
-    take a lock on a different, discarded inode and silently stop
-    contending for it.
+    The whole sequence runs under a per-dest_dir flock: two overlapping
+    refreshes of the same tool (e.g. a manual `homepkg install` racing
+    setup-kde's own fetch) would otherwise each list dest_dir mid-flight and
+    delete the *other* one's just-placed final file -- both report success,
+    but the cache ends up empty. Serializing means the second call only ever
+    sees the first call's fully-finished result. The lock file itself is
+    never removed by the cleanup below; deleting it while a process still
+    holds it open would let a later opener take a lock on a different,
+    discarded inode and silently stop contending for it.
 
-    If dest_dir already holds an asset newer (by mtime) than the one
-    populate() just produced, the existing asset is kept and this returns
-    False instead of replacing it -- a staged bundle, built at some earlier
-    point, must not downgrade a cache that was refreshed more recently
-    online. download() always writes with the current time, so the online
-    path never loses this comparison; a bundle's asset mtime survives from
-    whenever the bundle was built (preserved through tarfile extraction and
-    shutil.copy2), so it can correctly lose to a fresher cache. Returns True
+    `freshness` is an opaque, lexicographically-comparable token -- in
+    practice Codeberg's release `published_at` (RFC3339, sorts correctly as
+    a plain string) -- persisted in a small sidecar file next to the asset.
+    If the sidecar's stored value is already >= `freshness`, populate() is
+    skipped entirely (no download/copy) and this returns False: a bundle
+    built at some earlier point must not downgrade a cache that was
+    refreshed more recently online. This deliberately does NOT use local
+    file mtimes: a bundle built on one host and installed on another has no
+    shared clock, so an older bundle from a host with a clock skewed ahead
+    could otherwise look newer than a genuinely fresher cache -- and worse,
+    a bogus future mtime could then block every later legitimate refresh
+    until the local clock caught up to it. `freshness=None` (unknown) always
+    applies, matching the old no-comparison-possible behavior. Returns True
     if the new asset was applied.
     """
     import fcntl  # POSIX-only, matching this file's Linux/macOS-only scope
@@ -553,25 +566,31 @@ def _replace_codeberg_asset(dest_dir, name, populate):
     with open(lock_path, "a+") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
+            meta_path = os.path.join(dest_dir, _CODEBERG_ASSET_META)
+            existing_freshness = None
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path) as f:
+                        existing_freshness = json.load(f).get("published_at")
+                except (OSError, ValueError):
+                    existing_freshness = None
+            if (existing_freshness is not None and freshness is not None
+                    and existing_freshness >= freshness):
+                return False
+
             tmp_path = os.path.join(dest_dir, f".{name}.part")
             final_path = os.path.join(dest_dir, name)
             try:
                 populate(tmp_path)
+                os.replace(tmp_path, final_path)
             except BaseException:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
                 raise
-            others = [f for f in os.listdir(dest_dir)
-                      if f not in (name, _CODEBERG_ASSET_LOCK, os.path.basename(tmp_path))]
-            newest_existing = max(
-                (os.path.getmtime(os.path.join(dest_dir, f)) for f in others),
-                default=None)
-            if newest_existing is not None and newest_existing > os.path.getmtime(tmp_path):
-                os.remove(tmp_path)
-                return False
-            os.replace(tmp_path, final_path)
+            with open(meta_path, "w") as f:
+                json.dump({"published_at": freshness}, f)
             for existing in os.listdir(dest_dir):
-                if existing in (name, _CODEBERG_ASSET_LOCK):
+                if existing in (name, _CODEBERG_ASSET_LOCK, _CODEBERG_ASSET_META):
                     continue
                 p = os.path.join(dest_dir, existing)
                 if os.path.isdir(p) and not os.path.islink(p):
@@ -585,7 +604,7 @@ def _replace_codeberg_asset(dest_dir, name, populate):
 
 def install_codeberg(tool, meta, prefix, plat, dry_run):
     repo = meta["codeberg"]
-    tag, assets = codeberg_release_assets(repo, meta.get("codeberg_tag"))
+    tag, published_at, assets = codeberg_release_assets(repo, meta.get("codeberg_tag"))
     picked = codeberg_pick_kwinscript(assets)
     if not picked:
         raise HomepkgError(f"{tool}: no .kwinscript asset in {repo} {tag}")
@@ -601,10 +620,10 @@ def install_codeberg(tool, meta, prefix, plat, dry_run):
         info(f"  would install from {url}")
         return
     dest_dir = codeberg_asset_dir(tool, prefix)
-    if _replace_codeberg_asset(dest_dir, name, lambda tmp: download(url, tmp)):
+    if _replace_codeberg_asset(dest_dir, name, lambda tmp: download(url, tmp), published_at):
         info(f"  saved {name} to {dest_dir}")
     else:
-        info(f"  {dest_dir} already has a newer asset; keeping it")
+        info(f"  {dest_dir} already has a release at least as recent; keeping it")
 
 
 # The per-tool extract backends: fetch one prebuilt artifact and unpack it.
@@ -899,7 +918,7 @@ def _stage_codeberg(tools, td, skip_unavailable=False):
     entries = []
     for t in tools:
         repo = TOOLS[t]["codeberg"]
-        tag, assets = codeberg_release_assets(repo, TOOLS[t].get("codeberg_tag"))
+        tag, published_at, assets = codeberg_release_assets(repo, TOOLS[t].get("codeberg_tag"))
         picked = codeberg_pick_kwinscript(assets)
         if not picked:
             msg = f"{t}: no .kwinscript asset in {repo} {tag}"
@@ -913,7 +932,10 @@ def _stage_codeberg(tools, td, skip_unavailable=False):
         # staging directory.
         _require_basename(name, "asset name")
         download(url, os.path.join(adir, name))
-        entries.append({"tool": t, "asset": name})
+        # published_at rides along in the manifest so install-bundle can
+        # compare it against whatever's already cached at install time,
+        # without needing network access to look it up again.
+        entries.append({"tool": t, "asset": name, "published_at": published_at})
     return entries
 
 
@@ -1095,7 +1117,8 @@ def _install_bundle_codeberg(td, manifest, prefix, dry_run):
             continue
         dest_dir = codeberg_asset_dir(e["tool"], prefix)
         if not _replace_codeberg_asset(dest_dir, e["asset"],
-                                       lambda tmp, src=asset: shutil.copy2(src, tmp)):
+                                       lambda tmp, src=asset: shutil.copy2(src, tmp),
+                                       e.get("published_at")):
             # Not a failure: the tool still has a valid (just newer) asset --
             # this bundle's copy simply lost to a fresher cache.
             info(f"  {e['tool']}: keeping the newer cached asset over this bundle's")

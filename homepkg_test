@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
 
 # Load the extensionless homepkg script as a module without running main().
@@ -147,13 +146,13 @@ _http_get_urls = []
 def _fake_http_get(url, accept=None):
     _http_get_urls.append(url)
     if "/releases/tags/" in url:
-        return json.dumps({"tag_name": "1.2.3",
+        return json.dumps({"tag_name": "1.2.3", "published_at": "2026-06-01T00:00:00Z",
                            "assets": [{"name": "krohnkite-1.2.3.kwinscript",
                                        "browser_download_url": "https://example.invalid/pinned"}]}).encode()
-    return json.dumps([{"tag_name": "0.9.9.3_beta",
+    return json.dumps([{"tag_name": "0.9.9.3_beta", "published_at": "2026-07-01T00:00:00Z",
                         "assets": [{"name": "krohnkite-0.9.9.3_beta.kwinscript",
                                     "browser_download_url": "https://example.invalid/newest"}]},
-                       {"tag_name": "0.9.9.2",
+                       {"tag_name": "0.9.9.2", "published_at": "2026-01-01T00:00:00Z",
                         "assets": [{"name": "krohnkite-0.9.9.2.kwinscript",
                                     "browser_download_url": "https://example.invalid/older"}]}]).encode()
 hp.http_get = _fake_http_get
@@ -161,11 +160,13 @@ try:
     hp.codeberg_release_assets("anametologin/Krohnkite", "1.2.3")
     check("codeberg_release_assets requests a pinned tag from /releases/tags",
           _http_get_urls[-1].endswith("/releases/tags/1.2.3"))
-    tag, assets = hp.codeberg_release_assets("anametologin/Krohnkite")
+    tag, published_at, assets = hp.codeberg_release_assets("anametologin/Krohnkite")
     check("codeberg_release_assets with no tag requests /releases?limit=1, not /releases/latest",
           _http_get_urls[-1].endswith("/releases?limit=1"))
     check("codeberg_release_assets with no tag takes the newest release, prereleases included",
           tag == "0.9.9.3_beta" and assets[0][0] == "krohnkite-0.9.9.3_beta.kwinscript")
+    check("codeberg_release_assets returns the release's published_at",
+          published_at == "2026-07-01T00:00:00Z")
 finally:
     hp.http_get = _saved_http_get
 
@@ -173,7 +174,8 @@ finally:
 # no unpacking, unlike install_github, and no "bins" needed in meta.
 _saved_cra = hp.codeberg_release_assets
 hp.codeberg_release_assets = lambda repo, tag=None: (
-    "0.9.9.3_beta", [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
+    "0.9.9.3_beta", "2026-07-01T00:00:00Z",
+    [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
 try:
     with tempfile.TemporaryDirectory() as td:
         prefix = os.path.join(td, "prefix")
@@ -201,7 +203,8 @@ try:
               not os.path.exists(hp.codeberg_asset_dir("krohnkite", prefix)))
     # No .kwinscript asset in the release -- e.g. upstream renamed or dropped
     # it -- has to fail loudly rather than silently install nothing.
-    hp.codeberg_release_assets = lambda repo, tag=None: ("9.9.9", [("Source code (zip)", "u")])
+    hp.codeberg_release_assets = lambda repo, tag=None: (
+        "9.9.9", "2026-07-01T00:00:00Z", [("Source code (zip)", "u")])
     _err = None
     try:
         hp.install_codeberg("krohnkite", hp.TOOLS["krohnkite"],
@@ -217,7 +220,8 @@ try:
     # ends in .kwinscript must be rejected before it becomes a path, the same
     # way a bundle-manifest asset name already is.
     hp.codeberg_release_assets = lambda repo, tag=None: (
-        "9.9.9", [("../../evil.kwinscript", "https://example.invalid/evil")])
+        "9.9.9", "2026-07-01T00:00:00Z",
+        [("../../evil.kwinscript", "https://example.invalid/evil")])
     with tempfile.TemporaryDirectory() as td:
         prefix = os.path.join(td, "prefix")
         _err = None
@@ -247,6 +251,8 @@ finally:
 
 # The new asset must land under its final name and any older-version file
 # must be gone -- but only after populate() (the download/copy) succeeds.
+# Neither call here passes a freshness token, so the swap is unconditional
+# (freshness=None always applies -- "can't compare, so just take it").
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     os.makedirs(dest_dir)
@@ -262,7 +268,8 @@ with tempfile.TemporaryDirectory() as td:
           not os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript")))
     check("_replace_codeberg_asset leaves no stray temp file",
           sorted(os.listdir(dest_dir))
-          == sorted(["krohnkite-0.9.9.3_beta.kwinscript", hp._CODEBERG_ASSET_LOCK]))
+          == sorted(["krohnkite-0.9.9.3_beta.kwinscript",
+                     hp._CODEBERG_ASSET_LOCK, hp._CODEBERG_ASSET_META]))
 
 # If populate() fails, the old asset must be untouched and no partial temp
 # file left behind -- the swap only happens after populate() succeeds.
@@ -293,23 +300,34 @@ with tempfile.TemporaryDirectory() as td:
 
 # A staged bundle, built at some earlier point, must not downgrade a cache
 # that was refreshed more recently online -- e.g. the cache holds 0.9.9.3
-# (fetched today) but a bootstrap bundle sitting around still carries
-# 0.9.9.2 (built weeks ago). populate() here simulates a bundle-copy that
-# preserves the source's (older) mtime, the same way shutil.copy2 does.
+# (fetched today, published_at recorded in the sidecar) but a bootstrap
+# bundle sitting around still carries 0.9.9.2 (built weeks ago, an OLDER
+# published_at). This is deliberately NOT a local-mtime comparison: a bundle
+# built on one host and installed on another share no clock, so an older
+# bundle from a host with a skewed-ahead clock could otherwise look newer
+# than a genuinely fresher cache.
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     os.makedirs(dest_dir)
     newer_path = os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript")
     with open(newer_path, "wb") as f:
         f.write(b"newer, already cached")
+    with open(os.path.join(dest_dir, hp._CODEBERG_ASSET_META), "w") as f:
+        json.dump({"published_at": "2026-07-01T00:00:00Z"}, f)
 
-    def _populate_older(tmp):
-        with open(tmp, "wb") as f:
-            f.write(b"older, from a stale bundle")
-        os.utime(tmp, (time.time() - 3600, time.time() - 3600))  # 1h in the past
+    def _populate_should_not_run(tmp):
+        raise AssertionError("populate() must not be called for an already-stale candidate")
 
-    applied = hp._replace_codeberg_asset(
-        dest_dir, "krohnkite-0.9.9.2.kwinscript", _populate_older)
+    try:
+        applied = hp._replace_codeberg_asset(
+            dest_dir, "krohnkite-0.9.9.2.kwinscript", _populate_should_not_run,
+            "2026-01-01T00:00:00Z")
+        _populate_wrongly_called = False
+    except AssertionError:
+        applied = False
+        _populate_wrongly_called = True
+    check("_replace_codeberg_asset never calls populate() for an already-stale candidate",
+          not _populate_wrongly_called)
     check("_replace_codeberg_asset reports the older asset was not applied",
           applied is False)
     check("_replace_codeberg_asset keeps the newer cached asset",
@@ -317,39 +335,81 @@ with tempfile.TemporaryDirectory() as td:
     check("_replace_codeberg_asset doesn't leave the older asset behind either",
           not os.path.exists(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript")))
 
-# ...but the online path is never blocked by this: download() always writes
-# with the current time, so a genuinely fresh fetch always wins even if it
-# happens to resolve to a name that would sort "older" as a plain string.
+# ...a genuinely newer release (later published_at) correctly supersedes it.
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     os.makedirs(dest_dir)
     with open(os.path.join(dest_dir, "krohnkite-0.9.9.9.kwinscript"), "wb") as f:
         f.write(b"cached")
+    with open(os.path.join(dest_dir, hp._CODEBERG_ASSET_META), "w") as f:
+        json.dump({"published_at": "2026-01-01T00:00:00Z"}, f)
     applied = hp._replace_codeberg_asset(
         dest_dir, "krohnkite-0.9.9.10.kwinscript",
-        lambda tmp: open(tmp, "wb").write(b"freshly fetched"))
-    check("a freshly-populated asset (current mtime) always applies",
+        lambda tmp: open(tmp, "wb").write(b"freshly fetched"),
+        "2026-07-01T00:00:00Z")
+    check("a release with a later published_at applies over an older cache",
           applied is True
           and open(os.path.join(dest_dir, "krohnkite-0.9.9.10.kwinscript"), "rb").read()
           == b"freshly fetched")
 
+# An unknown freshness (no sidecar yet, e.g. a cache from before this
+# mechanism existed) can't be compared, so the new asset always applies --
+# matching the old no-comparison-possible behavior.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    with open(os.path.join(dest_dir, "krohnkite-0.9.9.2.kwinscript"), "wb") as f:
+        f.write(b"legacy cache, no sidecar")
+    applied = hp._replace_codeberg_asset(
+        dest_dir, "krohnkite-0.9.9.3_beta.kwinscript",
+        lambda tmp: open(tmp, "wb").write(b"new"), "2026-07-01T00:00:00Z")
+    check("no existing sidecar means the new asset always applies",
+          applied is True)
 
-def _concurrent_replace_worker(dest_dir, name, barrier, barrier_q, outcome_q):
+# A process killed mid-populate() (e.g. SIGKILL) leaves an orphaned
+# .NAME.part behind -- its cleanup-on-exception path never runs. That orphan
+# must not count as "an existing asset" for freshness purposes (its recent
+# mtime could otherwise make a legitimate, genuinely newer replacement look
+# like a downgrade and get discarded) and should be swept up as ordinary
+# clutter the next time the lock is held.
+with tempfile.TemporaryDirectory() as td:
+    dest_dir = os.path.join(td, "assets", "krohnkite")
+    os.makedirs(dest_dir)
+    orphan = os.path.join(dest_dir, ".krohnkite-0.9.9.2.kwinscript.part")
+    with open(orphan, "wb") as f:
+        f.write(b"leftover from a killed process")
+    applied = hp._replace_codeberg_asset(
+        dest_dir, "krohnkite-0.9.9.3_beta.kwinscript",
+        lambda tmp: open(tmp, "wb").write(b"new"), "2026-07-01T00:00:00Z")
+    check("an orphaned .part file doesn't block a legitimate replacement",
+          applied is True)
+    check("the orphan is swept up, not left behind",
+          not os.path.exists(orphan))
+    check("only the new asset, lock, and sidecar remain",
+          sorted(os.listdir(dest_dir))
+          == sorted(["krohnkite-0.9.9.3_beta.kwinscript",
+                     hp._CODEBERG_ASSET_LOCK, hp._CODEBERG_ASSET_META]))
+
+
+def _concurrent_replace_worker(dest_dir, name, start_barrier, active_count, max_seen, outcome_q):
+    start_barrier.wait()  # both processes begin racing for the flock together
     def populate(tmp):
+        # Directly, atomically observe how many workers are inside
+        # populate() at once -- not inferred from timeouts or sleep
+        # ordering, which can give a false "exclusive" reading purely from
+        # scheduler delay. If the lock holds, max_seen can never exceed 1,
+        # full stop, regardless of timing; if it were missing, two workers
+        # synchronized by start_barrier are very likely to be here together
+        # and max_seen would show it.
+        with active_count.get_lock():
+            active_count.value += 1
+            with max_seen.get_lock():
+                max_seen.value = max(max_seen.value, active_count.value)
         with open(tmp, "wb") as f:
             f.write(name.encode())
-        # If the lock holds, only one worker is ever inside populate() at a
-        # time, so its partner can never reach this barrier concurrently and
-        # wait() must time out (BrokenBarrierError). If the lock were
-        # missing, both workers would be here together and the barrier would
-        # release normally for both -- that's the race, detected
-        # deterministically instead of via sleep timing that CI scheduling
-        # could make miss the overlap entirely.
-        try:
-            barrier.wait(timeout=2)
-            barrier_q.put("released")
-        except threading.BrokenBarrierError:
-            barrier_q.put("timed-out")
+        time.sleep(0.1)  # widen the window a broken lock would need to be caught in
+        with active_count.get_lock():
+            active_count.value -= 1
     try:
         hp._replace_codeberg_asset(dest_dir, name, populate)
         outcome_q.put("ok")
@@ -359,36 +419,40 @@ def _concurrent_replace_worker(dest_dir, name, barrier, barrier_q, outcome_q):
 
 # _replace_codeberg_asset locks per dest_dir: two overlapping installs of the
 # same tool must not run their populate() calls concurrently (proven above
-# via the barrier), and the overall operation must still behave correctly:
-# neither call may raise, and exactly one final asset must remain (the
-# lock's serialization makes the later call supersede the earlier one, same
-# as two sequential refreshes would -- without the lock this reproduces as
-# either both final files vanishing, each call's cleanup deleting the
+# via the shared counter), and the overall operation must still behave
+# correctly: neither call may raise, and exactly one final asset must remain
+# (the lock's serialization makes the later call supersede the earlier one,
+# same as two sequential refreshes would -- without the lock this reproduces
+# as either both final files vanishing, each call's cleanup deleting the
 # other's just-placed file, or a crash from one call's cleanup deleting the
 # other's still-in-flight temp file). Real subprocesses (fork), so the OS
-# flock and the barrier are both actually contended, not same-process no-ops.
+# flock and the shared counter are both actually contended, not
+# same-process no-ops.
 with tempfile.TemporaryDirectory() as td:
     dest_dir = os.path.join(td, "assets", "krohnkite")
     ctx = multiprocessing.get_context("fork")
-    barrier = ctx.Barrier(2)
-    barrier_q = ctx.Queue()
+    start_barrier = ctx.Barrier(2)
+    active_count = ctx.Value('i', 0)
+    max_seen = ctx.Value('i', 0)
     outcome_q = ctx.Queue()
     p1 = ctx.Process(target=_concurrent_replace_worker,
-                     args=(dest_dir, "krohnkite-a.kwinscript", barrier, barrier_q, outcome_q))
+                     args=(dest_dir, "krohnkite-a.kwinscript", start_barrier,
+                           active_count, max_seen, outcome_q))
     p2 = ctx.Process(target=_concurrent_replace_worker,
-                     args=(dest_dir, "krohnkite-b.kwinscript", barrier, barrier_q, outcome_q))
+                     args=(dest_dir, "krohnkite-b.kwinscript", start_barrier,
+                           active_count, max_seen, outcome_q))
     p1.start()
     p2.start()
-    barrier_signals = sorted([barrier_q.get(timeout=10), barrier_q.get(timeout=10)])
     outcomes = sorted([outcome_q.get(timeout=10), outcome_q.get(timeout=10)])
     p1.join(timeout=10)
     p2.join(timeout=10)
     check("the lock keeps populate() calls from ever overlapping "
-          "(neither finds a partner at the barrier)",
-          barrier_signals == ["timed-out", "timed-out"])
+          "(a shared counter never observes more than 1 concurrently)",
+          max_seen.value == 1)
     check("neither concurrent _replace_codeberg_asset call raises",
           outcomes == ["ok", "ok"])
-    remaining = sorted(f for f in os.listdir(dest_dir) if f != hp._CODEBERG_ASSET_LOCK)
+    remaining = sorted(f for f in os.listdir(dest_dir)
+                       if f not in (hp._CODEBERG_ASSET_LOCK, hp._CODEBERG_ASSET_META))
     check("concurrent _replace_codeberg_asset calls don't both vanish",
           remaining in (["krohnkite-a.kwinscript"], ["krohnkite-b.kwinscript"]))
 
@@ -870,6 +934,37 @@ with tempfile.TemporaryDirectory() as td:
     check("install-bundle (combined) replays the codeberg section",
           os.path.exists(os.path.join(hp.codeberg_asset_dir("krohnkite", prefix), asset)))
 
+# End-to-end: a bundle manifest's published_at (recorded by _stage_codeberg
+# at build time) has to actually block install-bundle from downgrading a
+# cache that's already newer -- not just work at the _replace_codeberg_asset
+# unit level.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    dest_dir = hp.codeberg_asset_dir("krohnkite", prefix)
+    os.makedirs(dest_dir)
+    newer_asset = os.path.join(dest_dir, "krohnkite-0.9.9.3_beta.kwinscript")
+    with open(newer_asset, "wb") as f:
+        f.write(b"newer, already cached")
+    with open(os.path.join(dest_dir, hp._CODEBERG_ASSET_META), "w") as f:
+        json.dump({"published_at": "2026-07-01T00:00:00Z"}, f)
+
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "codeberg-assets"))
+    older_asset_name = "krohnkite-0.9.9.2.kwinscript"
+    with open(os.path.join(src, "codeberg-assets", older_asset_name), "wb") as f:
+        f.write(b"older, from a stale bundle")
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "codeberg", "platform": "linux/x86_64",
+                   "tools": [{"tool": "krohnkite", "asset": older_asset_name,
+                              "published_at": "2026-01-01T00:00:00Z"}]}, f)
+    bundle = os.path.join(td, "stale.tar.gz")
+    hp._write_bundle(bundle, src)
+
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("install-bundle (codeberg) doesn't downgrade a newer cache end-to-end",
+          open(newer_asset, "rb").read() == b"newer, already cached"
+          and not os.path.exists(os.path.join(dest_dir, older_asset_name)))
+
 # A codeberg asset missing from the bundle is reported, not silently skipped
 # -- same contract as the equivalent github-side test above.
 with tempfile.TemporaryDirectory() as td:
@@ -926,7 +1021,8 @@ with tempfile.TemporaryDirectory() as td:
     _saved_cra2 = hp.codeberg_release_assets
     _saved_dl2 = hp.download
     hp.codeberg_release_assets = lambda repo, tag=None: (
-        "0.9.9.3_beta", [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
+        "0.9.9.3_beta", "2026-07-01T00:00:00Z",
+        [("krohnkite-0.9.9.3_beta.kwinscript", "https://example.invalid/k")])
     def _failing_download(url, dest):
         raise OSError("network unreachable")
     hp.download = _failing_download
