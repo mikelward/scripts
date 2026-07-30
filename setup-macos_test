@@ -8,7 +8,7 @@
 # same way setup-kde_test mocks kwriteconfig6.
 #
 # The absolute-path helpers can't be shadowed by PATH, so setup-macos takes
-# them from the environment ($ACTIVATE_SETTINGS) and the mocks go there.
+# them from the environment ($ACTIVATE_SETTINGS, $PBS) and the mocks go there.
 
 set -e
 
@@ -49,13 +49,16 @@ exit 0
 MOCK
     done
 
-    # The absolute-path helper.
-    cat > "$TEST_TMPDIR/bin/activateSettings" <<MOCK
+    # The absolute-path helpers.
+    for cmd in activateSettings pbs; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
-printf "%s\\n" "activateSettings \$*" >> "$CALLS"
+printf "%s\\n" "$cmd \$*" >> "$CALLS"
 exit 0
 MOCK
+    done
     ACTIVATE_SETTINGS="$TEST_TMPDIR/bin/activateSettings"
+    PBS="$TEST_TMPDIR/bin/pbs"
 
     chmod +x "$TEST_TMPDIR"/bin/*
 
@@ -67,7 +70,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in cat dirname grep id mkdir rm; do
+    for cmd in cat dirname grep id mkdir rm sed; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -75,6 +78,55 @@ MOCK
     # so the ordinary run has nothing to warn about;
     # test_missing_amethyst_config removes it.
     touch "$TEST_TMPDIR/home/.amethyst.yml"
+
+    # On PATH by default, so the ordinary run configures every shortcut. Tests
+    # about missing launchers use isolate_script to get away from both these
+    # and the real ones beside the script.
+    add_all_launchers
+}
+
+# Add a fake launcher helper (e.g. browser1) to the mock bin, i.e. on PATH.
+add_launcher() {
+    cat > "$TEST_TMPDIR/bin/$1" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/$1"
+}
+
+# Underscore-prefixed, and not "name": run_test holds the test's name in a
+# plain global, and a loop variable that collides with it renames every test
+# that calls this.
+add_all_launchers() {
+    for _each_launcher in browser1 browser2 terminal terminal_on_workstation music; do
+        add_launcher "$_each_launcher"
+    done
+}
+
+# Run a copy of setup-macos from a directory with no launcher siblings. In the
+# real repo the launchers live beside setup-macos and the sibling fallback
+# finds them, so tests about genuinely-missing launchers need it isolated --
+# and the mock bin copies removed from PATH.
+isolate_script() {
+    # An optional directory name, so a test can isolate into a path with a
+    # space or an XML metacharacter in it.
+    ISOLATED_DIR="$TEST_TMPDIR/${1:-isolated}"
+    mkdir -p "$ISOLATED_DIR"
+    cp "$SCRIPT_DIR/setup-macos" "$ISOLATED_DIR/setup-macos"
+    MACOS_SCRIPT="$ISOLATED_DIR/setup-macos"
+    for _each_launcher in browser1 browser2 terminal terminal_on_workstation music; do
+        rm -f "$TEST_TMPDIR/bin/$_each_launcher"
+    done
+}
+
+# Put a launcher beside the isolated script but NOT on PATH, to exercise the
+# sibling fallback on its own.
+add_sibling_launcher() {
+    cat > "$ISOLATED_DIR/$1" <<'MOCK'
+#!/bin/sh
+exit 0
+MOCK
+    chmod +x "$ISOLATED_DIR/$1"
 }
 
 teardown() {
@@ -93,6 +145,7 @@ run_macos() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
+        PBS="$PBS" \
         PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" 2>&1)"
     status=$?
@@ -116,6 +169,7 @@ run_macos_without() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
+        PBS="$PBS" \
         PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" 2>&1)"
     status=$?
@@ -164,6 +218,14 @@ assert_not_called() {
 assert_file_exists() {
     if ! test -f "$1"; then
         echo "  FAIL: expected file '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_not_exists() {
+    if test -f "$1"; then
+        echo "  FAIL: unexpected file '$1' exists"
         TEST_FAILED=1
         return 1
     fi
@@ -416,6 +478,18 @@ test_missing_activate_settings_warns_about_logout() {
     assert_output_contains "log out and back in for the shortcut changes"
 }
 
+# --- Spaces ---
+
+# Regression: with the Dock's "automatically rearrange Spaces" left on (the
+# default), the Option+1..9 bindings above point at whichever desktop was used
+# most recently rather than at desktop N.
+test_pins_the_spaces_order() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.dock mru-spaces -bool false" &&
+    assert_called "killall Dock"
+}
+
 # --- Amethyst ---
 
 test_enables_focus_follows_mouse() {
@@ -454,6 +528,82 @@ test_workflow_name_is_substituted() {
     assert_file_lacks "$plist" "WORKFLOWNAME"
 }
 
+# Regression: the command baked into the workflow used to be a hard-coded
+# "$HOME/scripts/<launcher>" regardless of where the launcher actually is, so
+# a checkout kept anywhere else got Quick Actions pointing at nothing.
+test_workflow_runs_the_resolved_launcher() {
+    run_macos
+    wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
+    assert_status 0 &&
+    assert_file_contains "$wflow" "$TEST_TMPDIR/bin/browser1" &&
+    assert_file_lacks "$wflow" "$TEST_TMPDIR/home/scripts/browser1"
+}
+
+# During a fresh bootstrap setup runs setup-macos out of the just-cloned repo,
+# before any login shell has put it on PATH -- so the launchers have to be
+# found beside the script too.
+test_sibling_launcher_fallback() {
+    isolate_script
+    add_sibling_launcher browser1
+    run_macos --ignore-errors
+    wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
+    assert_status 0 &&
+    assert_file_contains "$wflow" "$ISOLATED_DIR/browser1"
+}
+
+# A launcher that isn't installed must not be fatal, and must not leave a
+# shortcut bound to a workflow that runs nothing.
+test_missing_launcher_skipped_not_fatal() {
+    isolate_script
+    add_sibling_launcher browser1
+    run_macos --ignore-errors
+    services="$TEST_TMPDIR/home/Library/Services"
+    assert_status 0 &&
+    assert_output_contains "music not found on PATH or beside this script" &&
+    assert_file_exists "$services/Launch Browser1.workflow/Contents/document.wflow" &&
+    assert_file_not_exists "$services/Launch Music.workflow/Contents/document.wflow" &&
+    assert_not_called "Launch Music - runWorkflowAsService"
+}
+
+# The COMMAND_STRING is run as a /bin/sh command and lives inside a plist, so
+# a checkout under a path with a space would be split into two words, and one
+# with an `&` would make the XML invalid.
+test_launcher_path_is_quoted_and_escaped() {
+    isolate_script "odd & dir"
+    add_sibling_launcher browser1
+    run_macos --ignore-errors
+    wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
+    assert_status 0 &&
+    assert_file_contains "$wflow" "<string>'$TEST_TMPDIR/odd &amp; dir/browser1'</string>" &&
+    assert_file_lacks "$wflow" "<string>$TEST_TMPDIR/odd & dir/browser1</string>"
+}
+
+# A launcher that existed on an earlier run leaves a workflow behind. Skipping
+# it now has to take that with it, or the shortcut keeps working and runs the
+# path the launcher used to have.
+test_stale_workflow_removed_when_launcher_disappears() {
+    run_macos
+    services="$TEST_TMPDIR/home/Library/Services"
+    assert_status 0 &&
+    assert_file_exists "$services/Launch Music.workflow/Contents/document.wflow" || return 1
+
+    isolate_script
+    add_sibling_launcher browser1
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Removing the stale Quick Action for music" &&
+    assert_file_not_exists "$services/Launch Music.workflow/Contents/document.wflow" &&
+    assert_file_exists "$services/Launch Browser1.workflow/Contents/document.wflow"
+}
+
+test_no_launchers_at_all_warns_without_writing_the_registry() {
+    isolate_script
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "no launcher helpers found" &&
+    assert_not_called "defaults write pbs NSServicesStatus"
+}
+
 test_assigns_option_key_equivalents() {
     run_macos
     assert_status 0 &&
@@ -463,6 +613,22 @@ test_assigns_option_key_equivalents() {
     assert_called '"key_equivalent" = "~t"' &&
     assert_called '"key_equivalent" = "~w"' &&
     assert_called '"key_equivalent" = "~y"'
+}
+
+# Regression: writing the workflows and the key equivalents isn't enough. The
+# Services registry is a cache, and until pbs re-reads it the Quick Actions
+# aren't registered and the shortcuts silently do nothing.
+test_flushes_the_services_registry() {
+    run_macos
+    assert_status 0 &&
+    assert_called "pbs -flush"
+}
+
+test_missing_pbs_warns_about_logout() {
+    PBS="$TEST_TMPDIR/bin/no-such-pbs"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "log out and back in for the launch shortcuts to work"
 }
 
 # --- Finder ---
@@ -512,12 +678,30 @@ run_test "applies the shortcut settings to this session" \
     test_applies_shortcut_settings
 run_test "missing activateSettings falls back to the logout advice" \
     test_missing_activate_settings_warns_about_logout
+run_test "pins the Spaces order so the numbered shortcuts hold" \
+    test_pins_the_spaces_order
 run_test "enables focus follows mouse" test_enables_focus_follows_mouse
 run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
 run_test "creates a Quick Action per launcher" test_creates_launcher_workflows
 run_test "substitutes the workflow name without sed" \
     test_workflow_name_is_substituted
+run_test "the workflow runs the resolved launcher path" \
+    test_workflow_runs_the_resolved_launcher
+run_test "finds a launcher beside the script without PATH" \
+    test_sibling_launcher_fallback
+run_test "a missing launcher is skipped, not fatal" \
+    test_missing_launcher_skipped_not_fatal
+run_test "quotes and XML-escapes the launcher path" \
+    test_launcher_path_is_quoted_and_escaped
+run_test "removes a stale Quick Action when its launcher goes away" \
+    test_stale_workflow_removed_when_launcher_disappears
+run_test "no launchers at all leaves the registry alone" \
+    test_no_launchers_at_all_warns_without_writing_the_registry
 run_test "assigns the Option+key equivalents" test_assigns_option_key_equivalents
+run_test "flushes the Services registry so the shortcuts work" \
+    test_flushes_the_services_registry
+run_test "missing pbs falls back to the logout advice" \
+    test_missing_pbs_warns_about_logout
 run_test "configures Finder and restarts it" test_configures_finder
 
 echo
