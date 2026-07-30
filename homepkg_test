@@ -600,6 +600,396 @@ with tempfile.TemporaryDirectory() as td:
     check("github_extract says what it kept",
           _err is not None and "hx" in str(_err).split("kept")[-1])
 
+# --- github payload (non-binary release contents) -----------------------------
+#
+# helix's release asset carries hx plus the runtime/ tree it loads grammars and
+# queries from; keeping only the binary would install an editor with no
+# language support. The registry's "payload" key names those directories.
+
+_HELIX_PAYLOAD = {"runtime": "share/helix/runtime"}
+
+check("registry keeps helix's runtime payload from its release",
+      hp.TOOLS["helix"].get("payload") == _HELIX_PAYLOAD)
+
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {
+        "helix-25.07/hx": b"#!/bin/sh\necho hx\n",
+        "helix-25.07/runtime/queries/rust/highlights.scm": b"; rust\n",
+        "helix-25.07/runtime/themes/dark.toml": b"# dark\n",
+        "helix-25.07/README.md": b"docs\n"})
+    placed = hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                               _HELIX_PAYLOAD)
+    runtime = os.path.join(prefix, "share", "helix", "runtime")
+    check("github_extract places the binary alongside its payload",
+          placed == ["hx"] and os.access(os.path.join(prefix, "bin", "hx"), os.X_OK))
+    check("github_extract installs the payload directory at its destination",
+          os.path.exists(os.path.join(runtime, "queries", "rust", "highlights.scm"))
+          and os.path.exists(os.path.join(runtime, "themes", "dark.toml")))
+    _kept = [f for _dir, _subdirs, files in os.walk(prefix) for f in files]
+    check("github_extract keeps only the binary and the payload",
+          "README.md" not in _kept)
+
+    # Reinstalling replaces the payload rather than merging into it: a grammar
+    # or query dropped upstream must not linger and shadow the new release.
+    with open(os.path.join(runtime, "queries", "stale.scm"), "w") as f:
+        f.write("; removed upstream\n")
+    hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"], _HELIX_PAYLOAD)
+    check("reinstalling the payload drops files the new asset doesn't have",
+          not os.path.exists(os.path.join(runtime, "queries", "stale.scm"))
+          and os.path.exists(os.path.join(runtime, "themes", "dark.toml")))
+    check("replacing the payload leaves no swap directories behind",
+          not os.path.exists(runtime + ".new") and not os.path.exists(runtime + ".old"))
+
+# A payload the asset doesn't carry fails the tool, for the same reason a
+# missing binary does: the caller has to know to get it another way rather
+# than be told an unusable helix installed fine. Unlike a missing binary it
+# fails before installing anything, since a new hx paired with the previous
+# release's runtime runs -- wrongly -- where a missing binary just isn't there.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    runtime = os.path.join(prefix, "share", "helix", "runtime")
+    os.makedirs(runtime)
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(runtime, "previous.toml"), "w") as f:
+        f.write("# the runtime already installed\n")
+    with open(os.path.join(prefix, "bin", "hx"), "w") as f:
+        f.write("previous hx\n")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.07/hx": b"#!/bin/sh\necho hx\n"})
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                          _HELIX_PAYLOAD)
+    except hp.HomepkgError as e:
+        _err = e
+    check("github_extract fails when the asset lacks a payload directory",
+          _err is not None and "runtime/" in str(_err))
+    check("a missing payload leaves the previous binary in place",
+          open(os.path.join(prefix, "bin", "hx")).read() == "previous hx\n")
+    check("a missing payload leaves the previous payload in place",
+          os.path.exists(os.path.join(runtime, "previous.toml")))
+    check("a missing payload says the previous install was kept",
+          _err is not None and "kept the previous install" in str(_err))
+
+# A raw single-binary asset can't carry a payload at all -- there's nothing to
+# unpack -- so asking for one is a failure, not a silently skipped step, and
+# again not one that replaces the binary on the way out.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(prefix, "bin", "hx"), "w") as f:
+        f.write("previous hx\n")
+    asset = os.path.join(td, "hx-linux-amd64")
+    with open(asset, "wb") as f:
+        f.write(b"#!/bin/sh\necho hx\n")
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                          _HELIX_PAYLOAD)
+    except hp.HomepkgError as e:
+        _err = e
+    check("a payload asked of an unpackable asset is a failure",
+          _err is not None and "runtime/" in str(_err))
+    check("an unpackable asset leaves the previous binary in place",
+          open(os.path.join(prefix, "bin", "hx")).read() == "previous hx\n")
+
+# The mirror of the case above: the asset carries the runtime but not the
+# binary. Publishing the runtime and only then reporting the missing binary
+# would leave the previous hx reading a runtime from a different release, so
+# nothing is installed here either.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    runtime = os.path.join(prefix, "share", "helix", "runtime")
+    os.makedirs(runtime)
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(runtime, "previous.toml"), "w") as f:
+        f.write("# the runtime already installed\n")
+    with open(os.path.join(prefix, "bin", "hx"), "w") as f:
+        f.write("previous hx\n")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                          _HELIX_PAYLOAD)
+    except hp.HomepkgError as e:
+        _err = e
+    check("github_extract fails when a payload asset lacks the binary",
+          _err is not None and "hx" in str(_err))
+    check("a missing binary leaves the previous payload in place",
+          os.path.exists(os.path.join(runtime, "previous.toml"))
+          and not os.path.exists(os.path.join(runtime, "themes", "dark.toml")))
+
+# A prefix the mamba backend has also managed has <prefix>/bin/<tool> as a
+# symlink into its environment. Copying onto that symlink would follow it and
+# overwrite the conda-managed executable in place, leaving the environment
+# describing a file it no longer has; a release install owns the name in bin/,
+# not whatever the name currently points at.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    env_bin = os.path.join(prefix, "share", "homepkg", "env", "bin")
+    os.makedirs(env_bin)
+    os.makedirs(os.path.join(prefix, "bin"))
+    managed = os.path.join(env_bin, "rg")
+    with open(managed, "w") as f:
+        f.write("the conda-managed rg\n")
+    os.symlink(managed, os.path.join(prefix, "bin", "rg"))
+    asset = os.path.join(td, "rg-x86_64-unknown-linux-musl.tar.gz")
+    _make_targz(asset, {"ripgrep-14.1.0/rg": b"#!/bin/sh\necho release rg\n"})
+    hp.github_extract(asset, os.path.basename(asset), prefix, ["rg"])
+    check("github_extract replaces a managed symlink with a regular file",
+          not os.path.islink(os.path.join(prefix, "bin", "rg")))
+    check("github_extract doesn't write through to the managed binary",
+          open(managed).read() == "the conda-managed rg\n")
+
+# Being in the asset isn't landing on disk: the payload copy is the big half and
+# the one a full disk fails, so a failure there has to take the new binary back
+# out with it rather than leave it reading the previous release's data files.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    runtime = os.path.join(prefix, "share", "helix", "runtime")
+    os.makedirs(runtime)
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(runtime, "previous.toml"), "w") as f:
+        f.write("# the runtime already installed\n")
+    with open(os.path.join(prefix, "bin", "hx"), "w") as f:
+        f.write("previous hx\n")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.07/hx": b"#!/bin/sh\necho hx\n",
+                        "helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    _real_replace_dir = hp._replace_dir
+
+    def _failing_replace_dir(src, dest):
+        raise OSError(28, "No space left on device")
+
+    hp._replace_dir = _failing_replace_dir
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                          _HELIX_PAYLOAD)
+    except OSError as e:
+        _err = e
+    finally:
+        hp._replace_dir = _real_replace_dir
+    check("a payload that fails to publish is reported", _err is not None)
+    check("a failed payload publish puts the previous binary back",
+          open(os.path.join(prefix, "bin", "hx")).read() == "previous hx\n")
+    check("a failed payload publish leaves no binary backup behind",
+          not os.path.exists(os.path.join(prefix, "bin", "hx.prev")))
+
+# A binary's own copy can fail the same way the payload's can, and the rollback
+# has to cover the call that raised -- not just the ones that returned -- or the
+# working binary is stranded at .prev with nothing at the destination.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir)
+    with open(os.path.join(bindir, "hx"), "w") as f:
+        f.write("previous hx\n")
+    _err = None
+    try:
+        # A source that isn't there fails the copy after the live binary has
+        # already been moved aside.
+        hp._publish_release({"hx": os.path.join(td, "absent")}, [], prefix, bindir)
+    except OSError as e:
+        _err = e
+    check("a binary copy that fails is reported", _err is not None)
+    check("a failed binary copy puts the previous binary back",
+          open(os.path.join(bindir, "hx")).read() == "previous hx\n")
+    check("a failed binary copy strands nothing at .prev",
+          not os.path.exists(os.path.join(bindir, "hx.prev")))
+
+# On a first install there's nothing to put back, so rolling back means removing
+# the binary that did land: "both or neither" has to hold for a fresh prefix too,
+# and a fresh hx with no runtime is the editor-with-no-language-support this
+# payload exists to prevent.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir)
+    src = os.path.join(td, "hx")
+    with open(src, "w") as f:
+        f.write("#!/bin/sh\n")
+    _real_replace_dir = hp._replace_dir
+
+    def _failing_replace_dir(src, dest):
+        raise OSError(28, "No space left on device")
+
+    hp._replace_dir = _failing_replace_dir
+    try:
+        hp._publish_release({"hx": src}, [("runtime", os.path.join(td, "rt"),
+                                           "share/helix/runtime")], prefix, bindir)
+    except OSError:
+        pass
+    finally:
+        hp._replace_dir = _real_replace_dir
+    check("a rollback on a fresh prefix removes the binary that landed",
+          not os.path.exists(os.path.join(bindir, "hx")))
+    check("a rollback on a fresh prefix leaves no backup behind",
+          not os.path.exists(os.path.join(bindir, "hx.prev")))
+
+# And the same window across runs: a run killed between the rename and the copy
+# leaves the binary at .prev with nothing at the destination, so the next call
+# puts it back before touching anything.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir)
+    with open(os.path.join(bindir, "hx.prev"), "w") as f:
+        f.write("previous hx\n")
+    try:
+        hp._publish_release({"hx": os.path.join(td, "absent")}, [], prefix, bindir)
+    except OSError:
+        pass
+    check("a binary stranded at .prev by an earlier run is recovered",
+          os.path.exists(os.path.join(bindir, "hx"))
+          and open(os.path.join(bindir, "hx")).read() == "previous hx\n")
+
+# ...and a run that gets all the way through leaves no backup either.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(prefix, "bin", "hx"), "w") as f:
+        f.write("previous hx\n")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.07/hx": b"#!/bin/sh\necho hx\n",
+                        "helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"], _HELIX_PAYLOAD)
+    check("a successful publish replaces the binary and clears the backup",
+          open(os.path.join(prefix, "bin", "hx")).read() != "previous hx\n"
+          and not os.path.exists(os.path.join(prefix, "bin", "hx.prev")))
+
+# The swap in _replace_dir has one window -- dest moved aside, replacement not
+# yet renamed in -- that an interruption can land in, leaving the payload at
+# .old with nothing at dest. The next call has to put it back, not delete it,
+# or the tool stays without its data files until some later install succeeds.
+with tempfile.TemporaryDirectory() as td:
+    dest = os.path.join(td, "runtime")
+    old = dest + ".old"
+    os.makedirs(old)
+    with open(os.path.join(old, "themes.toml"), "w") as f:
+        f.write("previous\n")
+    # A source that isn't there fails the copy, standing in for the disk filling
+    # up or a Ctrl-C during it -- so recovery is all this call gets to do.
+    try:
+        hp._replace_dir(os.path.join(td, "absent"), dest)
+    except OSError:
+        pass
+    check("_replace_dir recovers a payload an interrupted swap left at .old",
+          os.path.exists(os.path.join(dest, "themes.toml")))
+
+# Recovered and then replaced in one call: the backup is gone afterwards, and
+# what's at dest is the new payload rather than the recovered one.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "new.toml"), "w") as f:
+        f.write("new\n")
+    dest = os.path.join(td, "runtime")
+    os.makedirs(dest + ".old")
+    with open(os.path.join(dest + ".old", "themes.toml"), "w") as f:
+        f.write("previous\n")
+    hp._replace_dir(src, dest)
+    check("a recovered payload is still replaced by the new one",
+          os.path.exists(os.path.join(dest, "new.toml"))
+          and not os.path.exists(os.path.join(dest, "themes.toml"))
+          and not os.path.exists(dest + ".old"))
+
+# A payload destination decides which directory gets replaced wholesale, so its
+# shape is constrained rather than trusted: inside the prefix isn't enough. "bin"
+# would move every installed executable aside and delete it; "share/homepkg/..."
+# would do the same to the mamba env; "share" alone would take out both.
+for _bad in ("../../evil", "/etc/evil", "", ".", "bin", "bin/hx", "share",
+             "share/homepkg", "share/homepkg/env", "share/./helix",
+             "lib/helix/runtime"):
+    with tempfile.TemporaryDirectory() as td:
+        prefix = os.path.join(td, "prefix")
+        asset = os.path.join(td, "tool-x86_64-linux.tar.gz")
+        _make_targz(asset, {"tool-1.0/hx": b"#!/bin/sh\n",
+                            "tool-1.0/runtime/x": b"x\n"})
+        _err = None
+        try:
+            hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                              {"runtime": _bad})
+        except hp.HomepkgError as e:
+            _err = e
+        check(f"github_extract rejects the payload destination {_bad!r}",
+              _err is not None and "payload destination" in str(_err))
+        check(f"nothing is installed for the destination {_bad!r}",
+              not os.path.exists(os.path.join(prefix, "bin", "hx")))
+
+# The concrete damage the shape check prevents: "bin" as a destination would
+# replace the directory every installed executable lives in, and report success.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    bindir = os.path.join(prefix, "bin")
+    os.makedirs(bindir)
+    for _tool in ("rg", "fd", "uv"):
+        with open(os.path.join(bindir, _tool), "w") as f:
+            f.write("#!/bin/sh\n")
+    asset = os.path.join(td, "helix-x86_64-linux.tar.gz")
+    _make_targz(asset, {"helix-25.07/hx": b"#!/bin/sh\n",
+                        "helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["hx"],
+                          {"runtime": "bin"})
+    except hp.HomepkgError as e:
+        _err = e
+    check("a payload destination of bin is refused", _err is not None)
+    check("the other installed executables are untouched",
+          sorted(os.listdir(bindir)) == ["fd", "rg", "uv"])
+
+# ...and a manifest can't ask for it in the first place: replaying a bundle takes
+# the payload from the registry, so the only destination that can reach
+# _replace_dir is the one this repo ships.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "helix-x86_64-linux.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset),
+                {"helix-25.07/hx": b"#!/bin/sh\n",
+                 "helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": [{"tool": "helix", "asset": asset, "bins": ["hx"],
+                              "payload": {"runtime": "bin"}}]}, f)
+    bundle = os.path.join(td, "tampered.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "bin"))
+    with open(os.path.join(prefix, "bin", "rg"), "w") as f:
+        f.write("#!/bin/sh\n")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("a manifest's payload destination is ignored for the registry's",
+          os.path.exists(os.path.join(prefix, "share", "helix", "runtime",
+                                      "themes", "dark.toml")))
+    check("a tampered manifest can't replace the binary directory",
+          os.path.exists(os.path.join(prefix, "bin", "rg"))
+          and os.path.exists(os.path.join(prefix, "bin", "hx")))
+
+# _replace_dir has to cope with whatever is already at the destination: a
+# stale symlink (what setup's old cargo path left at ~/.config/helix/runtime),
+# or a plain file.
+for _existing in ("symlink", "file"):
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, "src")
+        os.makedirs(src)
+        with open(os.path.join(src, "new"), "w") as f:
+            f.write("new\n")
+        dest = os.path.join(td, "dest")
+        if _existing == "symlink":
+            os.symlink(os.path.join(td, "elsewhere"), dest)
+        else:
+            with open(dest, "w") as f:
+                f.write("old\n")
+        hp._replace_dir(src, dest)
+        check(f"_replace_dir replaces an existing {_existing} at the destination",
+              os.path.isdir(dest) and not os.path.islink(dest)
+              and os.path.exists(os.path.join(dest, "new")))
+
 # --- conda extraction (.tar.bz2, no zstd needed) -----------------------------
 
 with tempfile.TemporaryDirectory() as td:
@@ -858,6 +1248,27 @@ with tempfile.TemporaryDirectory() as td:
     hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
     check("install-bundle (combined) unpacks the github half offline",
           os.access(os.path.join(prefix, "bin", "rg"), os.X_OK))
+
+# A bundle built before the payload key existed records only the binaries, so
+# replaying it falls back to the registry's payload -- otherwise an old bundle
+# would install an hx with no runtime and report success.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "assets"))
+    asset = "helix-x86_64-linux.tar.gz"
+    _make_targz(os.path.join(src, "assets", asset),
+                {"helix-25.07/hx": b"#!/bin/sh\necho hx\n",
+                 "helix-25.07/runtime/themes/dark.toml": b"# dark\n"})
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "github", "platform": "linux/x86_64",
+                   "tools": [{"tool": "helix", "asset": asset, "bins": ["hx"]}]}, f)
+    bundle = os.path.join(td, "legacy.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+    hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    check("a bundle with no payload recorded falls back to the registry's",
+          os.path.exists(os.path.join(prefix, "share", "helix", "runtime",
+                                      "themes", "dark.toml")))
 
 # A bundle that lost an asset -- built when the release had none for this
 # platform, or truncated in transit -- still installs everything else, and
