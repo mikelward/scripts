@@ -17,4 +17,5 @@ test:
 	./runenv_test
 	./setup_test
 	./setup-kde_test
+	./kdeshortcut_test
 	./dvorak_test

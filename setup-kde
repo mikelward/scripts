@@ -8,7 +8,18 @@
 # - Application launch shortcuts (browser, terminal, music)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 #
+# Every setting applies to the running session -- no logout. The KDE config
+# files this writes are only what the *next* login loads, so each step is
+# paired with the reload that makes the current session pick it up: kwinrc via
+# `kwin reconfigure`, Krohnkite by unloading and reloading the script, and
+# shortcuts via kdeshortcut.py, which hands them to kglobalaccel the way
+# System Settings does and reports any that didn't take. A shortcut that can't
+# be applied live is reported, never assumed -- see apply_shortcuts_live.
+#
 # Requires: kpackagetool6, kwriteconfig6
+# Wants: python3 plus either gdbus or python3-dbus, for applying shortcuts to
+#        the running session (kdeshortcut.py). Without them the shortcuts are
+#        still written, and the script says a logout is needed.
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
 # for the current user, so setup-kde still works when system sudo is restricted.
 # Optional: homepkg (fetches Krohnkite's prebuilt .kwinscript release, the
@@ -63,6 +74,10 @@ INSTALL=yes
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
+
+# Interpreter for kdeshortcut.py (see apply_shortcuts_live). Overridable for
+# a box where python3 isn't the name of a working Python 3.
+PYTHON="${PYTHON:-python3}"
 
 info() {
     printf "%s\n" "$*"
@@ -132,8 +147,32 @@ if test "$IGNORE_ERRORS" = no; then
     set -e
 fi
 
+# Shortcuts written to kglobalshortcutsrc during this run, collected as
+# they're written so apply_shortcuts_live can hand the whole batch to
+# kdeshortcut.py in one go. See record_live_shortcut.
+#
+# mktemp rather than a $$-derived name: on a shared /tmp a predictable name can
+# be pre-created as a symlink, and record_live_shortcut's >> would append
+# through it to any file this user can write. It also can't collide with a
+# stale batch left behind by a run that was killed before its trap ran, whose
+# obsolete shortcuts would otherwise be appended to and applied.
+#
+# An unusable temp directory isn't fatal -- every config write still works, and
+# only the live apply is lost -- but it can't pass silently either, so the
+# empty value is what apply_shortcuts_live reports on.
+LIVE_SHORTCUTS=""
+if ! LIVE_SHORTCUTS="$(mktemp "${TMPDIR:-/tmp}/setup-kde-shortcuts-XXXXXX")"; then
+    LIVE_SHORTCUTS=""
+    warn "could not create a temporary file for the shortcut batch"
+fi
+
 cleanup() {
     rm -rf "$KROHNKITE_DIR"
+    # An if, not a &&: a false test as the last command would make the EXIT
+    # trap return non-zero.
+    if test -n "$LIVE_SHORTCUTS"; then
+        rm -f "$LIVE_SHORTCUTS"
+    fi
 }
 trap cleanup EXIT
 
@@ -449,18 +488,31 @@ configure_keyboard_layout() {
 # whose action ID is the same as the display name (e.g. "Window Close").
 # Krohnkite's newer action IDs (KrohnkitegrowWidth, ...) differ from
 # their labels ("Krohnkite: Grow Width"), so pass the label explicitly.
+# Record a shortcut for apply_shortcuts_live. Writing kglobalshortcutsrc only
+# changes what the *next* login loads -- kglobalaccel holds the live registry
+# in memory and never re-reads the file -- so every write below is paired with
+# a line here, and the whole batch is pushed into the running daemon at the
+# end of the run. Tab-separated because action IDs contain spaces.
+record_live_shortcut() {
+    # No batch file means mktemp failed above, which was already reported.
+    test -n "$LIVE_SHORTCUTS" || return 0
+    printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-$2}" >> "$LIVE_SHORTCUTS"
+}
+
 set_shortcut() {
     action="$1"
     shortcut="$2"
     label="${3:-$action}"
     kwriteconfig6 --file kglobalshortcutsrc --group kwin \
         --key "$action" "$shortcut,none,$label"
+    record_live_shortcut kwin "$action" "$shortcut" "$label"
 }
 
 unbind_shortcut() {
     action="$1"
     kwriteconfig6 --file kglobalshortcutsrc --group kwin \
         --key "$action" "none,none,$action"
+    record_live_shortcut kwin "$action" none "$action"
 }
 
 unbind_shortcut_in() {
@@ -468,6 +520,7 @@ unbind_shortcut_in() {
     action="$2"
     kwriteconfig6 --file kglobalshortcutsrc --group "$group" \
         --key "$action" "none,none,$action"
+    record_live_shortcut "$group" "$action" none "$action"
 }
 
 # Clear a launch shortcut held by a KDE-shipped .desktop component. These live
@@ -478,6 +531,7 @@ unbind_shortcut_in() {
 unbind_app_shortcut() {
     kwriteconfig6 --file kglobalshortcutsrc \
         --group services --group "$1" --key _launch "none,none,$2"
+    record_live_shortcut "$1" _launch none "$2"
 }
 
 # Collect the action IDs first, then unbind them -- never write from inside
@@ -541,6 +595,15 @@ add_app_shortcut() {
     # a launch-shortcut component; without it, kglobalaccel won't register
     # the _launch entry, the shortcut never grabs, and the keypress falls
     # through to the focused window.
+    #
+    # X-KDE-Shortcuts is what makes the shortcut go live without a logout.
+    # kglobalaccel rebuilds its service components when the sycoca database
+    # changes (GlobalShortcutsRegistry watches KSycoca::databaseChanged), and
+    # the rebuild finds launchers by querying for exactly this property --
+    # a .desktop without it is invisible to that scan no matter what
+    # kglobalshortcutsrc says. The binding itself still comes from
+    # kglobalshortcutsrc, which is written below; this only gets the component
+    # registered, so kbuildsycoca6 in the main flow is what completes it.
     cat > "$desktop_dir/$desktop_file" <<EOF
 [Desktop Entry]
 Type=Application
@@ -549,6 +612,7 @@ Exec=$command
 NoDisplay=true
 StartupNotify=false
 X-KDE-GlobalAccel-CommandShortcut=true
+X-KDE-Shortcuts=$shortcut
 EOF
 
     # Nested group [services][foo.desktop] is what kglobalaccel reads for
@@ -571,6 +635,7 @@ EOF
     kwriteconfig6 --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
         --key _k_friendly_name "$name"
+    record_live_shortcut "$desktop_file" _launch "$shortcut" "$name"
 }
 
 # An earlier version of this script wrote app-launch shortcuts under a
@@ -743,10 +808,13 @@ reload_krohnkite() {
     qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.start >/dev/null 2>&1 || true
 }
 
+# Last resort when the shortcuts couldn't be pushed into the running daemon.
+#
 # In Plasma 6, kglobalaccel is embedded in kwin — the systemd service is a
 # no-op stub. On X11 we can safely replace kwin in-session to reload
 # kglobalshortcutsrc; on Wayland kwin_wayland *is* the compositor, so
-# replacing it kills every client. Just tell the user to log out.
+# replacing it kills every client. Then the only way to reload the file is a
+# fresh login.
 reload_kglobalaccel() {
     case "$XDG_SESSION_TYPE" in
         x11)
@@ -758,6 +826,66 @@ reload_kglobalaccel() {
             ;;
         *)
             warn "unknown session type '$XDG_SESSION_TYPE'; log out and back in to pick up shortcuts"
+            ;;
+    esac
+}
+
+# Push every shortcut written above into the running kglobalaccel, so they
+# work now instead of at the next login.
+#
+# kwriteconfig6 writes the file, which is only what the next login loads: the
+# daemon keeps the live registry in memory and never re-reads the file after
+# startup. kdeshortcut.py makes the same D-Bus call System Settings makes and
+# reads each binding back, so a shortcut that didn't take is reported now.
+#
+# Both halves are kept: the file is what survives a reboot, the D-Bus call is
+# what makes this session agree with it.
+apply_shortcuts_live() {
+    # Without a batch file the shortcuts were written but can't be applied, so
+    # the session still needs the old treatment.
+    if test -z "$LIVE_SHORTCUTS"; then
+        warn "no shortcut batch was recorded, so shortcuts can't be applied to the running session"
+        reload_kglobalaccel
+        return 0
+    fi
+
+    # Nothing recorded means no shortcut was written -- there is nothing to
+    # apply, and no failure to report.
+    test -s "$LIVE_SHORTCUTS" || return 0
+
+    helper="$SCRIPT_DIR/kdeshortcut.py"
+    # Run the interpreter explicitly rather than executing the helper
+    # directly: this reports a missing interpreter as such, and still works if
+    # the file came out of a checkout without its executable bit.
+    if ! is_command "$PYTHON" || ! test -f "$helper"; then
+        if ! is_command "$PYTHON"; then
+            warn "$PYTHON not found, so shortcuts can't be applied to the running session"
+        else
+            warn "kdeshortcut.py not found beside this script, so shortcuts can't be applied to the running session"
+        fi
+        reload_kglobalaccel
+        return 0
+    fi
+
+    info "Applying shortcuts to the running session"
+    status=0
+    "$PYTHON" "$helper" --quiet --batch "$LIVE_SHORTCUTS" || status=$?
+    case "$status" in
+        0)
+            info "Shortcuts are live; no logout needed"
+            ;;
+        1)
+            # The helper already named each shortcut it couldn't apply.
+            warn "some shortcuts could not be applied to the running session"
+            reload_kglobalaccel
+            ;;
+        3)
+            warn "could not reach kglobalaccel; shortcuts are written but not live"
+            reload_kglobalaccel
+            ;;
+        *)
+            warn "kdeshortcut.py failed (status $status); shortcuts are written but not live"
+            reload_kglobalaccel
             ;;
     esac
 }
@@ -779,15 +907,20 @@ configure_keyboard_layout
 reload_kwin
 configure_keybindings
 configure_app_shortcuts
-# Rebuild service database so KDE picks up the new .desktop files
+# Rebuild the service database so KDE picks up the new .desktop files. This
+# also registers them with the running kglobalaccel: it rebuilds its service
+# components when sycoca changes, which is what lets apply_shortcuts_live bind
+# the launch shortcuts below.
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
     kbuildsycoca6
 fi
-# Reload to apply all changes
+# Reload to apply all changes. Order matters for the last step: Krohnkite has
+# to be loaded before its shortcuts can be pushed into the daemon, since
+# kglobalaccel only accepts keys for actions that are registered.
 reload_kwin
 reload_krohnkite
 reload_diminactive_effect
-reload_kglobalaccel
+apply_shortcuts_live
 
 if is_command setup-kde.local; then
     info "Sourcing setup-kde.local"

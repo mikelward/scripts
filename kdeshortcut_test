@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+# Tests for kdeshortcut.py: the shortcut -> Qt keycode parser, the D-Bus
+# argument marshalling, and the reporting contract setup-kde relies on (which
+# exit status means "written but not live" versus "couldn't reach the daemon").
+#
+# The gdbus backend is exercised against a stub gdbus on PATH, which is what
+# makes the wire format testable without a session bus: the assertions check
+# the exact GVariant text, since that's the part a live daemon would reject
+# silently. Applying a shortcut to a *real* kglobalaccel can only be verified
+# on a running Plasma session -- kdeshortcut.py's own readback is what reports
+# that, and these tests cover the readback logic, not the daemon.
+
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+# Don't drop a __pycache__/ dir in the repo when importing kdeshortcut.py.
+sys.dont_write_bytecode = True
+
+_dir = os.path.dirname(os.path.abspath(__file__))
+_script = os.path.join(_dir, 'kdeshortcut.py')
+_spec = importlib.util.spec_from_file_location('kdeshortcut', _script)
+kdeshortcut = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(kdeshortcut)
+
+tests_run = 0
+failures = 0
+
+# Qt6 modifier bits, spelled out here rather than imported so a typo in the
+# module's table can't agree with itself and pass.
+META = 0x10000000
+SHIFT = 0x02000000
+CTRL = 0x04000000
+ALT = 0x08000000
+
+
+def check(label, expected, actual):
+    global tests_run, failures
+    tests_run += 1
+    if expected == actual:
+        print('ok %d %s' % (tests_run, label))
+    else:
+        print('not ok %d %s' % (tests_run, label))
+        print('  expected: %r' % (expected,))
+        print('  actual:   %r' % (actual,))
+        failures += 1
+
+
+def check_raises(label, exception, call):
+    global tests_run, failures
+    tests_run += 1
+    try:
+        call()
+    except exception:
+        print('ok %d %s' % (tests_run, label))
+        return
+    except Exception as error:  # noqa: BLE001 - wrong exception is a failure
+        print('not ok %d %s' % (tests_run, label))
+        print('  expected %s, raised %r' % (exception.__name__, error))
+        failures += 1
+        return
+    print('not ok %d %s' % (tests_run, label))
+    print('  expected %s, nothing raised' % exception.__name__)
+    failures += 1
+
+
+# --- Shortcut parsing ---
+#
+# Every form setup-kde actually writes, since a keycode that's wrong by a bit
+# is a shortcut that silently does nothing.
+
+check('a plain letter is the uppercase code point, Qt has no Key_a',
+      [META | 0x54], kdeshortcut.parse_shortcut('Meta+T'))
+check('a lowercase letter parses to the same code',
+      [META | 0x54], kdeshortcut.parse_shortcut('meta+t'))
+check('Backspace is a named key, not a character',
+      [META | 0x01000003], kdeshortcut.parse_shortcut('Meta+Backspace'))
+check('Return is a named key', [META | 0x01000004],
+      kdeshortcut.parse_shortcut('Meta+Return'))
+check('a digit is its own code point', [META | 0x31],
+      kdeshortcut.parse_shortcut('Meta+1'))
+check('KDE records a shifted digit as the character produced, with no Shift bit',
+      [META | 0x21], kdeshortcut.parse_shortcut('Meta+!'))
+check('backslash is a single-character key', [META | 0x5C],
+      kdeshortcut.parse_shortcut('Meta+\\'))
+check('comma is a single-character key', [META | 0x2C],
+      kdeshortcut.parse_shortcut('Meta+,'))
+check('backtick is a single-character key', [META | 0x60],
+      kdeshortcut.parse_shortcut('Meta+`'))
+check('slash is a single-character key', [META | 0x2F],
+      kdeshortcut.parse_shortcut('Meta+/'))
+# Regression: setup-kde passes shortcuts in the escaped form
+# kglobalshortcutsrc holds, because KConfig would otherwise split the entry on
+# the comma. The escape isn't part of the key.
+check('an escaped comma is the comma key', [META | 0x2C],
+      kdeshortcut.parse_shortcut('Meta+\\,'))
+check('an escaped backslash is the backslash key', [META | 0x5C],
+      kdeshortcut.parse_shortcut('Meta+\\\\'))
+check('function keys count up from F1', [META | SHIFT | 0x01000032],
+      kdeshortcut.parse_shortcut('Meta+Shift+F3'))
+check('several modifiers OR together', [CTRL | ALT | 0x01000007],
+      kdeshortcut.parse_shortcut('Ctrl+Alt+Delete'))
+check('Super is an alias for Meta', kdeshortcut.parse_shortcut('Meta+T'),
+      kdeshortcut.parse_shortcut('Super+T'))
+check('a trailing + is the plus key, not an empty token', [META | 0x2B],
+      kdeshortcut.parse_shortcut('Meta++'))
+check('"none" is an unbind, not a key', [], kdeshortcut.parse_shortcut('none'))
+check('an empty string is an unbind', [], kdeshortcut.parse_shortcut(''))
+check('surrounding whitespace is ignored', [META | 0x54],
+      kdeshortcut.parse_shortcut('  Meta+T  '))
+
+check_raises('an unknown key name is refused, not guessed',
+             kdeshortcut.ShortcutError,
+             lambda: kdeshortcut.parse_shortcut('Meta+Nonsense'))
+check_raises('an unknown modifier is refused',
+             kdeshortcut.ShortcutError,
+             lambda: kdeshortcut.parse_shortcut('Hyper+T'))
+check_raises('a function key out of range is refused',
+             kdeshortcut.ShortcutError,
+             lambda: kdeshortcut.parse_shortcut('Meta+F99'))
+check_raises('a non-ASCII key has no computable Qt::Key, so it is refused',
+             kdeshortcut.ShortcutError,
+             lambda: kdeshortcut.parse_shortcut('Meta+ä'))
+
+check("a quote in a GVariant string is escaped", r"'it\'s'",
+      kdeshortcut.gvariant_string("it's"))
+check('a backslash in a GVariant string is escaped', r"'a\\b'",
+      kdeshortcut.gvariant_string('a\\b'))
+
+
+# --- Batch parsing ---
+
+def batch(text):
+    return kdeshortcut.read_batch(text.splitlines(True))
+
+
+check('a batch line splits on tabs, so action IDs may contain spaces',
+      [('kwin', 'Switch to Desktop 1', 'Meta+1', 'Switch to Desktop 1')],
+      batch('kwin\tSwitch to Desktop 1\tMeta+1\tSwitch to Desktop 1\n'))
+check('the label is optional', [('kwin', 'Window Close', 'Meta+Backspace', '')],
+      batch('kwin\tWindow Close\tMeta+Backspace\n'))
+check('blank lines and comments are skipped',
+      [('kwin', 'a', 'Meta+A', '')],
+      batch('\n# a comment\nkwin\ta\tMeta+A\n\n'))
+check_raises('a line with too few fields is an error, not a silent skip',
+             kdeshortcut.ShortcutError, lambda: batch('kwin\tonly-two\n'))
+
+
+# --- The gdbus backend, against a stub gdbus ---
+
+STUB = """#!/bin/sh
+printf '%s\\n' "$*" >> "$GDBUS_LOG"
+for arg in "$@"; do
+    case "$arg" in *Peer.Ping) exit 0;; esac
+done
+case "$*" in
+    *shortcutKeys*)
+        if test -n "$STUB_KEYS"; then
+            printf '([([%s],)],)\\n' "$STUB_KEYS"
+        else
+            printf '(@a(ai) [],)\\n'
+        fi
+        ;;
+    *) echo '()';;
+esac
+exit 0
+"""
+
+workdir = tempfile.mkdtemp()
+try:
+    bindir = os.path.join(workdir, 'bin')
+    os.mkdir(bindir)
+    stub = os.path.join(bindir, 'gdbus')
+    with open(stub, 'w') as handle:
+        handle.write(STUB)
+    os.chmod(stub, 0o755)
+    log = os.path.join(workdir, 'gdbus.log')
+
+    def run(args, keys='', path=None, stdin=None):
+        """Run kdeshortcut.py with the stub gdbus, returning (status, out, err,
+        gdbus calls)."""
+        if os.path.exists(log):
+            os.remove(log)
+        env = dict(os.environ,
+                   PATH=path if path is not None else bindir + os.pathsep + os.environ.get('PATH', ''),
+                   GDBUS_LOG=log,
+                   STUB_KEYS=keys)
+        # PYTHONDONTWRITEBYTECODE: no __pycache__ in the repo from a subprocess.
+        env['PYTHONDONTWRITEBYTECODE'] = '1'
+        result = subprocess.run([sys.executable, _script] + args,
+                                capture_output=True, text=True, env=env,
+                                input=stdin)
+        calls = ''
+        if os.path.exists(log):
+            with open(log) as handle:
+                calls = handle.read()
+        return result.returncode, result.stdout, result.stderr, calls
+
+    META_T = str(META | 0x54)
+
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T', 'Close'],
+                                  keys=META_T)
+    check('a shortcut the daemon confirms exits 0', 0, status)
+    check('the daemon is asked to set the shortcut, the way System Settings does',
+          True, 'org.kde.KGlobalAccel.setForeignShortcutKeys' in calls)
+    check('actionId is the 4-field identity, component friendly name included',
+          True, "['kwin', 'Window Close', 'kwin', 'Close']" in calls)
+    check('keys marshal as a(ai): an array of one-element key sequences',
+          True, '[([%s],)]' % META_T in calls)
+    check('the binding is read back out of the daemon, not assumed',
+          True, 'org.kde.KGlobalAccel.shortcutKeys' in calls)
+    check('a confirmed shortcut is reported as live', True, 'live' in out)
+
+    status, out, err, calls = run(['kwin', 'Grid View', 'none'], keys='')
+    check('an unbind exits 0 when the daemon holds no keys', 0, status)
+    check('an empty key list is type-annotated, since GVariant [] is ambiguous',
+          True, '@a(ai) []' in calls)
+
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'], keys='999')
+    check('a daemon holding different keys is a failure', 1, status)
+    check('the mismatch names both what the daemon holds and what was wanted',
+          True, 'daemon holds 999' in err and 'wanted %s' % META_T in err)
+
+    status, out, err, calls = run(['kwin', 'Bogus Action', 'Meta+T'], keys='')
+    check('an action the daemon does not know is a failure, not a success', 1, status)
+    check('the unregistered case says it applies at next login',
+          True, 'next login' in err)
+
+    status, out, err, calls = run(['--check', 'kwin', 'Window Close', 'Meta+T'],
+                                  keys=META_T)
+    check('--check exits 0 when the daemon already agrees', 0, status)
+    check('--check changes nothing', True,
+          'setForeignShortcutKeys' not in calls)
+
+    status, out, err, calls = run(['--quiet', 'kwin', 'Window Close', 'Meta+T'],
+                                  keys=META_T)
+    check('--quiet says nothing about a shortcut that worked', '', out)
+
+    batch_text = ('kwin\tWindow Close\tMeta+T\tClose\n'
+                  '# comment\n'
+                  '\n'
+                  'kwin\tOther\tMeta+T\tOther\n')
+    status, out, err, calls = run(['--batch'], keys=META_T, stdin=batch_text)
+    check('--batch reads shortcuts from stdin', 0, status)
+    check('--batch applies every entry in one process', 2,
+          calls.count('setForeignShortcutKeys'))
+
+    batch_file = os.path.join(workdir, 'batch')
+    with open(batch_file, 'w') as handle:
+        handle.write('kwin\tWindow Close\tMeta+T\tClose\n')
+    status, out, err, calls = run(['--batch', batch_file], keys=META_T)
+    check('--batch reads shortcuts from a file', 0, status)
+
+    status, out, err, calls = run(['--batch'], keys=META_T,
+                                  stdin='kwin\tWindow Close\tMeta+Nonsense\n')
+    check('an unparseable shortcut fails that entry rather than crashing',
+          1, status)
+    check('the bad shortcut is named', True, 'Nonsense' in err)
+
+    # A batch where one entry works and one doesn't: the exit status has to
+    # report the failure, since setup-kde keys its fallback off it.
+    status, out, err, calls = run(
+        ['--batch'], keys=META_T,
+        stdin='kwin\tWindow Close\tMeta+T\nkwin\tOther\tMeta+X\n')
+    check('one failure in a batch makes the whole run fail', 1, status)
+    check('the summary counts the failures', True, '1 of 2' in err)
+
+    status, out, err, calls = run(['kwin', 'a', 'Meta+T'], path='/nonexistent')
+    check('no usable D-Bus backend exits 3, distinct from a refused shortcut',
+          3, status)
+    check('the unreachable-daemon message names what was tried', True,
+          'gdbus' in err and 'dbus-python' in err)
+    check('nothing is claimed to be live when the daemon is unreachable',
+          '', out)
+
+    status, out, err, calls = run(['--backend', 'nonsense', 'kwin', 'a', 'Meta+T'])
+    check('an unknown --backend is reported, not silently ignored', 3, status)
+
+    status, out, err, calls = run(['--backend=gdbus', 'kwin', 'Window Close',
+                                   'Meta+T'], keys=META_T)
+    check('--backend=value form works', 0, status)
+
+    status, out, err, calls = run(['kwin', 'Window Close'])
+    check('too few arguments is a usage error', 2, status)
+    status, out, err, calls = run(['--nonsense'])
+    check('an unknown option is a usage error', 2, status)
+    status, out, err, calls = run(['--help'])
+    check('--help exits 0 and describes the exit statuses', True,
+          status == 0 and 'Exit status' in out)
+
+    # A gdbus that fails outright: the daemon is there but the call didn't
+    # work, which must not be reported as a live shortcut.
+    with open(stub, 'w') as handle:
+        handle.write('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GDBUS_LOG"\n'
+                     'echo "Error: no such interface" >&2\nexit 1\n')
+    os.chmod(stub, 0o755)
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'])
+    check('a failing gdbus is reported as unreachable, not as success', 3, status)
+    check('the gdbus error text is passed through', True, 'no such interface' in err)
+finally:
+    shutil.rmtree(workdir)
+
+print()
+print('%d tests, %d passed, %d failed' % (tests_run, tests_run - failures, failures))
+sys.exit(1 if failures else 0)
