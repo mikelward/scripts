@@ -8,18 +8,23 @@
 # - Application launch shortcuts (browser, terminal, music)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 #
-# Every setting applies to the running session -- no logout. The KDE config
-# files this writes are only what the *next* login loads, so each step is
-# paired with the reload that makes the current session pick it up: kwinrc via
-# `kwin reconfigure`, Krohnkite by unloading and reloading the script, and
-# shortcuts via kdeshortcut.py, which hands them to kglobalaccel the way
-# System Settings does and reports any that didn't take. A shortcut that can't
-# be applied live is reported, never assumed -- see apply_shortcuts_live.
+# The KDE config files this writes are only what the *next* login loads, so
+# most steps are paired with the reload that makes the current session pick
+# them up: kwinrc via `kwin reconfigure`, Krohnkite by unloading and reloading
+# the script, the keyboard layout by kxkbrc's own watcher.
+#
+# Keyboard shortcuts are the exception, and deliberately so. kglobalaccel holds
+# the live shortcut registry in memory and only reads kglobalshortcutsrc at
+# startup, and in Plasma 6 it runs inside kwin -- so the D-Bus call that would
+# apply a shortcut now can, if the daemon mishandles it, kill the compositor
+# and every client with it. It's behind --live-shortcuts and off by default
+# until that path is confirmed on real hardware; see apply_shortcuts_live and
+# kdeshortcut.py.
 #
 # Requires: kpackagetool6, kwriteconfig6
-# Wants: python3 plus either gdbus or python3-dbus, for applying shortcuts to
-#        the running session (kdeshortcut.py). Without them the shortcuts are
-#        still written, and the script says a logout is needed.
+# Wants: python3 plus either gdbus or python3-dbus, for --live-shortcuts
+#        (kdeshortcut.py). Without them the shortcuts are still written, and
+#        the script says a logout is needed.
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
 # for the current user, so setup-kde still works when system sudo is restricted.
 # Optional: homepkg (fetches Krohnkite's prebuilt .kwinscript release, the
@@ -79,6 +84,16 @@ IGNORE_ERRORS=no
 # a box where python3 isn't the name of a working Python 3.
 PYTHON="${PYTHON:-python3}"
 
+# Whether to push the shortcuts into the running session (--live-shortcuts).
+#
+# Off by default, and it has to stay off until the live path is confirmed on
+# real hardware: kglobalaccel runs inside kwin, so a call it mishandles doesn't
+# fail, it kills the compositor -- and on Wayland that takes every client with
+# it. The first version of this defaulted to on and did exactly that, losing a
+# session's worth of terminals. Writing the config and asking for a logout is
+# slower but can't cost you anything, so that's what an unattended run does.
+LIVE_SHORTCUTS_MODE=off
+
 info() {
     printf "%s\n" "$*"
 }
@@ -98,7 +113,8 @@ is_command() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors]
+                 [--live-shortcuts] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
@@ -107,6 +123,14 @@ Options:
   --no-sudo        Accepted for consistency with setup; setup-kde uses no
                    sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
+  --live-shortcuts Also apply the shortcuts to the running session, instead of
+                   leaving them for the next login. UNVERIFIED: kglobalaccel
+                   runs inside kwin, and a call it mishandles kills the
+                   compositor -- which on Wayland closes every window. Save
+                   your work first
+  --no-live-shortcuts
+                   The default: write the shortcuts and let the next login
+                   pick them up
   -h, --help       Show this help and exit
 USAGE
 }
@@ -127,6 +151,12 @@ while test $# -gt 0; do
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
+            ;;
+        --live-shortcuts)
+            LIVE_SHORTCUTS_MODE=on
+            ;;
+        --no-live-shortcuts)
+            LIVE_SHORTCUTS_MODE=off
             ;;
         -h|--help)
             usage
@@ -160,10 +190,17 @@ fi
 # An unusable temp directory isn't fatal -- every config write still works, and
 # only the live apply is lost -- but it can't pass silently either, so the
 # empty value is what apply_shortcuts_live reports on.
+#
+# Only allocated when the live apply was actually asked for. On the default path
+# the batch is never read, so creating it would mean a temp file, a warning
+# about a feature the user didn't request, and -- worse -- an append that can
+# abort the whole run under set -e for a file nothing consumes.
 LIVE_SHORTCUTS=""
-if ! LIVE_SHORTCUTS="$(mktemp "${TMPDIR:-/tmp}/setup-kde-shortcuts-XXXXXX")"; then
-    LIVE_SHORTCUTS=""
-    warn "could not create a temporary file for the shortcut batch"
+if test "$LIVE_SHORTCUTS_MODE" = on; then
+    if ! LIVE_SHORTCUTS="$(mktemp "${TMPDIR:-/tmp}/setup-kde-shortcuts-XXXXXX")"; then
+        LIVE_SHORTCUTS=""
+        warn "could not create a temporary file for the shortcut batch"
+    fi
 fi
 
 cleanup() {
@@ -494,7 +531,8 @@ configure_keyboard_layout() {
 # a line here, and the whole batch is pushed into the running daemon at the
 # end of the run. Tab-separated because action IDs contain spaces.
 record_live_shortcut() {
-    # No batch file means mktemp failed above, which was already reported.
+    # No batch file means either the live apply wasn't asked for -- the default,
+    # where nothing would read it -- or mktemp failed, which was reported there.
     test -n "$LIVE_SHORTCUTS" || return 0
     printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-$2}" >> "$LIVE_SHORTCUTS"
 }
@@ -841,6 +879,13 @@ reload_kglobalaccel() {
 # Both halves are kept: the file is what survives a reboot, the D-Bus call is
 # what makes this session agree with it.
 apply_shortcuts_live() {
+    if test "$LIVE_SHORTCUTS_MODE" != on; then
+        # Not a warning: this is the default, and the config is correct either
+        # way. Only the current session is behind.
+        info "Shortcuts written; they apply at next login (--live-shortcuts applies them now)"
+        return 0
+    fi
+
     # Without a batch file the shortcuts were written but can't be applied, so
     # the session still needs the old treatment.
     if test -z "$LIVE_SHORTCUTS"; then
@@ -867,9 +912,32 @@ apply_shortcuts_live() {
         return 0
     fi
 
+    # The journal survives the session: kglobalaccel runs inside kwin, so a
+    # call that takes the compositor down takes this script's terminal with it,
+    # and the file is then the only record of which shortcut was in flight.
+    # kdeshortcut.py skips whatever it names on the next run.
+    # The same file kdeshortcut.py defaults to, deliberately: a marker names an
+    # action that took the compositor down, which is a property of the action
+    # and not of whoever applied it. A private journal here would let a direct
+    # kdeshortcut.py run repeat the very call that crashed, and would leave its
+    # --forget clearing the wrong file.
+    journal_dir="${XDG_STATE_HOME:-$HOME/.local/state}"
+    journal="$journal_dir/kdeshortcut.inflight"
+    if ! mkdir -p "$journal_dir"; then
+        # Fail closed rather than run without the journal. Applying anyway is
+        # the case it exists to prevent: a call that takes the compositor down
+        # would leave nothing to identify it, so the next run would make it
+        # again. The config is written either way, so the only cost of waiting
+        # for the next login is the wait.
+        warn "could not create the state directory for the crash journal (\$XDG_STATE_HOME); not applying shortcuts to the running session"
+        reload_kglobalaccel
+        return 0
+    fi
+
     info "Applying shortcuts to the running session"
     status=0
-    "$PYTHON" "$helper" --quiet --batch "$LIVE_SHORTCUTS" || status=$?
+    "$PYTHON" "$helper" --quiet --journal "$journal" \
+        --batch "$LIVE_SHORTCUTS" || status=$?
     case "$status" in
         0)
             info "Shortcuts are live; no logout needed"

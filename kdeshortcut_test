@@ -10,6 +10,7 @@
 # on a running Plasma session -- kdeshortcut.py's own readback is what reports
 # that, and these tests cover the readback logic, not the daemon.
 
+import fcntl
 import importlib.util
 import os
 import shutil
@@ -157,11 +158,28 @@ for arg in "$@"; do
     case "$arg" in *Peer.Ping) exit 0;; esac
 done
 case "$*" in
-    *shortcutKeys*)
+    *allActionsForComponent*)
+        # $STUB_ACTIONS is a ;-separated list of action names the daemon claims
+        # to have -- ';' because action names contain spaces. The reply shape is
+        # aas, one 4-field list per action.
+        out=""
+        oldifs="$IFS"; IFS=';'
+        for action in $STUB_ACTIONS; do
+            IFS="$oldifs"
+            out="$out['comp', '$action', 'comp', '$action'], "
+            IFS=';'
+        done
+        IFS="$oldifs"
+        printf '([%s],)\\n' "$out"
+        ;;
+    *getGlobalShortcutsByKey*)
+        printf "([('kwin', 'KWin', 'Edit Tiles', 'Edit Tiles', '', '', [1], [1])],)\\n"
+        ;;
+    *KGlobalAccel.shortcut*)
         if test -n "$STUB_KEYS"; then
-            printf '([([%s],)],)\\n' "$STUB_KEYS"
+            printf '([%s],)\\n' "$STUB_KEYS"
         else
-            printf '(@a(ai) [],)\\n'
+            printf '(@ai [],)\\n'
         fi
         ;;
     *) echo '()';;
@@ -178,8 +196,10 @@ try:
         handle.write(STUB)
     os.chmod(stub, 0o755)
     log = os.path.join(workdir, 'gdbus.log')
+    statedir = os.path.join(workdir, 'state')
+    default_journal = os.path.join(statedir, 'kdeshortcut.inflight')
 
-    def run(args, keys='', path=None, stdin=None):
+    def run(args, keys='', path=None, stdin=None, actions=None, extra=None):
         """Run kdeshortcut.py with the stub gdbus, returning (status, out, err,
         gdbus calls)."""
         if os.path.exists(log):
@@ -187,9 +207,16 @@ try:
         env = dict(os.environ,
                    PATH=path if path is not None else bindir + os.pathsep + os.environ.get('PATH', ''),
                    GDBUS_LOG=log,
-                   STUB_KEYS=keys)
+                   STUB_KEYS=keys,
+                   # Pinned so a run without --journal writes its default
+                   # journal here rather than into the caller's real state dir.
+                   XDG_STATE_HOME=statedir,
+                   STUB_ACTIONS='Window Close;Other;Grid View'
+                   if actions is None else actions)
         # PYTHONDONTWRITEBYTECODE: no __pycache__ in the repo from a subprocess.
         env['PYTHONDONTWRITEBYTECODE'] = '1'
+        if extra:
+            env.update(extra)
         result = subprocess.run([sys.executable, _script] + args,
                                 capture_output=True, text=True, env=env,
                                 input=stdin)
@@ -204,20 +231,52 @@ try:
     status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T', 'Close'],
                                   keys=META_T)
     check('a shortcut the daemon confirms exits 0', 0, status)
-    check('the daemon is asked to set the shortcut, the way System Settings does',
-          True, 'org.kde.KGlobalAccel.setForeignShortcutKeys' in calls)
+    check('the shortcut is set through the flat-int API, not the QKeySequence one',
+          True, 'org.kde.KGlobalAccel.setForeignShortcut ' in calls
+          and 'setForeignShortcutKeys' not in calls)
     check('actionId is the 4-field identity, component friendly name included',
           True, "['kwin', 'Window Close', 'kwin', 'Close']" in calls)
-    check('keys marshal as a(ai): an array of one-element key sequences',
-          True, '[([%s],)]' % META_T in calls)
+    check('keys marshal as a flat ai, with no QKeySequence struct to get wrong',
+          True, '[%s]' % META_T in calls and '([%s],)' % META_T not in calls)
     check('the binding is read back out of the daemon, not assumed',
-          True, 'org.kde.KGlobalAccel.shortcutKeys' in calls)
+          True, 'org.kde.KGlobalAccel.shortcut ' in calls)
     check('a confirmed shortcut is reported as live', True, 'live' in out)
+
+    # A real daemon reports all four slots of a QKeySequence, padding the unused
+    # ones with 0 or Qt::Key_unknown. Requiring exact equality reported every
+    # correctly applied shortcut as a failure, which made the readback useless.
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'],
+                                  keys='%s, 33554431, 33554431, 0' % META_T)
+    check('a four-slot reply with an empty tail counts as live', 0, status)
+    check('the report shows the real key, not the padding', True,
+          META_T in out and '33554431' not in out)
+
+    # The tail is padding, but the head still has to match.
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'],
+                                  keys='999, 0, 0, 0')
+    check('padding does not excuse a different key', 1, status)
+
+    status, out, err, calls = run(['kwin', 'Grid View', 'none'],
+                                  keys='0, 33554431, 33554431, 0')
+    check('an unbind is live when every slot is empty', 0, status)
+
+    # --who: which component holds a key. Read-only, and the argument is a plain
+    # int, so there is no struct to marshal.
+    status, out, err, calls = run(['--who', 'Meta+T'])
+    check('--who reports the holder of a key', 0, status)
+    check('--who names the component and action', True,
+          'kwin' in out and 'Edit Tiles' in out)
+    check('--who changes nothing', True, 'setForeignShortcut' not in calls)
+    check('--who asks the daemon by keycode', True,
+          'getGlobalShortcutsByKey' in calls and META_T in calls)
+
+    status, out, err, calls = run(['--who', 'none'])
+    check('--who with an unbind is a usage error', 2, status)
 
     status, out, err, calls = run(['kwin', 'Grid View', 'none'], keys='')
     check('an unbind exits 0 when the daemon holds no keys', 0, status)
     check('an empty key list is type-annotated, since GVariant [] is ambiguous',
-          True, '@a(ai) []' in calls)
+          True, '@ai []' in calls)
 
     status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'], keys='999')
     check('a daemon holding different keys is a failure', 1, status)
@@ -229,11 +288,445 @@ try:
     check('the unregistered case says it applies at next login',
           True, 'next login' in err)
 
+    # The safety property this whole guard exists for: kglobalaccel is part of
+    # kwin, so a mutating call it mishandles kills the compositor. An action the
+    # daemon doesn't list must be reported, never called.
+    status, out, err, calls = run(['kwin', 'Bogus Action', 'Meta+T'], keys='')
+    check('an unknown action is never handed to a mutating call', True,
+          'setForeignShortcut' not in calls)
+    check('the daemon is asked which actions it has, first', True,
+          'allActionsForComponent' in calls)
+    check('an unknown action still reports it applies at next login', True,
+          'next login' in err)
+
+    # Unbinding something the daemon doesn't have isn't a failure: there is no
+    # binding, which is what was wanted.
+    status, out, err, calls = run(['kwin', 'Bogus Action', 'none'])
+    check('an unbind of an unknown action is a success', 0, status)
+    check('an unbind of an unknown action calls nothing', True,
+          'setForeignShortcut' not in calls)
+
+    # One enumeration per component, not per shortcut.
+    status, out, err, calls = run(
+        ['--batch'], keys=META_T,
+        stdin='kwin\tWindow Close\tMeta+T\nkwin\tOther\tMeta+T\n')
+    check('the action list is fetched once per component', 1,
+          calls.count('allActionsForComponent'))
+
+    # --- The journal ---
+    #
+    # A call that kills kwin kills this process's terminal too, so the file is
+    # the only thing left to say which shortcut was in flight.
+    journal = os.path.join(workdir, 'inflight')
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'], keys=META_T)
+    check('a completed run leaves no journal entry behind', False,
+          os.path.exists(journal))
+
+    # A journal naming a shortcut means the previous run didn't return from it.
+    with open(journal, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'], keys=META_T)
+    check('a shortcut the previous run died on is skipped, not retried', True,
+          'setForeignShortcut' not in calls)
+    check('the skipped shortcut is named', True,
+          'Window Close' in err and 'previous run' in err)
+    check('skipping it counts as not live', 1, status)
+    def journal_text():
+        """The journal's contents, or '' when it's gone -- never a traceback,
+        so a regression shows up as a failed check rather than a dead run."""
+        try:
+            with open(journal) as handle:
+                return handle.read()
+        except FileNotFoundError:
+            return ''
+
+    check('reading a marker does not retire it -- the run after would retry it',
+          True, 'Window Close' in journal_text())
+
+    # A marker blocks mutating, not reading: --check makes no call that could
+    # repeat the crash, and it's the shortcut you most want to ask about after
+    # one. Journal still names 'kwin/Window Close' from just above.
+    status, out, err, calls = run(['--check', '--journal', journal, 'kwin',
+                                   'Window Close', 'Meta+T'], keys=META_T)
+    check('--check reads the daemon even for a journaled shortcut', True,
+          'KGlobalAccel.shortcut' in calls)
+    check('--check makes no mutating call for a journaled shortcut', True,
+          'setForeignShortcut' not in calls)
+    check('--check reports a journaled shortcut the daemon holds as live',
+          0, status)
+    check('--check still says the shortcut is journaled', True,
+          'journaled as crashing' in out)
+    # An apply, by contrast, still refuses it.
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'], keys=META_T)
+    check('an apply still skips a journaled shortcut', True,
+          'setForeignShortcut' not in calls and status == 1)
+
+    # The cross-run case: the marker has to survive a run that applies *other*
+    # shortcuts successfully. Every setup-kde batch has some, and clearing on
+    # one of those took the marker with it -- so the third run retried the call
+    # that killed kwin.
+    with open(journal, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    batch_text = ('kwin\tWindow Close\tMeta+T\n'
+                  'kwin\tOther\tMeta+T\n')
+    status, out, err, calls = run(['--journal', journal, '--batch'],
+                                  keys=META_T, actions='Window Close;Other',
+                                  stdin=batch_text)
+    check('a later successful shortcut does not retire the marker', True,
+          'Window Close' in journal_text())
+    check('the poisoned one is still the only one skipped', 1,
+          calls.count('setForeignShortcut'))
+
+    # The in-flight entry is written alongside the markers and removed when the
+    # call returns, so a completed run leaves the markers and nothing else.
+    check('a completed entry is not left in the journal beside the marker',
+          True, 'Other' not in journal_text())
+
+    # --forget is the deliberate retirement, and the only thing that retires.
+    status, out, err, calls = run(['--journal', journal, '--forget'])
+    check('--forget retires the marker', False, os.path.exists(journal))
+    check('--forget exits 0 with nothing else to do', 0, status)
+    check('--forget names what it retired', True, 'Window Close' in out)
+    # --forget with no --journal retires the default journal rather than erroring:
+    # it's the same file a journal-less mutating run would have used.
+    os.makedirs(statedir, exist_ok=True)
+    with open(default_journal, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    status, out, err, calls = run(['--forget'])
+    check('--forget with no --journal retires the default journal', 0, status)
+    check('the default journal is gone after --forget', False,
+          os.path.exists(default_journal))
+
+    # Once retired, the shortcut is attempted again.
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'], keys=META_T)
+    check('after --forget the shortcut is retried', True,
+          'setForeignShortcut' in calls)
+
+    # A journal that can't be read may be preserving the marker that matters, so
+    # nothing mutating may run. A directory at the path is an unreadable journal
+    # whatever the uid, where a chmod would not be for root.
+    unreadable = os.path.join(workdir, 'unreadable-journal')
+    os.mkdir(unreadable)
+    status, out, err, calls = run(['--journal', unreadable, 'kwin',
+                                   'Window Close', 'Meta+T'], keys=META_T)
+    check('an unreadable journal makes no mutating call', True,
+          'setForeignShortcut' not in calls)
+    check('an unreadable journal fails rather than proceeding blind', 1, status)
+    check('the unreadable journal says how to get out of it', True,
+          'refusing to apply' in err and '--forget' in err)
+    # Read-only work needs no marker, so it isn't blocked.
+    status, out, err, calls = run(['--check', '--journal', unreadable, 'kwin',
+                                   'Window Close', 'Meta+T'], keys=META_T)
+    check('--check is allowed through an unreadable journal', 0, status)
+    status, out, err, calls = run(['--journal', unreadable, '--forget'])
+    check('--forget on an unretireable journal reports it', 1, status)
+    check('--forget says it could not remove it', True, 'cannot remove' in err)
+
+    # A journal that can't be written: the marker for the call about to be made
+    # can't be recorded, so the call must not happen. A path under a directory
+    # that doesn't exist reads as "no journal yet" and fails on write.
+    unwritable = os.path.join(workdir, 'no-such-dir', 'inflight')
+    status, out, err, calls = run(['--journal', unwritable, 'kwin',
+                                   'Window Close', 'Meta+T'], keys=META_T)
+    check('a journal that cannot be written makes no mutating call', True,
+          'setForeignShortcut' not in calls)
+    check('a journal that cannot be written fails the shortcut', 1, status)
+    check('the reason names the missing crash journal', True,
+          'crash journal' in err)
+
+    # And it stops the batch rather than repeating the same failure per entry:
+    # a full state directory doesn't fix itself between shortcuts.
+    status, out, err, calls = run(['--journal', unwritable, '--batch'],
+                                  keys=META_T,
+                                  stdin='kwin\tWindow Close\tMeta+T\n'
+                                        'kwin\tOther\tMeta+T\n')
+    check('an unwritable journal stops the batch', True,
+          'not attempted' in err)
+    check('no shortcut in the batch was applied', True,
+          'setForeignShortcut' not in calls)
+
+    # A mutating run with no --journal must not run unjournaled: with no path,
+    # record() is a no-op and a call that kills kwin leaves nothing behind. The
+    # default journal is proved to be in use by seeding a marker in it and
+    # watching the run skip that shortcut.
+    os.makedirs(statedir, exist_ok=True)
+    with open(default_journal, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'], keys=META_T)
+    check('a run with no --journal uses the default journal', True,
+          'setForeignShortcut' not in calls and status == 1)
+    check('the default journal marker is reported', True, 'previous run' in err)
+    os.remove(default_journal)
+
+    # A default journal that can't be created is the same fail-closed case as an
+    # unwritable one: a regular file where the state directory should be.
+    state_is_file = os.path.join(workdir, 'state-file')
+    with open(state_is_file, 'w') as handle:
+        handle.write('not a directory\n')
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'],
+                                  keys=META_T,
+                                  extra={'XDG_STATE_HOME': state_is_file})
+    check('an uncreatable default journal makes no mutating call', True,
+          'setForeignShortcut' not in calls)
+    check('an uncreatable default journal fails the run', 1, status)
+    check('it points at --journal as the way out', True, '--journal' in err)
+    # --check needs no journal at all, so it is unaffected.
+    status, out, err, calls = run(['--check', 'kwin', 'Window Close', 'Meta+T'],
+                                  keys=META_T,
+                                  extra={'XDG_STATE_HOME': state_is_file})
+    check('--check needs no journal, so an uncreatable one is irrelevant',
+          0, status)
+
+    # Serializing the transaction. Replacing each write atomically isn't enough:
+    # two overlapping runs would snapshot the same markers and the second
+    # record() would replace the first's in-flight entry, so a crash would name
+    # the wrong action. The stub probes the lock during set_keys -- if the lock is
+    # held across the call, a non-blocking attempt from inside it fails.
+    lock_probe = os.path.join(workdir, 'lock-probe')
+    probe_journal = os.path.join(workdir, 'probe-journal')
+    probe_stub = """#!/bin/sh
+printf '%%s\\n' "$*" >> "$GDBUS_LOG"
+case "$*" in
+    *Peer.Ping) exit 0;;
+    *allActionsForComponent*) printf "([['c', 'Window Close', 'c', 'x']],)\\n";;
+    *setForeignShortcut*)
+        "%s" -c 'import fcntl, sys
+handle = open(sys.argv[1] + ".lock", "w")
+try:
+    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print("free")
+except OSError:
+    print("held")' "%s" >> "%s"
+        echo '()'
+        ;;
+    *) printf '(@ai [],)\\n';;
+esac
+exit 0
+""" % (sys.executable, probe_journal, lock_probe)
+    def install_stub(text):
+        with open(stub, 'w') as handle:
+            handle.write(text)
+        os.chmod(stub, 0o755)
+
+    install_stub(probe_stub)
+    status, out, err, calls = run(['--journal', probe_journal, 'kwin',
+                                   'Window Close', 'Meta+T'], keys=META_T)
+    check('the journal lock is held across the D-Bus call', 'held',
+          open(lock_probe).read().strip() if os.path.exists(lock_probe) else '')
+    install_stub(STUB)
+
+    # --forget takes the same lock. Without it, retiring markers could delete an
+    # entry another process had journaled and not yet returned from -- and if
+    # that call took kwin down, nothing would name it. Asserted by holding the
+    # lock here and watching --forget block until it's released.
+    contended = os.path.join(workdir, 'contended-journal')
+    with open(contended, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    lock_handle = open(contended + '.lock', 'w')
+    fcntl.flock(lock_handle, fcntl.LOCK_EX)
+    forget_command = [sys.executable, _script, '--journal', contended, '--forget']
+    forget_env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
+                      XDG_STATE_HOME=statedir)
+    blocked = False
+    try:
+        subprocess.run(forget_command, capture_output=True, text=True,
+                       env=forget_env, timeout=2)
+    except subprocess.TimeoutExpired:
+        blocked = True
+    check('--forget waits for the journal lock rather than racing a call',
+          True, blocked)
+    def contended_text():
+        """Crash-safe read: a regression must fail a check, not kill the run."""
+        try:
+            with open(contended) as handle:
+                return handle.read()
+        except FileNotFoundError:
+            return ''
+
+    check('the markers survive while the lock is held',
+          'kwin\tWindow Close\n', contended_text())
+    # Released: the same command now completes and retires the marker.
+    lock_handle.close()
+    result = subprocess.run(forget_command, capture_output=True, text=True,
+                            env=forget_env, timeout=30)
+    check('--forget completes once the lock is released', 0, result.returncode)
+    check('the marker is retired after the lock is released', False,
+          os.path.exists(contended))
+
+    # A marker that appears while --forget waits for the lock is somebody else's
+    # fresh crash -- quite possibly the call that was in flight when it started
+    # waiting. Retiring is a decision about the markers the user was shown, so
+    # anything newer survives. Driven in-process: the wait is what creates the
+    # window, and reproducing that through subprocesses would be a race rather
+    # than a test.
+    waited = os.path.join(workdir, 'waited-journal')
+    with open(waited, 'w') as handle:
+        handle.write('kwin\tOld\n')
+    def forget_result(journal):
+        """(retired, kept) from forget(), or (None, None) if it returns neither.
+        A shape regression must fail a check, not kill the run with a
+        TypeError and take every later check with it."""
+        outcome = journal.forget()
+        if isinstance(outcome, tuple) and len(outcome) == 2:
+            return outcome
+        return None, None
+
+    retiring = kdeshortcut.Journal(waited)
+    check('the snapshot holds what was there at startup',
+          {('kwin', 'Old')}, retiring.poisoned)
+    # The crashing call's marker lands while this one waits for the lock.
+    with open(waited, 'w') as handle:
+        handle.write('kwin\tOld\nkwin\tCrashedWhileWaiting\n')
+    gone, kept = forget_result(retiring)
+    check('--forget retires what it was holding', [('kwin', 'Old')], gone)
+    check('a marker journaled while --forget waited is kept',
+          [('kwin', 'CrashedWhileWaiting')], kept)
+    check('the kept marker is still on disk, so the crash is not retried',
+          'kwin\tCrashedWhileWaiting\n',
+          open(waited).read() if os.path.exists(waited) else '')
+
+    # With nothing newer, the journal goes away entirely as before.
+    only_old = os.path.join(workdir, 'only-old-journal')
+    with open(only_old, 'w') as handle:
+        handle.write('kwin\tOld\n')
+    gone, kept = forget_result(kdeshortcut.Journal(only_old))
+    check('--forget with nothing newer removes the journal', ([('kwin', 'Old')], []),
+          (gone, kept))
+    check('no journal file is left behind', False, os.path.exists(only_old))
+
+    # And the markers are re-read inside the lock, so a run sees what a
+    # concurrent one wrote rather than its startup snapshot.
+    fresh = os.path.join(workdir, 'fresh-journal')
+    entry = kdeshortcut.Journal(fresh)
+    check('nothing is poisoned before the concurrent write', set(), entry.poisoned)
+    with open(fresh, 'w') as handle:
+        handle.write('kwin\tConcurrent\n')
+    with entry.transaction():
+        seen = set(entry.poisoned)
+    check('transaction() re-reads the markers under the lock',
+          {('kwin', 'Concurrent')}, seen)
+
+    # The journal is replaced by rename, never truncated in place. A write that
+    # fails partway would otherwise erase the markers or leave a half-written
+    # line that the next run reads as absent -- and retry a known killer. Tested
+    # in-process by making the rename fail, which no filesystem trick can do
+    # reliably as root.
+    atomic = os.path.join(workdir, 'atomic-journal')
+    with open(atomic, 'w') as handle:
+        handle.write('kwin\tWindow Close\n')
+    entry = kdeshortcut.Journal(atomic)
+    real_replace = os.replace
+    raised = False
+
+    def failing_replace(*args, **kwargs):
+        raise OSError(28, 'No space left on device')
+
+    os.replace = failing_replace
+    try:
+        entry.record('kwin', 'Other')
+    except kdeshortcut.JournalError:
+        raised = True
+    finally:
+        os.replace = real_replace
+
+    check('a journal replacement that fails raises rather than warns',
+          True, raised)
+    check('the previous markers survive a failed replacement',
+          'kwin\tWindow Close\n', open(atomic).read())
+    check('a failed replacement leaves no temporary file behind', ['atomic-journal'],
+          sorted(name for name in os.listdir(workdir)
+                 if name.startswith('atomic-journal')))
+
+    # And the successful path really does replace, rather than append.
+    entry.record('kwin', 'Other')
+    check('a successful record keeps the markers and adds the in-flight entry',
+          ['kwin\tOther', 'kwin\tWindow Close'],
+          sorted(open(atomic).read().splitlines()))
+
+    # A crash mid-call: the set fails and the daemon stops answering. The
+    # journal must keep the shortcut's name, since that call is the one that
+    # took kwin down. The first Ping still succeeds -- that's the backend
+    # opening -- and later ones don't.
+    crash_stub = """#!/bin/sh
+printf '%s\\n' "$*" >> "$GDBUS_LOG"
+case "$*" in
+    *Peer.Ping)
+        if test -f "$STUB_PINGED"; then exit 1; fi
+        : > "$STUB_PINGED"
+        exit 0
+        ;;
+    *allActionsForComponent*) printf "([['c', 'Window Close', 'c', 'x']],)\\n";;
+    *setForeignShortcut*) echo "Error: connection closed" >&2; exit 1;;
+    *) printf '(@ai [],)\\n';;
+esac
+"""
+    pinged = os.path.join(workdir, 'pinged')
+
+    def write_stub(text):
+        with open(stub, 'w') as handle:
+            handle.write(text)
+        os.chmod(stub, 0o755)
+
+    write_stub(crash_stub)
+    for stale in (journal, pinged):
+        if os.path.exists(stale):
+            os.remove(stale)
+    env_extra = {'STUB_PINGED': pinged}
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'], extra=env_extra)
+    check('a call that took the daemon down leaves its shortcut in the journal',
+          True, os.path.exists(journal)
+          and 'Window Close' in open(journal).read())
+
+    # A batch where the first entry kills the daemon: the journal must keep that
+    # first action, and the rest must not be attempted. Carrying on would call
+    # into a dead daemon and overwrite the one entry worth keeping.
+    for stale in (journal, pinged):
+        if os.path.exists(stale):
+            os.remove(stale)
+    status, out, err, calls = run(
+        ['--journal', journal, '--batch'], extra=env_extra,
+        stdin='kwin\tWindow Close\tMeta+T\nkwin\tWindow Close\tMeta+Y\n')
+    check('the journal keeps the entry that killed the daemon, not a later one',
+          True, os.path.exists(journal)
+          and open(journal).read().strip().endswith('Window Close'))
+    check('nothing is attempted after the daemon is found dead', 1,
+          calls.count('.setForeignShortcut '))
+    check('the unattempted shortcuts are reported, not silently dropped', True,
+          'not attempted' in err)
+    check('a dead daemon mid-batch is a failure', 1, status)
+
+    # An ordinary transient error, with the daemon still answering: the journal
+    # must be cleared, or one failed call would refuse that shortcut forever.
+    write_stub("""#!/bin/sh
+printf '%s\\n' "$*" >> "$GDBUS_LOG"
+case "$*" in
+    *Peer.Ping) exit 0;;
+    *allActionsForComponent*) printf "([['c', 'Window Close', 'c', 'x']],)\\n";;
+    *setForeignShortcut*) echo "Error: temporarily unavailable" >&2; exit 1;;
+    *) printf '(@ai [],)\\n';;
+esac
+""")
+    if os.path.exists(journal):
+        os.remove(journal)
+    status, out, err, calls = run(['--journal', journal, 'kwin', 'Window Close',
+                                   'Meta+T'])
+    check('a transient error with a live daemon does not poison the shortcut',
+          False, os.path.exists(journal))
+    check('the transient error is still reported as a failure', 1, status)
+
+    write_stub(STUB)
+    if os.path.exists(journal):
+        os.remove(journal)
+
     status, out, err, calls = run(['--check', 'kwin', 'Window Close', 'Meta+T'],
                                   keys=META_T)
     check('--check exits 0 when the daemon already agrees', 0, status)
-    check('--check changes nothing', True,
-          'setForeignShortcutKeys' not in calls)
+    check('--check changes nothing', True, 'setForeignShortcut' not in calls)
 
     status, out, err, calls = run(['--quiet', 'kwin', 'Window Close', 'Meta+T'],
                                   keys=META_T)
@@ -246,7 +739,7 @@ try:
     status, out, err, calls = run(['--batch'], keys=META_T, stdin=batch_text)
     check('--batch reads shortcuts from stdin', 0, status)
     check('--batch applies every entry in one process', 2,
-          calls.count('setForeignShortcutKeys'))
+          calls.count('.setForeignShortcut '))
 
     batch_file = os.path.join(workdir, 'batch')
     with open(batch_file, 'w') as handle:

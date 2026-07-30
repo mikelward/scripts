@@ -1384,6 +1384,44 @@ test_unprefixed_caller_skips_the_mismatch_check() {
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
+# --- live-shortcuts mode ---
+
+# Both flags are known options, so a later --help is still reached.
+test_live_shortcuts_flags_accepted() {
+    run_setup --live-shortcuts --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup" || return 1
+    run_setup --no-live-shortcuts --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup"
+}
+
+# Documented in usage, along with the reason it's off by default.
+test_live_shortcuts_in_usage() {
+    run_setup --help
+    assert_status 0 &&
+    assert_output_contains "--live-shortcuts" &&
+    assert_output_contains "--no-live-shortcuts"
+}
+
+# --live-shortcuts is forwarded to setup-kde; the default is not. An unattended
+# bootstrap must not opt into a D-Bus call that can take the compositor down,
+# so the flag is only ever added when explicitly asked for.
+test_live_shortcuts_parsing_and_forwarding() {
+    assert_source_contains "LIVE_SHORTCUTS=no" &&
+    assert_source_contains '[-]-live-shortcuts)' &&
+    assert_source_contains '[-]-no-live-shortcuts)' &&
+    assert_source_contains "LIVE_SHORTCUTS=yes" &&
+    assert_source_contains 'KDE_SETUP_FLAGS --live-shortcuts' &&
+    # Never forwarded unconditionally: the guard is what keeps the default off.
+    assert_source_contains 'test "$LIVE_SHORTCUTS" = yes' &&
+    # KDE-only: setup-macos shares DESKTOP_SETUP_FLAGS and rejects options it
+    # doesn't know, so a KDE flag in there would abort the macOS run.
+    assert_source_contains 'setup-kde" $DESKTOP_SETUP_FLAGS $KDE_SETUP_FLAGS' &&
+    assert_source_not_contains 'DESKTOP_SETUP_FLAGS --live-shortcuts' &&
+    assert_source_not_contains 'setup-macos" .*KDE_SETUP_FLAGS'
+}
+
 # --- no-sudo mode ---
 
 # --no-sudo is a known option: it's accepted (not an "Unknown option" error),
@@ -1710,6 +1748,11 @@ run_test "the default prefix doesn't second-guess an existing remote" \
 run_test "a caller whose URL isn't from the prefix skips the check" \
     test_unprefixed_caller_skips_the_mismatch_check
 
+run_test "--live-shortcuts and --no-live-shortcuts are accepted" \
+    test_live_shortcuts_flags_accepted
+run_test "--live-shortcuts is documented in usage" test_live_shortcuts_in_usage
+run_test "--live-shortcuts forwards to setup-kde only when asked" \
+    test_live_shortcuts_parsing_and_forwarding
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
 run_test "--no-sudo parses and forwards to desktop helpers" \
