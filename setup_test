@@ -653,12 +653,13 @@ fi' &&
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
 # cloned over SSH, and pushing anywhere needs a key. Codeberg hosts Krohnkite
-# now, so the key-generation prompt must point at both GitHub and Codeberg,
-# not GitHub alone.
+# now, so the key-generation prompt must point at both the GitHub host and
+# Codeberg, not the GitHub host alone. The GitHub side is named by
+# $GITHUB_HOST so a --github mirror gets its own host rather than github.com's.
 test_ssh_key_prompt_covers_github_and_codeberg() {
     assert_source_contains "https://github.com/settings/ssh/new" &&
     assert_source_contains "https://codeberg.org/user/settings/keys" &&
-    assert_source_contains "add the key to GitHub and Codeberg"
+    assert_source_contains 'add the key to $GITHUB_HOST and Codeberg'
 }
 
 # --ssh promises to generate a key even when one is already available, so
@@ -677,6 +678,251 @@ test_offers_ssh_remote_switch() {
     assert_source_contains "offer_ssh_remotes" &&
     assert_source_contains "gittossh" &&
     assert_source_contains "from HTTPS to SSH?"
+}
+
+# --- --github mirror: SSH key and remote handling ---
+
+# Run offer_ssh_remotes against a recording gittossh stub. Neither call below
+# may reach the prompt, which would block on a terminal: the mirror case
+# returns at the guard under test, and the default case is given no gittossh so
+# it returns at the executable check just after it.
+run_offer_ssh_remotes() {
+    offer_mirror="$1"
+    offer_converter="$2"
+    offer_tmpdir="$(mktemp -d)"
+    offer_calls="$offer_tmpdir/calls"
+    for d in scripts conf src/root; do
+        mkdir -p "$offer_tmpdir/$d/.git"
+    done
+    if test "$offer_converter" = present; then
+        cat > "$offer_tmpdir/scripts/gittossh" <<MOCK
+#!/bin/sh
+printf '%s\n' "gittossh \$*" >> "$offer_calls"
+MOCK
+        chmod +x "$offer_tmpdir/scripts/gittossh"
+    fi
+
+    set +e
+    output="$(sh -c "set -e
+GITHUB_MIRROR=$offer_mirror
+GITHUB_HOST=ghe.corp.example.com
+SCRIPTS_DIR='$offer_tmpdir/scripts'
+CONF_DIR='$offer_tmpdir/conf'
+ROOT_DIR='$offer_tmpdir/src/root'
+$(extract_functions "info warn offer_ssh_remotes")
+offer_ssh_remotes
+echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$offer_calls" 2>/dev/null)"
+    rm -rf "$offer_tmpdir"
+}
+
+# A --github prefix put these remotes where they are on purpose: an internal
+# mirror is a host gittossh wouldn't rewrite anyway, and an HTTPS prefix was
+# chosen because SSH isn't the way in. So the offer is skipped outright --
+# gittossh is never run, and the bootstrap continues.
+test_mirror_skips_ssh_remote_offer() {
+    run_offer_ssh_remotes yes present
+    assert_status 0 &&
+    assert_output_contains "Cloned from ghe.corp.example.com" &&
+    assert_output_contains "leaving repo remotes as-is" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$calls" ""
+}
+
+# Without a mirror prefix the guard must not fire: the function falls through
+# to its converter lookup (absent here, so it returns before the prompt) rather
+# than reporting that it left the remotes alone.
+test_default_prefix_reaches_ssh_remote_offer() {
+    run_offer_ssh_remotes no absent
+    assert_status 0 &&
+    assert_output_lacks "ghe.corp.example.com" &&
+    assert_output_lacks "leaving repo remotes as-is" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Run generate_ssh_key with a stub ssh-keygen. Only safe for the HTTPS-prefix
+# case, which returns before the "Press Enter" prompt; the SSH paths would
+# block on a terminal. SSH=yes so it skips the auto-mode short circuits and
+# actually reaches the key-instructions block under test.
+run_generate_ssh_key_https() {
+    key_tmpdir="$(mktemp -d)"
+    mkdir -p "$key_tmpdir/bin"
+    cat > "$key_tmpdir/bin/ssh-keygen" <<'MOCK'
+#!/bin/sh
+keyfile=""
+while test $# -gt 0; do
+    case "$1" in
+        -f) keyfile="$2"; shift ;;
+    esac
+    shift
+done
+: > "$keyfile"
+printf 'ssh-ed25519 AAAATESTKEY test\n' > "$keyfile.pub"
+MOCK
+    chmod +x "$key_tmpdir/bin/ssh-keygen"
+
+    set +e
+    output="$(PATH="$key_tmpdir/bin:$PATH" HOME="$key_tmpdir" \
+        sh -c "set -e
+SSH=yes
+GITHUB_MIRROR=yes
+GITHUB_HOST=ghe.corp.example.com
+GITHUB_PREFIX_SSH=no
+$(extract_functions "info warn generate_ssh_key")
+generate_ssh_key
+echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$key_tmpdir"
+}
+
+# Under an HTTPS prefix nothing setup clones authenticates with the key, so the
+# run must not stall at "Press Enter after adding the key" -- it prints the key
+# and continues. The instructions name the prefix's host: a mirror's key
+# settings live wherever that deployment puts them, not at github.com's URL.
+test_https_prefix_key_prompt_does_not_block() {
+    run_generate_ssh_key_https
+    assert_status 0 &&
+    assert_output_contains "ghe.corp.example.com" &&
+    assert_output_contains "ssh-ed25519 AAAATESTKEY" &&
+    assert_output_lacks "https://github.com/settings/ssh/new" &&
+    assert_output_lacks "Press Enter" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Run clone_or_pull's existing-checkout branch against a stub git, so nothing
+# here touches the network. The stub answers the config lookup with
+# $MOCK_ORIGIN (exiting 1 when it's empty, as git does for an unset key) and
+# succeeds at everything else.
+run_clone_or_pull_existing() {
+    cop_mirror="$1"
+    cop_origin="$2"
+    cop_repo="$3"
+    # Whether the call opts into the mismatch check, i.e. stands in for one of
+    # the three repos whose URL comes from the prefix. Defaults to yes so the
+    # cases below read as the prefixed call sites they model.
+    cop_from_prefix="${4:-yes}"
+    cop_tmpdir="$(mktemp -d)"
+    mkdir -p "$cop_tmpdir/bin" "$cop_tmpdir/scripts/.git"
+    cat > "$cop_tmpdir/bin/git" <<'MOCK'
+#!/bin/sh
+shift 2                     # drop the "-C DIR" clone_or_pull always passes
+case "$1" in
+    config)
+        test -n "${MOCK_ORIGIN:-}" || exit 1
+        printf '%s\n' "$MOCK_ORIGIN"
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "$cop_tmpdir/bin/git"
+
+    set +e
+    output="$(PATH="$cop_tmpdir/bin:$PATH" MOCK_ORIGIN="$cop_origin" \
+        sh -c "set -e
+GITHUB_MIRROR=$cop_mirror
+$(extract_functions "info warn redact_url_credentials canonical_remote clone_or_pull")
+clone_or_pull '$cop_repo' '$cop_tmpdir/scripts' $cop_from_prefix
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$cop_tmpdir"
+}
+
+# --github steers fresh clones only; a checkout that already exists keeps the
+# remote it was cloned with. Re-running with a mirror prefix over repos cloned
+# from github.com must say the flag didn't apply, not leave it looking like it
+# did -- and must still continue the bootstrap.
+test_existing_checkout_mismatch_warns() {
+    run_clone_or_pull_existing yes \
+        "git@github.com:mikelward/scripts.git" \
+        "https://ghe.corp.example.com/mikelward/scripts.git"
+    assert_status 0 &&
+    assert_output_contains "is cloned from git@github.com:mikelward/scripts.git" &&
+    assert_output_contains "leaving the remote as-is" &&
+    assert_output_contains "remote set-url origin" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A stored origin can carry a token the user has long forgotten, and the
+# mismatch warning is printed to the terminal and into any captured bootstrap
+# log -- so neither URL may go out with its credentials intact. The host and
+# path still come through, which is all the warning needs to be actionable.
+test_existing_checkout_mismatch_redacts_credentials() {
+    run_clone_or_pull_existing yes \
+        "https://olduser:oldtoken@github.com/mikelward/scripts.git" \
+        "https://newuser:newtoken@ghe.corp.example.com/mikelward/scripts.git"
+    assert_status 0 &&
+    assert_output_lacks "oldtoken" &&
+    assert_output_lacks "newtoken" &&
+    assert_output_lacks "olduser" &&
+    assert_output_lacks "newuser" &&
+    assert_output_contains "https://***@github.com/mikelward/scripts.git" &&
+    assert_output_contains "https://***@ghe.corp.example.com/mikelward/scripts.git"
+}
+
+# Exercise the real canonical_remote: git treats a trailing slash and the .git
+# suffix as interchangeable, so the mismatch check has to as well. Protocol and
+# host differences must survive -- those are the mismatches worth reporting.
+test_canonical_remote() {
+    eval "$(extract_functions "canonical_remote")"
+    assert_eq "$(canonical_remote 'https://ghe.corp.example.com/mikelward/scripts.git')" \
+        "$(canonical_remote 'https://ghe.corp.example.com/mikelward/scripts')" &&
+    assert_eq "$(canonical_remote 'https://ghe.corp.example.com/mikelward/scripts/')" \
+        "$(canonical_remote 'https://ghe.corp.example.com/mikelward/scripts')" &&
+    assert_eq "$(canonical_remote 'git@ghe.corp.example.com:mikelward/scripts.git')" \
+        'git@ghe.corp.example.com:mikelward/scripts' &&
+    # A different protocol on the same host stays a mismatch.
+    test "$(canonical_remote 'https://ghe.corp.example.com/mikelward/scripts.git')" \
+        != "$(canonical_remote 'git@ghe.corp.example.com:mikelward/scripts.git')"
+}
+
+# The repo paths carry a .git suffix, but a checkout cloned by hand often
+# doesn't. Both spell the same repository, so a byte-for-byte comparison would
+# tell the user --github hadn't applied when it had nothing to apply.
+test_existing_checkout_suffix_spelling_is_quiet() {
+    run_clone_or_pull_existing yes \
+        "https://ghe.corp.example.com/mikelward/scripts" \
+        "https://ghe.corp.example.com/mikelward/scripts.git"
+    assert_status 0 &&
+    assert_output_lacks "leaving the remote as-is"
+}
+
+# A checkout that already points at the mirror is the expected state, so the
+# re-run says nothing about it.
+test_existing_checkout_match_is_quiet() {
+    run_clone_or_pull_existing yes \
+        "https://ghe.corp.example.com/mikelward/scripts.git" \
+        "https://ghe.corp.example.com/mikelward/scripts.git"
+    assert_status 0 &&
+    assert_output_lacks "leaving the remote as-is"
+}
+
+# On the default prefix an HTTPS github.com checkout differs from the SSH URL
+# harmlessly -- that's what offer_ssh_remotes is for -- so the mismatch warning
+# must stay quiet rather than nagging on every ordinary re-run.
+test_existing_checkout_quiet_on_default_prefix() {
+    run_clone_or_pull_existing no \
+        "https://github.com/mikelward/scripts.git" \
+        "git@github.com:mikelward/scripts.git"
+    assert_status 0 &&
+    assert_output_lacks "leaving the remote as-is"
+}
+
+# clone_or_pull is shared: install_helix calls it with a hard-coded upstream
+# URL that --github never steers, and that checkout's origin may legitimately
+# be an SSH URL or a fork. Such a caller must not inherit the mismatch check,
+# or a mirror prefix would claim --github asked for a different Helix remote.
+test_unprefixed_caller_skips_the_mismatch_check() {
+    run_clone_or_pull_existing yes \
+        "git@github.com:someone/helix.git" \
+        "https://github.com/helix-editor/helix" \
+        no
+    assert_status 0 &&
+    assert_output_lacks "leaving the remote as-is" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
 # --- no-sudo mode ---
@@ -884,7 +1130,8 @@ test_github_rejects_empty_equals() {
 # The repos are assembled from GITHUB_PREFIX + path, defaulting to GitHub over
 # SSH, so an unset --github clones from github.com exactly as before.
 test_github_default_and_assembly() {
-    assert_source_contains 'GITHUB_PREFIX="${GITHUB_PREFIX:-git@github.com:}"' &&
+    assert_source_contains 'GITHUB_DEFAULT_PREFIX="git@github.com:"' &&
+    assert_source_contains 'GITHUB_PREFIX="${GITHUB_PREFIX:-$GITHUB_DEFAULT_PREFIX}"' &&
     assert_source_contains 'SCRIPTS_REPO_PATH="mikelward/scripts.git"' &&
     assert_source_contains 'SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"' &&
     assert_source_contains 'CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"' &&
@@ -906,6 +1153,51 @@ test_normalize_github_prefix() {
     assert_eq "$(normalize_github_prefix 'ssh://git@ghe.corp')" 'ssh://git@ghe.corp/'
 }
 
+# GITHUB_MIRROR is what the SSH-key and remote-rewrite steps key off, so it has
+# to be derived from the *normalized* prefix -- otherwise "--github git@github.com"
+# (the default, spelled without its separator) would look like a mirror. The
+# HTTPS check decides whether an SSH key is needed to clone at all.
+test_github_mirror_derived_after_normalizing() {
+    assert_source_contains 'test "$GITHUB_MIRROR" = yes' &&
+    assert_source_contains 'if test "$GITHUB_PREFIX" = "$GITHUB_DEFAULT_PREFIX"; then' &&
+    assert_source_contains 'GITHUB_PREFIX_SSH=no' &&
+    # The GITHUB_MIRROR/GITHUB_PREFIX_SSH block reads the normalized prefix, so
+    # it must come after normalize_github_prefix rewrites it.
+    test "$(grep -n 'GITHUB_PREFIX=$(normalize_github_prefix' "$SETUP" | cut -d: -f1)" \
+        -lt "$(grep -n '^    GITHUB_MIRROR=no$' "$SETUP" | cut -d: -f1)"
+}
+
+# Exercise the real github_prefix_host: both prefix shapes reduce to a bare
+# host, so the SSH-key and remote messages can name where the repos came from.
+test_github_prefix_host() {
+    eval "$(sed -n '/^github_prefix_host() {/,/^}/p' "$SETUP")"
+    assert_eq "$(github_prefix_host 'git@github.com:')" 'github.com' &&
+    assert_eq "$(github_prefix_host 'git@ghe.corp.example.com:')" 'ghe.corp.example.com' &&
+    assert_eq "$(github_prefix_host 'https://ghe.corp.example.com/')" 'ghe.corp.example.com' &&
+    assert_eq "$(github_prefix_host 'ssh://git@ghe.corp.example.com/')" 'ghe.corp.example.com' &&
+    assert_eq "$(github_prefix_host 'https://user@ghe.corp.example.com/')" 'ghe.corp.example.com'
+}
+
+# Exercise the real redact_url_credentials. An HTTPS clone URL can carry a
+# token, and the token-as-username forms mean a bare user-info is no safer than
+# a password, so the whole of it is replaced -- while credential-free URLs and
+# scp-style remotes (no password field in that syntax) print unchanged, so the
+# ordinary case stays readable and copy-pasteable.
+test_redact_url_credentials() {
+    eval "$(sed -n '/^redact_url_credentials() {/,/^}/p' "$SETUP")"
+    assert_eq "$(redact_url_credentials 'https://user:tok@ghe.corp.example.com/mikelward/scripts.git')" \
+        'https://***@ghe.corp.example.com/mikelward/scripts.git' &&
+    assert_eq "$(redact_url_credentials 'https://tok@ghe.corp.example.com/mikelward/scripts.git')" \
+        'https://***@ghe.corp.example.com/mikelward/scripts.git' &&
+    assert_eq "$(redact_url_credentials 'https://ghe.corp.example.com/mikelward/scripts.git')" \
+        'https://ghe.corp.example.com/mikelward/scripts.git' &&
+    assert_eq "$(redact_url_credentials 'git@github.com:mikelward/scripts.git')" \
+        'git@github.com:mikelward/scripts.git' &&
+    # An '@' in the path is not user-info, so it survives untouched.
+    assert_eq "$(redact_url_credentials 'https://ghe.corp.example.com/mikelward/a@b.git')" \
+        'https://ghe.corp.example.com/mikelward/a@b.git'
+}
+
 run_test "--github is accepted and takes an argument" test_github_flag_accepted
 run_test "--github=VALUE form parses" test_github_equals_form_accepted
 run_test "--github without an argument errors" test_github_requires_argument
@@ -916,6 +1208,32 @@ run_test "repos default to github.com over SSH via GITHUB_PREFIX" \
     test_github_default_and_assembly
 run_test "normalize_github_prefix appends the right separator" \
     test_normalize_github_prefix
+run_test "the mirror flags are derived from the normalized prefix" \
+    test_github_mirror_derived_after_normalizing
+run_test "github_prefix_host reduces both prefix shapes to a host" \
+    test_github_prefix_host
+run_test "redact_url_credentials strips embedded user-info" \
+    test_redact_url_credentials
+run_test "a mirror prefix skips the SSH remote-switch offer" \
+    test_mirror_skips_ssh_remote_offer
+run_test "the default prefix still reaches the remote-switch offer" \
+    test_default_prefix_reaches_ssh_remote_offer
+run_test "an HTTPS prefix names its host and doesn't wait for the key" \
+    test_https_prefix_key_prompt_does_not_block
+run_test "a mismatched existing checkout is reported under a mirror prefix" \
+    test_existing_checkout_mismatch_warns
+run_test "the mismatch warning redacts credentials in both URLs" \
+    test_existing_checkout_mismatch_redacts_credentials
+run_test "canonical_remote folds interchangeable URL spellings" \
+    test_canonical_remote
+run_test "a .git-suffix spelling difference is not a mismatch" \
+    test_existing_checkout_suffix_spelling_is_quiet
+run_test "a matching existing checkout is silent under a mirror prefix" \
+    test_existing_checkout_match_is_quiet
+run_test "the default prefix doesn't second-guess an existing remote" \
+    test_existing_checkout_quiet_on_default_prefix
+run_test "a caller whose URL isn't from the prefix skips the check" \
+    test_unprefixed_caller_skips_the_mismatch_check
 
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage

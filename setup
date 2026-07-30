@@ -68,6 +68,12 @@
 # PREFIX is the part before OWNER/REPO; a bare host is treated as SSH, and its
 # trailing separator (: or /) is supplied for you. GITHUB_PREFIX in the
 # environment does the same, which is handy when piping setup from a mirror.
+#
+# A non-default prefix also stops setup assuming github.com-over-SSH elsewhere:
+# the SSH key instructions name that host instead of github.com, an HTTPS
+# prefix doesn't stop to wait for the key at all (nothing it clones needs one),
+# the end-of-run offer to rewrite remotes to SSH is skipped, and a repo already
+# cloned from somewhere else is reported rather than silently left behind.
 
 # The three repositories setup clones, kept as OWNER/REPO paths. The host and
 # protocol come from GITHUB_PREFIX, which defaults to GitHub over SSH and can be
@@ -78,7 +84,12 @@
 # apart. The path is appended to the prefix; the URLs themselves are assembled
 # after argument parsing (see normalize_github_prefix). Override the default
 # host by exporting GITHUB_PREFIX, or per-run with --github.
-GITHUB_PREFIX="${GITHUB_PREFIX:-git@github.com:}"
+#
+# The default is kept as its own constant so the steps that care whether the
+# repos come from somewhere else -- the SSH key prompt and the offer to rewrite
+# remotes -- can compare against it (see GITHUB_MIRROR below).
+GITHUB_DEFAULT_PREFIX="git@github.com:"
+GITHUB_PREFIX="${GITHUB_PREFIX:-$GITHUB_DEFAULT_PREFIX}"
 SCRIPTS_REPO_PATH="mikelward/scripts.git"
 CONF_REPO_PATH="mikelward/conf.git"
 ROOT_REPO_PATH="mikelward/root.git"
@@ -210,7 +221,9 @@ Options:
                    is the host or full prefix before OWNER/REPO; its protocol is
                    taken as given, e.g. an internal SSH host (git@ghe.corp or
                    git@ghe.corp:) or an HTTPS mirror (https://ghe.corp). A bare
-                   host is treated as SSH. Also settable via the GITHUB_PREFIX
+                   host is treated as SSH. Setting it also points the SSH key
+                   instructions at that host and skips the offer to rewrite the
+                   cloned remotes to SSH. Also settable via the GITHUB_PREFIX
                    environment variable
   -h, --help       Show this help and exit
 
@@ -299,6 +312,59 @@ normalize_github_prefix() {
         *://*)   printf '%s/' "$1" ;;
         *)       printf '%s:' "$1" ;;
     esac
+}
+
+# github_prefix_host PREFIX: print the host from a normalized prefix, for the
+# messages that name where the repos came from. Handles both shapes the prefix
+# can take -- scp-style (git@HOST:) and URL (https://HOST/, ssh://git@HOST/).
+github_prefix_host() {
+    case "$1" in
+        *://*)
+            _prefix_rest=${1#*://}
+            _prefix_rest=${_prefix_rest%%/*}
+            ;;
+        *)
+            _prefix_rest=${1%%:*}
+            ;;
+    esac
+    printf '%s' "${_prefix_rest#*@}"
+}
+
+# redact_url_credentials URL: print URL with any embedded user-info replaced by
+# "***", so a message can name a remote without echoing a secret to the
+# terminal or to a captured bootstrap log. An HTTPS clone URL can carry one --
+# https://USER:TOKEN@host/..., and the token-as-username forms
+# (https://TOKEN@host/..., https://x-access-token:TOKEN@host/...) mean a bare
+# user-info is no safer than a password, so the whole of it goes. scp-style
+# remotes (git@HOST:PATH) are printed unchanged: that syntax has no password
+# field, so its user is a plain SSH login rather than a credential.
+redact_url_credentials() {
+    case "$1" in
+        *://*) ;;
+        *) printf '%s' "$1"; return ;;
+    esac
+    _redact_scheme=${1%%://*}
+    _redact_rest=${1#*://}
+    # User-info is only what precedes the '@' in the authority, i.e. before the
+    # first '/'. An '@' further along is part of the path, not a credential.
+    _redact_authority=${_redact_rest%%/*}
+    case "$_redact_authority" in
+        *@*) ;;
+        *) printf '%s' "$1"; return ;;
+    esac
+    _redact_path=${_redact_rest#"$_redact_authority"}
+    printf '%s://***@%s%s' \
+        "$_redact_scheme" "${_redact_authority##*@}" "$_redact_path"
+}
+
+# canonical_remote URL: print URL with the spellings git treats as
+# interchangeable removed -- a trailing slash and the optional .git suffix --
+# so a checkout cloned as .../OWNER/REPO compares equal to the .../OWNER/REPO.git
+# the repo paths are written as. Protocol and host are deliberately left alone:
+# a difference there is a real one, and reporting it is the point.
+canonical_remote() {
+    _canon=${1%/}
+    printf '%s' "${_canon%.git}"
 }
 
 # require_github_prefix VALUE: abort with the usage error unless VALUE is a
@@ -408,6 +474,28 @@ SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"
 CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"
 ROOT_REPO="${GITHUB_PREFIX}${ROOT_REPO_PATH}"
 
+# Whether the repos come from somewhere other than the default (github.com over
+# SSH), i.e. --github or GITHUB_PREFIX pointed them elsewhere. Compared after
+# normalization, so "--github git@github.com" is recognized as the default
+# rather than mistaken for a mirror. Steps that assume github.com-over-SSH key
+# off this: the SSH key prompt names the right host, and the offer to rewrite
+# remotes to SSH is skipped -- see offer_ssh_remotes.
+if test "$GITHUB_PREFIX" = "$GITHUB_DEFAULT_PREFIX"; then
+    GITHUB_MIRROR=no
+else
+    GITHUB_MIRROR=yes
+fi
+GITHUB_HOST=$(github_prefix_host "$GITHUB_PREFIX")
+
+# Whether cloning from the prefix authenticates with an SSH key. An HTTPS
+# prefix -- an internal mirror served over HTTPS, or github.com itself where a
+# network blocks SSH -- needs no key for any repo setup clones, so
+# generate_ssh_key doesn't stop the bootstrap to wait for one.
+case "$GITHUB_PREFIX" in
+    https://* | http://*) GITHUB_PREFIX_SSH=no ;;
+    *)                    GITHUB_PREFIX_SSH=yes ;;
+esac
+
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the bootstrap pushes through failing steps. We toggle this only after
 # parsing args, so an unknown option above still exits non-zero.
@@ -437,9 +525,39 @@ fi
 clone_or_pull() {
     repo="$1"
     dir="$2"
+    # Whether REPO was built from GITHUB_PREFIX. Only for those does an
+    # existing checkout pointing elsewhere mean --github failed to apply; the
+    # helix clone shares this function with a hard-coded upstream URL the flag
+    # never steers, and its origin may legitimately be an SSH URL or a fork.
+    # Default off so a new caller has to opt in rather than inherit the check.
+    from_prefix="${3:-no}"
 
     if test -d "$dir/.git"; then
         info "$dir already exists, pulling latest changes"
+        # The prefix only steers fresh clones; an existing checkout keeps
+        # whatever remote it was cloned with. Say so when they disagree, rather
+        # than letting --github look like it took effect on a re-run. Only
+        # under a non-default prefix: on the default, a repo cloned over HTTPS
+        # differs from the SSH default URL harmlessly, and that's exactly what
+        # offer_ssh_remotes exists to fix.
+        if test "$from_prefix" = yes && test "$GITHUB_MIRROR" = yes; then
+            # config --get, not "remote get-url": we want the raw stored URL,
+            # not one an url.*.insteadOf rule has already rewritten. An unset
+            # key (a local-only checkout with no origin) exits 1 with no
+            # output -- not an error here, just nothing to compare against.
+            existing=$(git -C "$dir" config --get remote.origin.url) || existing=""
+            # Compared canonically, so a checkout cloned without the .git
+            # suffix isn't reported as a mismatch against the same URL with it.
+            if test -n "$existing" \
+                    && test "$(canonical_remote "$existing")" != "$(canonical_remote "$repo")"; then
+                # Both URLs are redacted before they're printed: a stored origin
+                # can carry a token the user has long forgotten, and the prefix
+                # they passed lands in any captured log just the same. In the
+                # ordinary credential-free case nothing changes and the
+                # set-url command below is copy-pasteable as printed.
+                warn "$dir is cloned from $(redact_url_credentials "$existing"), not $(redact_url_credentials "$repo"); leaving the remote as-is (git -C $dir remote set-url origin $(redact_url_credentials "$repo") to change it)"
+            fi
+        fi
         # A failed pull (e.g. no network) must not abort the bootstrap: the
         # existing checkout is enough to keep going. This is also what lets an
         # offline "setup --no-root" reach the homepkg bundle install, which runs
@@ -455,7 +573,9 @@ clone_or_pull() {
         # No existing checkout, so a failed clone stays fatal: there's nothing
         # to fall back to, and later steps (confinst, the root build) need the
         # repo. An offline box must therefore pre-stage the repos it needs.
-        info "Cloning $repo into $dir"
+        # Redacted for the same reason as the mismatch warning above: a prefix
+        # passed with credentials shouldn't be echoed into a bootstrap log.
+        info "Cloning $(redact_url_credentials "$repo") into $dir"
         git clone --recurse-submodules "$repo" "$dir"
     fi
 }
@@ -1372,23 +1492,39 @@ generate_ssh_key() {
     ssh-keygen -t ed25519 -f "$HOME/.ssh/id_ed25519" -N ""
 
     info ""
-    info "Add this SSH public key to GitHub and Codeberg before continuing:"
-    info "  GitHub:   https://github.com/settings/ssh/new"
+    info "Add this SSH public key to $GITHUB_HOST and Codeberg:"
+    if test "$GITHUB_MIRROR" = yes; then
+        # A mirror's web UI lives wherever that deployment puts it, so name the
+        # host rather than guessing at a settings URL that probably 404s.
+        info "  $GITHUB_HOST: add it under your account's SSH keys"
+    else
+        info "  GitHub:   https://github.com/settings/ssh/new"
+    fi
     info "  Codeberg: https://codeberg.org/user/settings/keys"
     info ""
     cat "$HOME/.ssh/id_ed25519.pub"
     info ""
 
+    # Only block on the key when this run's clones actually need it. Under an
+    # HTTPS prefix nothing setup clones authenticates with it (the repos come
+    # over HTTPS, as does Krohnkite), so waiting would stall a bootstrap that
+    # would otherwise finish unattended -- print the key and keep going.
+    if test "$GITHUB_PREFIX_SSH" = no; then
+        info "Cloning from $GITHUB_HOST over HTTPS this run, so setup isn't waiting for the key"
+        return
+    fi
+
     # When run via "curl | sh", stdin is the script itself, so we
     # can't read user input.  Open /dev/tty to read from the terminal.
+    prompt="Press Enter after adding the key to $GITHUB_HOST and Codeberg..."
     if test -t 0; then
-        printf "Press Enter after adding the key to GitHub and Codeberg..."
+        printf "%s" "$prompt"
         read -r _
     elif test -e /dev/tty; then
-        printf "Press Enter after adding the key to GitHub and Codeberg..."
+        printf "%s" "$prompt"
         read -r _ < /dev/tty
     else
-        warn "Cannot prompt for input; add the key to GitHub and Codeberg manually before cloning SSH repos"
+        warn "Cannot prompt for input; add the key to $GITHUB_HOST and Codeberg manually before cloning SSH repos"
     fi
 }
 
@@ -1399,6 +1535,17 @@ generate_ssh_key() {
 # be flipped here so pushes use the key. Defaults to no, so a non-interactive
 # "curl | sh" run never rewrites anything without being asked.
 offer_ssh_remotes() {
+    # A non-default prefix put these remotes where they are deliberately, so
+    # don't offer to move them. Both shapes it can take argue against the
+    # offer: an internal mirror is a host gittossh doesn't rewrite at all (it
+    # only knows github.com and codeberg.org), so the prompt could only ever
+    # answer "nothing to convert"; and an HTTPS prefix was chosen precisely
+    # because SSH isn't the way in, so converting would break the remote.
+    if test "$GITHUB_MIRROR" = yes; then
+        info "Cloned from $GITHUB_HOST; leaving repo remotes as-is"
+        return 0
+    fi
+
     converter="$SCRIPTS_DIR/gittossh"
     test -x "$converter" || return 0
 
@@ -1573,8 +1720,8 @@ if ! command -v make >/dev/null 2>&1; then
     exit 1
 fi
 
-clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR"
-clone_or_pull "$CONF_REPO" "$CONF_DIR"
+clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR" yes
+clone_or_pull "$CONF_REPO" "$CONF_DIR" yes
 
 info "Running confinst"
 "$SCRIPTS_DIR/confinst"
@@ -1627,7 +1774,7 @@ fi
 # an install step too: skip it under --no-install.
 if test "$INSTALL" = yes; then
     mkdir -p "$SRC_DIR"
-    clone_or_pull "$ROOT_REPO" "$ROOT_DIR"
+    clone_or_pull "$ROOT_REPO" "$ROOT_DIR" yes
     # The default root config builds helper tools that require cargo. When
     # cargo isn't available -- the --brew extras path skips the Rust toolchain,
     # as does --minimal -- install the legacy config from the legacy/ subdir
