@@ -855,15 +855,66 @@ assert_batch_contains() {
     fi
 }
 
+# The default must not touch the running session at all. kglobalaccel lives
+# inside kwin, so a mishandled call kills the compositor and every client with
+# it -- which is what happened when this defaulted to on. An unattended run
+# writes the config and says a logout is needed; nothing else.
+test_live_apply_is_off_by_default() {
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "kdeshortcut.py" &&
+    assert_output_contains "they apply at next login" &&
+    assert_output_contains "KDE configured successfully" &&
+    # The config is still written in full -- only the live push is skipped.
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# The default path allocates no batch at all. It never reads one, so creating it
+# would put a temp file, a warning about a feature that wasn't requested, and an
+# append that can abort the run under set -e in the way of a plain config run.
+# An unusable TMPDIR is how that shows up: it must be a non-event here, while
+# --live-shortcuts still reports it (see the fallback test below).
+test_default_run_allocates_no_batch() {
+    mock_python3 0
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        TMPDIR="$TEST_TMPDIR/no-such-dir" \
+        "$KDE_SCRIPT" --no-install 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_lacks "could not create a temporary file" &&
+    assert_output_lacks "no shortcut batch was recorded" &&
+    assert_output_contains "they apply at next login" &&
+    assert_output_contains "KDE configured successfully" &&
+    assert_not_called "kdeshortcut.py" &&
+    # The config writes are unaffected by any of this.
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# --no-live-shortcuts is accepted explicitly, for a caller that wants to state
+# the default rather than rely on it.
+test_no_live_shortcuts_flag_is_accepted() {
+    mock_python3 0
+    run_kde --no-install --no-live-shortcuts
+    assert_status 0 &&
+    assert_not_called "kdeshortcut.py" &&
+    assert_output_contains "KDE configured successfully"
+}
+
 # Every shortcut written to the config is also handed to kdeshortcut.py, with
 # the component, action, keys and label the config got -- tab-separated,
 # because action IDs contain spaces.
 test_shortcuts_pushed_to_running_session() {
     add_launcher browser1
     mock_python3 0
-    run_kde --no-install
+    run_kde --no-install --live-shortcuts
     assert_status 0 &&
-    assert_called "kdeshortcut.py --quiet --batch" &&
+    assert_called "kdeshortcut.py --quiet --journal" &&
     assert_batch_contains 'kwin\tWindow Close\tMeta+Backspace' &&
     assert_batch_contains 'kwin\tSwitch to Desktop 1\tMeta+1' &&
     assert_batch_contains 'kwin\tKrohnkiteSetMaster\tMeta+Return' &&
@@ -881,7 +932,7 @@ test_shortcuts_pushed_to_running_session() {
 # is handed, since that's the only place the name is observable.
 test_batch_file_name_is_unpredictable() {
     mock_python3 0
-    run_kde --no-install
+    run_kde --no-install --live-shortcuts
     batch_arg="$(sed -n 's/.*--batch //p' "$CALLS" | head -1)"
     assert_status 0 &&
     case "$batch_arg" in
@@ -903,7 +954,7 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         TMPDIR="$TEST_TMPDIR/no-such-dir" \
-        "$KDE_SCRIPT" --no-install 2>&1)"
+        "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
     status=$?
     set -e
     assert_status 0 &&
@@ -914,11 +965,60 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
 
+# No crash journal means no live apply. Running without it is precisely the case
+# the journal exists to prevent: a call that takes the compositor down would
+# leave nothing to identify it, so the next run would make it again. A regular
+# file where the state directory should be is a state directory that can't be
+# created, for any uid.
+test_uncreatable_journal_dir_skips_live_apply() {
+    mock_python3 0
+    : > "$TEST_TMPDIR/state-is-a-file"
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        XDG_STATE_HOME="$TEST_TMPDIR/state-is-a-file/state" \
+        "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "could not create the state directory" &&
+    assert_output_contains "not applying shortcuts to the running session" &&
+    assert_output_contains "shortcuts take effect after logging out" &&
+    assert_output_contains "KDE configured successfully" &&
+    # Nothing may reach the daemon without the journal.
+    assert_not_called "kdeshortcut.py" &&
+    # The config writes still happen; only the live push is skipped.
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# The helper is never invoked without --journal: that would leave Journal with
+# no path, where record() is a no-op and every mutating call runs unprotected.
+#
+# The path is also the one kdeshortcut.py defaults to. A marker names an action
+# that takes the compositor down, which is true of the action whoever applied
+# it -- so a private journal here would let a direct kdeshortcut.py run repeat
+# the call that crashed, and would leave its --forget clearing the wrong file.
+test_live_apply_always_passes_a_journal() {
+    mock_python3 0
+    run_kde --no-install --live-shortcuts
+    journal_arg="$(sed -n 's/.*--journal \([^ ]*\).*/\1/p' "$CALLS" | head -1)"
+    assert_status 0 &&
+    assert_called "kdeshortcut.py --quiet --journal" &&
+    ! grep -q 'kdeshortcut\.py --quiet --batch' "$CALLS" &&
+    case "$journal_arg" in
+        */kdeshortcut.inflight) ;;
+        *) echo "  FAIL: journal '$journal_arg' is not the helper's default path"
+            TEST_FAILED=1; return 1 ;;
+    esac
+}
+
 # The whole point is not having to log out, so a successful run must not tell
 # the user to.
 test_live_apply_does_not_advise_logout() {
     mock_python3 0
-    run_kde --no-install
+    run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_output_lacks "logging out" &&
     assert_output_lacks "log out"
@@ -936,7 +1036,7 @@ test_missing_python3_falls_back_to_logout_advice() {
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         PYTHON=no-such-python3 \
-        "$KDE_SCRIPT" --no-install 2>&1)"
+        "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
     status=$?
     set -e
     assert_status 0 &&
@@ -949,7 +1049,7 @@ test_missing_python3_falls_back_to_logout_advice() {
 # run still succeeds -- the config on disk is correct either way.
 test_failed_live_apply_warns_and_continues() {
     mock_python3 1
-    run_kde --no-install
+    run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_output_contains "some shortcuts could not be applied" &&
     assert_output_contains "shortcuts take effect after logging out" &&
@@ -960,7 +1060,7 @@ test_failed_live_apply_warns_and_continues() {
 # changed in the session, rather than some shortcut being rejected.
 test_unreachable_daemon_warns_and_continues() {
     mock_python3 3
-    run_kde --no-install
+    run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_output_contains "could not reach kglobalaccel" &&
     assert_output_contains "KDE configured successfully"
@@ -1111,12 +1211,22 @@ run_test "stale-group sweep rewrites through a symlink" \
     test_stale_group_sweep_follows_symlink
 run_test "stale-group sweep needs no python3" \
     test_stale_group_sweep_needs_no_python3
+run_test "the live apply is off by default" \
+    test_live_apply_is_off_by_default
+run_test "the default run allocates no shortcut batch" \
+    test_default_run_allocates_no_batch
+run_test "--no-live-shortcuts is accepted" \
+    test_no_live_shortcuts_flag_is_accepted
 run_test "shortcuts are pushed to the running session" \
     test_shortcuts_pushed_to_running_session
 run_test "the shortcut batch file name is unpredictable" \
     test_batch_file_name_is_unpredictable
 run_test "an unusable TMPDIR falls back to the logout advice" \
     test_unusable_tmpdir_falls_back_to_logout_advice
+run_test "an uncreatable journal directory skips the live apply" \
+    test_uncreatable_journal_dir_skips_live_apply
+run_test "the live apply always passes a journal" \
+    test_live_apply_always_passes_a_journal
 run_test "a successful live apply doesn't advise logging out" \
     test_live_apply_does_not_advise_logout
 run_test "missing python3 falls back to the logout advice" \
