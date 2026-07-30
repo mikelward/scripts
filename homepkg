@@ -335,6 +335,60 @@ def github_latest_assets(repo):
         (a["name"], a["browser_download_url"]) for a in data.get("assets", [])]
 
 
+# Non-payload artifacts that sit in a release beside the archives: checksums,
+# signatures, manifests, installer scripts. The cargo-dist updater is here
+# because no extension test can catch it -- it's named <tool>-<triple>-update
+# with no extension at all, so it looks exactly like a bare binary, and it is
+# one; just not the tool's. Left unfiltered it matches the platform tokens as
+# well as the real archive does, and github_extract then installs axoupdater
+# under the tool's name.
+SIDECAR_SUFFIXES = (
+    ".sha256", ".sha512", ".sum", ".asc", ".sig", ".txt", ".sbom", ".json",
+    ".sh", ".ps1", "-update",
+)
+
+# What github_extract knows how to unpack, split the way it opens them. The
+# picker ranks by this rather than a list of its own, so teaching extraction a
+# new format can't leave the two disagreeing about what's installable.
+TAR_SUFFIXES = (".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")
+ZIP_SUFFIXES = (".zip",)
+ARCHIVE_SUFFIXES = TAR_SUFFIXES + ZIP_SUFFIXES
+
+
+def _asset_kind(low):
+    """How installable an asset looks, highest first.
+
+    Ranked rather than filtered, because enumerating the formats a release
+    might add is a losing game: goreleaser ships .deb, .rpm *and* .apk beside
+    the tarball, every one of them matching the platform tokens as well as the
+    tarball does. Deciding by what we can actually open needs no such list.
+
+    2  an archive we can unpack
+    1  no extension, so possibly a bare binary (jq-linux-amd64)
+    0  anything else -- a package format we can't open. Still eligible, so a
+       release offering nothing better is reported by github_extract, which
+       knows what it couldn't do with it, rather than as "no matching asset".
+    """
+    if low.endswith(ARCHIVE_SUFFIXES):
+        return 2
+    return 1 if "." not in os.path.basename(low) else 0
+
+
+def _name_prefix_len(low, tokens):
+    """Characters before the platform part of an asset name.
+
+    Only used to break ties. One repo can release several binaries -- atuin
+    ships atuin-<triple>.tar.gz beside atuin-server-<triple>.tar.gz -- and
+    both match every token equally, so otherwise the winner is whichever
+    GitHub happens to list first. The tool's own archive is the one with the
+    least name in front of the triple. It stays a tie-break rather than a
+    match against the tool name because plenty of tools ship under a longer
+    name than their registry key (carapace -> carapace-bin_<ver>_linux_amd64).
+    """
+    at = [low.find(t) for t in tokens["arch"] + tokens["os"] if t in low]
+    return min(at) if at else len(low)
+
+
 def github_pick_asset(assets, tokens):
     """Choose the best asset for this platform from (name, url) pairs."""
     def score(name):
@@ -343,14 +397,19 @@ def github_pick_asset(assets, tokens):
             return None
         if tokens["os"] and not any(t in low for t in tokens["os"]):
             return None
-        # Skip checksums/signatures/source archives.
-        if any(low.endswith(x) for x in (".sha256", ".asc", ".sig", ".txt", ".sbom")):
+        # Skip checksums, signatures, manifests, installers and updaters.
+        # Source archives need no rule of their own: they carry no platform
+        # in the name, so the two token tests above have already dropped them.
+        if low.endswith(SIDECAR_SUFFIXES):
             return None
         s = 0
         for i, pref in enumerate(tokens["prefer"]):
             if pref and pref in low:
                 s = len(tokens["prefer"]) - i
-        return s
+        # Compared as a tuple. Installability leads: a musl .deb is still no
+        # use to us next to a gnu tarball. The name length only settles what
+        # the rest leaves tied.
+        return (_asset_kind(low), s, -_name_prefix_len(low, tokens))
     best = None
     for name, url in assets:
         sc = score(name)
@@ -362,6 +421,17 @@ def github_pick_asset(assets, tokens):
 def _ensure_executable(path):
     if os.path.exists(path):
         os.chmod(path, 0o755)
+
+
+# What a release might ship as a bare, extensionless binary: ELF (Linux),
+# Mach-O 64-bit either endianness and a universal binary (macOS), or a script.
+EXEC_MAGIC = (b"\x7fELF", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
+              b"\xca\xfe\xba\xbe", b"#!")
+
+
+def _looks_executable(path):
+    with open(path, "rb") as fh:
+        return fh.read(4).startswith(EXEC_MAGIC)
 
 
 def _within(dest_real, path):
@@ -560,11 +630,11 @@ def github_extract(asset_path, name, prefix, bins, payload=None):
     os.makedirs(bindir, exist_ok=True)
     low = name.lower()
     root = None
-    if low.endswith((".tar.gz", ".tgz", ".tar.xz", ".tar.bz2", ".tar")):
+    if low.endswith(TAR_SUFFIXES):
         root = os.path.join(os.path.dirname(asset_path), "x")
         with tarfile.open(asset_path) as tf:
             _safe_extract_tar(tf, root)
-    elif low.endswith(".zip"):
+    elif low.endswith(ZIP_SUFFIXES):
         root = os.path.join(os.path.dirname(asset_path), "x")
         with zipfile.ZipFile(asset_path) as zf:
             _safe_extract_zip(zf, root)
@@ -607,6 +677,15 @@ def github_extract(asset_path, name, prefix, bins, payload=None):
             placed.append(b)
     else:
         # Raw single binary (e.g. jq-linux-amd64): treat the asset as bins[0].
+        # Nothing in the name proves it is one, and getting this wrong is
+        # silent in the worst way -- the file lands on PATH under the tool's
+        # name and only fails when the user runs it -- so check it looks like
+        # an executable first. Raising before _place_binary leaves the
+        # previous install untouched.
+        if not _looks_executable(asset_path):
+            raise HomepkgError(
+                f"{name} is neither an archive nor an executable; "
+                f"refusing to install it as {bins[0]}")
         _place_binary(asset_path, os.path.join(bindir, bins[0]))
         placed = [bins[0]]
     # An asset that doesn't carry every binary the registry says it does -- a

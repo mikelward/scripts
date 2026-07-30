@@ -122,6 +122,77 @@ check("github_pick_asset matches single-binary amd64", _pick_jq is not None and 
 check("github_pick_asset returns None when nothing matches",
       hp.github_pick_asset([("tool-win.zip", "x")], _linux) is None)
 
+# cargo-dist publishes an updater binary next to the real archives, named
+# <tool>-<triple>-update. It has no extension, so it matches the platform
+# tokens just as well as the archive does and github_extract would then treat
+# it as the tool's own raw binary -- installing axoupdater as `atuin`, which
+# answers `atuin init zsh` with a clap usage error.
+_dist = [
+    ("atuin-x86_64-unknown-linux-musl-update", "bad"),
+    ("atuin-x86_64-unknown-linux-musl.tar.gz", "good"),
+    ("atuin-x86_64-unknown-linux-gnu-update", "bad2"),
+    ("atuin-x86_64-unknown-linux-gnu.tar.gz", "gnu"),
+    ("atuin-installer.sh", "sh"),
+    ("sha256.sum", "sum"),
+]
+check("github_pick_asset skips the cargo-dist updater",
+      hp.github_pick_asset(_dist, _linux)[1] == "good")
+check("github_pick_asset skips installers and unified checksums",
+      all(hp.github_pick_asset([a], _linux) is None
+          for a in (_dist[4], _dist[5])))
+
+# Same silent-install vector as the updater, via a different route, and the
+# reason the package formats are ranked instead of listed: goreleaser ships
+# .deb, .rpm and .apk beside the tarball, all matching every token, none of
+# them something homepkg can unpack. Ordering must not decide.
+_pkgs = [("carapace-bin_1.7.3_linux_amd64.apk", "apk"),
+         ("carapace-bin_1.7.3_linux_amd64.deb", "deb"),
+         ("carapace-bin_1.7.3_linux_amd64.rpm", "rpm"),
+         ("carapace-bin_1.7.3_linux_amd64.tar.gz", "tgz")]
+check("github_pick_asset prefers the tarball over distro packages",
+      hp.github_pick_asset(_pkgs, _linux)[1] == "tgz")
+check("github_pick_asset ranks packages the same either way round",
+      hp.github_pick_asset(list(reversed(_pkgs)), _linux)[1] == "tgz")
+# Installability outranks the musl/gnu preference: a musl package we can't
+# open is no use next to a gnu archive we can.
+check("github_pick_asset takes a gnu archive over a musl package",
+      hp.github_pick_asset([("t-x86_64-unknown-linux-musl.deb", "deb"),
+                            ("t-x86_64-unknown-linux-gnu.tar.gz", "tgz")],
+                           _linux)[1] == "tgz")
+# A bare binary is the middle rank -- above a package, below an archive --
+# so jq's asset still wins where it's the best on offer.
+check("github_pick_asset takes a bare binary over a package",
+      hp.github_pick_asset([("jq-linux-amd64.rpm", "rpm"),
+                            ("jq-linux-amd64", "raw")], _linux)[1] == "raw")
+
+# Ranking by extension would rate a source tarball as highly as a real one,
+# and an Arch package's .pkg.tar.zst higher than it deserves. Neither needs a
+# rule, because neither names a platform the way a binary archive does -- but
+# that's load-bearing now, so pin it. atuin ships source.tar.gz for real.
+for _name in ("source.tar.gz", "atuin-source.tar.gz",
+              "helix-25.01-source.tar.xz",
+              "carapace-1.7.3-1-x86_64.pkg.tar.zst",
+              "tool-25.01-x86_64.AppImage"):
+    check(f"github_pick_asset needs a platform in the name ({_name})",
+          hp.github_pick_asset([(_name, "x")], _linux) is None)
+
+# One repo can release several binaries. atuin ships atuin-<triple>.tar.gz
+# beside atuin-server-<triple>.tar.gz; both match every token, so the pick
+# must not come down to the order GitHub lists assets in.
+_siblings = [
+    ("atuin-x86_64-unknown-linux-musl.tar.gz", "atuin"),
+    ("atuin-server-x86_64-unknown-linux-musl.tar.gz", "server"),
+]
+check("github_pick_asset prefers the tool over a sibling binary",
+      hp.github_pick_asset(_siblings, _linux)[1] == "atuin")
+check("github_pick_asset picks the same sibling either way round",
+      hp.github_pick_asset(list(reversed(_siblings)), _linux)[1] == "atuin")
+# The tie-break must not outrank the musl/gnu preference it sits behind.
+check("github_pick_asset still prefers musl over a shorter gnu name",
+      hp.github_pick_asset([("a-x86_64-linux-gnu.tar.gz", "gnu"),
+                            ("atuin-x86_64-unknown-linux-musl.tar.gz", "musl")],
+                           _linux)[1] == "musl")
+
 # --- codeberg asset selection -------------------------------------------------
 
 _kw_assets = [
@@ -578,6 +649,33 @@ with tempfile.TemporaryDirectory() as td:
     placed = hp.github_extract(asset, os.path.basename(asset), prefix, ["jq"])
     jq = os.path.join(prefix, "bin", "jq")
     check("github_extract treats a raw asset as the binary", placed == ["jq"] and os.access(jq, os.X_OK))
+
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "atuin-x86_64-unknown-linux-musl-update")
+    with open(asset, "wb") as f:
+        f.write(b"\x7fELF\x02\x01\x01\x00")
+    placed = hp.github_extract(asset, os.path.basename(asset), prefix, ["atuin"])
+    check("github_extract still installs a raw ELF asset",
+          placed == ["atuin"] and os.access(os.path.join(prefix, "bin", "atuin"), os.X_OK))
+
+# The raw-asset path can't tell what program it was handed, so a mis-picked
+# non-executable would otherwise be copied onto PATH under the tool's name and
+# only fail when run. Refuse it instead, and leave nothing behind.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    asset = os.path.join(td, "atuin-x86_64-unknown-linux-musl.deb")
+    with open(asset, "wb") as f:
+        f.write(b"!<arch>\ndebian-binary   ")
+    _err = None
+    try:
+        hp.github_extract(asset, os.path.basename(asset), prefix, ["atuin"])
+    except hp.HomepkgError as e:
+        _err = e
+    check("github_extract refuses a non-executable raw asset",
+          _err is not None and "atuin" in str(_err))
+    check("github_extract leaves no binary behind when it refuses one",
+          not os.path.exists(os.path.join(prefix, "bin", "atuin")))
 
 # An asset that's missing one of the binaries the registry names -- a release
 # that changed its layout, or the asset picker choosing the wrong archive --
