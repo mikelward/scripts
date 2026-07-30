@@ -3,11 +3,13 @@
 #
 # Sets up:
 # - Dvorak keyboard layout
-# - Swap Control and Command keys (for Linux-like Ctrl shortcuts)
+# - Rotate Control, Command and Option (for Linux-like Ctrl shortcuts)
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
-# - Amethyst tiling window manager (layouts, modifiers, margins, focus follows mouse)
-# - Application launch shortcuts via Automator Quick Actions (browser, terminal, music)
+# - Focus follows mouse for Amethyst (its layouts, modifiers and margins come
+#   from ~/.amethyst.yml, which confinst symlinks out of the conf repo)
+# - Application launch shortcuts via Automator Quick Actions (browser, terminal,
+#   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
 #
 # Modifier key philosophy (matches Linux muscle memory):
@@ -20,14 +22,21 @@
 # keys are already in the Mac order this rotation is undoing. It assumes a PC
 # keyboard.
 #
+# Not everything here reaches the running session. The `defaults` writes go to
+# preference domains their owners read at launch (Finder and the Dock are
+# restarted below; other apps pick the text-substitution settings up as they
+# start), and the input source is read by the login session, so the layout
+# change needs a logout. Each step says which of those applies, and the run
+# ends by saying whether anything didn't work.
+#
 # Requires: defaults, hidutil (i.e. macOS). Both are checked up front, so
 #           running this anywhere else says so instead of failing several
 #           steps in with "defaults: not found".
 # Wants: activateSettings, to apply the shortcut changes without a logout;
 #        launchctl, to load the key-remapping agent now rather than at the
-#        next login; pbs, to register the Quick Actions; killall, to restart
-#        Finder and the Dock. Without any of them the settings are still
-#        written and the script says what needs a logout.
+#        next login; pbs, to register the Quick Actions; killall and pgrep, to
+#        restart Finder and the Dock. Without any of them the settings are
+#        still written and the script says what needs a logout.
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -58,6 +67,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ACTIVATE_SETTINGS="${ACTIVATE_SETTINGS:-/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings}"
 PBS="${PBS:-/System/Library/CoreServices/pbs}"
 
+# Count of steps that warned, so the closing message can say the run was
+# incomplete instead of claiming success over a screenful of warnings. Only
+# reachable with --ignore-errors: without it set -e aborts on the first
+# failure.
+WARNINGS=0
+
 # Dvorak as an input source entry, used both to enable the layout and to
 # select it. The layout ID is the part that identifies it: macOS ships several
 # variants whose names all contain "Dvorak" (Dvorak - Qwerty <Cmd>, Dvorak
@@ -72,6 +87,7 @@ info() {
 
 warn() {
     printf "Warning: %s\n" "$*" >&2
+    WARNINGS=$((WARNINGS + 1))
 }
 
 error() {
@@ -81,6 +97,97 @@ error() {
 
 is_command() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Run a configuration step, and make a failure visible either way.
+#
+# Without --ignore-errors, set -e would abort on a bare failing command, and
+# this aborts with the command named instead of silently. With it, set -e is
+# off -- so a bare failing command's status went nowhere at all: the run
+# carried on, WARNINGS stayed at zero, and the closing summary reported
+# success over a step that hadn't happened. That's the whole point of the
+# summary, so every state-changing step goes through here.
+try() {
+    "$@" && return 0
+    report_failure $? "$@"
+}
+
+# What a failed step does, split out of try so a step that can't be run
+# through try -- sourcing the local hook -- reports identically rather than
+# growing its own wording.
+report_failure() {
+    _status="$1"
+    shift
+    if test "$IGNORE_ERRORS" = yes; then
+        warn "failed (exit $_status): $*"
+        return 0
+    fi
+    error "failed (exit $_status): $*"
+}
+
+# Write stdin to FILE, as a command whose failure `try` can actually see.
+#
+# `try cat > "$file"` doesn't do that: the shell opens the target before it
+# invokes try, so a target that can't be opened -- a read-only file, a missing
+# directory -- skips try altogether and the failure goes unrecorded. Doing the
+# redirection in here puts it inside the command whose status try checks.
+#
+# Written to a temporary file and moved into place, so a failure part-way
+# through leaves the previous file rather than a truncated plist for launchd
+# or Automator to choke on.
+write_file() {
+    _dest="$1"
+    _tmp="$_dest.tmp.$$"
+    # `mv file dir` moves the file *into* dir rather than failing, so without
+    # this the plist would be quietly filed somewhere else and reported
+    # written.
+    if test -d "$_dest"; then
+        printf "%s is a directory, not a file\n" "$_dest" >&2
+        return 1
+    fi
+    if ! cat > "$_tmp"; then
+        rm -f "$_tmp"
+        return 1
+    fi
+    if ! mv "$_tmp" "$_dest"; then
+        rm -f "$_tmp"
+        return 1
+    fi
+}
+
+# Restart APP so it re-reads the settings just written, where WHY names what
+# stays unapplied if it can't be. APP not running is the ordinary case on a
+# fresh machine and isn't a failure -- but it's not the only reason killall
+# exits non-zero, so ask pgrep first rather than reading every non-zero status
+# as "it wasn't running" and reporting a refused kill as success.
+restart_app() {
+    _app="$1"
+    _why="$2"
+    if ! is_command killall || ! is_command pgrep; then
+        warn "killall/pgrep not found; restart $_app (or log out) for $_why"
+        return 0
+    fi
+    # pgrep exits 1 for "no such process", but 2 and 3 for its own failures.
+    # Reading every non-zero status as "not running" would skip the restart on
+    # a broken probe and say nothing about why, which is the same mistake as
+    # reading killall's status that way.
+    if pgrep -x "$_app" >/dev/null; then
+        _running=0
+    else
+        _running=$?
+    fi
+    case "$_running" in
+        0) ;;
+        1)
+            info "$_app was not running; it will pick up the new settings when it starts"
+            return 0
+            ;;
+        *)
+            warn "could not tell whether $_app is running (pgrep exited $_running); log out for $_why"
+            return 0
+            ;;
+    esac
+    killall "$_app" || warn "could not restart $_app; log out for $_why"
 }
 
 usage() {
@@ -162,14 +269,14 @@ configure_keyboard() {
             | grep -qE "\"?KeyboardLayout ID\"? *= *$DVORAK_LAYOUT_ID *;"; then
         info "Dvorak is already an enabled input source"
     else
-        defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
+        try defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
             "$DVORAK_INPUT_SOURCE"
     fi
     # -array, not -array-add: this is the single selected source, so replacing
     # the value outright is both correct and idempotent.
-    defaults write com.apple.HIToolbox AppleSelectedInputSources -array \
+    try defaults write com.apple.HIToolbox AppleSelectedInputSources -array \
         "$DVORAK_INPUT_SOURCE"
-    defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID \
+    try defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID \
         "com.apple.keylayout.Dvorak"
     # The login session reads the input source at startup and holds it in
     # memory, so unlike the hidutil remap below this one isn't live yet.
@@ -178,11 +285,11 @@ configure_keyboard() {
 
     # Disable auto-correct, auto-capitalize, smart quotes/dashes. Read by each
     # app as it launches, so already-running apps keep the old behavior.
-    defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
-    defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
-    defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
-    defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
-    defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false
+    try defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
+    try defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
+    try defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
+    try defaults write NSGlobalDomain NSAutomaticDashSubstitutionEnabled -bool false
+    try defaults write NSGlobalDomain NSAutomaticPeriodSubstitutionEnabled -bool false
 
 }
 
@@ -203,14 +310,14 @@ configure_modifier_keys() {
 
     # Applies to the running session immediately; hidutil mappings are lost on
     # reboot, which is what the LaunchAgent below is for.
-    hidutil property --set "$KEY_REMAPPING" >/dev/null
+    try hidutil property --set "$KEY_REMAPPING" >/dev/null
 
     # Persist across reboots with a LaunchAgent
     launch_agent_dir="$HOME/Library/LaunchAgents"
     launch_agent="$launch_agent_dir/com.local.KeyRemapping.plist"
-    mkdir -p "$launch_agent_dir"
+    try mkdir -p "$launch_agent_dir"
 
-    cat > "$launch_agent" <<PLIST
+    try write_file "$launch_agent" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -257,7 +364,7 @@ configure_shortcuts() {
     # Modifier flags: Option = 524288
 
     # Spotlight: Option+Space (ID 64)
-    defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 '
+    try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64 '
         <dict>
             <key>enabled</key><true/>
             <key>value</key><dict>
@@ -271,7 +378,7 @@ configure_shortcuts() {
         </dict>'
 
     # Disable Finder search window (ID 65) to avoid conflict
-    defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65 '
+    try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65 '
         <dict>
             <key>enabled</key><false/>
         </dict>'
@@ -292,7 +399,7 @@ configure_shortcuts() {
     while test $# -ge 3; do
         hotkey_id=$1 ascii=$2 keycode=$3
         shift 3
-        defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$hotkey_id" '
+        try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$hotkey_id" '
             <dict>
                 <key>enabled</key><true/>
                 <key>value</key><dict>
@@ -325,16 +432,10 @@ configure_spaces() {
     # above -- so the shortcut that switched to a given desktop a moment ago
     # switches somewhere else now. Numbered shortcuts only mean anything with
     # a fixed order.
-    defaults write com.apple.dock mru-spaces -bool false
+    try defaults write com.apple.dock mru-spaces -bool false
 
     # The Dock owns Mission Control and reads this at launch.
-    if is_command killall; then
-        # A non-zero status means no Dock was running, which is not a failure
-        # to report: it will read the new value when it starts.
-        killall Dock || info "the Dock was not running; it will pick this up when it starts"
-    else
-        warn "killall not found; restart the Dock (or log out) for the Spaces order to be pinned"
-    fi
+    restart_app Dock "the Spaces order to be pinned"
 }
 
 # --- Configure Amethyst tiling window manager ---
@@ -350,7 +451,12 @@ configure_amethyst() {
 
     # Enable focus follows mouse
     info "Enabling focus follows mouse"
-    defaults write com.amethyst.Amethyst focus-follows-mouse -bool true
+    try defaults write com.amethyst.Amethyst focus-follows-mouse -bool true
+
+    # Amethyst can't move a window without Accessibility access, and macOS only
+    # grants that through an interactive prompt -- there's no defaults key for
+    # it, so say so rather than leave it looking configured but inert.
+    info "Grant Amethyst Accessibility access in System Settings > Privacy & Security"
 }
 
 # --- Configure application launch shortcuts ---
@@ -390,7 +496,7 @@ create_launcher_workflow() {
     name="$1"
     script=$(shell_quote_xml "$2")
     workflow_dir="$SERVICES_DIR/$name.workflow"
-    mkdir -p "$workflow_dir/Contents"
+    try mkdir -p "$workflow_dir/Contents"
 
     # An unquoted heredoc, so $name expands. This used to be a fixed
     # placeholder patched by `sed -i ''`, whose empty-suffix argument is
@@ -399,7 +505,7 @@ create_launcher_workflow() {
     # NSSendTypes is present and empty on purpose: that's how a service
     # declares it takes no input, which is what makes these appear whether or
     # not anything is selected.
-    cat > "$workflow_dir/Contents/Info.plist" <<PLIST
+    try write_file "$workflow_dir/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -422,7 +528,7 @@ create_launcher_workflow() {
 </plist>
 PLIST
 
-    cat > "$workflow_dir/Contents/document.wflow" <<WFLOW
+    try write_file "$workflow_dir/Contents/document.wflow" <<WFLOW
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -531,7 +637,7 @@ configure_app_shortcuts() {
     info "Configuring application launch shortcuts (Automator Quick Actions)"
 
     SERVICES_DIR="$HOME/Library/Services"
-    mkdir -p "$SERVICES_DIR"
+    try mkdir -p "$SERVICES_DIR"
 
     # Quick Action name, launcher helper, and shortcut key. The Option modifier
     # is "~" in a key equivalent (Option+Shift would be "~$"). These are logical
@@ -572,7 +678,7 @@ configure_app_shortcuts() {
             stale_workflow="$SERVICES_DIR/$workflow_name.workflow"
             if test -d "$stale_workflow"; then
                 info "Removing the stale Quick Action for $launcher_name"
-                rm -rf "$stale_workflow"
+                try rm -rf "$stale_workflow"
             fi
             continue
         fi
@@ -588,7 +694,7 @@ configure_app_shortcuts() {
         warn "no launcher helpers found; no launch shortcuts were configured"
         return 0
     fi
-    defaults write pbs NSServicesStatus -dict-add "$@"
+    try defaults write pbs NSServicesStatus -dict-add "$@"
 
     # Writing the workflows and the key equivalents isn't enough: the Services
     # registry is a cache, and until pbs re-reads it the new Quick Actions
@@ -605,10 +711,13 @@ configure_app_shortcuts() {
 
 configure_finder() {
     info "Configuring Finder"
-    defaults write com.apple.finder AppleShowAllFiles -bool true
-    defaults write com.apple.finder ShowPathbar -bool true
-    defaults write NSGlobalDomain AppleShowAllExtensions -bool true
-    killall Finder 2>/dev/null || true
+    try defaults write com.apple.finder AppleShowAllFiles -bool true
+    try defaults write com.apple.finder ShowPathbar -bool true
+    try defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+
+    # This used to be `killall Finder 2>/dev/null || true`, which hid every
+    # failure to tolerate the one expected one. See restart_app.
+    restart_app Finder "its settings to take effect"
 }
 
 # --- Main ---
@@ -621,4 +730,34 @@ configure_amethyst
 configure_app_shortcuts
 configure_finder
 
-info "macOS configured successfully"
+# Machine-specific extras, matching setup-kde's setup-kde.local hook.
+if is_command setup-macos.local; then
+    info "Sourcing setup-macos.local"
+    # Not `try . setup-macos.local`: sourcing inside a function would run the
+    # hook with try's positional parameters ($1 = ".") instead of this
+    # script's, so its status is captured here and reported the same way.
+    #
+    # `. hook || status=$?` doesn't capture it portably: `.` is a special
+    # builtin, and under set -e dash exits at a hook that returns non-zero
+    # even inside a `||` list, so the failure would abort unnamed and with the
+    # hook's own status. bash carries on. Turning set -e off around the source
+    # gets the same behavior from both.
+    set +e
+    # shellcheck source=/dev/null
+    . setup-macos.local
+    hook_status=$?
+    if test "$IGNORE_ERRORS" = no; then
+        set -e
+    fi
+    test "$hook_status" -eq 0 || report_failure "$hook_status" "setup-macos.local"
+fi
+
+if test "$WARNINGS" -eq 0; then
+    info "macOS configured successfully"
+else
+    # Not via warn(): this is the tally, not another problem to count. Only
+    # reachable under --ignore-errors, which is the whole point of that flag --
+    # so the exit status stays 0 and the caller keeps going.
+    printf "macOS configured with %s problem(s); see the warnings above\n" \
+        "$WARNINGS" >&2
+fi

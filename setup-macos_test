@@ -38,10 +38,16 @@ if test "\$1" = read; then
     echo "Domain/default pair does not exist" >&2
     exit 1
 fi
+if test "\$1" = write && test -f "$TEST_TMPDIR/defaults_write_fails"; then
+    echo "defaults: could not write domain" >&2
+    exit 1
+fi
 exit 0
 MOCK
 
-    for cmd in hidutil launchctl killall; do
+    # pgrep exits 0 by default, i.e. the app is running and restart_app should
+    # go on to killall it.
+    for cmd in hidutil launchctl killall pgrep; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
@@ -70,7 +76,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in cat dirname grep id mkdir rm sed; do
+    for cmd in cat dirname grep id mkdir mv rm sed; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -139,6 +145,12 @@ stage_defaults_read() {
     printf "%s\n" "$1" > "$TEST_TMPDIR/defaults_read"
 }
 
+# Make every `defaults write` fail, to exercise what the run reports when a
+# configuration step doesn't take.
+fail_defaults_write() {
+    touch "$TEST_TMPDIR/defaults_write_fails"
+}
+
 # Run setup-macos in the sandbox: fresh HOME, and a PATH of just the mock bin
 # plus the symlinked system utilities -- nothing from the real /usr/bin.
 run_macos() {
@@ -190,6 +202,17 @@ assert_output_contains() {
         *"$1"*) ;;
         *)
             printf "%s\n" "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_output_lacks() {
+    case "$output" in
+        *"$1"*)
+            printf "%s\n" "  FAIL: output unexpectedly contains '$1'"
             echo "  output: $output"
             TEST_FAILED=1
             return 1
@@ -359,6 +382,82 @@ test_dvorak_variant_is_not_standard_dvorak() {
     assert_called "AppleEnabledInputSources -array-add"
 }
 
+# pgrep exits 1 for "no such process" but 2 and 3 for its own failures, so a
+# broken probe must not be read as "the app wasn't running".
+test_pgrep_failure_is_not_read_as_not_running() {
+    cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pgrep \$*" >> "$CALLS"
+exit 2
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/pgrep"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not tell whether Finder is running" &&
+    assert_output_lacks "Finder was not running" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# Under --ignore-errors set -e is off, so a failed write's status went nowhere:
+# the run carried on and still claimed success. Every state-changing step now
+# goes through try, which counts the failure.
+# `try cat > "$file"` never worked: the shell opens the target before invoking
+# try, so an unopenable target skipped try entirely and the failure went
+# unrecorded -- the run carried on and still claimed success. Making the target
+# a directory is the one open failure that holds even when the tests run as
+# root.
+test_unwritable_file_is_reported() {
+    mkdir -p "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "failed (exit 1): write_file" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# The cleanup path itself: a write that gets as far as the temporary file and
+# then fails to move it into place must leave neither a truncated plist for
+# launchd to parse nor a stray temporary file. Failing `mv` is the only way to
+# reach that branch without depending on file permissions, which say nothing
+# when the tests run as root.
+test_failed_move_cleans_up_its_temporary_file() {
+    cat > "$TEST_TMPDIR/bin/mv" <<MOCK
+#!/bin/sh
+printf "%s\\n" "mv \$*" >> "$CALLS"
+echo "mv: refusing" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/mv"
+    agents="$TEST_TMPDIR/home/Library/LaunchAgents"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "failed (exit 1): write_file" &&
+    assert_file_not_exists "$agents/com.local.KeyRemapping.plist" &&
+    if ls "$agents"/*.tmp.* >/dev/null 2>&1; then
+        echo "  FAIL: a temporary file was left behind"
+        printf "%s\n" "  found: $(ls "$agents")"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_failed_write_counts_under_ignore_errors() {
+    fail_defaults_write
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "failed (exit 1): defaults write" &&
+    assert_output_contains "problem(s)" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# Without --ignore-errors the same failure aborts -- but named, rather than as
+# a bare set -e death with no output.
+test_failed_write_aborts_without_ignore_errors() {
+    fail_defaults_write
+    run_macos
+    assert_status 1 &&
+    assert_output_contains "failed (exit 1): defaults write"
+}
+
 test_selects_dvorak_input_source() {
     run_macos
     assert_status 0 &&
@@ -505,6 +604,14 @@ test_missing_amethyst_config() {
     assert_output_contains "run confinst after cloning the conf repo"
 }
 
+# Amethyst is inert without Accessibility access and there's no defaults key
+# for it, so the run has to say so.
+test_mentions_accessibility_permission() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Accessibility"
+}
+
 # --- application launch shortcuts ---
 
 test_creates_launcher_workflows() {
@@ -642,6 +749,139 @@ test_configures_finder() {
     assert_called "killall Finder"
 }
 
+# Regression: this used to be `killall Finder 2>/dev/null || true`, which hid
+# every failure. An app that isn't running is the expected case, so it's
+# reported as information and doesn't count against the run -- and it's
+# established by asking pgrep, not by reading killall's exit status.
+test_app_not_running_is_not_a_warning() {
+    cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pgrep \$*" >> "$CALLS"
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/pgrep"
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Finder was not running" &&
+    assert_not_called "killall Finder" &&
+    assert_output_contains "macOS configured successfully"
+}
+
+# The other half of the same point: a killall that fails for any reason other
+# than the app being absent must be reported, not relabeled "wasn't running".
+test_failed_restart_is_reported() {
+    cat > "$TEST_TMPDIR/bin/killall" <<MOCK
+#!/bin/sh
+printf "%s\\n" "killall \$*" >> "$CALLS"
+echo "killall: warning: kill -TERM 1 : Operation not permitted" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/killall"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not restart Finder" &&
+    assert_output_contains "could not restart Dock" &&
+    assert_output_lacks "Finder was not running" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+test_missing_pgrep_warns_about_restarting() {
+    run_macos_without pgrep --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "killall/pgrep not found"
+}
+
+# --- the local hook and the closing summary ---
+
+test_sources_local_hook() {
+    cat > "$TEST_TMPDIR/bin/setup-macos.local" <<'MOCK'
+#!/bin/sh
+echo "local hook ran"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/setup-macos.local"
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Sourcing setup-macos.local" &&
+    assert_output_contains "local hook ran"
+}
+
+# The hook is machine-specific configuration like any other step, so its
+# failure has to count. It can't go through try -- sourcing inside a function
+# would hand the hook try's positional parameters -- so this checks the
+# separate path reports identically.
+test_failing_local_hook_is_counted() {
+    cat > "$TEST_TMPDIR/bin/setup-macos.local" <<'MOCK'
+#!/bin/sh
+echo "local hook ran"
+return 3
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/setup-macos.local"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "failed (exit 3): setup-macos.local" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+test_failing_local_hook_aborts_without_ignore_errors() {
+    cat > "$TEST_TMPDIR/bin/setup-macos.local" <<'MOCK'
+#!/bin/sh
+return 3
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/setup-macos.local"
+    run_macos
+    assert_status 1 &&
+    assert_output_contains "failed (exit 3): setup-macos.local"
+}
+
+# The hook must still see the script's own (empty) positional parameters, not
+# the arguments of whatever helper sourced it.
+test_local_hook_sees_no_positional_parameters() {
+    cat > "$TEST_TMPDIR/bin/setup-macos.local" <<'MOCK'
+#!/bin/sh
+echo "hook argc=$#"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/setup-macos.local"
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "hook argc=0"
+}
+
+# Announcing the removal and then not checking it left the obsolete Quick
+# Action in place while the run reported success.
+test_failed_stale_workflow_removal_is_reported() {
+    run_macos
+    assert_status 0 || return 1
+    isolate_script
+    add_sibling_launcher browser1
+    cat > "$TEST_TMPDIR/bin/rm" <<MOCK
+#!/bin/sh
+printf "%s\\n" "rm \$*" >> "$CALLS"
+echo "rm: cannot remove" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/rm"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "failed (exit 1): rm -rf" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+test_reports_success_when_nothing_warned() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "macOS configured successfully"
+}
+
+# Regression: with --ignore-errors the run used to print "configured
+# successfully" over a screenful of warnings.
+test_reports_problems_instead_of_success() {
+    isolate_script
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_lacks "macOS configured successfully" &&
+    assert_output_contains "problem(s); see the warnings above"
+}
+
 # --- Test runner ---
 
 run_test "--help exits 0 and prints usage" test_help_flag
@@ -653,8 +893,6 @@ run_test "--help works without the macOS tools" test_help_works_without_macos_to
 run_test "enables the Dvorak layout" test_enables_dvorak
 run_test "doesn't stack a second Dvorak entry on a re-run" \
     test_does_not_re_add_dvorak
-run_test "a Dvorak variant is not mistaken for standard Dvorak" \
-    test_dvorak_variant_is_not_standard_dvorak
 run_test "selects Dvorak, not just enables it" test_selects_dvorak_input_source
 run_test "says the layout needs a logout" test_says_layout_needs_logout
 run_test "disables the text substitutions" test_disables_text_substitutions
@@ -682,6 +920,8 @@ run_test "pins the Spaces order so the numbered shortcuts hold" \
     test_pins_the_spaces_order
 run_test "enables focus follows mouse" test_enables_focus_follows_mouse
 run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
+run_test "says Amethyst needs Accessibility access" \
+    test_mentions_accessibility_permission
 run_test "creates a Quick Action per launcher" test_creates_launcher_workflows
 run_test "substitutes the workflow name without sed" \
     test_workflow_name_is_substituted
@@ -703,6 +943,37 @@ run_test "flushes the Services registry so the shortcuts work" \
 run_test "missing pbs falls back to the logout advice" \
     test_missing_pbs_warns_about_logout
 run_test "configures Finder and restarts it" test_configures_finder
+run_test "an app that isn't running is reported, not swallowed" \
+    test_app_not_running_is_not_a_warning
+run_test "a failed restart is reported, not relabeled" \
+    test_failed_restart_is_reported
+run_test "missing pgrep warns about restarting by hand" \
+    test_missing_pgrep_warns_about_restarting
+run_test "a pgrep failure is not read as 'not running'" \
+    test_pgrep_failure_is_not_read_as_not_running
+run_test "a Dvorak variant is not mistaken for standard Dvorak" \
+    test_dvorak_variant_is_not_standard_dvorak
+run_test "an unwritable file is reported, not skipped" \
+    test_unwritable_file_is_reported
+run_test "a failed move cleans up its temporary file" \
+    test_failed_move_cleans_up_its_temporary_file
+run_test "a failed write is counted under --ignore-errors" \
+    test_failed_write_counts_under_ignore_errors
+run_test "a failed write aborts without --ignore-errors" \
+    test_failed_write_aborts_without_ignore_errors
+run_test "sources setup-macos.local when present" test_sources_local_hook
+run_test "a failing local hook is counted" \
+    test_failing_local_hook_is_counted
+run_test "a failing local hook aborts without --ignore-errors" \
+    test_failing_local_hook_aborts_without_ignore_errors
+run_test "the local hook sees no positional parameters" \
+    test_local_hook_sees_no_positional_parameters
+run_test "a failed stale-workflow removal is reported" \
+    test_failed_stale_workflow_removal_is_reported
+run_test "reports success when nothing warned" \
+    test_reports_success_when_nothing_warned
+run_test "reports the problem count instead of success" \
+    test_reports_problems_instead_of_success
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
