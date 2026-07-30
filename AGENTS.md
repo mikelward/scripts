@@ -67,6 +67,8 @@ stopping at the file you opened.
 - **Script output is not one of those artifacts.** It prints on the user's own
   terminal, and naming hosts, paths and remotes is usually the point of the
   message. Redact only secrets: tokens, keys, and passwords embedded in URLs.
+  Quoting that output into a commit, PR, or fixture republishes it, and the
+  bullet above governs again — paraphrase or use a placeholder there.
 
 ## Language and spelling
 
