@@ -64,7 +64,19 @@ KROHNKITE_REPO="${KROHNKITE_REPO:-$KROHNKITE_DEFAULT_REPO}"
 if test -z "${KROHNKITE_BRANCH:-}" && test "$KROHNKITE_REPO" = "$KROHNKITE_DEFAULT_REPO"; then
     KROHNKITE_BRANCH=mikel
 fi
-KROHNKITE_DIR="${TMPDIR:-/tmp}/krohnkite-$$"
+# Scratch checkout for the source-build fallback, created by
+# install_krohnkite_from_source when that path is actually reached. Empty until
+# then: a config-only run never builds anything, so it has no reason to leave a
+# directory behind.
+#
+# It's created with mktemp -d rather than named from the PID. This path gets a
+# git clone, a build, and then a kpackagetool6 install of whatever ends up in
+# it, so on a shared /tmp a guessable name is one a symlink can be planted at
+# ahead of time -- the build would then run in someone else's directory and the
+# installed KWin script would come from there, with the cleanup below removing
+# only the link. A stale directory left by a killed run with a recycled PID
+# would collide the same way.
+KROHNKITE_DIR=""
 
 # Directory containing this script, resolved up front while $0 still means
 # what the caller typed: install_krohnkite cds into the Krohnkite checkout,
@@ -204,9 +216,11 @@ if test "$LIVE_SHORTCUTS_MODE" = on; then
 fi
 
 cleanup() {
-    rm -rf "$KROHNKITE_DIR"
-    # An if, not a &&: a false test as the last command would make the EXIT
-    # trap return non-zero.
+    # Ifs, not &&: a false test as the trap's last command would make the EXIT
+    # trap return non-zero. Both paths are empty unless their step ran.
+    if test -n "$KROHNKITE_DIR"; then
+        rm -rf "$KROHNKITE_DIR"
+    fi
     if test -n "$LIVE_SHORTCUTS"; then
         rm -f "$LIVE_SHORTCUTS"
     fi
@@ -307,6 +321,14 @@ SHIM
 install_krohnkite_from_source() {
     command -v git >/dev/null 2>&1 \
         || error "git is required to build Krohnkite from source (the prebuilt release could not be fetched)"
+
+    # Fail rather than fall back to a predictable path: everything below runs
+    # in this directory and the result gets installed, so there's no safe
+    # substitute for one only this run can name. git clone is happy with the
+    # empty directory mktemp leaves.
+    KROHNKITE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/krohnkite-XXXXXX")" \
+        || error "could not create a temporary directory to build Krohnkite in"
+
     if test -n "${KROHNKITE_BRANCH:-}"; then
         info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
         git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"

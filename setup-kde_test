@@ -544,6 +544,48 @@ test_source_build_uses_local_tsc_not_remote_npm() {
     assert_not_called "npm"
 }
 
+# The build directory is named by mktemp, not from the PID. Everything the
+# source build does happens in it and the result is installed from it, so a
+# guessable name on a shared /tmp is one a symlink can be planted at in advance
+# -- the build would run in someone else's directory, the installed KWin script
+# would come from there, and the cleanup would remove only the link. Observed
+# through the clone target the mock git records.
+test_source_build_dir_is_unpredictable() {
+    add_source_build_mocks
+    TMPDIR="$TEST_TMPDIR"; export TMPDIR
+    run_kde
+    unset TMPDIR
+    clone_dir="$(sed -n 's/^git clone .* \([^ ]*\)$/\1/p' "$CALLS" | head -1)"
+    assert_status 0 &&
+    case "$clone_dir" in
+        */krohnkite-$$) echo "  FAIL: build directory is named from the PID"
+            TEST_FAILED=1; return 1 ;;
+        */krohnkite-??????) ;;
+        *) echo "  FAIL: unexpected build directory '$clone_dir'"
+            TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# A config-only run builds nothing, so it has no reason to create a scratch
+# directory at all. Uses a logging passthrough for mktemp, since the absence of
+# a directory that would be cleaned up anyway isn't otherwise observable.
+test_config_only_run_creates_no_build_dir() {
+    cat > "$TEST_TMPDIR/bin/mktemp" <<MOCK
+#!/bin/sh
+printf "%s\\n" "mktemp \$*" >> "$CALLS"
+exec /usr/bin/mktemp "\$@"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/mktemp"
+    TMPDIR="$TEST_TMPDIR"; export TMPDIR
+    run_kde --no-install
+    unset TMPDIR
+    assert_status 0 &&
+    assert_output_contains "KDE configured successfully" &&
+    assert_not_called "mktemp" &&
+    # And nothing was left behind under TMPDIR either.
+    ! ls "$TEST_TMPDIR" | grep -q '^krohnkite-'
+}
+
 # Missing tsc is a prerequisite *warning*, not an error: a checkout that
 # ships a prebuilt .kwinscript installs without any compiler, so the
 # install must still succeed. Skipped when the host itself has tsc on the
@@ -1184,6 +1226,10 @@ run_test "prebuilt package installs without npm (fallback)" \
     test_prebuilt_package_installs_without_npm
 run_test "source build uses local tsc, never remote npm (fallback)" \
     test_source_build_uses_local_tsc_not_remote_npm
+run_test "the source-build directory name is unpredictable (fallback)" \
+    test_source_build_dir_is_unpredictable
+run_test "a config-only run creates no build directory" \
+    test_config_only_run_creates_no_build_dir
 run_test "missing tsc warns up front but prebuilt still installs (fallback)" \
     test_missing_tsc_warns_but_prebuilt_still_installs
 run_test "source build without tsc errors instead of remote npm (fallback)" \
