@@ -816,6 +816,14 @@ install_packages() {
                     kwin-dev \
                     plasma-desktop plasma-sdk \
                     || warn "skipping KDE graphical package installation"
+                # gdbus (glib's D-Bus CLI) is how setup-kde applies keyboard
+                # shortcuts to the running session instead of deferring them to
+                # the next login -- see kdeshortcut.py. Its own step, because
+                # apt rejects a whole transaction on one unknown name, and
+                # because it's usually already pulled in by the desktop.
+                info "Installing gdbus (live shortcut updates)"
+                sudo_or_warn apt-get install -y --install-recommends libglib2.0-bin \
+                    || warn "libglib2.0-bin unavailable via apt; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
                 # yazi (terminal file manager) is often not in the default repos;
                 # install it separately so its absence doesn't block the rest.
                 sudo_or_warn apt-get install -y --install-recommends yazi \
@@ -884,6 +892,13 @@ install_packages() {
                     plasma-desktop \
                     plasma-sdk \
                     || warn "skipping KDE graphical package installation"
+                # gdbus (glib's D-Bus CLI) is how setup-kde applies keyboard
+                # shortcuts to the running session instead of deferring them to
+                # the next login -- see kdeshortcut.py. Its own step so one
+                # unavailable name can't take the desktop packages down with it.
+                info "Installing gdbus (live shortcut updates)"
+                sudo_or_warn dnf install -y glib2 \
+                    || warn "glib2 unavailable via dnf; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
                 # yazi (terminal file manager) may need a COPR; install it
                 # separately so its absence doesn't block the rest.
                 sudo_or_warn dnf install -y yazi \

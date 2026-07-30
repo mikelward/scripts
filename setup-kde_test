@@ -805,8 +805,8 @@ test_stale_group_sweep_needs_no_python3() {
 [scripts-browser1.desktop]
 _launch=Meta+G
 CONF
-    # Shadow python3 with a mock that always fails: reaching it at all is the
-    # regression, and it comes first on the test PATH.
+    # Shadow python3 with a mock that always fails: reaching it for the sweep
+    # is the regression, and it comes first on the test PATH.
     cat > "$TEST_TMPDIR/bin/python3" <<MOCK
 #!/bin/sh
 printf "%s\\n" "python3 \$*" >> "$CALLS"
@@ -815,9 +815,155 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/python3"
     run_kde --no-install
     assert_status 0 &&
-    assert_not_called "python3" &&
     assert_output_contains "KDE configured successfully" &&
+    # python3 is legitimate for kdeshortcut.py, which applies the shortcuts to
+    # the running session -- so this can't assert python3 went unused, only
+    # that the sweep itself didn't reach for it.
+    ! grep '^python3 ' "$CALLS" | grep -qv 'kdeshortcut\.py' &&
     ! grep -q '^\[scripts-browser1\.desktop\]' "$config_dir/kglobalshortcutsrc"
+}
+
+# --- Applying shortcuts to the running session ---
+#
+# Writing kglobalshortcutsrc only changes what the next login loads, so
+# setup-kde also pushes every shortcut into the running kglobalaccel via
+# kdeshortcut.py. These tests mock python3 to capture that hand-off: the
+# batch file is deleted on exit, so the mock copies it aside first.
+
+# Mock python3 so it records its arguments, saves the batch file it was handed,
+# and exits with $1 (0 = every shortcut went live).
+mock_python3() {
+    cat > "$TEST_TMPDIR/bin/python3" <<MOCK
+#!/bin/sh
+printf "%s\\n" "python3 \$*" >> "$CALLS"
+# The last argument is the batch file; keep a copy for the assertions.
+for arg in "\$@"; do batch="\$arg"; done
+if test -f "\$batch"; then
+    cp "\$batch" "$TEST_TMPDIR/batch"
+fi
+exit ${1:-0}
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/python3"
+}
+
+assert_batch_contains() {
+    if ! grep -qF -- "$(printf "$1")" "$TEST_TMPDIR/batch" 2>/dev/null; then
+        printf "%s\n" "  FAIL: batch does not contain '$1'"
+        printf "%s\n" "  batch: $(cat "$TEST_TMPDIR/batch" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# Every shortcut written to the config is also handed to kdeshortcut.py, with
+# the component, action, keys and label the config got -- tab-separated,
+# because action IDs contain spaces.
+test_shortcuts_pushed_to_running_session() {
+    add_launcher browser1
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kdeshortcut.py --quiet --batch" &&
+    assert_batch_contains 'kwin\tWindow Close\tMeta+Backspace' &&
+    assert_batch_contains 'kwin\tSwitch to Desktop 1\tMeta+1' &&
+    assert_batch_contains 'kwin\tKrohnkiteSetMaster\tMeta+Return' &&
+    # Unbinds go live too, or the key stays grabbed by its old owner.
+    assert_batch_contains 'kwin\tGrid View\tnone' &&
+    assert_batch_contains 'plasmashell\tactivate task manager entry 1\tnone' &&
+    # Launch shortcuts are [services] components keyed by .desktop name.
+    assert_batch_contains 'shortcut-browser1.desktop\t_launch\tMeta+G\tbrowser1' &&
+    assert_output_contains "Shortcuts are live; no logout needed"
+}
+
+# The batch file is created with mktemp, not from the PID: a predictable name
+# in a shared /tmp can be pre-created as a symlink, and the >> that appends
+# each shortcut would write through it. Asserted via the path the mock python3
+# is handed, since that's the only place the name is observable.
+test_batch_file_name_is_unpredictable() {
+    mock_python3 0
+    run_kde --no-install
+    batch_arg="$(sed -n 's/.*--batch //p' "$CALLS" | head -1)"
+    assert_status 0 &&
+    case "$batch_arg" in
+        *setup-kde-shortcuts-$$) echo "  FAIL: batch file is named from the PID"
+            TEST_FAILED=1; return 1 ;;
+        */setup-kde-shortcuts-??????) ;;
+        *) echo "  FAIL: unexpected batch file name '$batch_arg'"
+            TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# An unusable TMPDIR loses the live apply, but must not lose the config writes
+# or pass silently -- mktemp failing is exactly when the old advice applies.
+test_unusable_tmpdir_falls_back_to_logout_advice() {
+    mock_python3 0
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        TMPDIR="$TEST_TMPDIR/no-such-dir" \
+        "$KDE_SCRIPT" --no-install 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "could not create a temporary file" &&
+    assert_output_contains "shortcuts take effect after logging out" &&
+    assert_output_contains "KDE configured successfully" &&
+    # The config writes are the part that must survive.
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# The whole point is not having to log out, so a successful run must not tell
+# the user to.
+test_live_apply_does_not_advise_logout() {
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_lacks "logging out" &&
+    assert_output_lacks "log out"
+}
+
+# A missing interpreter can't be fatal, and it can't be silent either: the
+# shortcuts are written but not live, which is exactly when the old advice
+# applies. $PYTHON stands in for hiding the system python3, which the test
+# PATH can't do -- the mock bin comes first, but an absent entry there just
+# falls through to /usr/bin.
+test_missing_python3_falls_back_to_logout_advice() {
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        PYTHON=no-such-python3 \
+        "$KDE_SCRIPT" --no-install 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "no-such-python3 not found" &&
+    assert_output_contains "shortcuts take effect after logging out" &&
+    assert_output_contains "KDE configured successfully"
+}
+
+# A shortcut the daemon refuses (status 1) is reported, not swallowed, and the
+# run still succeeds -- the config on disk is correct either way.
+test_failed_live_apply_warns_and_continues() {
+    mock_python3 1
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "some shortcuts could not be applied" &&
+    assert_output_contains "shortcuts take effect after logging out" &&
+    assert_output_contains "KDE configured successfully"
+}
+
+# kglobalaccel unreachable (status 3) is a different message: nothing was
+# changed in the session, rather than some shortcut being rejected.
+test_unreachable_daemon_warns_and_continues() {
+    mock_python3 3
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "could not reach kglobalaccel" &&
+    assert_output_contains "KDE configured successfully"
 }
 
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch
@@ -836,6 +982,11 @@ test_app_shortcut_created_for_present_launcher() {
     assert_file_exists "$desktop" &&
     grep -q "Exec=$TEST_TMPDIR/bin/browser1" "$desktop" &&
     grep -q "X-KDE-GlobalAccel-CommandShortcut=true" "$desktop" &&
+    # X-KDE-Shortcuts is how the running kglobalaccel finds the launcher when
+    # sycoca changes: its service-component rebuild queries for this property,
+    # and a .desktop without it stays invisible to that scan -- which is what
+    # would force a logout for launch shortcuts specifically.
+    grep -q "X-KDE-Shortcuts=Meta+G" "$desktop" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G,none,browser1" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _k_friendly_name browser1" &&
     # No one-field value may survive: that is the shape kglobalaccel drops.
@@ -960,6 +1111,20 @@ run_test "stale-group sweep rewrites through a symlink" \
     test_stale_group_sweep_follows_symlink
 run_test "stale-group sweep needs no python3" \
     test_stale_group_sweep_needs_no_python3
+run_test "shortcuts are pushed to the running session" \
+    test_shortcuts_pushed_to_running_session
+run_test "the shortcut batch file name is unpredictable" \
+    test_batch_file_name_is_unpredictable
+run_test "an unusable TMPDIR falls back to the logout advice" \
+    test_unusable_tmpdir_falls_back_to_logout_advice
+run_test "a successful live apply doesn't advise logging out" \
+    test_live_apply_does_not_advise_logout
+run_test "missing python3 falls back to the logout advice" \
+    test_missing_python3_falls_back_to_logout_advice
+run_test "a refused shortcut warns and the run continues" \
+    test_failed_live_apply_warns_and_continues
+run_test "an unreachable daemon warns and the run continues" \
+    test_unreachable_daemon_warns_and_continues
 run_test "app shortcut created for present launcher" \
     test_app_shortcut_created_for_present_launcher
 run_test "missing launcher is skipped, not fatal" \
