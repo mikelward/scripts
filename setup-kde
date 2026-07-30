@@ -471,12 +471,13 @@ unbind_shortcut_in() {
 }
 
 # Clear a launch shortcut held by a KDE-shipped .desktop component. These live
-# under the nested [services][NAME.desktop] group and carry the bare shortcut
-# as their value, the same shape add_app_shortcut writes -- not the
-# "shortcut,default,name" triple the [kwin] actions use.
+# under the nested [services][NAME.desktop] group and take the same
+# "shortcut,default,name" triple as a [kwin] action -- see add_app_shortcut.
+# Writing a bare "none" would be a one-field value, which kglobalaccel skips,
+# leaving the component free to register its .desktop default instead.
 unbind_app_shortcut() {
     kwriteconfig6 --file kglobalshortcutsrc \
-        --group services --group "$1" --key _launch none
+        --group services --group "$1" --key _launch "none,none,$2"
 }
 
 # Collect the action IDs first, then unbind them -- never write from inside
@@ -552,11 +553,24 @@ EOF
 
     # Nested group [services][foo.desktop] is what kglobalaccel reads for
     # desktop-file launch shortcuts; a top-level [foo.desktop] group is
-    # silently ignored. The value is just the shortcut — the ",default,name"
-    # suffix used for [kwin] actions doesn't apply to launch shortcuts.
+    # silently ignored.
+    #
+    # The value needs all three comma-separated fields, exactly like a [kwin]
+    # action: kglobalaccel loads BOTH kinds through Component::loadSettings
+    # (KServiceActionComponent derives from Component), which reads each entry
+    # with readEntry(QStringList) and skips anything that isn't 3 fields. A
+    # bare "Meta+T" is one field, so the entry is dropped, the shortcut never
+    # grabs, and the keypress falls through to the focused window -- the same
+    # failure the X-KDE-GlobalAccel-CommandShortcut flag above fixes, and the
+    # same 3-field rule that Meta+\, needs in configure_keybindings.
     kwriteconfig6 --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
-        --key _launch "$shortcut"
+        --key _launch "$shortcut,none,$name"
+    # The component's display name in System Settings, written the way KDE
+    # writes it for its own service shortcuts.
+    kwriteconfig6 --file kglobalshortcutsrc \
+        --group services --group "$desktop_file" \
+        --key _k_friendly_name "$name"
 }
 
 # An earlier version of this script wrote app-launch shortcuts under a
@@ -660,7 +674,7 @@ configure_keybindings() {
     # script already cleared yours, System Settings > Shortcuts restores it.
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
     # not a [kwin] action, so it needs the launch-shortcut form.
-    unbind_app_shortcut org.kde.plasma.emojier.desktop  # Meta+. -> Krohnkite Next Layout
+    unbind_app_shortcut org.kde.plasma.emojier.desktop "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
     n=1
     while test "$n" -le 9; do
         # Meta+1..9 -> Switch to Desktop N (plasmashell grabs these by default).

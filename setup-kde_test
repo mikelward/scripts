@@ -715,7 +715,7 @@ CONF
 test_unbinds_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none,none,Emoji Selector" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteNextLayout Meta+."
 }
 
@@ -822,6 +822,12 @@ MOCK
 
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch
 # shortcut pointing at its resolved path.
+#
+# The _launch value must carry all three comma-separated fields. kglobalaccel
+# loads service shortcuts through the same Component::loadSettings as [kwin]
+# actions, and that skips any entry which isn't 3 fields -- so a bare "Meta+G"
+# is silently dropped and the shortcut never grabs. This assertion previously
+# pinned the one-field form, which is how that regression survived.
 test_app_shortcut_created_for_present_launcher() {
     add_launcher browser1
     run_kde --no-install
@@ -830,7 +836,10 @@ test_app_shortcut_created_for_present_launcher() {
     assert_file_exists "$desktop" &&
     grep -q "Exec=$TEST_TMPDIR/bin/browser1" "$desktop" &&
     grep -q "X-KDE-GlobalAccel-CommandShortcut=true" "$desktop" &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G"
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G,none,browser1" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _k_friendly_name browser1" &&
+    # No one-field value may survive: that is the shape kglobalaccel drops.
+    assert_not_called "--key _launch Meta+G$"
 }
 
 # A launcher on neither PATH nor beside the script is skipped with a warning;
