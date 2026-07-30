@@ -48,10 +48,10 @@ stopping at the file you opened.
 ## Error handling
 
 - **Don't silently swallow errors.** A bare `2>/dev/null`, an unchecked exit
-  status, or a `|| true` hides real failures. Report what failed (sanitized —
-  the *Privacy* rule applies to warnings too), clean up what the failed step
-  created, and decide explicitly what the caller sees. To ignore a specific
-  failure, say why in a one-line comment (`# not every host has shpool`).
+  status, or a `|| true` hides real failures. Report what failed, clean up what
+  the failed step created, and decide explicitly what the caller sees. To
+  ignore a specific failure, say why in a one-line comment (`# not every host
+  has shpool`).
 
 ## Privacy
 
@@ -64,6 +64,9 @@ stopping at the file you opened.
   placeholders (`/home/user`, `host1`, `git@example.com:org/repo.git`) in
   examples and fixtures. If a bug report contains any of it, paraphrase in
   the commit / PR — don't quote verbatim. When in doubt, ask before pushing.
+- **Script output is not one of those artifacts.** It prints on the user's own
+  terminal, and naming hosts, paths and remotes is usually the point of the
+  message. Redact only secrets: tokens, keys, and passwords embedded in URLs.
 
 ## Language and spelling
 
