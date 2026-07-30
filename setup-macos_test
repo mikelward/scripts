@@ -1,0 +1,410 @@
+#!/bin/sh
+# Tests for setup-macos
+#
+# setup-macos is pure configuration -- every step is a `defaults` write, a
+# hidutil remap, or a file dropped in ~/Library -- so it runs against a
+# throwaway HOME with the macOS CLI tools mocked, and the assertions look at
+# what it asked those tools to do. That means these run on Linux CI too, the
+# same way setup-kde_test mocks kwriteconfig6.
+#
+# The absolute-path helpers can't be shadowed by PATH, so setup-macos takes
+# them from the environment ($ACTIVATE_SETTINGS) and the mocks go there.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    TEST_TMPDIR="$(mktemp -d)"
+    CALLS="$TEST_TMPDIR/calls"
+    rm -f "$CALLS"
+    mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
+    MACOS_SCRIPT="$SCRIPT_DIR/setup-macos"
+
+    # `defaults read` fails the way the real one does for a key that was never
+    # written. Everything else just records argv.
+    cat > "$TEST_TMPDIR/bin/defaults" <<MOCK
+#!/bin/sh
+printf "%s\\n" "defaults \$*" >> "$CALLS"
+if test "\$1" = read; then
+    echo "Domain/default pair does not exist" >&2
+    exit 1
+fi
+exit 0
+MOCK
+
+    for cmd in hidutil killall; do
+        cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
+#!/bin/sh
+printf "%s\\n" "$cmd \$*" >> "$CALLS"
+exit 0
+MOCK
+    done
+
+    # The absolute-path helper.
+    cat > "$TEST_TMPDIR/bin/activateSettings" <<MOCK
+#!/bin/sh
+printf "%s\\n" "activateSettings \$*" >> "$CALLS"
+exit 0
+MOCK
+    ACTIVATE_SETTINGS="$TEST_TMPDIR/bin/activateSettings"
+
+    chmod +x "$TEST_TMPDIR"/bin/*
+
+    # The ordinary system utilities setup-macos shells out to, symlinked into
+    # a directory of their own. The sandbox PATH is built from just these two
+    # directories -- never /usr/bin -- because on a real Mac the system copies
+    # of defaults, hidutil and launchctl would otherwise still be on PATH:
+    # run_macos_without could not simulate a missing command, and a run that
+    # reached the real hidutil and launchctl would remap the developer's
+    # keyboard and load a LaunchAgent while they ran `make test`.
+    mkdir -p "$TEST_TMPDIR/sysbin"
+    for cmd in cat dirname grep id mkdir rm; do
+        ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
+    done
+
+    # confinst normally symlinks this out of the conf repo. Present by default
+    # so the ordinary run has nothing to warn about;
+    # test_missing_amethyst_config removes it.
+    touch "$TEST_TMPDIR/home/.amethyst.yml"
+}
+
+teardown() {
+    rm -rf "$TEST_TMPDIR"
+}
+
+# Run setup-macos in the sandbox: fresh HOME, and a PATH of just the mock bin
+# plus the symlinked system utilities -- nothing from the real /usr/bin.
+run_macos() {
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
+        PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
+        "$MACOS_SCRIPT" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+# Like run_macos, but with the named commands removed from PATH. The reduced
+# directory replaces the mock bin entirely, so a removed command is genuinely
+# absent rather than falling through to a system copy.
+run_macos_without() {
+    missing="$1"
+    shift
+    mkdir -p "$TEST_TMPDIR/reduced"
+    for f in "$TEST_TMPDIR"/bin/*; do
+        base="${f##*/}"
+        case " $missing " in
+            *" $base "*) continue ;;
+        esac
+        cp "$f" "$TEST_TMPDIR/reduced/$base"
+    done
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
+        PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
+        "$MACOS_SCRIPT" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            printf "%s\n" "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_called() {
+    if ! grep -qF -- "$1" "$CALLS" 2>/dev/null; then
+        printf "%s\n" "  FAIL: expected call '$1' not found"
+        printf "%s\n" "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_exists() {
+    if ! test -f "$1"; then
+        echo "  FAIL: expected file '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_contains() {
+    if ! test -f "$1"; then
+        echo "  FAIL: expected file '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+    if ! grep -qF -- "$2" "$1"; then
+        printf "%s\n" "  FAIL: '$1' does not contain '$2'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_file_lacks() {
+    if grep -qF -- "$2" "$1" 2>/dev/null; then
+        printf "%s\n" "  FAIL: '$1' unexpectedly contains '$2'"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    setup
+    TEST_FAILED=
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    teardown
+}
+
+# --- usage and help ---
+
+test_help_flag() {
+    run_macos --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-macos"
+}
+
+test_unknown_option() {
+    run_macos --bogus
+    assert_status 1 &&
+    assert_output_contains "Unknown option"
+}
+
+# setup forwards these three to every desktop helper. --no-install and
+# --no-sudo have nothing to skip here, but they must still be accepted.
+test_forwarded_flags_accepted() {
+    run_macos --no-install --no-sudo --ignore-errors
+    assert_status 0 &&
+    assert_called "defaults write com.apple.finder AppleShowAllFiles -bool true"
+}
+
+# --- prerequisites ---
+
+# Without `defaults` nothing this script does is possible. Say so by name
+# rather than failing several steps in with "defaults: not found" -- which is
+# what running it on the wrong OS used to look like.
+test_missing_defaults_errors() {
+    run_macos_without defaults
+    assert_status 1 &&
+    assert_output_contains "defaults is required"
+}
+
+test_missing_hidutil_errors() {
+    run_macos_without hidutil
+    assert_status 1 &&
+    assert_output_contains "hidutil is required"
+}
+
+# The prerequisite check must not pre-empt --help: asking for usage on a
+# machine that can't run the script is still a reasonable thing to do.
+test_help_works_without_macos_tools() {
+    run_macos_without "defaults hidutil" --help
+    assert_status 0 &&
+    assert_output_contains "Usage: setup-macos"
+}
+
+# --- keyboard layout ---
+
+test_enables_dvorak() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add" &&
+    assert_called "defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID com.apple.keylayout.Dvorak"
+}
+
+test_disables_text_substitutions() {
+    run_macos
+    assert_status 0 &&
+    assert_called "NSAutomaticSpellingCorrectionEnabled -bool false" &&
+    assert_called "NSAutomaticCapitalizationEnabled -bool false" &&
+    assert_called "NSAutomaticQuoteSubstitutionEnabled -bool false" &&
+    assert_called "NSAutomaticDashSubstitutionEnabled -bool false" &&
+    assert_called "NSAutomaticPeriodSubstitutionEnabled -bool false"
+}
+
+# --- modifier keys ---
+
+# The three-key rotation: Ctrl→Cmd, Win→Option, Alt→Control, on both sides of
+# the keyboard. E0/E4 are the Controls, E2/E6 the Options, E3/E7 the Commands.
+test_remaps_modifier_keys() {
+    run_macos
+    assert_status 0 &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4'
+}
+
+test_writes_launch_agent() {
+    run_macos
+    agent="$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    assert_status 0 &&
+    assert_file_exists "$agent" &&
+    assert_file_contains "$agent" "<string>/usr/bin/hidutil</string>" &&
+    assert_file_contains "$agent" "com.local.KeyRemapping"
+}
+
+# --- keyboard shortcuts ---
+
+test_configures_spotlight_on_option_space() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64"
+}
+
+test_disables_finder_search_hotkey() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65"
+}
+
+# Nine desktops, IDs 118-126, each on Option (modifier flag 524288).
+test_configures_nine_desktop_shortcuts() {
+    run_macos
+    assert_status 0 || return 1
+    for _hotkey_id in 118 119 120 121 122 123 124 125 126; do
+        assert_called "AppleSymbolicHotKeys -dict-add $_hotkey_id" || return 1
+    done
+    assert_called "524288"
+}
+
+test_applies_shortcut_settings() {
+    run_macos
+    assert_status 0 &&
+    assert_called "activateSettings -u"
+}
+
+# The path used to be hard-coded, so a run anywhere it doesn't exist died with
+# status 127 partway through instead of finishing and saying what was left.
+test_missing_activate_settings_warns_about_logout() {
+    ACTIVATE_SETTINGS="$TEST_TMPDIR/bin/no-such-activateSettings"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "log out and back in for the shortcut changes"
+}
+
+# --- Amethyst ---
+
+test_enables_focus_follows_mouse() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.amethyst.Amethyst focus-follows-mouse -bool true"
+}
+
+test_missing_amethyst_config() {
+    rm -f "$TEST_TMPDIR/home/.amethyst.yml"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "run confinst after cloning the conf repo"
+}
+
+# --- application launch shortcuts ---
+
+test_creates_launcher_workflows() {
+    run_macos
+    services="$TEST_TMPDIR/home/Library/Services"
+    assert_status 0 &&
+    assert_file_exists "$services/Launch Browser1.workflow/Contents/Info.plist" &&
+    assert_file_exists "$services/Launch Browser1.workflow/Contents/document.wflow" &&
+    assert_file_exists "$services/Launch Terminal on Workstation.workflow/Contents/document.wflow" &&
+    assert_file_exists "$services/Launch Music.workflow/Contents/document.wflow"
+}
+
+# Regression: the workflow name used to be substituted with `sed -i ''`, whose
+# empty-suffix argument is BSD-only -- so this step aborted the run under any
+# GNU sed, and the name never made it into the plist.
+test_workflow_name_is_substituted() {
+    run_macos
+    plist="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/Info.plist"
+    assert_status 0 &&
+    assert_file_contains "$plist" "<string>Launch Browser1</string>" &&
+    assert_file_lacks "$plist" "WORKFLOWNAME"
+}
+
+test_assigns_option_key_equivalents() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write pbs NSServicesStatus -dict-add" &&
+    assert_called '"key_equivalent" = "~g"' &&
+    assert_called '"key_equivalent" = "~h"' &&
+    assert_called '"key_equivalent" = "~t"' &&
+    assert_called '"key_equivalent" = "~w"' &&
+    assert_called '"key_equivalent" = "~y"'
+}
+
+# --- Finder ---
+
+test_configures_finder() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.finder AppleShowAllFiles -bool true" &&
+    assert_called "defaults write com.apple.finder ShowPathbar -bool true" &&
+    assert_called "defaults write NSGlobalDomain AppleShowAllExtensions -bool true" &&
+    assert_called "killall Finder"
+}
+
+# --- Test runner ---
+
+run_test "--help exits 0 and prints usage" test_help_flag
+run_test "an unknown option is a usage error" test_unknown_option
+run_test "the flags setup forwards are all accepted" test_forwarded_flags_accepted
+run_test "missing defaults is reported by name" test_missing_defaults_errors
+run_test "missing hidutil is reported by name" test_missing_hidutil_errors
+run_test "--help works without the macOS tools" test_help_works_without_macos_tools
+run_test "enables the Dvorak layout" test_enables_dvorak
+run_test "disables the text substitutions" test_disables_text_substitutions
+run_test "rotates Ctrl, Command and Option on both sides" \
+    test_remaps_modifier_keys
+run_test "writes the key-remapping LaunchAgent" test_writes_launch_agent
+run_test "puts Spotlight on Option+Space" test_configures_spotlight_on_option_space
+run_test "disables the conflicting Finder search hotkey" \
+    test_disables_finder_search_hotkey
+run_test "binds Option+1..9 to the nine desktops" \
+    test_configures_nine_desktop_shortcuts
+run_test "applies the shortcut settings to this session" \
+    test_applies_shortcut_settings
+run_test "missing activateSettings falls back to the logout advice" \
+    test_missing_activate_settings_warns_about_logout
+run_test "enables focus follows mouse" test_enables_focus_follows_mouse
+run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
+run_test "creates a Quick Action per launcher" test_creates_launcher_workflows
+run_test "substitutes the workflow name without sed" \
+    test_workflow_name_is_substituted
+run_test "assigns the Option+key equivalents" test_assigns_option_key_equivalents
+run_test "configures Finder and restarts it" test_configures_finder
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
