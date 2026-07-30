@@ -25,7 +25,9 @@
 #           steps in with "defaults: not found".
 # Wants: activateSettings, to apply the shortcut changes without a logout;
 #        launchctl, to load the key-remapping agent now rather than at the
-#        next login.
+#        next login; pbs, to register the Quick Actions; killall, to restart
+#        Finder and the Dock. Without any of them the settings are still
+#        written and the script says what needs a logout.
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -40,13 +42,21 @@
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
 
+# Directory containing this script, resolved up front while $0 still means what
+# the caller typed. The launcher helpers the Quick Actions run live beside this
+# script, and during a fresh bootstrap `setup` runs it straight out of the
+# just-cloned repo, before any login shell has put it on PATH.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 # macOS helpers that live at an absolute path rather than on PATH, so PATH
 # can't shadow them. Overridable so the tests can point them at mocks, in the
 # same spirit as setup-kde's $PYTHON.
 #
 # activateSettings makes the symbolic hotkey writes take effect without a
-# logout.
+# logout; pbs re-reads the Services registry so the Quick Actions and their key
+# equivalents are picked up.
 ACTIVATE_SETTINGS="${ACTIVATE_SETTINGS:-/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings}"
+PBS="${PBS:-/System/Library/CoreServices/pbs}"
 
 # Dvorak as an input source entry, used both to enable the layout and to
 # select it. The layout ID is the part that identifies it: macOS ships several
@@ -305,6 +315,28 @@ configure_shortcuts() {
     fi
 }
 
+# --- Configure Spaces ---
+
+configure_spaces() {
+    info "Pinning the Spaces order"
+
+    # "Automatically rearrange Spaces based on most recent use" is on by
+    # default, and it reorders the Spaces behind the Option+1..9 bindings
+    # above -- so the shortcut that switched to a given desktop a moment ago
+    # switches somewhere else now. Numbered shortcuts only mean anything with
+    # a fixed order.
+    defaults write com.apple.dock mru-spaces -bool false
+
+    # The Dock owns Mission Control and reads this at launch.
+    if is_command killall; then
+        # A non-zero status means no Dock was running, which is not a failure
+        # to report: it will read the new value when it starts.
+        killall Dock || info "the Dock was not running; it will pick this up when it starts"
+    else
+        warn "killall not found; restart the Dock (or log out) for the Spaces order to be pinned"
+    fi
+}
+
 # --- Configure Amethyst tiling window manager ---
 
 configure_amethyst() {
@@ -323,27 +355,51 @@ configure_amethyst() {
 
 # --- Configure application launch shortcuts ---
 
-configure_app_shortcuts() {
-    info "Configuring application launch shortcuts (Automator Quick Actions)"
+# Print the path to a launcher helper, or fail if there isn't one. PATH first,
+# then beside this script: during a fresh bootstrap `setup` runs setup-macos
+# out of the just-cloned scripts repo, before any login shell has put it on
+# PATH. Baking $HOME/scripts into the workflow instead -- which is what this
+# used to do -- writes a Quick Action pointing at nothing on a checkout kept
+# anywhere else.
+resolve_launcher() {
+    _launcher=$(command -v "$1") || _launcher=""
+    if test -z "$_launcher" && test -x "$SCRIPT_DIR/$1"; then
+        _launcher="$SCRIPT_DIR/$1"
+    fi
+    test -n "$_launcher" || return 1
+    printf '%s' "$_launcher"
+}
 
-    services_dir="$HOME/Library/Services"
-    mkdir -p "$services_dir"
+# Print PATH as a single-quoted /bin/sh word, then escaped for XML, ready to
+# drop into the workflow's COMMAND_STRING. Two separate hazards: the string is
+# run as a shell command, so a checkout under a path with a space would be
+# split into two words (and one with a `$` or a `;` would be worse); and it's
+# embedded in a plist, so an `&` or a `<` in the path makes the XML invalid.
+# Quote for the shell first, then escape the result for XML -- the other order
+# would escape the quotes we just added.
+shell_quote_xml() {
+    printf '%s' "$1" \
+        | sed -e "s/'/'\\\\''/g" -e "s/^/'/" -e "s/\$/'/" \
+        | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
 
-    scripts="$HOME/scripts"
+# Create an Automator Quick Action (.workflow) that runs a shell script.
+# These appear in System Settings > Keyboard > Shortcuts > Services, with the
+# Option+key shortcuts assigned below (physical Win key sends Option).
+create_launcher_workflow() {
+    name="$1"
+    script=$(shell_quote_xml "$2")
+    workflow_dir="$SERVICES_DIR/$name.workflow"
+    mkdir -p "$workflow_dir/Contents"
 
-    # Create an Automator Quick Action (.workflow) that runs a shell script.
-    # These appear in System Settings > Keyboard > Shortcuts > Services,
-    # where we assign Option+key shortcuts (physical Win key sends Option).
-    create_launcher_workflow() {
-        name="$1"
-        script="$2"
-        workflow_dir="$services_dir/$name.workflow"
-        mkdir -p "$workflow_dir/Contents"
-
-        # An unquoted heredoc, so $name expands. This used to be a fixed
-        # placeholder patched by `sed -i ''`, whose empty-suffix argument is
-        # BSD-only -- and unnecessary, since the value is known right here.
-        cat > "$workflow_dir/Contents/Info.plist" <<PLIST
+    # An unquoted heredoc, so $name expands. This used to be a fixed
+    # placeholder patched by `sed -i ''`, whose empty-suffix argument is
+    # BSD-only -- and unnecessary, since the value is known right here.
+    #
+    # NSSendTypes is present and empty on purpose: that's how a service
+    # declares it takes no input, which is what makes these appear whether or
+    # not anything is selected.
+    cat > "$workflow_dir/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -358,13 +414,15 @@ configure_app_shortcuts() {
             </dict>
             <key>NSMessage</key>
             <string>runWorkflowAsService</string>
+            <key>NSSendTypes</key>
+            <array/>
         </dict>
     </array>
 </dict>
 </plist>
 PLIST
 
-        cat > "$workflow_dir/Contents/document.wflow" <<WFLOW
+    cat > "$workflow_dir/Contents/document.wflow" <<WFLOW
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -467,36 +525,80 @@ PLIST
 </dict>
 </plist>
 WFLOW
-    }
+}
 
-    # Create Quick Action workflows for each launcher
-    create_launcher_workflow "Launch Browser1" "$scripts/browser1"
-    create_launcher_workflow "Launch Browser2" "$scripts/browser2"
-    create_launcher_workflow "Launch Terminal" "$scripts/terminal"
-    create_launcher_workflow "Launch Terminal on Workstation" "$scripts/terminal_on_workstation"
-    create_launcher_workflow "Launch Music" "$scripts/music"
+configure_app_shortcuts() {
+    info "Configuring application launch shortcuts (Automator Quick Actions)"
 
-    # Assign Option+key shortcuts to each Quick Action
-    # Option modifier = 524288, Option+Shift would be 655360
-    # These use logical key names, so Dvorak layout is handled by the OS
+    SERVICES_DIR="$HOME/Library/Services"
+    mkdir -p "$SERVICES_DIR"
+
+    # Quick Action name, launcher helper, and shortcut key. The Option modifier
+    # is "~" in a key equivalent (Option+Shift would be "~$"). These are logical
+    # key names, so the OS handles the Dvorak layout.
     #
-    # Shortcut keys (physical Win sends Option after hidutil remap):
+    # Shortcut keys (physical Win sends Option after the hidutil remap):
     #   Win+G → Option+G → browser1
     #   Win+H → Option+H → browser2
     #   Win+T → Option+T → terminal
     #   Win+W → Option+W → terminal_on_workstation
     #   Win+Y → Option+Y → music
-    defaults write pbs NSServicesStatus -dict-add \
-        '"(null) - Launch Browser1 - runWorkflowAsService"' \
-        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~g"; }' \
-        '"(null) - Launch Browser2 - runWorkflowAsService"' \
-        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~h"; }' \
-        '"(null) - Launch Terminal - runWorkflowAsService"' \
-        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~t"; }' \
-        '"(null) - Launch Terminal on Workstation - runWorkflowAsService"' \
-        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~w"; }' \
-        '"(null) - Launch Music - runWorkflowAsService"' \
-        '{ "enabled_context_menu" = 1; "enabled_services_menu" = 1; "key_equivalent" = "~y"; }'
+    #
+    # $@ accumulates the key/value pairs for one `defaults write`, so a
+    # launcher that isn't installed drops out of the registry entry too rather
+    # than leaving a shortcut bound to a workflow that runs nothing.
+    set --
+    for entry in \
+        "Launch Browser1:browser1:g" \
+        "Launch Browser2:browser2:h" \
+        "Launch Terminal:terminal:t" \
+        "Launch Terminal on Workstation:terminal_on_workstation:w" \
+        "Launch Music:music:y"; do
+        workflow_name=${entry%%:*}
+        entry_rest=${entry#*:}
+        launcher_name=${entry_rest%%:*}
+        shortcut_key=${entry_rest##*:}
+
+        if ! launcher_path=$(resolve_launcher "$launcher_name"); then
+            warn "$launcher_name not found on PATH or beside this script; skipping its launch shortcut"
+            # An earlier run may have installed a workflow for it. Leaving that
+            # behind would keep the shortcut working and running the path the
+            # launcher used to have, which is the opposite of skipping it. The
+            # NSServicesStatus entry naming it is left alone -- `defaults` has
+            # no way to delete one key from a nested dict, and rewriting the
+            # whole dict would drop other applications' services -- but with
+            # the workflow gone it names a service that no longer exists, so
+            # the key equivalent binds nothing.
+            stale_workflow="$SERVICES_DIR/$workflow_name.workflow"
+            if test -d "$stale_workflow"; then
+                info "Removing the stale Quick Action for $launcher_name"
+                rm -rf "$stale_workflow"
+            fi
+            continue
+        fi
+        create_launcher_workflow "$workflow_name" "$launcher_path"
+        # The key is quoted inside the value too: `defaults` parses it as an
+        # old-style plist, where spaces and parentheses need the quotes.
+        set -- "$@" \
+            "\"(null) - $workflow_name - runWorkflowAsService\"" \
+            "{ \"enabled_context_menu\" = 1; \"enabled_services_menu\" = 1; \"key_equivalent\" = \"~$shortcut_key\"; }"
+    done
+
+    if test $# -eq 0; then
+        warn "no launcher helpers found; no launch shortcuts were configured"
+        return 0
+    fi
+    defaults write pbs NSServicesStatus -dict-add "$@"
+
+    # Writing the workflows and the key equivalents isn't enough: the Services
+    # registry is a cache, and until pbs re-reads it the new Quick Actions
+    # aren't registered and their shortcuts silently do nothing.
+    if test -x "$PBS"; then
+        "$PBS" -flush \
+            || warn "could not refresh the Services registry; log out and back in for the launch shortcuts to work"
+    else
+        warn "$PBS not found; log out and back in for the launch shortcuts to work"
+    fi
 }
 
 # --- Configure Finder ---
@@ -514,6 +616,7 @@ configure_finder() {
 configure_keyboard
 configure_modifier_keys
 configure_shortcuts
+configure_spaces
 configure_amethyst
 configure_app_shortcuts
 configure_finder
