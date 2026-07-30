@@ -68,6 +68,11 @@ import zipfile
 #              conda package is unpacked whole (bin/lib/share); for github we
 #              locate these names in the extracted asset. Omitted for codeberg
 #              tools, which aren't CLI binaries -- see krohnkite below.
+# payload:     non-binary directories to keep out of a github release asset,
+#              {directory in the asset: destination relative to the prefix}.
+#              The github backend otherwise copies out only "bins" and drops
+#              the rest of the archive, which isn't enough for a tool whose
+#              binary needs data files at run time -- see helix below.
 TOOLS = {
     "ripgrep": {"conda": "ripgrep",   "github": "BurntSushi/ripgrep", "bins": ["rg"]},
     "fd":      {"conda": "fd",         "github": "sharkdp/fd",         "bins": ["fd"]},
@@ -76,7 +81,14 @@ TOOLS = {
     "jq":      {"conda": "jq",         "github": "jqlang/jq",          "bins": ["jq"]},
     "delta":   {"conda": "git-delta",  "github": "dandavison/delta",   "bins": ["delta"]},
     "gh":      {"conda": "gh",         "github": "cli/cli",            "bins": ["gh"]},
-    "helix":   {"conda": "helix",      "github": "helix-editor/helix", "bins": ["hx"]},
+    # helix's release tarball carries the hx binary and the runtime/ tree of
+    # grammars, queries, and themes that hx loads at run time. Keep both: an
+    # hx with no runtime starts, but with no highlighting and no language
+    # support. hx searches <config dir>/runtime ahead of anything relative to
+    # the binary, so whoever installs it points that at share/helix/runtime
+    # (setup's link_helix_runtime does).
+    "helix":   {"conda": "helix",      "github": "helix-editor/helix", "bins": ["hx"],
+                "payload": {"runtime": "share/helix/runtime"}},
     "jj":      {"conda": "jujutsu",    "github": "jj-vcs/jj",          "bins": ["jj"]},
     "nu":      {"conda": "nushell",    "github": "nushell/nushell",    "bins": ["nu"]},
     "uv":      {"conda": "uv",         "github": "astral-sh/uv",       "bins": ["uv", "uvx"]},
@@ -364,6 +376,145 @@ def _require_basename(name, what):
         raise HomepkgError(f"unsafe {what} in bundle: {name!r}")
 
 
+# Payloads are data files, so they go under share/ -- and never under
+# share/homepkg/, which is homepkg's own state (the mamba env, the cached
+# assets). Widen this when a tool genuinely needs another root.
+_PAYLOAD_ROOT = "share"
+_HOMEPKG_DIR = "homepkg"
+
+
+def _require_payload_dest(path, prefix, what):
+    """Reject a payload destination that isn't somewhere a payload belongs.
+
+    Staying inside the prefix isn't enough. _replace_dir replaces its
+    destination wholesale, so a destination of "bin" would move every installed
+    executable aside and delete it -- while the install reported success -- and
+    "share/homepkg/env" would take out the mamba environment the same way. Since
+    a destination can come from a bundle manifest, and a bundle can be tampered
+    with (see _require_basename), the shape is constrained rather than trusted:
+    at least two components, the first share/, and not share/homepkg/.
+    """
+    parts = path.split("/") if path else []
+    if (not path or os.path.isabs(path) or len(parts) < 2
+            or any(p in ("", ".", "..") for p in parts)
+            or parts[0] != _PAYLOAD_ROOT or parts[1] == _HOMEPKG_DIR
+            or not _within(os.path.realpath(prefix), os.path.join(prefix, path))):
+        raise HomepkgError(f"unsafe {what}: {path!r}")
+
+
+def _rm_any(path):
+    """Remove a file, symlink, or directory tree, if it's there at all."""
+    if os.path.islink(path) or os.path.isfile(path):
+        os.remove(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
+
+def _place_binary(src, dest, backup=None):
+    """Copy the file `src` to `dest`, replacing whatever is there.
+
+    Clears dest first rather than copying onto it: on a prefix the mamba
+    backend has also managed, <prefix>/bin/<tool> is a symlink into its
+    environment, and copying through that symlink would overwrite the
+    conda-managed executable in place -- leaving the environment's metadata
+    describing a file it no longer has, for a later mamba update to replace
+    underneath us. A release install owns the name in <prefix>/bin, not
+    whatever the name currently points at.
+
+    With `backup`, whatever was at dest is moved there instead of removed, so a
+    caller that fails later can put it back -- see _publish_release. That leaves
+    the same one-rename window _replace_dir has, and it's closed the same way:
+    a backup found with nothing at dest is what an earlier run killed mid-swap
+    left behind, so put it back before doing anything else.
+    """
+    if backup is not None:
+        if os.path.exists(backup) and not (os.path.islink(dest) or os.path.exists(dest)):
+            os.rename(backup, dest)
+        if os.path.islink(dest) or os.path.exists(dest):
+            _rm_any(backup)
+            os.rename(dest, backup)
+        else:
+            _rm_any(backup)
+    else:
+        _rm_any(dest)
+    shutil.copy2(src, dest)
+    _ensure_executable(dest)
+
+
+def _publish_release(found_bins, payload_src, prefix, bindir):
+    """Install a tool's binaries and its payload, or neither.
+
+    Only for tools that have a payload, where the two have to match. Both are
+    already known to be in the asset by the time this runs, but being there is
+    not the same as landing: the payload copy is the big, slow half (helix's
+    runtime runs to a couple of hundred megabytes), and it's the one that fails
+    when a disk fills. So the binaries go first and are moved aside rather than
+    overwritten, and if publishing the payload then fails partway they go back
+    -- leaving the tool as it was, instead of a new binary reading the previous
+    release's data files.
+
+    A binary's own copy can fail the same way, so each destination is registered
+    for rollback before it's touched rather than after: the rollback has to cover
+    the call that raised, not just the ones that returned.
+
+    Rolling back means putting back what was there, which on a first install is
+    nothing -- so the new binary is removed rather than left behind. "Both or
+    neither" has to hold for a fresh prefix too, where an hx with no runtime is
+    exactly the editor-with-no-language-support this payload exists to prevent.
+    """
+    backups = {}
+    try:
+        for b, src in found_bins.items():
+            dest = os.path.join(bindir, b)
+            backups[dest] = dest + ".prev"
+            _place_binary(src, dest, backup=dest + ".prev")
+        for src_name, src, dest_rel in payload_src:
+            _replace_dir(src, os.path.join(prefix, dest_rel))
+            info(f"  installed {src_name}/ into {prefix}/{os.path.dirname(dest_rel)}")
+    except BaseException:
+        for dest, backup in backups.items():
+            _rm_any(dest)
+            if os.path.exists(backup):
+                os.rename(backup, dest)
+        raise
+    for backup in backups.values():
+        _rm_any(backup)
+
+
+def _replace_dir(src, dest):
+    """Copy the directory `src` to `dest`, replacing whatever is there.
+
+    Copies alongside the destination and swaps, rather than clearing dest
+    first: an install interrupted partway through (Ctrl-C, a full disk, a
+    truncated asset) then leaves the previous contents in place instead of a
+    half-populated tree. Both temp names are siblings of dest, so each rename
+    is atomic within the one filesystem.
+
+    Two renames means one window -- after dest is moved aside and before its
+    replacement lands -- where an interruption leaves nothing at dest and the
+    previous contents at dest.old. There's no portable way to swap two
+    directories in one step, so instead of widening the promise this closes it
+    from the other end: the next call puts dest.old back before doing anything
+    else, so the previous payload survives even an interruption inside that
+    window.
+    """
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    new, old = dest + ".new", dest + ".old"
+    # Recover from an earlier run interrupted mid-swap, then clear leftovers.
+    if os.path.isdir(old) and not os.path.exists(dest):
+        os.rename(old, dest)
+    _rm_any(new)
+    _rm_any(old)
+    shutil.copytree(src, new)
+    if os.path.isdir(dest) and not os.path.islink(dest):
+        os.rename(dest, old)
+        os.rename(new, dest)
+        shutil.rmtree(old)
+    else:
+        _rm_any(dest)  # a stale file or symlink where the directory goes
+        os.rename(new, dest)
+
+
 def _safe_extract_tar(tf, dest):
     """Extract a tar treating members as untrusted. Only directories and
     regular files are created, each validated to stay within dest; special
@@ -393,10 +544,18 @@ def _safe_extract_zip(zf, dest):
     zf.extractall(dest)
 
 
-def github_extract(asset_path, name, prefix, bins):
-    """Unpack an asset and copy the wanted binaries into prefix/bin."""
+def github_extract(asset_path, name, prefix, bins, payload=None):
+    """Unpack an asset and copy the wanted binaries into prefix/bin.
+
+    `payload` (the registry key of the same name) additionally keeps whole
+    directories out of the archive, {directory in the asset: destination
+    relative to prefix}, for a tool that needs data files next to its binary.
+    """
     for b in bins:
         _require_basename(b, "binary name")
+    for src_name, dest_rel in (payload or {}).items():
+        _require_basename(src_name, "payload directory")
+        _require_payload_dest(dest_rel, prefix, "payload destination")
     bindir = os.path.join(prefix, "bin")
     os.makedirs(bindir, exist_ok=True)
     low = name.lower()
@@ -409,27 +568,51 @@ def github_extract(asset_path, name, prefix, bins):
         root = os.path.join(os.path.dirname(asset_path), "x")
         with zipfile.ZipFile(asset_path) as zf:
             _safe_extract_zip(zf, root)
-    if root is not None:
+    # A binary and the data files it loads at run time have to match, so for a
+    # tool with a payload nothing is installed until every part has been located
+    # in the asset -- in either direction. Publishing a new binary and only then
+    # finding no runtime for it, or a new runtime the old binary then reads,
+    # leaves a mismatched pair: worse than not updating, and unlike a missing
+    # binary it can't be left half-done for the next reinstall to finish,
+    # because the half-done state runs -- wrongly. A tool with no payload keeps
+    # the partial-install policy below.
+    payload_src = []
+    if payload:
+        if root is None:
+            # Nothing to unpack, so there's nowhere for a payload to come from.
+            raise HomepkgError(
+                f"{name} can't carry {', '.join(s + '/' for s in payload)}; "
+                "kept the previous install")
+        found_bins = {b: _find_file(root, b) for b in bins}
+        found_payload = {s: _find_dir(root, s) for s in payload}
+        missing = [b for b, found in found_bins.items() if found is None]
+        missing += [s + "/" for s, found in found_payload.items() if found is None]
+        if missing:
+            raise HomepkgError(
+                f"{name} doesn't contain {', '.join(missing)}; "
+                "kept the previous install")
+        payload_src = [(s, found_payload[s], payload[s]) for s in payload]
+    if payload:
+        # Both halves published together, or neither -- everything above only
+        # established that they're in the asset, not that they land.
+        _publish_release(found_bins, payload_src, prefix, bindir)
+        placed = list(bins)
+    elif root is not None:
         placed = []
         for b in bins:
             src = _find_file(root, b)
             if src is None:
                 continue
-            dest = os.path.join(bindir, b)
-            shutil.copy2(src, dest)
-            _ensure_executable(dest)
+            _place_binary(src, os.path.join(bindir, b))
             placed.append(b)
     else:
         # Raw single binary (e.g. jq-linux-amd64): treat the asset as bins[0].
-        dest = os.path.join(bindir, bins[0])
-        shutil.copy2(asset_path, dest)
-        _ensure_executable(dest)
+        _place_binary(asset_path, os.path.join(bindir, bins[0]))
         placed = [bins[0]]
-    # An asset that doesn't carry everything the registry says it does --
-    # a changed release layout, an asset picked by the wrong token -- is a
-    # failed tool, not a warning: the caller has to know to get it another
-    # way. Whatever was found stays, since it works and the reinstall
-    # replaces it.
+    # An asset that doesn't carry every binary the registry says it does -- a
+    # changed release layout, an asset picked by the wrong token -- is a failed
+    # tool, not a warning: the caller has to know to get it another way.
+    # Whatever was found stays, since it works and the reinstall replaces it.
     missing = [b for b in bins if b not in placed]
     if missing:
         raise HomepkgError(
@@ -441,6 +624,13 @@ def github_extract(asset_path, name, prefix, bins):
 def _find_file(root, name):
     for dirpath, _dirs, files in os.walk(root):
         if name in files:
+            return os.path.join(dirpath, name)
+    return None
+
+
+def _find_dir(root, name):
+    for dirpath, dirs, _files in os.walk(root):
+        if name in dirs:
             return os.path.join(dirpath, name)
     return None
 
@@ -459,7 +649,8 @@ def install_github(tool, meta, prefix, plat, dry_run):
         return
     with tempfile.TemporaryDirectory() as td:
         asset_path = download(url, os.path.join(td, name))
-        placed = github_extract(asset_path, name, prefix, meta["bins"])
+        placed = github_extract(asset_path, name, prefix, meta["bins"],
+                                meta.get("payload"))
     info(f"  installed {', '.join(placed)} into {prefix}/bin")
 
 
@@ -913,6 +1104,9 @@ def _stage_github(tools, plat, td, skip_unavailable=False):
             continue
         name, url = picked
         download(url, os.path.join(adir, name))
+        # The payload isn't recorded: replaying a bundle takes it from the
+        # registry instead, so a tampered manifest can't choose which
+        # directories an install replaces (see _install_bundle_github).
         entries.append({"tool": t, "asset": name, "bins": TOOLS[t]["bins"]})
     return entries
 
@@ -1101,7 +1295,13 @@ def _install_bundle_github(td, manifest, prefix, dry_run):
         if dry_run:
             continue
         try:
-            github_extract(asset, e["asset"], prefix, e["bins"])
+            # The payload comes from the registry, never from the manifest: it
+            # decides which directories are replaced wholesale, and a bundle can
+            # be tampered with. A bundle for a tool that needs one but is
+            # unknown here installs its binaries and fails, which github_extract
+            # reports, rather than silently landing an incomplete tool.
+            github_extract(asset, e["asset"], prefix, e["bins"],
+                           TOOLS.get(e["tool"], {}).get("payload"))
         except Exception as exc:  # extraction, permissions, truncated asset
             warn(f"{e['tool']}: {exc}; skipping it")
             failed.append(e["tool"])
