@@ -13,6 +13,17 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# The harness builds a real zip to exercise the offline install path. Say so
+# plainly if the tools aren't there -- otherwise the bundle tests fail looking
+# like a fault in setup-macos.
+for _tool in zip unzip; do
+    command -v "$_tool" >/dev/null 2>&1 || {
+        echo "setup-macos_test needs $_tool to build a staged bundle fixture" >&2
+        exit 1
+    }
+done
+
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -47,13 +58,26 @@ MOCK
 
     # pgrep exits 0 by default, i.e. the app is running and restart_app should
     # go on to killall it.
-    for cmd in hidutil launchctl killall pgrep; do
+    for cmd in hidutil launchctl killall pgrep brew; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
 exit 0
 MOCK
     done
+
+    # xattr is asked two different questions: -d removes the quarantine
+    # attribute, -p reports whether anything still carries it. The default
+    # models a clean removal -- -d succeeds, and the follow-up -p finds
+    # nothing, which is a non-zero status from the real xattr.
+    cat > "$TEST_TMPDIR/bin/xattr" <<MOCK
+#!/bin/sh
+printf "%s\\n" "xattr \$*" >> "$CALLS"
+case "\$*" in
+    *-p*) exit 1 ;;
+esac
+exit 0
+MOCK
 
     # The absolute-path helpers.
     for cmd in activateSettings pbs; do
@@ -76,9 +100,20 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in cat dirname grep id mkdir mv rm sed; do
+    for cmd in cat dirname grep id mkdir mv rm sed unzip; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
+
+    # Amethyst lives in a sandboxed Applications directory; the real
+    # /Applications isn't writable by the tests and mustn't be touched.
+    APPLICATIONS_DIR="$TEST_TMPDIR/Applications"
+    USER_APPLICATIONS_DIR="$TEST_TMPDIR/home/Applications"
+    mkdir -p "$APPLICATIONS_DIR"
+    # Installed by default, so the ordinary run has nothing to install.
+    # Contents/Info.plist because that is what counts as installed: a bare
+    # directory is what a half-finished extraction leaves behind.
+    mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents/MacOS"
+    printf 'app\n' > "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
 
     # confinst normally symlinks this out of the conf repo. Present by default
     # so the ordinary run has nothing to warn about;
@@ -145,6 +180,23 @@ stage_defaults_read() {
     printf "%s\n" "$1" > "$TEST_TMPDIR/defaults_read"
 }
 
+# Remove the pre-installed Amethyst, i.e. pretend a fresh machine.
+remove_amethyst() {
+    rm -rf "$APPLICATIONS_DIR/Amethyst.app" "$USER_APPLICATIONS_DIR/Amethyst.app"
+}
+
+# Stage an Amethyst bundle at PATH containing a real Amethyst.app, so the
+# offline path has something to unpack.
+stage_amethyst_bundle() {
+    _staging="$TEST_TMPDIR/staging"
+    rm -rf "$_staging"
+    mkdir -p "$_staging/Amethyst.app/Contents/MacOS"
+    printf 'app\n' > "$_staging/Amethyst.app/Contents/Info.plist"
+    printf 'bin\n' > "$_staging/Amethyst.app/Contents/MacOS/Amethyst"
+    (cd "$_staging" && zip -qr "$1" Amethyst.app)
+    rm -rf "$_staging"
+}
+
 # Make every `defaults write` fail, to exercise what the run reports when a
 # configuration step doesn't take.
 fail_defaults_write() {
@@ -158,6 +210,9 @@ run_macos() {
     output="$(HOME="$TEST_TMPDIR/home" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
         PBS="$PBS" \
+        APPLICATIONS_DIR="$APPLICATIONS_DIR" \
+        USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
+        AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" 2>&1)"
     status=$?
@@ -182,6 +237,9 @@ run_macos_without() {
     output="$(HOME="$TEST_TMPDIR/home" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
         PBS="$PBS" \
+        APPLICATIONS_DIR="$APPLICATIONS_DIR" \
+        USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
+        AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" 2>&1)"
     status=$?
@@ -241,6 +299,14 @@ assert_not_called() {
 assert_file_exists() {
     if ! test -f "$1"; then
         echo "  FAIL: expected file '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_dir_not_exists() {
+    if test -d "$1"; then
+        echo "  FAIL: unexpected directory '$1' exists"
         TEST_FAILED=1
         return 1
     fi
@@ -791,6 +857,269 @@ test_missing_pgrep_warns_about_restarting() {
     assert_output_contains "killall/pgrep not found"
 }
 
+# Configuring an app that isn't installed writes preferences nothing reads:
+# `defaults` creates the domain regardless, so the run used to report success
+# over a machine with no tiling at all.
+test_installs_amethyst_when_missing() {
+    remove_amethyst
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst"
+}
+
+test_does_not_reinstall_amethyst_when_present() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Amethyst is already installed" &&
+    assert_not_called "brew install"
+}
+
+# --no-install used to be an accepted no-op. It now means what it says, and
+# says what the run won't do as a result.
+test_no_install_skips_amethyst() {
+    remove_amethyst
+    run_macos --no-install --ignore-errors
+    assert_status 0 &&
+    assert_not_called "brew install" &&
+    assert_output_contains "the tiling settings below will have no effect" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# The offline path, mirroring setup-kde's staged Krohnkite bundle.
+test_installs_amethyst_from_staged_bundle_when_brew_fails() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$*" >> "$CALLS"
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/brew"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "trying a staged bundle" &&
+    assert_output_contains "Installing Amethyst from bundle" &&
+    assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
+}
+
+# A staged bundle is the whole offline story, so it has to work with no brew
+# at all -- not just when brew is present and failing.
+test_installs_amethyst_from_bundle_without_brew() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Homebrew not found" &&
+    assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
+}
+
+# $AMETHYST_BUNDLE wins over the two default locations, matching
+# $HOMEPKG_KROHNKITE_BUNDLE.
+test_amethyst_bundle_env_var_is_honored() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/elsewhere.zip"
+    AMETHYST_BUNDLE="$TEST_TMPDIR/elsewhere.zip"
+    run_macos_without brew --ignore-errors
+    AMETHYST_BUNDLE=
+    assert_status 0 &&
+    assert_output_contains "elsewhere.zip" &&
+    assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
+}
+
+# Gatekeeper refuses to launch a hand-unpacked app, so the quarantine
+# attribute has to be cleared or the offline path installs something inert.
+test_staged_bundle_clears_quarantine() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_called "xattr -d -r com.apple.quarantine"
+}
+
+# Installing without write access to /Applications is the ordinary
+# unprivileged case; Amethyst runs from ~/Applications just as well.
+#
+# chmod is the real thing and is what runs on CI and on a developer's Mac,
+# both unprivileged. Running as root, permissions don't apply -- `test -w`
+# stays true on a mode-000 directory -- so the directory is removed instead,
+# which fails `test -w` for everyone and takes the same branch. Dropping
+# privileges to keep chmod meaningful under root needs the whole temp-dir path
+# traversable by the unprivileged user, which is more fragility than one
+# assertion is worth.
+test_staged_bundle_falls_back_to_user_applications() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    if test "$(id -u)" -eq 0; then
+        rmdir "$APPLICATIONS_DIR"
+    else
+        chmod a-w "$APPLICATIONS_DIR"
+    fi
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "is not writable" &&
+    assert_file_exists "$USER_APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
+}
+
+# Regression: unzip writes as it goes, so extracting straight into
+# /Applications left a partial Amethyst.app behind when the archive was
+# truncated or the disk filled -- and amethyst_path then read that directory as
+# installed, so every later run skipped both install paths. A transient failure
+# became a permanent one.
+test_failed_extraction_leaves_nothing_behind() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    # Extract something and then fail, the way a truncated archive does.
+    cat > "$TEST_TMPDIR/bin/unzip" <<MOCK
+#!/bin/sh
+printf "%s\\n" "unzip \$*" >> "$CALLS"
+_prev=""
+_out=""
+for _arg in "\$@"; do
+    if test "\$_prev" = "-d"; then _out="\$_arg"; fi
+    _prev="\$_arg"
+done
+mkdir -p "\$_out/Amethyst.app/Contents"
+exit 2
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/unzip"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not unpack" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
+    assert_output_lacks "macOS configured successfully" &&
+    if ls -d "$APPLICATIONS_DIR"/.amethyst-install.* >/dev/null 2>&1; then
+        echo "  FAIL: a staging directory was left behind"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# The other half of the same point: a directory named Amethyst.app with no app
+# in it must not count as installed, whatever left it there.
+test_partial_app_bundle_does_not_count_as_installed() {
+    remove_amethyst
+    mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst" &&
+    assert_output_lacks "Amethyst is already installed"
+}
+
+# A staging directory left by a crashed run with this PID must not be
+# extracted over: unzip -o would merge the new bundle into the stale files and
+# publish the mixture. Unlike the cleanups after a failure, this one is checked.
+test_unclearable_staging_directory_aborts_the_install() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    cat > "$TEST_TMPDIR/bin/rm" <<MOCK
+#!/bin/sh
+printf "%s\\n" "rm \$*" >> "$CALLS"
+case "\$*" in
+    *.amethyst-install.*) echo "rm: cannot remove" >&2; exit 1 ;;
+esac
+exec /bin/rm "\$@"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/rm"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not clear" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# A zip can contain a directory named Amethyst.app with nothing runnable in
+# it. Publishing that reported success over an install the next run would then
+# treat as missing -- amethyst_path applies this invariant, so the publish
+# check has to apply the same one.
+test_bundle_without_info_plist_is_rejected() {
+    remove_amethyst
+    _staging="$TEST_TMPDIR/badstaging"
+    rm -rf "$_staging"
+    mkdir -p "$_staging/Amethyst.app/Contents"
+    (cd "$_staging" && zip -qr "$TEST_TMPDIR/home/amethyst.zip" Amethyst.app)
+    rm -rf "$_staging"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "did not contain a usable Amethyst.app" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# `mv src dir` moves the source *into* an existing directory and returns 0, so
+# publishing over an unusable Amethyst.app used to bury the staged copy at
+# Amethyst.app/Amethyst.app and report success.
+test_unusable_destination_is_replaced_not_nested() {
+    remove_amethyst
+    mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Replacing the unusable" &&
+    assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app/Amethyst.app"
+}
+
+# xattr exits non-zero both when the attribute was already absent and when it
+# couldn't be removed, so reading its status treated a real failure as the
+# benign case and published an app macOS would refuse to launch.
+test_unclearable_quarantine_is_not_published() {
+    remove_amethyst
+    stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
+    # -d fails, and -p still reports the attribute present.
+    cat > "$TEST_TMPDIR/bin/xattr" <<MOCK
+#!/bin/sh
+printf "%s\\n" "xattr \$*" >> "$CALLS"
+case "\$*" in
+    *-p*) echo "com.apple.quarantine: 0081;" ; exit 0 ;;
+esac
+echo "xattr: [Errno 1] Operation not permitted" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/xattr"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not clear the quarantine attribute" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# An interrupted copy can leave an Info.plist with no executable directory. It
+# can't launch, so it mustn't count as installed -- otherwise every later run
+# skips both install paths.
+test_bundle_without_executable_dir_is_rejected() {
+    remove_amethyst
+    _bad="$TEST_TMPDIR/badexec"
+    rm -rf "$_bad"
+    mkdir -p "$_bad/Amethyst.app/Contents"
+    printf 'app\n' > "$_bad/Amethyst.app/Contents/Info.plist"
+    (cd "$_bad" && zip -qr "$TEST_TMPDIR/home/amethyst.zip" Amethyst.app)
+    rm -rf "$_bad"
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "did not contain a usable Amethyst.app" &&
+    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app"
+}
+
+test_installed_app_without_executable_dir_is_reinstalled() {
+    remove_amethyst
+    mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
+    printf 'app\n' > "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst" &&
+    assert_output_lacks "Amethyst is already installed"
+}
+
+# No network and nothing staged: say how to stage one rather than leaving the
+# user to work out why tiling never happens.
+test_no_brew_and_no_bundle_says_how_to_stage_one() {
+    remove_amethyst
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "brew fetch --cask amethyst" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
 # --- the local hook and the closing summary ---
 
 test_sources_local_hook() {
@@ -961,6 +1290,40 @@ run_test "a failed write is counted under --ignore-errors" \
     test_failed_write_counts_under_ignore_errors
 run_test "a failed write aborts without --ignore-errors" \
     test_failed_write_aborts_without_ignore_errors
+run_test "installs Amethyst when it is missing" \
+    test_installs_amethyst_when_missing
+run_test "does not reinstall Amethyst when present" \
+    test_does_not_reinstall_amethyst_when_present
+run_test "--no-install skips installing Amethyst" \
+    test_no_install_skips_amethyst
+run_test "falls back to a staged bundle when brew fails" \
+    test_installs_amethyst_from_staged_bundle_when_brew_fails
+run_test "installs from a staged bundle with no brew at all" \
+    test_installs_amethyst_from_bundle_without_brew
+run_test "\$AMETHYST_BUNDLE overrides the default locations" \
+    test_amethyst_bundle_env_var_is_honored
+run_test "a staged bundle has its quarantine cleared" \
+    test_staged_bundle_clears_quarantine
+run_test "a staged bundle falls back to ~/Applications" \
+    test_staged_bundle_falls_back_to_user_applications
+run_test "a bundle without an executable directory is rejected" \
+    test_bundle_without_executable_dir_is_rejected
+run_test "an installed app without an executable directory is reinstalled" \
+    test_installed_app_without_executable_dir_is_reinstalled
+run_test "a bundle without Info.plist is rejected" \
+    test_bundle_without_info_plist_is_rejected
+run_test "an unusable destination is replaced, not nested" \
+    test_unusable_destination_is_replaced_not_nested
+run_test "an unclearable quarantine attribute is not published" \
+    test_unclearable_quarantine_is_not_published
+run_test "an unclearable staging directory aborts the install" \
+    test_unclearable_staging_directory_aborts_the_install
+run_test "a failed extraction leaves nothing behind" \
+    test_failed_extraction_leaves_nothing_behind
+run_test "a partial app bundle does not count as installed" \
+    test_partial_app_bundle_does_not_count_as_installed
+run_test "says how to stage a bundle when there is none" \
+    test_no_brew_and_no_bundle_says_how_to_stage_one
 run_test "sources setup-macos.local when present" test_sources_local_hook
 run_test "a failing local hook is counted" \
     test_failing_local_hook_is_counted
