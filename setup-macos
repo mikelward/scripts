@@ -6,8 +6,9 @@
 # - Rotate Control, Command and Option (for Linux-like Ctrl shortcuts)
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
-# - Focus follows mouse for Amethyst (its layouts, modifiers and margins come
-#   from ~/.amethyst.yml, which confinst symlinks out of the conf repo)
+# - Amethyst tiling window manager: installs it (Homebrew, or a staged bundle
+#   offline), then sets focus follows mouse. Its layouts, modifiers and margins
+#   come from ~/.amethyst.yml, which confinst symlinks out of the conf repo.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -32,7 +33,10 @@
 # Requires: defaults, hidutil (i.e. macOS). Both are checked up front, so
 #           running this anywhere else says so instead of failing several
 #           steps in with "defaults: not found".
-# Wants: activateSettings, to apply the shortcut changes without a logout;
+# Wants: brew, to install Amethyst (a bundle staged at $AMETHYST_BUNDLE,
+#        ./amethyst.zip or ~/amethyst.zip is the offline path, and unzip and
+#        xattr unpack it); activateSettings, to apply the shortcut changes
+#        without a logout;
 #        launchctl, to load the key-remapping agent now rather than at the
 #        next login; pbs, to register the Quick Actions; killall and pgrep, to
 #        restart Finder and the Dock. Without any of them the settings are
@@ -41,15 +45,20 @@
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 #
-# setup forwards --no-install, --no-sudo, and --ignore-errors here. macOS
-# configuration installs no separate software (everything is
-# `defaults`/Automator config) and uses no sudo, so --no-install and --no-sudo
-# are accepted but have nothing to skip. --ignore-errors keeps going past
-# failures instead of aborting on the first one.
+# setup forwards --no-install, --no-sudo, and --ignore-errors here.
+# --no-install skips installing Amethyst and configures whatever is already
+# there. macOS configuration uses no sudo, so --no-sudo is accepted but has
+# nothing to skip. --ignore-errors keeps going past failures instead of
+# aborting on the first one.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
+
+# Whether to install Amethyst. --no-install skips it and configures whatever is
+# already there, matching setup-kde, which installs its own tiling window
+# manager (Krohnkite) under the same flag.
+INSTALL=yes
 
 # Directory containing this script, resolved up front while $0 still means what
 # the caller typed. The launcher helpers the Quick Actions run live beside this
@@ -66,6 +75,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # equivalents are picked up.
 ACTIVATE_SETTINGS="${ACTIVATE_SETTINGS:-/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings}"
 PBS="${PBS:-/System/Library/CoreServices/pbs}"
+
+# Where applications live. Overridable for the same reason as the helpers
+# above: the tests can't write to the real /Applications.
+APPLICATIONS_DIR="${APPLICATIONS_DIR:-/Applications}"
+USER_APPLICATIONS_DIR="${USER_APPLICATIONS_DIR:-$HOME/Applications}"
 
 # Count of steps that warned, so the closing message can say the run was
 # incomplete instead of claiming success over a screenful of warnings. Only
@@ -197,8 +211,8 @@ Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Accepted for consistency with setup; macOS configuration
-                   installs no separate software, so there's nothing to skip
+  --no-install     Don't install Amethyst; configure whatever is already
+                   there
   --no-sudo        Accepted for consistency with setup; macOS configuration
                    uses no sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
@@ -210,9 +224,18 @@ USAGE
 
 while test $# -gt 0; do
     case "$1" in
-        --install|--no-install|--sudo|--no-sudo)
-            # No separate install step and no sudo on macOS; accepted as a
-            # no-op so setup can forward these flags uniformly.
+        --install)
+            INSTALL=yes
+            ;;
+        --no-install)
+            INSTALL=no
+            ;;
+        --sudo|--no-sudo)
+            # macOS configuration uses no sudo; accepted as a no-op so setup
+            # can forward these flags uniformly. Installing Amethyst needs
+            # write access to an Applications directory, not sudo: a staged
+            # bundle falls back to ~/Applications when /Applications isn't
+            # writable, and Homebrew never wants sudo.
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
@@ -440,8 +463,184 @@ configure_spaces() {
 
 # --- Configure Amethyst tiling window manager ---
 
+# Where Amethyst is, or empty if it isn't installed. Both locations count:
+# Homebrew casks land in /Applications, and a staged bundle falls back to
+# ~/Applications when /Applications isn't writable.
+# Whether DIR is a usable .app rather than a directory with the right name: a
+# half-extracted or half-copied bundle has neither its Info.plist nor the
+# Contents/MacOS the executable lives in, and calling that "installed" is how a
+# failed install becomes a permanent one.
+#
+# One function because there are two callers -- what counts as installed, and
+# what is allowed to be published -- and they have already drifted apart once,
+# which let a bundle be published that the next run then treated as missing.
+#
+# Contents/MacOS as a directory, not Contents/MacOS/Amethyst: the executable's
+# name comes from CFBundleExecutable and isn't ours to assume. Guessing it
+# wrong would make a perfectly good install look unusable, and the publish path
+# deletes what it judges unusable.
+is_usable_app() {
+    test -f "$1/Contents/Info.plist" && test -d "$1/Contents/MacOS"
+}
+
+amethyst_path() {
+    for _dir in "$APPLICATIONS_DIR" "$USER_APPLICATIONS_DIR"; do
+        if is_usable_app "$_dir/Amethyst.app"; then
+            printf '%s' "$_dir/Amethyst.app"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Unpack a staged Amethyst zip, the offline path. Mirrors setup-kde's staged
+# Krohnkite bundle: same three places, same reason -- a machine with no network
+# still has to come up configured.
+#
+# `brew fetch --cask amethyst` produces exactly this file on a connected
+# machine, so staging one is a copy rather than a build.
+install_amethyst_from_bundle() {
+    _bundle=""
+    for _cand in "${AMETHYST_BUNDLE:-}" \
+            "$SCRIPT_DIR/amethyst.zip" \
+            "$HOME/amethyst.zip"; do
+        if test -n "$_cand" && test -f "$_cand"; then
+            _bundle="$_cand"
+            break
+        fi
+    done
+    if test -z "$_bundle"; then
+        warn "no Amethyst bundle staged (fetch one on a connected machine with 'brew fetch --cask amethyst' and copy it to $SCRIPT_DIR/amethyst.zip); the tiling settings below will have no effect until Amethyst is installed"
+        return 0
+    fi
+    if ! is_command unzip; then
+        warn "unzip not found; cannot unpack $_bundle"
+        return 0
+    fi
+
+    # /Applications needs admin rights this script doesn't ask for, so fall
+    # back to ~/Applications, which Amethyst runs from just as well.
+    _dest="$APPLICATIONS_DIR"
+    if ! test -w "$_dest"; then
+        _dest="$USER_APPLICATIONS_DIR"
+        info "$APPLICATIONS_DIR is not writable; installing Amethyst to $_dest"
+        try mkdir -p "$_dest"
+    fi
+
+    info "Installing Amethyst from bundle: $_bundle"
+
+    # Extracted beside the destination and moved into place only once it's
+    # whole. unzip writes as it goes, so extracting straight into $_dest would
+    # leave a partial Amethyst.app behind on a truncated archive or a full
+    # disk -- and amethyst_path would then read that as installed and skip
+    # both install paths on every later run, so a transient failure would
+    # stick permanently. Same reason write_file stages its plists.
+    #
+    # Staging inside $_dest keeps the move a rename within one filesystem
+    # rather than a second copy that can fail halfway itself.
+    _staging="$_dest/.amethyst-install.$$"
+    # Checked, unlike the cleanups below: those run after a failure that's
+    # already being reported, but this one guards what gets published. A
+    # leftover staging directory from a crashed run with this PID would be
+    # extracted over rather than replaced, and the stale files would ship.
+    if ! rm -rf "$_staging"; then
+        warn "could not clear $_staging"
+        return 0
+    fi
+    if ! mkdir -p "$_staging"; then
+        warn "could not create $_staging"
+        return 0
+    fi
+    if ! unzip -oq "$_bundle" -d "$_staging"; then
+        # The cleanup's own status is deliberately not reported here or in the
+        # paths below: the failure being cleaned up after is already going to
+        # warn, and a second warning about the tidy-up would bury it.
+        rm -rf "$_staging"
+        warn "could not unpack $_bundle"
+        return 0
+    fi
+    # The same invariant amethyst_path applies, via the same function, so the
+    # two can't disagree about what counts as an app.
+    if ! is_usable_app "$_staging/Amethyst.app"; then
+        rm -rf "$_staging"
+        warn "$_bundle did not contain a usable Amethyst.app"
+        return 0
+    fi
+
+    # Gatekeeper refuses to launch anything carrying com.apple.quarantine, and
+    # a hand-unpacked zip always does. Clearing it here means this path does
+    # NOT get the signature check `brew install --cask` performs -- it trusts
+    # the bundle because a person deliberately staged it. Prefer the brew path
+    # where there's a network.
+    #
+    # Done in staging, so what lands in $_dest is already launchable.
+    if is_command xattr; then
+        xattr -d -r com.apple.quarantine "$_staging/Amethyst.app" 2>/dev/null
+        # xattr exits non-zero both when the attribute was already absent and
+        # when it couldn't be removed, so its status can't tell those apart --
+        # the same trap as reading killall's. Ask what is actually true
+        # instead, and don't publish an app Gatekeeper will refuse.
+        if xattr -r -p com.apple.quarantine "$_staging/Amethyst.app" >/dev/null 2>&1; then
+            rm -rf "$_staging"
+            warn "could not clear the quarantine attribute on $_bundle; macOS would refuse to launch it, so it was not installed"
+            return 0
+        fi
+    else
+        warn "xattr not found; if macOS refuses to open Amethyst, clear its quarantine attribute by hand"
+    fi
+
+    # An unusable Amethyst.app can be sitting in the destination: amethyst_path
+    # treats one with no Info.plist as not installed, which is how this got
+    # here. `mv src dir` moves the source *inside* an existing directory and
+    # returns 0 -- the trap write_file already guards against -- which would
+    # bury the staged copy at Amethyst.app/Amethyst.app, leave the broken outer
+    # bundle in place, and report success.
+    if test -e "$_dest/Amethyst.app"; then
+        info "Replacing the unusable $_dest/Amethyst.app"
+        if ! rm -rf "$_dest/Amethyst.app"; then
+            rm -rf "$_staging"
+            warn "could not remove the unusable $_dest/Amethyst.app"
+            return 0
+        fi
+    fi
+
+    if ! mv "$_staging/Amethyst.app" "$_dest/Amethyst.app"; then
+        rm -rf "$_staging"
+        warn "could not move Amethyst.app into $_dest"
+        return 0
+    fi
+    rm -rf "$_staging"
+}
+
+install_amethyst() {
+    if _installed=$(amethyst_path); then
+        info "Amethyst is already installed at $_installed"
+        return 0
+    fi
+    if test "$INSTALL" = no; then
+        warn "Amethyst is not installed and --no-install was given; the tiling settings below will have no effect until it is"
+        return 0
+    fi
+
+    if is_command brew; then
+        info "Installing Amethyst"
+        if brew install --cask amethyst; then
+            return 0
+        fi
+        warn "could not install Amethyst via Homebrew; trying a staged bundle"
+    else
+        info "Homebrew not found; looking for a staged Amethyst bundle"
+    fi
+    install_amethyst_from_bundle
+}
+
 configure_amethyst() {
     info "Configuring Amethyst"
+
+    # Configuring an application that isn't there writes preferences nothing
+    # will ever read: `defaults` creates the domain regardless, so without this
+    # the run reported success over a machine with no tiling at all.
+    install_amethyst
 
     # Amethyst config lives in ~/conf/amethyst.yml and is symlinked
     # to ~/.amethyst.yml by confinst. Nothing to do here.
