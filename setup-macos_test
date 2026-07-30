@@ -24,19 +24,24 @@ setup() {
     mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
     MACOS_SCRIPT="$SCRIPT_DIR/setup-macos"
 
-    # `defaults read` fails the way the real one does for a key that was never
+    # `defaults read` answers from a file when a test has staged one, and
+    # otherwise fails the way the real one does for a key that was never
     # written. Everything else just records argv.
     cat > "$TEST_TMPDIR/bin/defaults" <<MOCK
 #!/bin/sh
 printf "%s\\n" "defaults \$*" >> "$CALLS"
 if test "\$1" = read; then
+    if test -f "$TEST_TMPDIR/defaults_read"; then
+        cat "$TEST_TMPDIR/defaults_read"
+        exit 0
+    fi
     echo "Domain/default pair does not exist" >&2
     exit 1
 fi
 exit 0
 MOCK
 
-    for cmd in hidutil killall; do
+    for cmd in hidutil launchctl killall; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
@@ -74,6 +79,12 @@ MOCK
 
 teardown() {
     rm -rf "$TEST_TMPDIR"
+}
+
+# Stage the output `defaults read` should print, i.e. pretend the key is
+# already set to this.
+stage_defaults_read() {
+    printf "%s\n" "$1" > "$TEST_TMPDIR/defaults_read"
 }
 
 # Run setup-macos in the sandbox: fresh HOME, and a PATH of just the mock bin
@@ -135,6 +146,15 @@ assert_output_contains() {
 assert_called() {
     if ! grep -qF -- "$1" "$CALLS" 2>/dev/null; then
         printf "%s\n" "  FAIL: expected call '$1' not found"
+        printf "%s\n" "  calls: $(cat "$CALLS" 2>/dev/null)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_not_called() {
+    if grep -qF -- "$1" "$CALLS" 2>/dev/null; then
+        printf "%s\n" "  FAIL: unexpected call '$1' found"
         printf "%s\n" "  calls: $(cat "$CALLS" 2>/dev/null)"
         TEST_FAILED=1
         return 1
@@ -242,6 +262,55 @@ test_enables_dvorak() {
     assert_called "defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID com.apple.keylayout.Dvorak"
 }
 
+# Regression: -array-add appends unconditionally, so the original version
+# stacked another Dvorak entry onto AppleEnabledInputSources on every run --
+# and setup is explicitly meant to be re-runnable.
+test_does_not_re_add_dvorak() {
+    stage_defaults_read '(
+        {
+        InputSourceKind = "Keyboard Layout";
+        "KeyboardLayout ID" = 16300;
+        "KeyboardLayout Name" = Dvorak;
+    }
+)'
+    run_macos
+    assert_status 0 &&
+    assert_not_called "AppleEnabledInputSources -array-add" &&
+    assert_output_contains "already an enabled input source"
+}
+
+# Enabling a layout only offers it; selecting it is a separate key. Written
+# with -array (replace) rather than -array-add, so it stays idempotent.
+# The variants all have "Dvorak" in the name, so a name match would see this
+# machine as already configured -- then select a layout that isn't in the
+# enabled list. Matched on the layout ID instead.
+test_dvorak_variant_is_not_standard_dvorak() {
+    stage_defaults_read '(
+        {
+        InputSourceKind = "Keyboard Layout";
+        "KeyboardLayout ID" = 16301;
+        "KeyboardLayout Name" = "Dvorak - Qwerty \U2318";
+    }
+)'
+    run_macos
+    assert_status 0 &&
+    assert_called "AppleEnabledInputSources -array-add"
+}
+
+test_selects_dvorak_input_source() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.HIToolbox AppleSelectedInputSources -array"
+}
+
+# The login session caches the input source, so this one genuinely does need a
+# logout -- and saying nothing left the user thinking it had applied.
+test_says_layout_needs_logout() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Log out and back in for the Dvorak layout"
+}
+
 test_disables_text_substitutions() {
     run_macos
     assert_status 0 &&
@@ -274,6 +343,38 @@ test_writes_launch_agent() {
     assert_file_exists "$agent" &&
     assert_file_contains "$agent" "<string>/usr/bin/hidutil</string>" &&
     assert_file_contains "$agent" "com.local.KeyRemapping"
+}
+
+# The live remap and the one the LaunchAgent reapplies at login have to be the
+# same mapping. They used to be two hand-maintained copies of the same JSON.
+test_launch_agent_matches_live_remap() {
+    run_macos
+    agent="$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    assert_status 0 &&
+    assert_file_contains "$agent" '{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3}' &&
+    assert_file_contains "$agent" '{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}'
+}
+
+# Loading it now is what turns a malformed plist into an error the user sees
+# while setup is running, rather than a machine that boots without a Ctrl key.
+test_loads_launch_agent() {
+    run_macos
+    assert_status 0 &&
+    assert_called "launchctl bootstrap gui/"
+}
+
+# bootstrap refuses a label that's already loaded, so a re-run has to unload
+# the previous copy first.
+test_unloads_previous_launch_agent() {
+    run_macos
+    assert_status 0 &&
+    assert_called "launchctl bootout gui/"
+}
+
+test_missing_launchctl_is_not_fatal() {
+    run_macos_without launchctl
+    assert_status 0 &&
+    assert_output_contains "launchctl not found"
 }
 
 # --- keyboard shortcuts ---
@@ -384,10 +485,24 @@ run_test "missing defaults is reported by name" test_missing_defaults_errors
 run_test "missing hidutil is reported by name" test_missing_hidutil_errors
 run_test "--help works without the macOS tools" test_help_works_without_macos_tools
 run_test "enables the Dvorak layout" test_enables_dvorak
+run_test "doesn't stack a second Dvorak entry on a re-run" \
+    test_does_not_re_add_dvorak
+run_test "a Dvorak variant is not mistaken for standard Dvorak" \
+    test_dvorak_variant_is_not_standard_dvorak
+run_test "selects Dvorak, not just enables it" test_selects_dvorak_input_source
+run_test "says the layout needs a logout" test_says_layout_needs_logout
 run_test "disables the text substitutions" test_disables_text_substitutions
 run_test "rotates Ctrl, Command and Option on both sides" \
     test_remaps_modifier_keys
 run_test "writes the key-remapping LaunchAgent" test_writes_launch_agent
+run_test "the LaunchAgent reapplies the same mapping" \
+    test_launch_agent_matches_live_remap
+run_test "loads the LaunchAgent instead of waiting for a login" \
+    test_loads_launch_agent
+run_test "unloads a previous LaunchAgent before loading" \
+    test_unloads_previous_launch_agent
+run_test "missing launchctl warns and the run continues" \
+    test_missing_launchctl_is_not_fatal
 run_test "puts Spotlight on Option+Space" test_configures_spotlight_on_option_space
 run_test "disables the conflicting Finder search hotkey" \
     test_disables_finder_search_hotkey
