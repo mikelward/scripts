@@ -15,7 +15,10 @@
 #   Physical Win/Super       → Option   → launcher, desktop switching
 #   Physical Alt (by space)  → Control  → available for per-app custom shortcuts
 #
-# Requires: defaults, hidutil
+# Requires: defaults, hidutil (i.e. macOS). Both are checked up front, so
+#           running this anywhere else says so instead of failing several
+#           steps in with "defaults: not found".
+# Wants: activateSettings, to apply the shortcut changes without a logout.
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -30,12 +33,29 @@
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
 
+# macOS helpers that live at an absolute path rather than on PATH, so PATH
+# can't shadow them. Overridable so the tests can point them at mocks, in the
+# same spirit as setup-kde's $PYTHON.
+#
+# activateSettings makes the symbolic hotkey writes take effect without a
+# logout.
+ACTIVATE_SETTINGS="${ACTIVATE_SETTINGS:-/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings}"
+
 info() {
     printf "%s\n" "$*"
 }
 
 warn() {
     printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+is_command() {
+    command -v "$1" >/dev/null 2>&1
 }
 
 usage() {
@@ -83,6 +103,16 @@ done
 if test "$IGNORE_ERRORS" = no; then
     set -e
 fi
+
+# --- Check prerequisites ---
+
+# Every step below is a `defaults` write or a hidutil remap, so without those
+# two there is nothing this script can do. Checked up front, and by name, so
+# running it on the wrong OS says so rather than failing several steps in.
+# The rest of the macOS helpers are checked where they're used: each has a
+# documented fallback (a logout, mostly).
+is_command defaults || error "defaults is required (this script configures macOS)"
+is_command hidutil || error "hidutil is required (this script configures macOS)"
 
 # --- Configure keyboard ---
 
@@ -211,7 +241,12 @@ configure_shortcuts() {
     done
 
     # Apply changes
-    /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u
+    if test -x "$ACTIVATE_SETTINGS"; then
+        "$ACTIVATE_SETTINGS" -u \
+            || warn "could not apply the shortcut settings to this session; log out and back in for the shortcut changes to take effect"
+    else
+        warn "$ACTIVATE_SETTINGS not found; log out and back in for the shortcut changes to take effect"
+    fi
 }
 
 # --- Configure Amethyst tiling window manager ---
@@ -249,7 +284,10 @@ configure_app_shortcuts() {
         workflow_dir="$services_dir/$name.workflow"
         mkdir -p "$workflow_dir/Contents"
 
-        cat > "$workflow_dir/Contents/Info.plist" <<'PLIST'
+        # An unquoted heredoc, so $name expands. This used to be a fixed
+        # placeholder patched by `sed -i ''`, whose empty-suffix argument is
+        # BSD-only -- and unnecessary, since the value is known right here.
+        cat > "$workflow_dir/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -260,7 +298,7 @@ configure_app_shortcuts() {
             <key>NSMenuItem</key>
             <dict>
                 <key>default</key>
-                <string>WORKFLOWNAME</string>
+                <string>$name</string>
             </dict>
             <key>NSMessage</key>
             <string>runWorkflowAsService</string>
@@ -269,8 +307,6 @@ configure_app_shortcuts() {
 </dict>
 </plist>
 PLIST
-        # Replace placeholder with actual name
-        sed -i '' "s/WORKFLOWNAME/$name/" "$workflow_dir/Contents/Info.plist"
 
         cat > "$workflow_dir/Contents/document.wflow" <<WFLOW
 <?xml version="1.0" encoding="UTF-8"?>
