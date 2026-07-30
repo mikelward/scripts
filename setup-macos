@@ -15,10 +15,17 @@
 #   Physical Win/Super       → Option   → launcher, desktop switching
 #   Physical Alt (by space)  → Control  → available for per-app custom shortcuts
 #
+# The modifier remap is a three-key rotation, not a swap, and hidutil applies
+# it to every attached keyboard -- including a laptop's built-in one, whose
+# keys are already in the Mac order this rotation is undoing. It assumes a PC
+# keyboard.
+#
 # Requires: defaults, hidutil (i.e. macOS). Both are checked up front, so
 #           running this anywhere else says so instead of failing several
 #           steps in with "defaults: not found".
-# Wants: activateSettings, to apply the shortcut changes without a logout.
+# Wants: activateSettings, to apply the shortcut changes without a logout;
+#        launchctl, to load the key-remapping agent now rather than at the
+#        next login.
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
@@ -40,6 +47,14 @@ IGNORE_ERRORS=no
 # activateSettings makes the symbolic hotkey writes take effect without a
 # logout.
 ACTIVATE_SETTINGS="${ACTIVATE_SETTINGS:-/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings}"
+
+# Dvorak as an input source entry, used both to enable the layout and to
+# select it. The layout ID is the part that identifies it: macOS ships several
+# variants whose names all contain "Dvorak" (Dvorak - Qwerty <Cmd>, Dvorak
+# Left, Dvorak Right), so matching the name would confuse standard Dvorak with
+# any of them.
+DVORAK_LAYOUT_ID=16300
+DVORAK_INPUT_SOURCE="<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>$DVORAK_LAYOUT_ID</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>"
 
 info() {
     printf "%s\n" "$*"
@@ -119,14 +134,40 @@ is_command hidutil || error "hidutil is required (this script configures macOS)"
 configure_keyboard() {
     info "Configuring keyboard"
 
-    # Set Dvorak as the input source
-    # This adds Dvorak; the user may still need to remove other layouts in System Settings
+    # Set Dvorak as the input source. AppleEnabledInputSources is the list of
+    # available layouts and AppleSelectedInputSources the active one, so both
+    # are needed for Dvorak to be picked rather than merely offered.
+    #
+    # -array-add appends unconditionally, so re-running setup used to stack a
+    # second, third, fourth Dvorak entry in the list. Add it only when it isn't
+    # there already. A `defaults read` of a key that was never written prints a
+    # "does not exist" diagnostic and exits non-zero; here that is the answer
+    # "no layouts enabled yet", not a failure to report.
+    #
+    # Matched on the layout ID, not the name: "Dvorak - Qwerty <Cmd>" contains
+    # "Dvorak" too, so a machine with only that variant enabled would look
+    # like it already had standard Dvorak -- and the select below would then
+    # point at a source missing from the enabled list.
+    if defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
+            | grep -qE "\"?KeyboardLayout ID\"? *= *$DVORAK_LAYOUT_ID *;"; then
+        info "Dvorak is already an enabled input source"
+    else
+        defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
+            "$DVORAK_INPUT_SOURCE"
+    fi
+    # -array, not -array-add: this is the single selected source, so replacing
+    # the value outright is both correct and idempotent.
+    defaults write com.apple.HIToolbox AppleSelectedInputSources -array \
+        "$DVORAK_INPUT_SOURCE"
     defaults write com.apple.HIToolbox AppleCurrentKeyboardLayoutInputSourceID \
         "com.apple.keylayout.Dvorak"
-    defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
-        '<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>16300</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>'
+    # The login session reads the input source at startup and holds it in
+    # memory, so unlike the hidutil remap below this one isn't live yet.
+    info "Log out and back in for the Dvorak layout to take effect"
+    info "(other layouts, if you want them gone, are removed in System Settings)"
 
-    # Disable auto-correct, auto-capitalize, smart quotes/dashes
+    # Disable auto-correct, auto-capitalize, smart quotes/dashes. Read by each
+    # app as it launches, so already-running apps keep the old behavior.
     defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
     defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
     defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
@@ -137,28 +178,29 @@ configure_keyboard() {
 
 # --- Remap modifier keys ---
 
+# The remap, as one line, so the live hidutil call and the LaunchAgent that
+# reapplies it at login can't drift apart. They used to be two hand-maintained
+# copies of the same JSON.
+#
+# Remap modifier keys to match Linux muscle memory:
+#   Physical Ctrl (E0/E4) → Command (E3/E7)
+#   Physical Win  (E3/E7) → Option  (E2/E6)
+#   Physical Alt  (E2/E6) → Control (E0/E4)
+KEY_REMAPPING='{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}]}'
+
 configure_modifier_keys() {
     info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
 
-    # Remap modifier keys to match Linux muscle memory:
-    #   Physical Ctrl (E0/E4) → Command (E3/E7)
-    #   Physical Win  (E3/E7) → Option  (E2/E6)
-    #   Physical Alt  (E2/E6) → Control (E0/E4)
-    hidutil property --set '{"UserKeyMapping":[
-        {"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},
-        {"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}
-    ]}' >/dev/null
+    # Applies to the running session immediately; hidutil mappings are lost on
+    # reboot, which is what the LaunchAgent below is for.
+    hidutil property --set "$KEY_REMAPPING" >/dev/null
 
     # Persist across reboots with a LaunchAgent
     launch_agent_dir="$HOME/Library/LaunchAgents"
     launch_agent="$launch_agent_dir/com.local.KeyRemapping.plist"
     mkdir -p "$launch_agent_dir"
 
-    cat > "$launch_agent" <<'PLIST'
+    cat > "$launch_agent" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -170,13 +212,27 @@ configure_modifier_keys() {
         <string>/usr/bin/hidutil</string>
         <string>property</string>
         <string>--set</string>
-        <string>{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}]}</string>
+        <string>$KEY_REMAPPING</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
 </dict>
 </plist>
 PLIST
+
+    # Load it now rather than leaving it for the next login: a malformed plist
+    # is worth hearing about while the script that wrote it is still running,
+    # not the next time the machine boots without a working Ctrl key.
+    if ! is_command launchctl; then
+        warn "launchctl not found; the key remapping is live now but was not verified for the next login"
+        return 0
+    fi
+    # A previous run's copy has to go first -- bootstrap refuses a label that's
+    # already loaded -- and on the first run there is nothing to unload, which
+    # is why this one failure is discarded rather than reported.
+    launchctl bootout "gui/$(id -u)/com.local.KeyRemapping" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$launch_agent" \
+        || warn "could not load $launch_agent; the remapping is live now but won't survive a reboot"
 }
 
 # --- Configure keyboard shortcuts ---
