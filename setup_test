@@ -210,12 +210,274 @@ run_missing_homepkg_warnings() {
 
     set +e
     output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
-$(extract_functions "info warn install_home_tools install_shell_tools")
+$(extract_functions "info warn install_home_tools install_shell_tools install_extras_release")
 install_home_tools
-install_shell_tools" 2>&1)"
+install_shell_tools
+install_extras_release" 2>&1)"
     status=$?
     set -e
     rm -rf "$homepkg_tmpdir"
+}
+
+# Run one of the Helix runtime helpers against a sandboxed HOME, so the tests
+# check what it did to ~/.config/helix/runtime rather than what the source says.
+#   $1  the call to make, e.g. clear_managed_helix_runtime
+#   $2  what's at the config runtime path to begin with:
+#       cargo (a symlink to the old source checkout) | release (a symlink to
+#       the release payload) | foreign (someone else's symlink) | none
+#   $3  whether the release payload exists in the prefix (default yes)
+#   $4  what ~/.local/bin/hx is: none (default) | release-file (the plain file a
+#       release install leaves, which no other path removes) | env-link
+# Leaves $helix_link_target set to what the symlink points at afterwards, or
+# empty when there's no symlink there.
+run_helix_runtime_helper() {
+    helix_call="$1"
+    helix_existing="$2"
+    helix_payload="${3:-yes}"
+    helix_hx="${4:-none}"
+    helix_tmpdir="$(mktemp -d)"
+    helix_home="$helix_tmpdir/home"
+    helix_config="$helix_home/.config"
+    helix_link="$helix_config/helix/runtime"
+    mkdir -p "$helix_config/helix" "$helix_home/src/helix/runtime" "$helix_home/.local/bin"
+    if test "$helix_payload" = yes; then
+        mkdir -p "$helix_home/.local/share/helix/runtime"
+    fi
+    case "$helix_existing" in
+        cargo)   ln -sfn "$helix_home/src/helix/runtime" "$helix_link" ;;
+        release) ln -sfn "$helix_home/.local/share/helix/runtime" "$helix_link" ;;
+        foreign) ln -sfn "$helix_tmpdir/elsewhere" "$helix_link" ;;
+        none)    ;;
+    esac
+    case "$helix_hx" in
+        release-file)
+            printf '#!/bin/sh\n' > "$helix_home/.local/bin/hx"
+            chmod +x "$helix_home/.local/bin/hx"
+            ;;
+        env-link)
+            mkdir -p "$helix_home/.local/share/homepkg/env/bin"
+            printf '#!/bin/sh\n' > "$helix_home/.local/share/homepkg/env/bin/hx"
+            chmod +x "$helix_home/.local/share/homepkg/env/bin/hx"
+            ln -sfn "$helix_home/.local/share/homepkg/env/bin/hx" "$helix_home/.local/bin/hx"
+            ;;
+        none)
+            ;;
+    esac
+
+    set +e
+    # XDG_CONFIG_HOME is set explicitly rather than unset: the helpers fall back
+    # to $HOME/.config, and a real one in the environment running the tests
+    # would otherwise send them at the developer's own config directory.
+    output="$(sh -c "set -e
+HOME='$helix_home'
+XDG_CONFIG_HOME='$helix_config'
+SRC_DIR='$helix_home/src'
+$(extract_functions "info warn link_helix_runtime clear_managed_helix_runtime")
+$helix_call
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    if test -L "$helix_link"; then
+        helix_link_target="$(readlink "$helix_link")"
+    else
+        helix_link_target=""
+    fi
+    rm -rf "$helix_tmpdir"
+}
+
+# Run install_extras_release against a mock homepkg, so the tests check the
+# command it issues and what it does with the result.
+#   $1  exit status for the mock homepkg
+#   $2  what ~/.local/bin/hx is afterwards: yes (a release plain file, i.e.
+#       helix installed) | no (nothing) | env-link (homepkg's symlink into its
+#       conda env, from an earlier --no-root run)
+# Leaves $calls set to the homepkg invocations and $helix_link_target to what
+# ~/.config/helix/runtime points at afterwards.
+run_install_extras_release() {
+    release_status="$1"
+    release_hx="$2"
+    release_tmpdir="$(mktemp -d)"
+    release_home="$release_tmpdir/home"
+    release_link="$release_home/.config/helix/runtime"
+    mkdir -p "$release_home/.local/bin" "$release_home/scripts" "$release_home/.config"
+    cat > "$release_home/scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$release_tmpdir/calls"
+exit $release_status
+MOCK
+    chmod +x "$release_home/scripts/homepkg"
+    case "$release_hx" in
+        yes)
+            mkdir -p "$release_home/.local/share/helix/runtime"
+            printf '#!/bin/sh\n' > "$release_home/.local/bin/hx"
+            chmod +x "$release_home/.local/bin/hx"
+            ;;
+        env-link)
+            # A release payload left on disk from before, with hx now homepkg's
+            # symlink into its env -- which brings its own runtime.
+            mkdir -p "$release_home/.local/share/helix/runtime" \
+                "$release_home/.local/share/homepkg/env/bin"
+            printf '#!/bin/sh\n' > "$release_home/.local/share/homepkg/env/bin/hx"
+            chmod +x "$release_home/.local/share/homepkg/env/bin/hx"
+            ln -sfn "$release_home/.local/share/homepkg/env/bin/hx" \
+                "$release_home/.local/bin/hx"
+            ;;
+        no)
+            ;;
+    esac
+
+    set +e
+    output="$(sh -c "set -e
+HOME='$release_home'
+XDG_CONFIG_HOME='$release_home/.config'
+SRC_DIR='$release_home/src'
+SCRIPTS_DIR='$release_home/scripts'
+$(extract_functions "info warn link_helix_runtime install_extras_release")
+install_extras_release
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$release_tmpdir/calls" 2>/dev/null)"
+    if test -L "$release_link"; then
+        helix_link_target="$(readlink "$release_link")"
+    else
+        helix_link_target=""
+    fi
+    rm -rf "$release_tmpdir"
+}
+
+# Run start_services' Linux arm against mocked shpool and systemctl, so the
+# tests check what it does about the service rather than what the source says.
+#   $1  what systemd already knows about shpool.service:
+#       cat (a unit file it can show) | loaded (listed, but no file to show) |
+#       none
+#   $2  how the mock systemctl behaves (default ok):
+#       ok | nobus (no user manager: every --user query fails alike) |
+#       enable-fails
+#   $3  whether a unit file is already in the sandboxed user unit directory
+#       (default no), to check an existing one is never rewritten
+# Leaves $calls set to the systemctl invocations, $services_unit_written to
+# whether a unit file is there afterwards, and $services_unit_body to its
+# contents, so a test can tell "left alone" from "rewritten".
+run_start_services() {
+    services_known="$1"
+    services_mode="${2:-ok}"
+    services_seed_unit="${3:-no}"
+    services_tmpdir="$(mktemp -d)"
+    services_home="$services_tmpdir/home"
+    services_calls="$services_tmpdir/calls"
+    services_unit="$services_home/.config/systemd/user/shpool.service"
+    mkdir -p "$services_home/.config/systemd/user"
+    if test "$services_seed_unit" = yes; then
+        printf 'the unit that was already here\n' > "$services_unit"
+    fi
+    printf '#!/bin/sh\n' > "$services_tmpdir/shpool"
+    cat > "$services_tmpdir/systemctl" <<MOCK
+#!/bin/sh
+printf '%s\n' "systemctl \$*" >> "$services_calls"
+# With no user manager every --user query fails identically -- the case that
+# must not be read as "systemd has never heard of that unit".
+test "$services_mode" = nobus && exit 1
+for arg in "\$@"; do
+    case "\$arg" in
+        show)
+            exit 0
+            ;;
+        cat)
+            # Non-zero for a unit systemd has never heard of, like the real one.
+            test "$services_known" = cat
+            exit \$?
+            ;;
+        list-units)
+            if test "$services_known" = loaded; then
+                echo "  shpool.service loaded active running shpool session manager"
+            fi
+            exit 0
+            ;;
+        enable)
+            test "$services_mode" = enable-fails && exit 1
+            exit 0
+            ;;
+    esac
+done
+exit 0
+MOCK
+    chmod +x "$services_tmpdir/shpool" "$services_tmpdir/systemctl"
+
+    set +e
+    output="$(PATH="$services_tmpdir:$PATH" \
+        sh -c "set -e
+OS=debian
+HOME='$services_home'
+XDG_CONFIG_HOME='$services_home/.config'
+$(extract_functions "info warn systemd_user_available shpool_service_exists start_services")
+start_services
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$services_calls" 2>/dev/null)"
+    services_unit_body=""
+    if test -f "$services_unit"; then
+        services_unit_written=yes
+        services_unit_body="$(cat "$services_unit")"
+    else
+        services_unit_written=no
+    fi
+    rm -rf "$services_tmpdir"
+}
+
+# Run install_home_tools against a mock homepkg, with the config runtime symlink
+# already pointing at a release payload, so the tests can check whether it's
+# cleared on the strength of which hx would actually run.
+#   $1  what ~/.local/bin/hx is: env-link (homepkg's symlink into its env) |
+#       release-file (a regular file the release path installed, which homepkg
+#       leaves alone) | absent
+# Leaves $helix_link_target set to what ~/.config/helix/runtime points at.
+run_home_tools_helix() {
+    ht_kind="$1"
+    ht_tmpdir="$(mktemp -d)"
+    ht_home="$ht_tmpdir/home"
+    ht_env_bin="$ht_home/.local/share/homepkg/env/bin"
+    ht_payload="$ht_home/.local/share/helix/runtime"
+    ht_link="$ht_home/.config/helix/runtime"
+    mkdir -p "$ht_home/.local/bin" "$ht_env_bin" "$ht_home/.config/helix" \
+        "$ht_home/scripts" "$ht_payload"
+    printf '#!/bin/sh\nexit 0\n' > "$ht_home/scripts/homepkg"
+    printf '#!/bin/sh\n' > "$ht_env_bin/hx"
+    chmod +x "$ht_home/scripts/homepkg" "$ht_env_bin/hx"
+    # The state a previous release-path run leaves behind.
+    ln -sfn "$ht_payload" "$ht_link"
+    case "$ht_kind" in
+        env-link)
+            ln -sfn "$ht_env_bin/hx" "$ht_home/.local/bin/hx"
+            ;;
+        release-file)
+            printf '#!/bin/sh\n' > "$ht_home/.local/bin/hx"
+            chmod +x "$ht_home/.local/bin/hx"
+            ;;
+        absent)
+            ;;
+    esac
+
+    set +e
+    output="$(sh -c "set -e
+HOME='$ht_home'
+XDG_CONFIG_HOME='$ht_home/.config'
+SRC_DIR='$ht_home/src'
+SCRIPTS_DIR='$ht_home/scripts'
+MINIMAL_ENABLED=0
+NPM=yes
+$(extract_functions "info warn install_home_tools clear_managed_helix_runtime")
+install_home_tools
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    if test -L "$ht_link"; then
+        helix_link_target="$(readlink "$ht_link")"
+    else
+        helix_link_target=""
+    fi
+    rm -rf "$ht_tmpdir"
 }
 
 assert_output_lacks() {
@@ -371,14 +633,18 @@ test_fnm_installed() {
     assert_source_not_contains "fnm use lts-latest"
 }
 
-# --- Rust / cargo ---
+# --- No source builds ---
 
-# rustup edits the shell rc/profile files by default to put ~/.cargo/bin on
-# PATH. --no-modify-path keeps it out of them, since PATH is managed by the
-# conf repo, not setup. -y still runs the install unattended.
-test_rust_installs_without_modifying_path() {
-    assert_source_contains "sh -s -- -y --no-modify-path" &&
-    assert_source_not_contains "sh.rustup.rs | sh -s -- -y$"
+# The extras arrive prebuilt now -- Homebrew bottles or release artifacts -- so
+# setup builds nothing from source and installs no Rust toolchain of its own.
+# (The yazi hints still name a cargo command for the user to run by hand; those
+# are messages, not installs.)
+test_no_source_builds() {
+    assert_source_not_contains "sh.rustup.rs" &&
+    assert_source_not_contains "rustup update" &&
+    assert_source_not_contains "cargo install --locked jj-cli" &&
+    assert_source_not_contains "cargo install --locked shpool" &&
+    assert_source_not_contains "cargo install --path"
 }
 
 # --- uv ---
@@ -398,17 +664,27 @@ test_uv_installs_without_modifying_path() {
     assert_source_contains "could not install uv"
 }
 
-# --- Homebrew extras backend ---
+# --- Extras backends ---
 
-# The heavyweight extras (helix, jj, shpool, nushell) can install from Homebrew
-# bottles instead of building from source. --brew / --cargo pick the backend,
-# resolved via EXTRAS_BACKEND, and install_extras dispatches to it.
+# The heavyweight extras (helix, jj, nushell) install from Homebrew bottles or
+# from release artifacts. --brew / --release pick the backend, resolved via
+# EXTRAS_BACKEND, and install_extras dispatches to it.
 test_extras_backend_flags() {
     assert_source_contains '[-]-brew)' &&
-    assert_source_contains '[-]-cargo)' &&
+    assert_source_contains '[-]-release)' &&
     assert_source_contains "EXTRAS_BACKEND" &&
     assert_source_contains "resolve_extras" &&
     assert_source_contains "install_extras"
+}
+
+# --cargo used to select the source builds, which no longer exist. It still
+# parses -- an existing invocation shouldn't die on an unknown option -- and
+# says what it did instead of silently meaning something else.
+test_cargo_flag_is_accepted_and_reported() {
+    run_setup --cargo --help
+    assert_status 0 &&
+    assert_output_contains "--cargo is gone" &&
+    assert_output_contains "release artifacts"
 }
 
 # The brew path installs helix/jj/nushell from homebrew-core, each on its own
@@ -418,20 +694,131 @@ test_extras_brew_formulae() {
     assert_source_contains 'brew install "$formula"'
 }
 
-# The shell-pool/shpool tap has no bottle (source-only), which would defeat
-# the brew path, so shpool is omitted from the brew extras with a TODO to add
-# it back. It still installs on the cargo path via install_shpool.
-test_shpool_omitted_from_brew_with_todo() {
+# shpool has no prebuilt artifact anywhere -- no release binaries, no bottle,
+# no conda-forge package -- and building from source is the one thing setup no
+# longer does, so nothing installs it, with a TODO to pick it up again once
+# there's an artifact. What stays is the setup for a shpool that got here some
+# other way: the systemd user service, gated on finding the binary.
+test_shpool_not_installed_with_todo() {
     assert_source_not_contains "shell-pool/shpool/shpool" &&
-    assert_source_contains "re-add shpool" &&
-    assert_source_contains "install_shpool"
+    assert_source_not_contains "install_shpool" &&
+    assert_source_contains "TODO: install shpool again" &&
+    assert_source_contains 'command -v shpool' &&
+    assert_source_contains 'shpool_bin=$(command -v shpool)' &&
+    assert_source_contains "Enabling and starting shpool service"
 }
 
-# When Homebrew can't be made available, the brew path falls back to building
-# the extras from source with cargo/rustup.
-test_extras_brew_falls_back_to_cargo() {
-    assert_source_contains "install_extras_cargo" &&
-    assert_source_contains "Homebrew unavailable; building the extras from source"
+# --- The shpool systemd user service ---
+
+# A unit file systemd can show belongs to whatever installed it -- typically a
+# distro package under /usr/lib/systemd/user. Writing one into
+# ~/.config/systemd/user would override it, since user config outranks /usr/lib,
+# so setup writes nothing and enables nothing.
+test_shpool_service_skipped_when_a_unit_file_exists() {
+    run_start_services cat
+    assert_status 0 &&
+    assert_eq "$services_unit_written" no &&
+    assert_output_contains "already set up; leaving it alone" &&
+    assert_output_lacks "Creating shpool systemd user service"
+}
+
+# `systemctl --user cat` only sees file-backed units, so a service that's merely
+# loaded -- what `list-units` reports on a box where something already set it up
+# -- has to count as existing too.
+test_shpool_service_skipped_when_the_unit_is_loaded() {
+    run_start_services loaded
+    assert_status 0 &&
+    assert_eq "$services_unit_written" no &&
+    assert_output_contains "already set up; leaving it alone"
+}
+
+# With no shpool.service anywhere, setup still provides one for an shpool that
+# got onto PATH some other way -- pointed at that shpool, not at a hard-coded
+# ~/.cargo/bin path.
+test_shpool_service_written_when_absent() {
+    run_start_services none
+    assert_status 0 &&
+    assert_eq "$services_unit_written" yes &&
+    assert_output_contains "Creating shpool systemd user service" &&
+    assert_calls_contain "systemctl --user daemon-reload" &&
+    assert_calls_contain "systemctl --user enable --now shpool.service"
+}
+
+# A box with no systemd user manager (a bare ssh session, a container) fails
+# every --user query, which is indistinguishable from "no such unit". Guessing
+# "no unit" there and writing one would leave an override shadowing whatever a
+# packaged unit turns out to be, and nothing could be enabled anyway -- so skip,
+# and say why.
+test_shpool_service_skipped_without_a_user_manager() {
+    run_start_services none nobus
+    assert_status 0 &&
+    assert_eq "$services_unit_written" no &&
+    assert_output_contains "no systemd user manager to query" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Same when a unit file is already sitting there: with no manager to ask, an
+# existing unit is left exactly as it was rather than rewritten.
+test_shpool_unit_file_untouched_without_a_user_manager() {
+    run_start_services none nobus yes
+    assert_status 0 &&
+    assert_eq "$services_unit_body" "the unit that was already here" &&
+    assert_output_contains "no systemd user manager to query"
+}
+
+# A manager that answers and then fails the enable anyway must not take the
+# bootstrap down, and the failure has to be reported rather than swallowed.
+test_shpool_service_failure_is_reported_not_fatal() {
+    run_start_services none enable-fails
+    assert_status 0 &&
+    assert_eq "$services_unit_written" yes &&
+    assert_output_contains "could not enable it" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# The release path fetches each project's own release artifacts through
+# homepkg's github backend -- one rootless mechanism, already used for
+# atuin/carapace -- rather than building anything.
+test_extras_release_uses_homepkg_github() {
+    run_install_extras_release 0 yes
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$calls" "homepkg --backend github install helix jj nu"
+}
+
+# A homepkg failure (a changed release layout, an offline box) warns and the
+# bootstrap carries on: the extras are extras.
+test_extras_release_failure_is_not_fatal() {
+    run_install_extras_release 1 no
+    assert_status 0 &&
+    assert_output_contains "could not be installed from their releases" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# homepkg exits non-zero when any one tool failed, so a run that installed hx
+# but lost jj still has to wire hx's runtime up -- hence the gate on the binary
+# rather than on the exit status.
+test_extras_release_links_runtime_after_partial_failure() {
+    run_install_extras_release 1 yes
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$release_home/.local/share/helix/runtime"
+}
+
+# ...but "some hx exists" isn't the same as "the release installed one". After a
+# --no-root run, hx is homepkg's symlink into its conda env and carries its own
+# runtime; a failed release install must not point that hx at a release payload
+# left over from an earlier run.
+test_extras_release_leaves_an_env_hx_runtime_alone() {
+    run_install_extras_release 1 env-link
+    assert_status 0 &&
+    assert_eq "$helix_link_target" ""
+}
+
+# When Homebrew can't be made available, the brew path falls back to the
+# release artifacts.
+test_extras_brew_falls_back_to_release() {
+    assert_source_contains "install_extras_release" &&
+    assert_source_contains "Homebrew unavailable; installing the extras from their release artifacts"
 }
 
 # install_homebrew handles the Linuxbrew prefixes too, not just the macOS
@@ -441,17 +828,88 @@ test_homebrew_handles_linux_prefix() {
     assert_source_contains '$HOME/.linuxbrew/bin/brew'
 }
 
-# Switching cargo -> brew leaves ~/.config/helix/runtime pointing at the
-# source checkout, which hx searches before the bottle's runtime. The brew
-# path removes that stale symlink (only the one install_helix created).
-test_brew_clears_stale_helix_runtime() {
-    assert_source_contains 'helix_runtime=' &&
-    assert_source_contains 'readlink "$helix_runtime"' &&
-    assert_source_contains "Removing stale Helix runtime symlink" &&
-    # Removal is gated on brew actually installing helix, so a failed helix
-    # install doesn't strip a prior cargo hx's runtime.
-    assert_source_contains 'helix_installed=yes' &&
-    assert_source_contains 'test "$helix_installed" = yes'
+# --- The Helix runtime ---
+
+# hx searches <config dir>/runtime before anything that ships with the binary,
+# so a symlink one install path left there shadows the next path's runtime.
+# Switching to brew (or to conda-forge under --no-root) has to clear the ones
+# setup itself made: the old cargo source checkout, and a release payload.
+test_clear_helix_runtime_drops_a_cargo_symlink() {
+    run_helix_runtime_helper clear_managed_helix_runtime cargo
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "" &&
+    assert_output_contains "Removing the Helix runtime symlink"
+}
+
+test_clear_helix_runtime_drops_a_release_symlink() {
+    run_helix_runtime_helper clear_managed_helix_runtime release
+    assert_status 0 &&
+    assert_eq "$helix_link_target" ""
+}
+
+# ...unless the release hx is still installed. No other install path removes that
+# plain file from ~/.local/bin, which is on PATH, so it may well still be the hx
+# that runs -- and the config directory runtime shadows every hx on the box, so
+# only one of the two can be right. Leaving it with version skew beats leaving it
+# with no grammars at all; which binary should win is the user's call.
+test_clear_helix_runtime_keeps_a_release_symlink_a_release_hx_needs() {
+    run_helix_runtime_helper clear_managed_helix_runtime release yes release-file
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$helix_home/.local/share/helix/runtime" &&
+    assert_output_contains "keeping the Helix runtime" &&
+    assert_output_lacks "$helix_home"
+}
+
+# homepkg's own hx is a symlink into its environment and carries its own runtime,
+# so it isn't a reason to keep the release payload's.
+test_clear_helix_runtime_drops_a_release_symlink_for_an_env_hx() {
+    run_helix_runtime_helper clear_managed_helix_runtime release yes env-link
+    assert_status 0 &&
+    assert_eq "$helix_link_target" ""
+}
+
+# Anything setup didn't put there is the user's: a symlink to a runtime they
+# manage themselves stays, and hx keeps using it.
+test_clear_helix_runtime_leaves_a_foreign_symlink() {
+    run_helix_runtime_helper clear_managed_helix_runtime foreign
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$helix_tmpdir/elsewhere"
+}
+
+# Nothing to clear is the common case (a fresh box), and it must not fail --
+# clear_managed_helix_runtime runs unguarded under set -e.
+test_clear_helix_runtime_with_nothing_there() {
+    run_helix_runtime_helper clear_managed_helix_runtime none
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# The release asset carries hx and its runtime as one artifact; the runtime
+# lands in the prefix and the config directory is pointed at it, which is what
+# makes grammars and queries resolve for a release build.
+test_link_helix_runtime_points_at_the_prefix() {
+    run_helix_runtime_helper 'link_helix_runtime "$HOME/.local"' none
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$helix_home/.local/share/helix/runtime"
+}
+
+# Repointing, not just removing: a box moving from the cargo path to the
+# release path has a symlink to the source checkout already.
+test_link_helix_runtime_replaces_a_cargo_symlink() {
+    run_helix_runtime_helper 'link_helix_runtime "$HOME/.local"' cargo
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$helix_home/.local/share/helix/runtime"
+}
+
+# An hx with no runtime starts, but with no highlighting and no language
+# support -- so say so rather than leave it looking installed. Sanitized, like
+# every other warning: no home paths.
+test_link_helix_runtime_reports_a_missing_runtime() {
+    run_helix_runtime_helper 'link_helix_runtime "$HOME/.local"' none no
+    assert_status 0 &&
+    assert_output_contains "its runtime directory is missing" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_lacks "$helix_home"
 }
 
 # The brew path skips the Rust toolchain, so the root-config install falls
@@ -591,6 +1049,7 @@ test_missing_homepkg_warnings_name_no_absolute_path() {
     assert_status 0 &&
     assert_output_contains "homepkg not found in the scripts repo; skipping home-prefix tool install" &&
     assert_output_contains "homepkg not found in the scripts repo; skipping atuin and carapace" &&
+    assert_output_contains "homepkg not found in the scripts repo; skipping helix, jj, and nushell" &&
     assert_output_lacks "$missing_scripts_dir" &&
     assert_output_lacks "/home/testuser"
 }
@@ -1023,24 +1482,40 @@ test_home_tools_install_degrades() {
     assert_source_contains "some CLI tools could not be installed via homepkg"
 }
 
-# shpool is source-only, so (like the brew path) the homepkg path can't provide
-# it. The full --no-root run must say so explicitly rather than silently
-# dropping it, since the normal full cargo path installs shpool.
+# shpool has no prebuilt artifact, so the homepkg path can't provide it either.
+# The full --no-root run must say so explicitly rather than silently dropping a
+# tool the shell config expects to prefer.
 test_home_tools_warns_about_shpool() {
-    assert_source_contains "shpool is not available on the homepkg path"
+    assert_source_contains "shpool is not installed by setup"
 }
 
-# Switching a prior cargo hx to the homepkg hx leaves ~/.config/helix/runtime
-# pointing at the source checkout, which hx searches first. The homepkg path
-# removes that stale symlink (only the one install_helix created), same as the
-# brew path -- and only after a successful install so a failed run doesn't strip
-# a still-active cargo hx's runtime.
+# The homepkg hx keeps its runtime inside the conda env, so a symlink another
+# install path left in the config directory -- which hx searches first -- has to
+# go, same as on the brew path. Only after a successful install, so a failed run
+# doesn't strip the runtime of an hx that's still in use.
 test_home_tools_clears_stale_helix_runtime() {
-    # Gated on hx being installed (linked into ~/.local/bin), not on the minimal
-    # profile -- a full bundle can install helix even under --minimal.
-    assert_source_contains 'test -x "$HOME/.local/bin/hx"' &&
-    assert_source_contains 'readlink "$helix_runtime"' &&
-    assert_source_contains "Removing stale Helix runtime symlink"
+    run_home_tools_helix env-link
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "" &&
+    assert_output_contains "Removing the Helix runtime symlink"
+}
+
+# ...but homepkg leaves a conflicting regular file in ~/.local/bin alone, so on a
+# box that installed the release hx first, that release binary is still what
+# runs. Clearing the runtime symlink then takes its grammars away, so the gate is
+# "the env's hx is the one that runs", not "some hx exists".
+test_home_tools_keeps_the_runtime_of_a_release_hx() {
+    run_home_tools_helix release-file
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$ht_payload"
+}
+
+# Nothing installed helix at all: leave the runtime symlink for whatever hx it
+# belongs to.
+test_home_tools_keeps_the_runtime_when_no_hx_landed() {
+    run_home_tools_helix absent
+    assert_status 0 &&
+    assert_eq "$helix_link_target" "$ht_payload"
 }
 
 # On a fresh env, install_home_tools prefers a prebuilt bundle (which installs
@@ -1261,8 +1736,12 @@ run_test "home-prefix tool install degrades on failure" \
     test_home_tools_install_degrades
 run_test "home-prefix full install warns that shpool is unavailable" \
     test_home_tools_warns_about_shpool
-run_test "home-prefix path clears the stale cargo Helix runtime symlink" \
+run_test "home-prefix path clears the Helix runtime symlink for the env hx" \
     test_home_tools_clears_stale_helix_runtime
+run_test "home-prefix path keeps the runtime of a release hx it left alone" \
+    test_home_tools_keeps_the_runtime_of_a_release_hx
+run_test "home-prefix path keeps the runtime when no hx landed" \
+    test_home_tools_keeps_the_runtime_when_no_hx_landed
 
 run_test "--kde is accepted as a no-op" test_kde_flag_is_a_noop
 run_test "tsc installs from the distro alongside node" \
@@ -1277,8 +1756,8 @@ run_test "successful sudo preserves its stderr" \
     test_sudo_success_preserves_stderr
 run_test "sudo-dependent blocks guard every privileged call" \
     test_sudo_calls_are_guarded
-run_test "rustup installs with --no-modify-path" \
-    test_rust_installs_without_modifying_path
+run_test "setup builds nothing from source" \
+    test_no_source_builds
 run_test "uv installs with --no-modify-path" \
     test_uv_installs_without_modifying_path
 run_test "fnm installs as a tool, not the node provisioner" \
@@ -1292,18 +1771,56 @@ run_test "--ssh overrides the existing-key skip" \
     test_ssh_flag_overrides_existing_key_check
 run_test "setup offers to switch repo remotes to SSH" \
     test_offers_ssh_remote_switch
-run_test "--brew/--cargo select the extras backend" \
+run_test "--brew/--release select the extras backend" \
     test_extras_backend_flags
+run_test "--cargo is accepted and reports what it does instead" \
+    test_cargo_flag_is_accepted_and_reported
 run_test "brew extras install helix/jj/nushell per formula" \
     test_extras_brew_formulae
-run_test "shpool is omitted from the brew path with a TODO" \
-    test_shpool_omitted_from_brew_with_todo
-run_test "brew extras fall back to cargo when Homebrew is unavailable" \
-    test_extras_brew_falls_back_to_cargo
+run_test "shpool is not installed, with a TODO and its service kept" \
+    test_shpool_not_installed_with_todo
+run_test "an existing shpool unit file is left alone" \
+    test_shpool_service_skipped_when_a_unit_file_exists
+run_test "an shpool unit that is only loaded is left alone" \
+    test_shpool_service_skipped_when_the_unit_is_loaded
+run_test "the shpool service is written when there is none" \
+    test_shpool_service_written_when_absent
+run_test "the shpool service is skipped with no user manager to query" \
+    test_shpool_service_skipped_without_a_user_manager
+run_test "an existing shpool unit file is untouched without a user manager" \
+    test_shpool_unit_file_untouched_without_a_user_manager
+run_test "an shpool service failure is reported, not fatal" \
+    test_shpool_service_failure_is_reported_not_fatal
+run_test "the release extras path installs via homepkg's github backend" \
+    test_extras_release_uses_homepkg_github
+run_test "a release extras failure warns instead of aborting" \
+    test_extras_release_failure_is_not_fatal
+run_test "a partial release run still links the Helix runtime" \
+    test_extras_release_links_runtime_after_partial_failure
+run_test "a failed release run leaves an env hx's runtime alone" \
+    test_extras_release_leaves_an_env_hx_runtime_alone
+run_test "brew extras fall back to the release artifacts" \
+    test_extras_brew_falls_back_to_release
 run_test "install_homebrew handles the Linuxbrew prefixes" \
     test_homebrew_handles_linux_prefix
-run_test "brew path clears the stale cargo Helix runtime symlink" \
-    test_brew_clears_stale_helix_runtime
+run_test "a cargo-checkout Helix runtime symlink is cleared" \
+    test_clear_helix_runtime_drops_a_cargo_symlink
+run_test "a release-payload Helix runtime symlink is cleared" \
+    test_clear_helix_runtime_drops_a_release_symlink
+run_test "a release-payload runtime a release hx still needs is kept" \
+    test_clear_helix_runtime_keeps_a_release_symlink_a_release_hx_needs
+run_test "a release-payload runtime is cleared for homepkg's env hx" \
+    test_clear_helix_runtime_drops_a_release_symlink_for_an_env_hx
+run_test "someone else's Helix runtime symlink is left alone" \
+    test_clear_helix_runtime_leaves_a_foreign_symlink
+run_test "clearing the Helix runtime with nothing there is not an error" \
+    test_clear_helix_runtime_with_nothing_there
+run_test "the Helix runtime is linked to the release payload" \
+    test_link_helix_runtime_points_at_the_prefix
+run_test "linking the Helix runtime replaces a cargo symlink" \
+    test_link_helix_runtime_replaces_a_cargo_symlink
+run_test "a missing Helix runtime is reported, sanitized" \
+    test_link_helix_runtime_reports_a_missing_runtime
 run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \

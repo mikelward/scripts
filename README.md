@@ -39,6 +39,14 @@ repo's shell config wires up — are in no distro repo and have no conda-forge
 package, so every `setup` run installs them from their GitHub releases with
 `homepkg --backend github`, regardless of profile or privilege.
 
+The heavyweight extras (`helix jj nu`) come the same way on a privileged box
+without Homebrew: `setup` fetches the release artifacts rather than building
+them from source, so no Rust toolchain is installed. `--brew` (the default
+where `brew` is available, and on macOS) uses bottles instead; `--release`
+forces the release artifacts. `shpool` publishes no prebuilt artifact and is
+no longer installed by `setup` — sessions still prefer it when it's on `PATH`
+from somewhere else, and otherwise fall back to `tmux`.
+
 On a host with no internet, stage a bundle instead. The one-shot bundle below
 covers them along with everything else, which is all a `--no-root` machine
 needs. On a privileged machine the distro packages come from apt/dnf and that

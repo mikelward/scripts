@@ -18,15 +18,15 @@
 # installed only when a display server is detected. Pass --gui to force
 # them on, or --no-gui to skip them (e.g. on a headless server).
 #
-# The heavyweight extras install from Homebrew bottles when brew is available
-# (or on macOS), and otherwise build from source via a Rust toolchain (rustup
-# + cargo). The brew path covers helix/jj/nushell; shpool has no tap bottle
-# yet, so it stays on the --cargo path for now. Pass --brew to force Homebrew
-# (installing it if needed) -- bottles skip the slow builds and the disk a
-# Rust toolchain needs -- or --cargo to force the from-source path. The extras
-# are skipped when the disk is small (see MIN_DISK_GB). Pass --minimal to
-# force that lean profile, or --full to install everything. To pass flags
-# through a pipe:
+# The heavyweight extras (helix, jj, nushell) install from Homebrew bottles
+# when brew is available (or on macOS), and otherwise from each project's
+# GitHub release artifacts, fetched into ~/.local by homepkg. Nothing is built
+# from source, so no Rust toolchain is installed either way. Pass --brew to
+# force Homebrew (installing it if needed) or --release to force the release
+# artifacts. shpool is no longer installed at all -- see the shpool note by
+# install_extras. The extras are skipped when the disk is small (see
+# MIN_DISK_GB). Pass --minimal to force that lean profile, or --full to
+# install everything. To pass flags through a pipe:
 #     curl -fsSL https://mikelward.com/setup | sh -s -- --no-gui --minimal
 #
 # Pass --no-install to skip all software installation (packages, fonts,
@@ -167,13 +167,13 @@ SUDO="${SUDO:-yes}"
 # Override with --root / --no-root, or by exporting ROOT before running.
 ROOT="${ROOT:-yes}"
 
-# Which backend installs the heavyweight extras (helix, jj, shpool, nushell).
-# One of:
-#   auto  - Homebrew when brew is available or on macOS; else cargo (default)
-#   brew  - install them from Homebrew bottles (fast, prebuilt, no Rust
-#           toolchain or large build dirs), installing Homebrew if needed
-#   cargo - build them from source via rustup + cargo
-# Override with --brew / --cargo.
+# Which backend installs the heavyweight extras (helix, jj, nushell). One of:
+#   auto    - Homebrew when brew is available or on macOS; else the release
+#             artifacts (default)
+#   brew    - install them from Homebrew bottles, installing Homebrew if needed
+#   release - install the prebuilt binaries from each project's GitHub releases
+#             into ~/.local via homepkg (no root, no build)
+# Override with --brew / --release.
 EXTRAS=auto
 
 usage() {
@@ -189,14 +189,13 @@ Options:
   --no-gui         Skip all graphical packages and desktop configuration
   --kde            Accepted for compatibility; KDE Plasma + Krohnkite is the
                    only desktop setup installs/configures (Linux)
-  --minimal        Skip heavyweight extras (Rust toolchain, helix, jj, shpool,
-                   nushell), installing only core packages, tools, and dotfiles
+  --minimal        Skip heavyweight extras (helix, jj, nushell), installing
+                   only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
   --brew           Install the heavyweight extras (helix, jj, nushell) from
-                   Homebrew bottles instead of building them from source (fast,
-                   no Rust toolchain or large build dirs); installs Homebrew if
-                   needed. shpool has no bottle yet, so use --cargo for it
-  --cargo          Build the heavyweight extras from source via rustup + cargo
+                   Homebrew bottles, installing Homebrew if needed
+  --release        Install the heavyweight extras from their GitHub release
+                   artifacts into ~/.local via homepkg
   --no-install     Skip every install step (packages, fonts, uv, extras, root
                    config) and only (re)apply config. Forwarded to setup-kde/macos
   --no-sudo        Run no sudo at all: every privileged command (package
@@ -228,10 +227,10 @@ Options:
   -h, --help       Show this help and exit
 
 By default graphical components are installed only when a display server
-(X11 or Wayland) is detected, and the heavyweight source-built extras are
-skipped when free disk space is below MIN_DISK_GB (default 15GB), so this
-runs sensibly on headless and small-disk machines. An SSH key is generated
-only when one isn't already loaded in the agent or present on disk.
+(X11 or Wayland) is detected, and the heavyweight extras are skipped when
+free disk space is below MIN_DISK_GB (default 15GB), so this runs sensibly
+on headless and small-disk machines. An SSH key is generated only when one
+isn't already loaded in the agent or present on disk.
 USAGE
 }
 
@@ -408,8 +407,15 @@ while test $# -gt 0; do
         --brew)
             EXTRAS=brew
             ;;
+        --release)
+            EXTRAS=release
+            ;;
         --cargo)
-            EXTRAS=cargo
+            # Kept so an existing invocation still runs: there is no
+            # from-source path left to select, and the release artifacts are
+            # what --cargo was a slower way of getting.
+            warn "--cargo is gone; installing the extras from their release artifacts instead"
+            EXTRAS=release
             ;;
         --install)
             INSTALL=yes
@@ -680,18 +686,19 @@ resolve_minimal() {
     esac
 }
 
-# Resolve $EXTRAS (auto/brew/cargo) into EXTRAS_BACKEND. Auto picks brew when
-# it's available or on macOS, else cargo -- preserving the previous default on
-# Linux without Homebrew. Must run after detect_os.
+# Resolve $EXTRAS (auto/brew/release) into EXTRAS_BACKEND. Auto picks brew when
+# it's available or on macOS, else the release artifacts -- which is also where
+# Linux boxes without Homebrew used to get a Rust toolchain and a source build.
+# Must run after detect_os.
 resolve_extras() {
     case "$EXTRAS" in
         brew)
             EXTRAS_BACKEND=brew
             info "Extras backend: Homebrew (--brew)"
             ;;
-        cargo)
-            EXTRAS_BACKEND=cargo
-            info "Extras backend: cargo/source (--cargo)"
+        release)
+            EXTRAS_BACKEND=release
+            info "Extras backend: GitHub release artifacts (--release)"
             ;;
         *)
             if command -v brew >/dev/null 2>&1; then
@@ -701,8 +708,8 @@ resolve_extras() {
                 EXTRAS_BACKEND=brew
                 info "Extras backend: Homebrew (macOS)"
             else
-                EXTRAS_BACKEND=cargo
-                info "Extras backend: cargo/source (no Homebrew; use --brew to override)"
+                EXTRAS_BACKEND=release
+                info "Extras backend: GitHub release artifacts (no Homebrew; use --brew to override)"
             fi
             ;;
     esac
@@ -731,7 +738,7 @@ install_homebrew() {
         fi
     done
     # Return status reflects whether brew is now usable, so callers can fall
-    # back (e.g. to the cargo source builds) rather than assume success.
+    # back (e.g. to the release artifacts) rather than assume success.
     command -v brew >/dev/null 2>&1
 }
 
@@ -1010,21 +1017,61 @@ install_fonts() {
 
 # --- Start services ---
 
+# Whether there's a systemd user manager to talk to at all. Without one every
+# --user query fails identically ("Failed to connect to bus"), so asking about a
+# unit can't tell "no such unit" from "couldn't ask" -- and nothing could be
+# enabled anyway. Checked with a query that doesn't name a unit, so the only
+# thing its failure can mean is that there's no manager.
+systemd_user_available() {
+    systemctl --user show --property=Version >/dev/null 2>&1
+}
+
+# True when an shpool.service already exists in any form: a distro package's
+# unit, one a previous setup run wrote, or one that's merely loaded (a generated
+# or transient unit with no file behind it). Whatever set it up owns it -- and a
+# unit setup writes into the user config directory silently overrides a packaged
+# one, since user config outranks /usr/lib -- so leave it alone.
+#
+# Both probes need a user manager, and callers check for one first. Asking
+# systemd beats reimplementing its unit load path: that path varies by version,
+# includes places easy to forget ($XDG_DATA_HOME/systemd/user, the generator
+# directories), and a local copy of it would quietly rot.
+#
+# They're questions rather than operations: for a unit systemd has never heard
+# of, systemctl exits non-zero and says "No files found", which is the negative
+# answer and not a failure to report.
+shpool_service_exists() {
+    if systemctl --user cat shpool.service >/dev/null 2>&1; then
+        return 0
+    fi
+    # cat only sees file-backed units, so ask about loaded ones separately.
+    test -n "$(systemctl --user list-units --all --plain --no-legend \
+        shpool.service 2>/dev/null)"
+}
+
 start_services() {
     case "$OS" in
         debian|redhat)
-            # Enable shpool as a systemd user service. Use the resolved
-            # shpool path in ExecStart rather than hard-coding
-            # %h/.cargo/bin/shpool: under --minimal we skip the cargo
-            # install, and shpool may instead come from a distro/Nix
-            # package elsewhere on PATH. Pointing the unit at a
-            # nonexistent ~/.cargo/bin/shpool would make `enable --now`
-            # fail and abort the whole bootstrap under set -e.
+            # setup doesn't install shpool at all (see the note by
+            # install_extras), so all this does is give a systemd user service
+            # to an shpool that arrived some other way -- a distro/Nix package,
+            # or a hand-run cargo install -- and only when nothing has set one
+            # up already. Use the resolved shpool path in ExecStart rather than
+            # hard-coding %h/.cargo/bin/shpool: pointing the unit at a
+            # nonexistent binary would just make `enable --now` fail.
             if command -v shpool >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1; then
-                shpool_bin=$(command -v shpool)
-                shpool_service_dir="$HOME/.config/systemd/user"
-                shpool_service="$shpool_service_dir/shpool.service"
-                if ! test -f "$shpool_service"; then
+                if ! systemd_user_available; then
+                    # Asked first, because the probes below can't answer without
+                    # a manager. Nothing could be enabled here anyway, and
+                    # writing a unit blind would leave an override shadowing
+                    # whatever a packaged unit turns out to be once there is one.
+                    warn "no systemd user manager to query; leaving shpool.service alone rather than write an override blind"
+                elif shpool_service_exists; then
+                    info "shpool.service is already set up; leaving it alone"
+                else
+                    shpool_bin=$(command -v shpool)
+                    shpool_service_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+                    shpool_service="$shpool_service_dir/shpool.service"
                     info "Creating shpool systemd user service"
                     mkdir -p "$shpool_service_dir"
                     cat > "$shpool_service" <<SERVICE
@@ -1039,10 +1086,19 @@ Restart=on-failure
 [Install]
 WantedBy=default.target
 SERVICE
-                    systemctl --user daemon-reload
+                    # Both steps are best-effort even though a manager answered
+                    # a moment ago: an optional session daemon must not take the
+                    # bootstrap down with it. The unit file stays either way --
+                    # it's valid, and nothing shadows it, since we only get here
+                    # when no other shpool.service exists.
+                    if systemctl --user daemon-reload; then
+                        info "Enabling and starting shpool service"
+                        systemctl --user enable --now shpool.service \
+                            || warn "wrote the shpool service but could not enable it; sessions fall back to tmux"
+                    else
+                        warn "wrote the shpool service but could not reload the systemd user manager, so it is not enabled"
+                    fi
                 fi
-                info "Enabling and starting shpool service"
-                systemctl --user enable --now shpool.service
             fi
             ;;
         macos)
@@ -1052,88 +1108,63 @@ SERVICE
     esac
 }
 
-# --- Install or update Rust, cargo, and rustup, using rustup ---
+# --- The Helix runtime ---
 
-install_rust() {
-    # Ensure cargo/rustup are on PATH even if profile hasn't been sourced
-    if test -f "$HOME/.cargo/env"; then
-        # shellcheck source=/dev/null
-        . "$HOME/.cargo/env"
-    fi
+# hx loads grammars, queries, and themes from a runtime directory, and searches
+# <config dir>/runtime ahead of both $HELIX_RUNTIME and anything beside the
+# binary. Each install path below brings its own runtime, so a symlink one of
+# them left in the config directory shadows the next one's -- these two keep
+# that straight.
 
-    if command -v rustup >/dev/null 2>&1; then
-        info "Updating Rust toolchain"
-        rustup update
-    else
-        info "Installing Rust via rustup"
-        # -y runs unattended; --no-modify-path keeps rustup out of the shell
-        # rc/profile files, since PATH is managed by the conf repo. We source
-        # ~/.cargo/env below so cargo is on PATH for the rest of this run.
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-        # shellcheck source=/dev/null
-        . "$HOME/.cargo/env"
-    fi
-}
-
-# --- Install jj (Jujutsu) ---
-
-install_jj() {
-    if ! command -v cargo >/dev/null 2>&1; then
-        warn "cargo not found, skipping jj installation"
+# Point ~/.config/helix/runtime at the runtime tree homepkg unpacked from the
+# release asset, replacing whatever an earlier install path left there.
+link_helix_runtime() {
+    helix_runtime_src="$1/share/helix/runtime"
+    if ! test -d "$helix_runtime_src"; then
+        warn "hx is installed but its runtime directory is missing; it will start with no grammars or queries"
         return
     fi
-
-    info "Installing/updating jj via cargo"
-    cargo install --locked jj-cli
-}
-
-# --- Install shpool ---
-
-install_shpool() {
-    if ! command -v cargo >/dev/null 2>&1; then
-        warn "cargo not found, skipping shpool installation"
-        return
-    fi
-
-    info "Installing/updating shpool via cargo"
-    cargo install --locked shpool
-}
-
-# --- Install Helix editor ---
-
-install_helix() {
-    if ! command -v cargo >/dev/null 2>&1; then
-        warn "cargo not found, skipping helix installation"
-        return
-    fi
-
-    helix_dir="$SRC_DIR/helix"
-    clone_or_pull "https://github.com/helix-editor/helix" "$helix_dir"
-    info "Installing/updating helix via cargo"
-    cargo install --path "$helix_dir/helix-term" --locked
-
-    # Link runtime files so hx can find grammars and queries
     helix_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/helix"
     mkdir -p "$helix_config_dir"
-    ln -sfn "$helix_dir/runtime" "$helix_config_dir/runtime"
+    info "Pointing the Helix runtime at the installed release runtime"
+    ln -sfn "$helix_runtime_src" "$helix_config_dir/runtime"
 }
 
-# --- Install Nushell ---
-
-install_nushell() {
-    if ! command -v cargo >/dev/null 2>&1; then
-        warn "cargo not found, skipping nushell installation"
-        return
-    fi
-
-    info "Installing/updating nushell via cargo"
-    cargo install --locked nu
+# Drop ~/.config/helix/runtime when it points at a runtime tree setup itself
+# put there -- the old cargo source checkout, or a release install's payload --
+# so the hx being installed now uses the runtime that came with it. Anything
+# else (a hand-made symlink, a real directory) is left alone.
+#
+# One exception: the release install's hx is a plain file in ~/.local/bin, which
+# no other install path removes, and ~/.local/bin is on PATH. While that binary
+# is still there it may well be the hx that runs, and taking its runtime away
+# leaves it with no grammars at all -- a worse outcome than the version skew of
+# leaving it in place, since the config directory runtime shadows every hx on
+# the box and only one of the two can be right. Keep it, and say so; removing
+# the superseded binary is the user's call, not this script's.
+clear_managed_helix_runtime() {
+    helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
+    test -L "$helix_runtime" || return 0
+    helix_release_runtime="$HOME/.local/share/helix/runtime"
+    case "$(readlink "$helix_runtime")" in
+        "$SRC_DIR/helix/runtime")
+            ;;
+        "$helix_release_runtime")
+            if test -f "$HOME/.local/bin/hx" && ! test -L "$HOME/.local/bin/hx"; then
+                warn "keeping the Helix runtime: the release hx in ~/.local/bin still needs it. Remove that binary if you want the hx just installed to own the runtime"
+                return 0
+            fi
+            ;;
+        *) return 0 ;;
+    esac
+    info "Removing the Helix runtime symlink left by a previous install path"
+    rm -f "$helix_runtime"
 }
 
 # --- Install the heavyweight extras ---
 
 # helix, jj, and nushell live in homebrew-core with prebuilt Linux/macOS
-# bottles. shpool isn't in core; it ships from the shell-pool/shpool tap.
+# bottles, each bottle carrying its own helix runtime.
 install_extras_brew() {
     # One formula at a time so a single failure doesn't block the rest.
     helix_installed=no
@@ -1145,46 +1176,68 @@ install_extras_brew() {
             warn "could not install $formula via Homebrew"
         fi
     done
-    # A prior cargo run points ~/.config/helix/runtime at the source checkout,
-    # and hx searches that before the bottle's bundled runtime -- so drop the
-    # symlink (only the one install_helix created) to avoid stale grammars.
-    # Only when brew actually installed helix: otherwise a prior cargo hx would
-    # lose the runtime it still needs.
-    helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
-    if test "$helix_installed" = yes \
-            && test -L "$helix_runtime" \
-            && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
-        info "Removing stale Helix runtime symlink from the cargo build"
-        rm -f "$helix_runtime"
+    # Only when brew actually installed helix: otherwise an hx from another
+    # path would lose the runtime it still needs.
+    if test "$helix_installed" = yes; then
+        clear_managed_helix_runtime
     fi
-    # TODO (follow-up PR): re-add shpool here optimistically -- attempt the
-    # install and warn on failure. It has no brew bottle, but should be
-    # available via apt on the system path.
-    warn "shpool is not installed on the brew path yet; use --cargo (or apt) for shpool"
 }
 
-# The from-source path: rustup + cargo builds of every extra. Slower and
-# disk-heavy, but needs no Homebrew.
-install_extras_cargo() {
-    install_rust
-    install_helix
-    install_jj
-    install_shpool
-    install_nushell
+# The release-artifact path: the prebuilt binaries each project publishes with
+# its own GitHub releases, fetched by homepkg into ~/.local. No Homebrew and no
+# root -- and no build, which is what this used to spend a Rust toolchain and
+# several minutes per box on.
+#
+# helix's asset carries the hx binary and the runtime/ tree hx needs at run
+# time; homepkg installs both (its registry's "payload" key) and
+# link_helix_runtime points hx at the result.
+install_extras_release() {
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found in the scripts repo; skipping helix, jj, and nushell"
+        return 0
+    fi
+    info "Installing helix, jj, and nushell from their GitHub release artifacts"
+    "$homepkg" --backend github install helix jj nu \
+        || warn "some of helix, jj, and nushell could not be installed from their releases (offline?)"
+    # A partial run can still have landed helix, so wire up its runtime on the
+    # strength of the binary being there rather than of homepkg's exit status.
+    # A release hx is a plain file; an hx that's a symlink is homepkg's, pointing
+    # into its conda env, and it carries its own runtime -- so a failed release
+    # install on a box provisioned that way must not point that hx at a release
+    # payload left over from before.
+    if test -f "$HOME/.local/bin/hx" && ! test -L "$HOME/.local/bin/hx"; then
+        link_helix_runtime "$HOME/.local"
+    fi
 }
 
 # Dispatch to the resolved extras backend. When Homebrew is requested but
-# can't be made available, fall back to the cargo/source builds.
+# can't be made available, fall back to the release artifacts.
 install_extras() {
     if test "$EXTRAS_BACKEND" = brew; then
         if install_homebrew; then
             install_extras_brew
             return
         fi
-        warn "Homebrew unavailable; building the extras from source with cargo instead"
+        warn "Homebrew unavailable; installing the extras from their release artifacts instead"
     fi
-    install_extras_cargo
+    install_extras_release
 }
+
+# --- shpool ---
+#
+# setup doesn't install shpool. It publishes no release artifact, isn't in
+# homebrew-core or the shell-pool tap as a bottle, and has no conda-forge
+# feedstock, so a cargo build was the only way to get it -- and building from
+# source is what this script no longer does.
+#
+# Sessions still prefer shpool wherever something else has put it on PATH (a
+# distro package, a manual cargo install): sessionlib picks it over tmux, and
+# start_services enables a systemd user service for whichever shpool it finds.
+#
+# TODO: install shpool again once there's a prebuilt artifact to fetch --
+# upstream release binaries, a brew bottle, or a conda-forge feedstock (which
+# would give the --no-root homepkg path a way to provide it too).
 
 # --- Install CLI tools into a home prefix (--no-root) ---
 
@@ -1217,10 +1270,11 @@ install_home_tools() {
     fi
     if test "$MINIMAL_ENABLED" -eq 0; then
         tools="$tools helix jj nu"
-        # shpool is source-only (no conda-forge/prebuilt artifact), so neither
-        # the homepkg nor the brew path can provide it. start_services skips its
-        # user service when shpool is absent, so the shell falls back to tmux.
-        warn "shpool is not available on the homepkg path (source-only); sessions fall back to tmux"
+        # shpool has no prebuilt artifact anywhere, so none of setup's install
+        # paths can provide it (see the shpool note by install_extras).
+        # start_services skips its user service when shpool is absent, so the
+        # shell falls back to tmux.
+        warn "shpool is not installed by setup (no prebuilt artifact); sessions fall back to tmux unless it's installed some other way"
     fi
 
     # Optimistic provisioning. On a FRESH env, prefer a prebuilt bundle (which
@@ -1300,17 +1354,19 @@ install_home_tools() {
         *) PATH="$HOME/.local/bin:$PATH" ;;
     esac
 
-    # A prior cargo run points ~/.config/helix/runtime at the source checkout,
-    # and hx searches that before the prebuilt runtime -- so drop the stale
-    # symlink (only the one install_helix created). Gate on hx actually being
-    # installed by homepkg (which links it into ~/.local/bin) rather than the
-    # minimal profile: a full bundle can install helix even under --minimal.
-    helix_runtime="${XDG_CONFIG_HOME:-$HOME/.config}/helix/runtime"
-    if test -x "$HOME/.local/bin/hx" \
-            && test -L "$helix_runtime" \
-            && test "$(readlink "$helix_runtime")" = "$SRC_DIR/helix/runtime"; then
-        info "Removing stale Helix runtime symlink from the cargo build"
-        rm -f "$helix_runtime"
+    # This path's helix comes from conda-forge, with its runtime inside the
+    # homepkg env, so a symlink left in the config directory by another install
+    # path has to go -- hx searches there first. Gate on the hx that will
+    # actually run being the env's, not merely on some hx existing: homepkg
+    # links the env's binaries into ~/.local/bin but deliberately leaves a
+    # conflicting regular file alone, so on a box that installed the release hx
+    # first, that release binary is still what runs -- and clearing the runtime
+    # symlink would take its grammars away. Gating on the link rather than on
+    # the minimal profile also covers a full bundle, which can install helix
+    # even under --minimal.
+    if test -L "$HOME/.local/bin/hx" \
+            && test "$(readlink "$HOME/.local/bin/hx")" = "$env_dir/bin/hx"; then
+        clear_managed_helix_runtime
     fi
 }
 
@@ -1732,17 +1788,17 @@ if test -f "$CONF_DIR/vcs/Makefile"; then
 fi
 
 if test "$INSTALL" = no; then
-    info "Skipping heavyweight extras (helix, jj, shpool, nushell); --no-install"
+    info "Skipping heavyweight extras (helix, jj, nushell); --no-install"
 elif test "$ROOT" = no; then
     # Unprivileged (--no-root): apt/dnf were skipped, so install the CLI tools
     # (the core distro package set plus the extras) into a home prefix with
     # homepkg instead. --no-sudo alone (ROOT=yes) leaves this to install_extras
-    # below, whose cargo/brew builds are themselves rootless.
+    # below, whose brew and release installs are themselves rootless.
     install_home_tools
 elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
-    info "Skipping heavyweight extras (helix, jj, shpool, nushell); minimal profile"
+    info "Skipping heavyweight extras (helix, jj, nushell); minimal profile"
 fi
 
 # atuin/carapace are small static binaries with no packaged build, so they're
@@ -1775,11 +1831,12 @@ fi
 if test "$INSTALL" = yes; then
     mkdir -p "$SRC_DIR"
     clone_or_pull "$ROOT_REPO" "$ROOT_DIR" yes
-    # The default root config builds helper tools that require cargo. When
-    # cargo isn't available -- the --brew extras path skips the Rust toolchain,
-    # as does --minimal -- install the legacy config from the legacy/ subdir
-    # instead. Source ~/.cargo/env first so a previously installed toolchain
-    # still counts as available even on a run that skipped install_rust.
+    # The default root config builds helper tools that require cargo. setup
+    # installs no Rust toolchain of its own any more (the extras come prebuilt
+    # from Homebrew or from release artifacts), so this uses whatever toolchain
+    # the machine already has and installs the legacy config from the legacy/
+    # subdir when there is none. Source ~/.cargo/env first so a rustup
+    # toolchain counts as available even in a non-login shell.
     if test -f "$HOME/.cargo/env"; then
         # shellcheck source=/dev/null
         . "$HOME/.cargo/env"
@@ -1790,7 +1847,7 @@ if test "$INSTALL" = yes; then
             || warn "skipping root config installation"
     else
         info "cargo unavailable; installing the legacy root config from $ROOT_DIR/legacy"
-        info "(no Rust toolchain this run; use --cargo, --full, or 'brew install rust' for the primary Rust root config)"
+        info "(install a Rust toolchain -- rustup, or 'brew install rust' -- for the primary Rust root config)"
         sudo_or_warn make -C "$ROOT_DIR/legacy" install \
             || warn "skipping legacy root config installation"
     fi
