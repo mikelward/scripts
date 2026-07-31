@@ -825,6 +825,26 @@ test_preflight_names_the_manual_steps() {
     assert_output_contains "Grant Amethyst Accessibility access"
 }
 
+# A first run installs Amethyst partway through, so asking for the permission
+# before that asks the user to grant it to an application that isn't there.
+test_preflight_defers_accessibility_until_after_the_run() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Then once this run has finished" &&
+    assert_output_contains "can only be granted afterwards"
+}
+
+# AGENTS.md wants a recommended external dependency to come with its cost and
+# what happens when it isn't there.
+test_preflight_states_focus_cue_cost_and_failure() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "free" &&
+    assert_output_contains "one-time" &&
+    assert_output_contains "always-on process" &&
+    assert_output_contains "losing the focus cue"
+}
+
 # macOS has no dim-inactive equivalent, so the preflight names the two ways to
 # get a focus cue rather than leaving it as an unexplained gap.
 test_preflight_names_the_focus_cue_options() {
@@ -1468,6 +1488,10 @@ run_test "the preflight names the manual steps" \
     test_preflight_names_the_manual_steps
 run_test "the preflight names the focus-cue options" \
     test_preflight_names_the_focus_cue_options
+run_test "the preflight defers Accessibility until after the install" \
+    test_preflight_defers_accessibility_until_after_the_run
+run_test "the preflight states focus-cue cost and failure behavior" \
+    test_preflight_states_focus_cue_cost_and_failure
 run_test "no preflight pause without a terminal" \
     test_preflight_does_not_pause_without_a_terminal
 run_test "--yes skips the preflight pause" \
