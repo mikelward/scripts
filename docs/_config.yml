@@ -1,0 +1,22 @@
+# GitHub Pages configuration.
+#
+# Pages serves this directory (Settings > Pages > Deploy from a branch, main,
+# /docs), so the published site is exactly what's in here. That's why there's
+# no exclude list: serving the repository root would copy all ~150 scripts
+# into the site, and keeping the docs in their own directory avoids the
+# problem rather than enumerating it away.
+
+title: scripts
+description: Shell utilities, and the macOS desktop setup they configure.
+theme: jekyll-theme-cayman
+
+# Only a file with YAML front matter is rendered as a page; everything else is
+# copied verbatim. Setting the layout here rather than in each file keeps a
+# page's front matter down to a title, which matters because GitHub renders
+# front matter as a table above the document on its own file view.
+defaults:
+  - scope:
+      path: ""
+      type: pages
+    values:
+      layout: default
