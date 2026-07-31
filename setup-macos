@@ -42,14 +42,25 @@
 #        restart Finder and the Dock. Without any of them the settings are
 #        still written and the script says what needs a logout.
 #
+# MACOS.md covers the whole setup: the key mapping against the KDE/Krohnkite
+# side, how the symbolic hotkeys work, what doesn't carry over from KWin, and
+# why Amethyst rather than yabai or AeroSpace.
+#
+# Three things here need a human first -- creating the Spaces, quitting System
+# Settings, and granting Amethyst Accessibility access -- and none of them can
+# be done from a script. The run opens by saying so and waiting for Enter; see
+# preflight. --yes skips the wait, and so does a non-terminal stdin, so an
+# unattended bootstrap doesn't block on an Enter that can never arrive.
+#
 # Usage:
-#     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+#     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
+#                 [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
 # --no-install skips installing Amethyst and configures whatever is already
 # there. macOS configuration uses no sudo, so --no-sudo is accepted but has
 # nothing to skip. --ignore-errors keeps going past failures instead of
-# aborting on the first one.
+# aborting on the first one. --yes skips the preflight pause.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -59,6 +70,10 @@ IGNORE_ERRORS=no
 # already there, matching setup-kde, which installs its own tiling window
 # manager (Krohnkite) under the same flag.
 INSTALL=yes
+
+# Whether to skip the preflight pause (--yes). A stdin that isn't a terminal
+# skips it too; see preflight.
+ASSUME_YES=no
 
 # Directory containing this script, resolved up front while $0 still means what
 # the caller typed. The launcher helpers the Quick Actions run live beside this
@@ -169,6 +184,18 @@ write_file() {
     fi
 }
 
+# Whether APP is running, as pgrep's own exit status: 0 running, 1 not
+# running, anything else a pgrep failure.
+#
+# pgrep exits 1 for "no such process", but 2 and 3 for its own failures.
+# Reading every non-zero status as "not running" would skip a restart on a
+# broken probe and say nothing about why, so the failure statuses are passed
+# through rather than collapsed into "no" and each caller decides what an
+# unknown answer means.
+app_running() {
+    pgrep -x "$1" >/dev/null
+}
+
 # Restart APP so it re-reads the settings just written, where WHY names what
 # stays unapplied if it can't be. APP not running is the ordinary case on a
 # fresh machine and isn't a failure -- but it's not the only reason killall
@@ -181,11 +208,7 @@ restart_app() {
         warn "killall/pgrep not found; restart $_app (or log out) for $_why"
         return 0
     fi
-    # pgrep exits 1 for "no such process", but 2 and 3 for its own failures.
-    # Reading every non-zero status as "not running" would skip the restart on
-    # a broken probe and say nothing about why, which is the same mistake as
-    # reading killall's status that way.
-    if pgrep -x "$_app" >/dev/null; then
+    if app_running "$_app"; then
         _running=0
     else
         _running=$?
@@ -204,9 +227,60 @@ restart_app() {
     killall "$_app" || warn "could not restart $_app; log out for $_why"
 }
 
+# --- Preflight ---
+
+# What this script can't do for you, printed before anything is changed so the
+# manual steps happen first instead of being discovered later as a dead
+# keybinding. Each one is genuinely out of reach: there is no API to create a
+# Space, System Settings owns the shortcut registry while it's open, and
+# Accessibility access can only be granted by a human in the GUI.
+preflight_notes() {
+    cat <<'NOTES'
+
+Before continuing, do these by hand -- this script can't:
+
+  1. Create nine Spaces in Mission Control (Ctrl-Up, then + at the top right).
+     No API creates a Space, so Option+1..9 silently does nothing for every
+     Space that doesn't exist yet.
+  2. Quit System Settings. Left open, it can write its cached copy of the
+     keyboard shortcuts back over the ones written here.
+  3. Grant Amethyst Accessibility access, under System Settings > Privacy &
+     Security > Accessibility. It can't move or resize a window without it.
+
+Optional: macOS has no equivalent of KDE's dim-inactive effect. JankyBorders
+(`brew install borders`, free) outlines the focused window instead of dimming
+the others; HazeOver (paid) does the dimming itself. Neither is installed or
+configured here.
+
+The keyboard layout and modifier-key changes take effect at the next login.
+
+NOTES
+}
+
+preflight() {
+    preflight_notes
+    if test "$ASSUME_YES" = yes; then
+        return 0
+    fi
+    # Nothing to prompt on: setup runs this as part of an unattended bootstrap,
+    # which must not block on an Enter that can never arrive.
+    if ! test -t 0; then
+        info "stdin is not a terminal; continuing without pausing."
+        return 0
+    fi
+    printf "Press Enter to continue, or Ctrl-C to abort: "
+    # EOF rather than a line means stdin closed under us; treat it as consent
+    # for the same reason as the non-terminal case, and end the line the
+    # prompt left open so the first step doesn't print onto it.
+    if ! read -r _preflight_reply; then
+        info ""
+    fi
+}
+
 usage() {
     cat <<'USAGE'
-Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
+                   [-h | --help]
 
 Configure the macOS desktop environment.
 
@@ -216,6 +290,7 @@ Options:
   --no-sudo        Accepted for consistency with setup; macOS configuration
                    uses no sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
+  --yes            Skip the preflight pause and start configuring right away
   -h, --help       Show this help and exit
 USAGE
 }
@@ -239,6 +314,9 @@ while test $# -gt 0; do
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
+            ;;
+        -y|--yes)
+            ASSUME_YES=yes
             ;;
         -h|--help)
             usage
@@ -377,8 +455,39 @@ PLIST
 
 # --- Configure keyboard shortcuts ---
 
+# System Settings holds the shortcut registry in memory while it's open and can
+# flush its copy back over these writes when it closes, silently reverting
+# them. Worth a warning rather than a refusal: it only clobbers if the Keyboard
+# pane is actually visited, so a run with it open often still lands.
+warn_if_settings_app_running() {
+    if ! is_command pgrep; then
+        warn "pgrep not found; quit System Settings before this run, or it can overwrite the shortcuts written below"
+        return 0
+    fi
+    # Both names, because the app was renamed in macOS 13 and this script has
+    # to work on either side of that.
+    for _settings_app in "System Settings" "System Preferences"; do
+        if app_running "$_settings_app"; then
+            _settings_running=0
+        else
+            _settings_running=$?
+        fi
+        case "$_settings_running" in
+            0)
+                warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
+                ;;
+            1) ;;
+            *)
+                warn "could not tell whether $_settings_app is running (pgrep exited $_settings_running); quit it before this run if it's open"
+                ;;
+        esac
+    done
+}
+
 configure_shortcuts() {
     info "Configuring keyboard shortcuts (Mission Control and Spotlight on Option)"
+
+    warn_if_settings_app_running
 
     # Remap Mission Control shortcuts from Control to Option
     # so the physical Win/Super key handles desktop switching
@@ -400,10 +509,24 @@ configure_shortcuts() {
             </dict>
         </dict>'
 
-    # Disable Finder search window (ID 65) to avoid conflict
+    # Disable Finder search window (ID 65) to avoid conflict.
+    #
+    # -dict-add replaces the whole entry, so writing a bare enabled=false would
+    # drop the parameters with it and leave the shortcut showing blank in
+    # System Settings, with nothing to restore it to. Its stock binding
+    # (Cmd+Option+Space: 1048576 + 524288) is written back alongside the flag,
+    # so turning it on again in the GUI gets the original key back.
     try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65 '
         <dict>
             <key>enabled</key><false/>
+            <key>value</key><dict>
+                <key>parameters</key><array>
+                    <integer>32</integer>
+                    <integer>49</integer>
+                    <integer>1572864</integer>
+                </array>
+                <key>type</key><string>standard</string>
+            </dict>
         </dict>'
 
     # Switch to Desktop 1-9: Option+1..9 (IDs 118-126)
@@ -447,6 +570,40 @@ configure_shortcuts() {
 
 # --- Configure Spaces ---
 
+# How many Spaces exist, printed on stdout.
+#
+# There's no public API for this, so it comes out of the Dock's own plist:
+# every Space carries a ManagedSpaceID, so counting those counts Spaces. It's
+# a floor, not an audit -- the count spans all displays and includes the
+# Spaces macOS creates for fullscreen apps, so it can read high. High is the
+# safe direction: this exists only to catch the case where there are plainly
+# fewer than nine and the Option+5..9 bindings would do nothing at all.
+count_spaces() {
+    _spaces_plist=$(defaults read com.apple.spaces SpacesDisplayConfiguration) \
+        || return 1
+    # grep -c exits 1 when the count is zero, which is a real answer here
+    # rather than a failure, so take the count from its output either way.
+    if ! _spaces_count=$(printf '%s\n' "$_spaces_plist" | grep -c ManagedSpaceID); then
+        _spaces_count=0
+    fi
+    printf '%s\n' "$_spaces_count"
+}
+
+# The Option+1..9 bindings written above are positional slots: macOS accepts
+# the write for a Space that doesn't exist, and the key then does nothing.
+# That looks exactly like a broken keybinding, so say which ones are dead.
+check_spaces_count() {
+    if ! _spaces=$(count_spaces); then
+        warn "could not read the Spaces configuration; if Option+1..9 doesn't switch desktops, create nine Spaces in Mission Control (Ctrl-Up, then +)"
+        return 0
+    fi
+    if test "$_spaces" -lt 9; then
+        warn "only $_spaces Space(s) exist, so Option+$((_spaces + 1))..9 will do nothing until the rest are created in Mission Control (Ctrl-Up, then +)"
+        return 0
+    fi
+    info "$_spaces Spaces found; Option+1..9 has a desktop to switch to"
+}
+
 configure_spaces() {
     info "Pinning the Spaces order"
 
@@ -459,6 +616,10 @@ configure_spaces() {
 
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
+
+    # After the restart: the Dock rewrites com.apple.spaces as it goes, so
+    # counting before it has settled can read the pre-restart layout.
+    check_spaces_count
 }
 
 # --- Configure Amethyst tiling window manager ---
@@ -921,6 +1082,7 @@ configure_finder() {
 
 # --- Main ---
 
+preflight
 configure_keyboard
 configure_modifier_keys
 configure_shortcuts
