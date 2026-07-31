@@ -26,6 +26,7 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
   - [And afterwards](#and-afterwards)
 - [Key mapping](#key-mapping)
   - [Modifier rotation](#modifier-rotation)
+  - [The one binding the rotation inverts](#the-one-binding-the-rotation-inverts)
 - [How desktop switching works](#how-desktop-switching-works)
   - [Reliability](#reliability)
 - [What doesn't carry over](#what-doesnt-carry-over)
@@ -75,8 +76,17 @@ this file.
 | `--no-root` | Unprivileged install; CLI tools come from conda-forge via `homepkg` instead |
 | `--no-npm` | Skip node and tsc |
 
-`--no-sudo` and `--no-root` are accepted but change little on macOS: nothing
-in the desktop configuration uses sudo, and Homebrew never wants it.
+`--no-sudo` and `--no-root` change little on macOS. Homebrew never wants sudo
+and installing Amethyst needs write access to an Applications directory rather
+than privilege. The one exception is Karabiner: its cask is backed by a `.pkg`,
+so Homebrew hands it to the system installer, which asks for an administrator
+password.
+
+The default is to try anyway. If you have admin rights you'll get the usual
+password prompt; if you don't, the install fails, the run warns and carries on,
+and everything except the Alt+Tab rule still applies. Pass `--no-sudo` only if
+you want to skip the attempt outright — `setup` promises that flag never
+prompts or stalls, so it has to skip rather than try.
 
 ### Desktop configuration on its own
 
@@ -94,7 +104,7 @@ missed step.
 | `--no-install` | Configure whatever Amethyst is already there; don't install |
 | `--ignore-errors` | Keep going past failures instead of aborting on the first |
 | `--yes` | Skip the preflight pause |
-| `--no-sudo` | Accepted for consistency with `setup`; nothing here uses sudo |
+| `--no-sudo` | Skip anything needing administrator rights — only Karabiner's installer does |
 | `--help` | Usage |
 
 `setup` forwards `--no-install`, `--no-sudo` and `--ignore-errors` when it
@@ -176,38 +186,50 @@ The run repeats the instruction when it gets there.
 
 ## Key mapping
 
-After the modifier rotation (see below), the physical Win/Super key sends
-Option, so a `Meta+X` binding on KDE is the same physical keypress as
-`Option+X` here.
+Both columns are the **physical keys you press** on a PC keyboard — not the
+modifier macOS receives. That distinction matters here, because the rotation
+below means the two are never the same thing: pressing `Win` sends Option,
+pressing `Ctrl` sends Command.
 
-| Action | KDE / Krohnkite | macOS | Provided by |
+Reading it this way is also the point of the whole arrangement. The columns
+match on all but two rows, which is the muscle memory being preserved.
+
+| Action | Linux (KDE) | macOS | Provided by |
 | --- | --- | --- | --- |
-| Switch to desktop 1–9 | `Meta+1`..`9` | `Option+1`..`9` | symbolichotkeys (IDs 118–126) |
-| Move window to desktop 1–9 | `Meta+Shift+1`..`9` | `Option+Control+1`..`9` | Amethyst `throw-space-N` |
-| Grow main pane | `Meta+\` | `Option+\` | Amethyst `expand-main` |
-| Shrink main pane | `Meta+/` | `Option+/` | Amethyst `shrink-main` |
-| Monocle / fullscreen layout | ``Meta+` `` | ``Option+` `` | Amethyst `select-fullscreen-layout` |
-| Previous layout | `Meta+,` | `Option+,` | Amethyst `cycle-layout-backward` |
-| Next layout | `Meta+.` | `Option+.` | Amethyst `cycle-layout` |
-| Set master window | `Meta+Return` | `Option+Return` | Amethyst `swap-main` |
-| Launcher / Spotlight | — | `Option+Space` | symbolichotkeys (ID 64) |
-| Browser 1 | `Meta+G` | `Option+G` | Automator Quick Action |
-| Browser 2 | `Meta+H` | `Option+H` | Automator Quick Action |
-| Terminal | `Meta+T` | `Option+T` | Automator Quick Action |
-| Terminal on workstation | `Meta+W` | `Option+W` | Automator Quick Action |
-| Music | `Meta+Y` | `Option+Y` | Automator Quick Action |
-| Close window | `Meta+Backspace` | `Cmd+W` (physical `Ctrl+W`) | macOS default, not configured |
+| Switch to desktop 1–9 | `Win+1`…`9` | `Win+1`…`9` | symbolichotkeys (IDs 118–126) |
+| Move window to desktop 1–9 | `Win+Shift+1`…`9` | **`Win+Alt+1`…`9`** | Amethyst `throw-space-N` |
+| Grow main pane | `Win+\` | `Win+\` | Amethyst `expand-main` |
+| Shrink main pane | `Win+/` | `Win+/` | Amethyst `shrink-main` |
+| Monocle / fullscreen layout | ``Win+` `` | ``Win+` `` | Amethyst `select-fullscreen-layout` |
+| Previous layout | `Win+,` | `Win+,` | Amethyst `cycle-layout-backward` |
+| Next layout | `Win+.` | `Win+.` | Amethyst `cycle-layout` |
+| Set master window | `Win+Return` | `Win+Return` | Amethyst `swap-main` |
+| Launcher / Spotlight | — | `Win+Space` | symbolichotkeys (ID 64) |
+| Browser 1 | `Win+G` | `Win+G` | Automator Quick Action |
+| Browser 2 | `Win+H` | `Win+H` | Automator Quick Action |
+| Terminal | `Win+T` | `Win+T` | Automator Quick Action |
+| Terminal on workstation | `Win+W` | `Win+W` | Automator Quick Action |
+| Music | `Win+Y` | `Win+Y` | Automator Quick Action |
+| Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
+| Switch applications | `Alt+Tab` | `Alt+Tab` † | Karabiner rule |
+| Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
 
-Two deviations worth knowing:
+† Without Karabiner those last two swap round — `Ctrl+Tab` switches
+applications and `Alt+Tab` goes to the next tab. Its driver extension is the
+one part of this setup a managed Mac can refuse; see
+[the one binding the rotation inverts](#the-one-binding-the-rotation-inverts).
 
-**Move-to-desktop uses Option+Control, not Option+Shift.** Option is macOS's
-dead-key layer: `Option+Shift+1` emits `⁄` rather than registering as a
-modifier combination. Krohnkite's `Meta+Shift+N` has no clean equivalent, so
-`amethyst.yml` binds `mod2` (Option+Control) instead.
+Only two rows differ from the Linux keys:
 
-**Close window isn't rebound.** `Cmd+W` is the macOS convention and, after the
-rotation, sits under the physical Ctrl key where the Linux muscle memory
-expects it.
+**Move-to-desktop is `Win+Alt+N`, not `Win+Shift+N`.** With `Win` sending
+Option, macOS treats `Option+Shift+1` as its dead-key layer and emits `⁄`
+rather than registering a modifier combination. Krohnkite's `Meta+Shift+N` has
+no clean equivalent, so `amethyst.yml` uses `mod2` (Option+Control) — which is
+`Win+Alt` under the fingers.
+
+**Close window is `Ctrl+W`.** `Cmd+W` is the macOS convention and it isn't
+rebound; after the rotation it lands under the physical Ctrl key, which is
+where a Linux hand already reaches for close.
 
 ### Modifier rotation
 
@@ -222,6 +244,63 @@ expects it.
 This assumes a PC keyboard. `hidutil` applies it to every attached keyboard,
 including a laptop's built-in one whose keys are already in the Mac order this
 rotation is undoing.
+
+### The one binding the rotation inverts
+
+The rotation works because macOS uses Command wherever Linux uses Control, so
+`Ctrl+C`, `Ctrl+V`, `Ctrl+T` and `Ctrl+W` all stay under the same physical key.
+
+Tab is the exception. macOS switches applications with `Cmd+Tab`, which Linux
+does with `Alt+Tab` — the one common binding where macOS uses Command for
+something Linux does with Alt. Left alone, the rotation swaps the two round:
+
+| | Linux (PC keyboard) | After the rotation alone |
+| --- | --- | --- |
+| physical `Ctrl+Tab` | next tab in app | **switch applications** |
+| physical `Alt+Tab` | switch windows | **next tab in app** |
+
+`setup-macos` installs Karabiner-Elements and the conf repo ships a complex
+modification that swaps them back:
+
+| Physical keys | Rotation alone | With the Karabiner rule |
+| --- | --- | --- |
+| `Alt+Tab` | next tab in app | **switch applications** |
+| `Ctrl+Tab` | switch applications | **next tab in app** |
+
+Both directions are mapped, and that matters. Remapping only `Alt+Tab` would
+put application switching on the physical Alt key without taking it off the
+physical Ctrl key, leaving next-tab with no physical keys at all. Shift
+variants are mapped alongside each, so `Shift+Alt+Tab` cycles the switcher
+backwards and `Shift+Ctrl+Tab` goes to the previous tab.
+
+**This is the one part of the setup that a managed Mac can refuse.** Karabiner
+installs a driver extension, and an MDM profile can block system extensions
+outright — which is why the key mapping table qualifies both Tab rows. It's
+free and open source, so there's no cost beyond disk, but it is a heavier
+commitment than an ordinary app: a driver extension loading at boot plus a
+background service, and a macOS upgrade can require re-approving the
+extension. If it's blocked, fails, or is uninstalled, the keyboard keeps
+working — the `hidutil` rotation is independent of it — and the only effect is
+that the two Tab bindings revert to the "rotation alone" column above.
+
+The rule maps left Alt+Tab to **`left_control`**+Tab, which reads wrong until
+you follow the layering: Karabiner grabs the keyboard and sees the *physical*
+key, and its output then passes through the `hidutil` rotation. So it has to
+name the key the rotation turns into Command — left Control. Naming
+`left_command` would come out as Option.
+
+Karabiner needs three things done by hand, none of them scriptable: its driver
+extension approved, Input Monitoring granted, and the rule enabled under
+Complex Modifications > Add rule. Until then Alt+Tab keeps switching tabs. The
+full reasoning, and what to flip if the layering differs on your macOS
+version, is in the conf repo's `config/karabiner/README.md`.
+
+The reciprocal mapping works the same way in reverse: physical Ctrl emits
+`left_option`, which the rotation turns back into Control. Karabiner doesn't
+feed its own output through its manipulators, so the two directions don't
+chase each other.
+
+Only left Alt is mapped; right Alt stays a plain modifier.
 
 ## How desktop switching works
 

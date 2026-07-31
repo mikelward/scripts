@@ -9,6 +9,8 @@
 # - Amethyst tiling window manager: installs it (Homebrew, or a staged bundle
 #   offline), then sets focus follows mouse. Its layouts, modifiers and margins
 #   come from ~/.amethyst.yml, which confinst symlinks out of the conf repo.
+# - Karabiner-Elements, for the one binding the modifier rotation inverts:
+#   Alt+Tab. Its rule is symlinked out of the conf repo too.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -59,10 +61,12 @@
 #                 [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
-# --no-install skips installing Amethyst and configures whatever is already
-# there. macOS configuration uses no sudo, so --no-sudo is accepted but has
-# nothing to skip. --ignore-errors keeps going past failures instead of
-# aborting on the first one. --yes skips the preflight pause.
+# --no-install skips installing Amethyst and Karabiner-Elements and configures
+# whatever is already there. --no-sudo skips only Karabiner's install, the one
+# step here that needs administrator rights -- its cask is a .pkg and Homebrew
+# hands those to the system installer. --ignore-errors keeps going past
+# failures instead of aborting on the first one. --yes skips the preflight
+# pause.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -76,6 +80,11 @@ INSTALL=yes
 # Whether to skip the preflight pause (--yes). A stdin that isn't a terminal
 # skips it too; see preflight.
 ASSUME_YES=no
+
+# Whether privileged commands may run at all. Only Karabiner's install needs
+# this: its cask is a .pkg and Homebrew hands those to the system installer,
+# which prompts for an administrator password. --no-sudo skips it.
+SUDO=yes
 
 # Directory containing this script, resolved up front while $0 still means what
 # the caller typed. The launcher helpers the Quick Actions run live beside this
@@ -254,6 +263,22 @@ Then once this run has finished:
      This run installs Amethyst if it isn't already there, so the permission
      can only be granted afterwards -- the run says so again when it gets
      there.
+  4. Approve Karabiner-Elements' driver extension and Input Monitoring
+     permission when it first launches, then enable "Alt+Tab switches
+     applications" under Complex Modifications > Add rule. Without it Alt+Tab
+     switches tabs rather than applications, because the modifier rotation
+     puts Cmd+Tab on the physical Ctrl key.
+
+     Karabiner is free and open source, so no cost beyond the disk it takes.
+     It is a bigger commitment than an ordinary app, though: it installs a
+     driver extension that loads at boot and runs a background service, and a
+     managed Mac may refuse the extension outright. If it is blocked, fails,
+     or is removed, the keyboard keeps working -- the modifier rotation is
+     separate and does not depend on it -- and the only effect is that Alt+Tab
+     goes back to switching tabs. A macOS upgrade can also require approving
+     the extension again.
+
+
 
 Optional: macOS has no equivalent of KDE's dim-inactive effect. JankyBorders
 (`brew install borders`, free) outlines the focused window; HazeOver (around
@@ -294,10 +319,10 @@ Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Don't install Amethyst; configure whatever is already
-                   there
-  --no-sudo        Accepted for consistency with setup; macOS configuration
-                   uses no sudo, so there's nothing to skip
+  --no-install     Don't install Amethyst or Karabiner-Elements; configure
+                   whatever is already there
+  --no-sudo        Don't run anything needing administrator rights. Only
+                   Karabiner-Elements' installer does, so only that is skipped
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Skip the preflight pause and start configuring right away
   -h, --help       Show this help and exit
@@ -314,12 +339,19 @@ while test $# -gt 0; do
         --no-install)
             INSTALL=no
             ;;
-        --sudo|--no-sudo)
-            # macOS configuration uses no sudo; accepted as a no-op so setup
-            # can forward these flags uniformly. Installing Amethyst needs
-            # write access to an Applications directory, not sudo: a staged
-            # bundle falls back to ~/Applications when /Applications isn't
-            # writable, and Homebrew never wants sudo.
+        --sudo)
+            SUDO=yes
+            ;;
+        --no-sudo)
+            # Almost nothing here needs sudo -- installing Amethyst needs write
+            # access to an Applications directory rather than privilege, and a
+            # staged bundle falls back to ~/Applications when /Applications
+            # isn't writable. Karabiner is the exception: its cask is backed by
+            # a .pkg, so Homebrew hands it to the system installer, which asks
+            # for an administrator password. setup promises --no-sudo never
+            # prompts or stalls, so that install has to be skipped rather than
+            # attempted. See install_karabiner.
+            SUDO=no
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
@@ -852,6 +884,81 @@ configure_amethyst() {
     info "Grant Amethyst Accessibility access in System Settings > Privacy & Security"
 }
 
+# --- Configure Karabiner-Elements ---
+
+# Where Karabiner reads add-on rules from. confinst creates the directory for
+# real and symlinks the rule into it, so this is a symlink into the conf repo
+# rather than a file Karabiner owns -- Karabiner rewrites karabiner.json on
+# every UI change but never touches an asset.
+KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+
+# Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
+# as amethyst_path, and for the same reason: an interrupted install leaves a
+# directory with the right name and nothing in it, and treating that as
+# installed turns a failed install into a permanent one -- every later run
+# skips Homebrew and then tells the user to enable a rule in an application
+# that can't start.
+karabiner_path() {
+    for _dir in "$APPLICATIONS_DIR" "$USER_APPLICATIONS_DIR"; do
+        if is_usable_app "$_dir/Karabiner-Elements.app"; then
+            printf '%s' "$_dir/Karabiner-Elements.app"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# The modifier rotation makes the physical Ctrl key send Command, which is what
+# keeps Ctrl+C and friends where a Linux hand expects them. Tab is the one
+# binding that inverts under it -- macOS switches applications with Cmd+Tab
+# where Linux uses Alt+Tab -- so app switching lands on the physical Ctrl key
+# and next-tab on the physical Alt key. The rule in the conf repo swaps them
+# back; see config/karabiner/README.md there for why it emits left_control.
+#
+# Homebrew only. Unlike Amethyst there's no staged-bundle path: Karabiner
+# installs a driver extension that needs approving in the GUI anyway, so an
+# offline install would still leave the interactive half undone.
+install_karabiner() {
+    if _installed=$(karabiner_path); then
+        info "Karabiner-Elements is already installed at $_installed"
+        return 0
+    fi
+    if test "$INSTALL" = no; then
+        warn "Karabiner-Elements is not installed and --no-install was given; Alt+Tab will switch tabs rather than applications until it is"
+        return 0
+    fi
+    # Not attempted under --no-sudo: the cask is a .pkg, so Homebrew hands it
+    # to the system installer and an administrator prompt appears -- exactly
+    # what --no-sudo exists to avoid.
+    if test "$SUDO" = no; then
+        warn "Karabiner-Elements' installer needs administrator rights and --no-sudo was given; skipping it, so Alt+Tab will switch tabs rather than applications"
+        return 0
+    fi
+    if ! is_command brew; then
+        warn "Homebrew not found, so Karabiner-Elements can't be installed; Alt+Tab will switch tabs rather than applications until it is"
+        return 0
+    fi
+    info "Installing Karabiner-Elements"
+    brew install --cask karabiner-elements \
+        || warn "could not install Karabiner-Elements; Alt+Tab will switch tabs rather than applications until it is"
+}
+
+configure_karabiner() {
+    info "Configuring Karabiner-Elements"
+
+    install_karabiner
+
+    if ! test -f "$KARABINER_RULE"; then
+        warn "$KARABINER_RULE not found; run confinst after cloning the conf repo, or Alt+Tab keeps switching tabs"
+        return 0
+    fi
+
+    # Karabiner lists an asset under "Add rule" but doesn't enable it, and
+    # there's no supported way to enable one from a script: karabiner.json is
+    # rewritten by the app, so editing it here would be racing the GUI.
+    info "Enable \"Alt+Tab switches applications\" in Karabiner-Elements > Complex Modifications > Add rule"
+}
+
 # --- Configure application launch shortcuts ---
 
 # Print the path to a launcher helper, or fail if there isn't one. PATH first,
@@ -1121,6 +1228,7 @@ configure_modifier_keys
 configure_shortcuts
 configure_spaces
 configure_amethyst
+configure_karabiner
 configure_app_shortcuts
 configure_finder
 
