@@ -32,6 +32,8 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
 - [What doesn't carry over](#what-doesnt-carry-over)
 - [Troubleshooting](#troubleshooting)
 - [Window manager evaluation](#window-manager-evaluation)
+  - [Focus follows mouse](#focus-follows-mouse)
+  - [Layout model](#layout-model)
   - [Amethyst](#amethyst)
   - [yabai](#yabai)
   - [AeroSpace](#aerospace)
@@ -358,7 +360,9 @@ defaults read com.apple.spaces                                 # Spaces
 
 ## What doesn't carry over
 
-These are macOS platform limits. No window manager fixes them.
+These are macOS platform limits — no window manager fixes them — with one
+exception, focus follows mouse, which is Amethyst's own limitation and is
+marked as such below.
 
 **Window decorations.** There is no equivalent of KWin's "No titlebar and
 frame" rule. Every tile keeps its titlebar and rounded corners. Only per-app
@@ -392,8 +396,15 @@ exactly why `setup-kde` picks it over `FocusUnderMouse`. Amethyst has no such
 exemption, no dwell delay, and no per-app exclusions, so there's no setting
 that softens it — the only fix is to leave it off.
 
+**This one is Amethyst's, not the platform's.** yabai gets it right by asking
+the window server what's under the pointer *first* and only then checking
+whether it's a window it manages, so an overlay it doesn't track simply ends
+the lookup. Amethyst filters to its tracked windows before the hit test, which
+is what makes the overlay invisible. Same platform, opposite order. See
+[focus follows mouse](#focus-follows-mouse) in the evaluation below.
+
 There's also no equivalent of KWin's `NextFocusPrefersMouse` or its
-focus-stealing prevention levels.
+focus-stealing prevention levels — that part *is* a platform limit.
 
 [amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
@@ -448,9 +459,63 @@ most recent use" is still off in Mission Control settings.
 
 ## Window manager evaluation
 
-Three tiling window managers are realistic on macOS. The decisive question is
-how each one handles Spaces, because that determines whether a nine-desktop
-workflow survives at all.
+Three tiling window managers are realistic on macOS. This used to turn on a
+single question — whether Spaces survive with SIP enabled — because yabai
+couldn't move a window to a Space without disabling it. That changed in yabai
+7.1.25 (May 2026), so the comparison now rests on two things instead:
+**the layout model** and **focus follows mouse**. Amethyst and yabai each win
+one of them.
+
+### Focus follows mouse
+
+Both implement it; only one does it without breaking popovers, and the
+difference is two lines of ordering.
+
+yabai asks the window server what is under the pointer, then checks whether
+that window is one it manages:
+
+```c
+SLSFindWindowAndOwner(g_connection, 0, 1, 0, &point, &window_point, &window_id, &window_cid);
+return window_manager_find_window(wm, window_id);
+```
+
+A Chrome extension popover isn't a managed window, so the lookup returns
+nothing and focus stays put.
+
+Amethyst reverses it — `WindowsInformation.topWindowForScreenAtPoint` narrows
+to its tracked windows *before* hit-testing, so an untracked overlay never
+enters the comparison and the window underneath it wins. Focusing that window
+deactivates the overlay's app, and the overlay dismisses itself. It has been
+[ianyh/Amethyst#277][amethyst-277] since 2015, and there is no delay or
+exclusion setting to soften it, so `setup-macos` turns the feature off.
+
+### Layout model
+
+The reverse asymmetry, and the bigger one.
+
+Amethyst ships the Krohnkite set and cycles it from a key: `tall` is
+master/stack, plus `3column-left`, `column`, `wide` and `fullscreen`. That's
+`amethyst.yml`'s current layout list, and it maps one-for-one onto Krohnkite's
+Tile / ThreeColumn / Columns / Monocle.
+
+yabai has bsp, stack and float. None of those is master/stack — its `stack`
+layout is tabbed stacking, where each window fills the space and you cycle
+between them, not a main pane beside a column of others. Nor is one planned:
+the algorithm is binary space partitioning throughout, and upstream considers
+dwm-style master-stack layouts out of scope ([yabai#908][yabai-908]). The
+workarounds are float mode with scripted grid placement — losing BSP and
+padding — or signal-driven plugins that re-tile on every window event.
+
+So this isn't a question of extensibility. The ordinary layouts this setup
+already uses have no yabai equivalent.
+
+Amethyst will also load user-written layouts as JavaScript from
+`~/Library/Application Support/Amethyst/Layouts/`, each defining
+`getFrameAssignments(windows, screenFrame, state, extendedFrames)` alongside
+`commands` and `initialState`. Not needed for the layouts above — they're
+built in — but it's there if the set ever isn't enough.
+
+[yabai-908]: https://github.com/koekeishiya/yabai/issues/908
 
 ### Amethyst
 
@@ -460,39 +525,60 @@ window to a Space, which is the part that matters.
 
 **Pros**
 - Throwing windows to a Space works with SIP fully enabled.
-- Layout model is a cycled list of named layouts — a direct match for
-  Krohnkite's Tile / ThreeColumn / Columns / Monocle.
+- **Ships master/stack and column layouts**, cycled from a key — a direct
+  match for Krohnkite's Tile / ThreeColumn / Columns / Monocle, and the one
+  thing yabai can't reproduce. See [layout model](#layout-model) above.
+- User-written layouts in JavaScript if the built-in set ever isn't enough.
 - Single app, no daemon, no separate hotkey program, YAML config.
 - No SIP or boot-security changes of any kind.
 
 **Cons**
+- **Focus follows mouse is unusable** and has to stay off; see
+  [above](#focus-follows-mouse).
 - Throw-to-space relies on private APIs and has been flaky across macOS
   releases.
-- Fixed feature set — no scripting or query interface.
+- No scripting or query interface, so behavior can't be prototyped without
+  rebuilding the app — and it's Swift and Xcode if you do.
 - Weaker per-app rules than the alternatives.
+- Quieter development than yabai: 0.24.3 in April 2026, in bursts.
 
 ### yabai
 
-The most capable of the three, but its best features are behind a scripting
-addition that injects into the Dock, which needs SIP partially disabled *and*
-the boot security policy lowered to Reduced Security.
+The most capable of the three. Some features are still behind a scripting
+addition that injects into the Dock, needing SIP partially disabled *and* the
+boot security policy lowered to Reduced Security — but moving windows between
+Spaces is no longer one of them.
+
+**7.1.25 (May 2026) restored throw-to-space with SIP enabled**, via
+`SLSBridgedMoveWindowsToManagedSpaceOperation`, validated on macOS 26.4
+([yabai#2788][yabai-2788]). That had been the single reason this setup ruled
+yabai out, and it no longer holds. It's a private window-server call, so it
+carries the same across-releases risk as Amethyst's equivalent — check it
+against your own macOS version rather than assuming.
 
 **Pros**
-- With the scripting addition: real Space create/destroy/focus, window
-  opacity and shadows, sticky windows.
-- Excellent scripting surface — `yabai -m query`, event signals.
+- Throw-to-space works with SIP enabled as of 7.1.25.
+- **Focus follows mouse that doesn't dismiss popovers** — see
+  [above](#focus-follows-mouse). The one thing Amethyst can't currently do.
+- Excellent scripting surface — `yabai -m query`, event signals — so behavior
+  can be prototyped in shell before any code is written.
 - Fine-grained gaps, padding, and per-app rules.
+- Actively developed: roughly monthly releases through 2026.
+- Builds from source with Command Line Tools and `make`, no Xcode.
 
 **Cons**
-- **With SIP enabled, it cannot move a window to another Space or focus one.**
-  That removes the whole move-to-desktop workflow with no keyboard
-  workaround.
+- **No master/stack or column layout, and none planned** — see
+  [layout model](#layout-model). This is now the disqualifier.
+- Keybindings need skhd, a second daemon with its own config.
+- Space create/destroy, window opacity and sticky windows still need the
+  scripting addition, so still SIP for those.
 - SIP changes are commonly blocked on managed Macs: on Apple Silicon,
   lowering the boot security policy requires a Volume Owner account, and
   every MDM/EDR agent reports SIP state as a compliance attribute.
-- The scripting addition breaks on macOS major releases until updated, and
-  SIP must be re-disabled after some updates.
-- BSP tiling is a different mental model from Krohnkite's layout cycle.
+- Leans harder on private window-server APIs than Amethyst, so it breaks more
+  often on macOS major releases.
+
+[yabai-2788]: https://github.com/koekeishiya/yabai/issues/2788
 
 ### AeroSpace
 
@@ -516,16 +602,29 @@ far off-screen coordinates.
 
 ### Recommendation: Amethyst
 
-For a nine-desktop workflow on a Mac where SIP can't be touched:
+Still Amethyst, but the reasoning has changed and it's now a genuine
+trade rather than a walkover:
 
-- **yabai is out.** Without the scripting addition it can't move a window to a
-  Space at all, which is a hard regression against the Krohnkite setup, not a
-  trade-off.
 - **AeroSpace is out** on the Cmd+Tab behavior. Breaking the system app
   switcher to gain faster workspace switching is a bad trade when the
   switching already works.
-- **Amethyst keeps the workflow intact** and matches Krohnkite's layout model
-  one-for-one. It's also what `amethyst.yml` and `setup-macos` already target.
+- **yabai is out on layouts.** It has no master/stack and no column layout,
+  and upstream doesn't intend to add them. Those are the layouts this setup
+  uses daily, so it's a hard regression — the same *kind* of objection that
+  used to be aimed at its Spaces handling, just relocated.
+- **Amethyst wins on layouts and loses on focus.** It matches Krohnkite's
+  layout model one-for-one, which is the thing in daily use; the price is
+  focus follows mouse, which has to stay off.
 
-If SIP restrictions ever lift, yabai plus skhd becomes the closest overall
-match to Krohnkite — but that's a boot-security change, not a preference.
+What changed: yabai's throw-to-space limitation was the previous
+disqualifier, and 7.1.25 removed it. It's now the better *codebase* — correct
+focus handling, a scripting interface, C and `make` rather than Swift and
+Xcode, more frequent releases — and it's still the wrong choice here, because
+a layout engine is a much larger thing to add to yabai than a corrected hit
+test is to add to Amethyst.
+
+That last point is the live one. Amethyst's focus bug is a localized ordering
+mistake in a single function, and yabai is a working reference for the fix, so
+the gap is closable upstream. If it closes, Amethyst wins outright. If yabai
+ever grows a non-BSP layout, this decision is worth reopening — the layout
+model is the only thing keeping it out.
