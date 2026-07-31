@@ -118,7 +118,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in cat dirname grep id mkdir mv rm sed unzip; do
+    for cmd in awk cat dirname grep id mkdir mv rm sed unzip; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -202,17 +202,28 @@ stage_defaults_read() {
     printf "%s\n" "$2" > "$TEST_TMPDIR/defaults_read.$1"
 }
 
-# Pretend N Spaces exist. count_spaces counts ManagedSpaceID keys, so the
-# fixture only has to carry one per Space.
+# Pretend each argument is a display with that many Spaces, e.g.
+# `stage_spaces 9` for one display with nine, `stage_spaces 9 5` for a second
+# display with five. count_spaces_per_display splits on the display identifier
+# and counts ManagedSpaceID keys, so the fixture only needs those two.
 stage_spaces() {
     _staged_spaces=
-    _remaining="$1"
-    while test "$_remaining" -gt 0; do
-        _staged_spaces="$_staged_spaces        ManagedSpaceID = $_remaining;
+    for _display_spaces in "$@"; do
+        _staged_spaces="$_staged_spaces        \"Display Identifier\" = Main;
 "
-        _remaining=$((_remaining - 1))
+        _remaining="$_display_spaces"
+        while test "$_remaining" -gt 0; do
+            _staged_spaces="$_staged_spaces            ManagedSpaceID = $_remaining;
+"
+            _remaining=$((_remaining - 1))
+        done
     done
     stage_defaults_read com.apple.spaces "$_staged_spaces"
+}
+
+# A Spaces plist that parses but names no display, i.e. the count is unknown.
+stage_spaces_without_display() {
+    stage_defaults_read com.apple.spaces '    "Management Data" = { };'
 }
 
 # Pretend System Settings is open, so its clobber warning fires.
@@ -744,14 +755,14 @@ test_warns_when_too_few_spaces() {
     stage_spaces 4
     run_macos --ignore-errors
     assert_status 0 &&
-    assert_output_contains "only 4 Space(s) exist, so Option+5..9 will do nothing"
+    assert_output_contains "display 1 has 4 Space(s), so Option+5..9 will do nothing there"
 }
 
 test_no_spaces_warning_when_all_nine_exist() {
     stage_spaces 9
     run_macos
     assert_status 0 &&
-    assert_output_contains "9 Spaces found" &&
+    assert_output_contains "Spaces per display: 9" &&
     assert_output_lacks "will do nothing"
 }
 
@@ -764,6 +775,26 @@ test_no_spaces_warning_when_more_than_nine() {
     assert_output_lacks "will do nothing"
 }
 
+# Regression: the count used to span every display, so two displays with five
+# Spaces each totalled ten and the check called Option+1..9 fine while 6..9
+# were dead on both. Desktop numbering is per display, so the count must be.
+test_counts_spaces_per_display_not_in_total() {
+    stage_spaces 5 5
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "display 1 has 5 Space(s)" &&
+    assert_output_contains "display 2 has 5 Space(s)"
+}
+
+# Only the short display is named; the one with enough Spaces isn't.
+test_only_the_short_display_is_named() {
+    stage_spaces 9 3
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "display 2 has 3 Space(s)" &&
+    assert_output_lacks "display 1 has"
+}
+
 # An unreadable Spaces plist is not "zero Spaces": say the count is unknown
 # rather than reporting a number that was never read.
 test_unreadable_spaces_config_is_reported() {
@@ -771,7 +802,17 @@ test_unreadable_spaces_config_is_reported() {
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not read the Spaces configuration" &&
-    assert_output_lacks "only 0 Space(s) exist"
+    assert_output_lacks "has 0 Space(s)"
+}
+
+# A plist that parses but names no display is the same kind of unknown, and
+# must not be reported as a display with zero Spaces.
+test_spaces_config_without_a_display_is_reported() {
+    stage_spaces_without_display
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "named no displays" &&
+    assert_output_lacks "has 0 Space(s)"
 }
 
 # --- preflight ---
@@ -1415,8 +1456,14 @@ run_test "no Spaces warning when all nine exist" \
     test_no_spaces_warning_when_all_nine_exist
 run_test "no Spaces warning when more than nine exist" \
     test_no_spaces_warning_when_more_than_nine
+run_test "counts Spaces per display, not as a total" \
+    test_counts_spaces_per_display_not_in_total
+run_test "only the display short of Spaces is named" \
+    test_only_the_short_display_is_named
 run_test "an unreadable Spaces config is reported, not counted as zero" \
     test_unreadable_spaces_config_is_reported
+run_test "a Spaces config naming no display is reported as unknown" \
+    test_spaces_config_without_a_display_is_reported
 run_test "the preflight names the manual steps" \
     test_preflight_names_the_manual_steps
 run_test "the preflight names the focus-cue options" \

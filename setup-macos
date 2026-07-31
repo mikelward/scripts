@@ -570,38 +570,62 @@ configure_shortcuts() {
 
 # --- Configure Spaces ---
 
-# How many Spaces exist, printed on stdout.
+# Spaces per display, printed on stdout as counts separated by spaces -- one
+# per display, in the order the Dock lists them.
 #
 # There's no public API for this, so it comes out of the Dock's own plist:
-# every Space carries a ManagedSpaceID, so counting those counts Spaces. It's
-# a floor, not an audit -- the count spans all displays and includes the
-# Spaces macOS creates for fullscreen apps, so it can read high. High is the
-# safe direction: this exists only to catch the case where there are plainly
-# fewer than nine and the Option+5..9 bindings would do nothing at all.
-count_spaces() {
+# every Space carries a ManagedSpaceID, so counting those counts Spaces. The
+# count has to be per display rather than a total, because with "Displays have
+# separate Spaces" enabled the desktop numbering is per display too: two
+# displays with five Spaces each total ten, and Option+6..9 is dead on both.
+#
+# Each count can read one high, since the monitor's current-Space marker
+# carries a ManagedSpaceID of its own, and can read high again for Spaces
+# macOS created for fullscreen apps. So this catches "plainly too few" rather
+# than auditing the exact number -- which is its whole remit. It deliberately
+# makes no "all nine are fine" claim, because that's the direction an
+# over-count would get wrong.
+count_spaces_per_display() {
     _spaces_plist=$(defaults read com.apple.spaces SpacesDisplayConfiguration) \
         || return 1
-    # grep -c exits 1 when the count is zero, which is a real answer here
-    # rather than a failure, so take the count from its output either way.
-    if ! _spaces_count=$(printf '%s\n' "$_spaces_plist" | grep -c ManagedSpaceID); then
-        _spaces_count=0
-    fi
-    printf '%s\n' "$_spaces_count"
+    printf '%s\n' "$_spaces_plist" | awk '
+        # Each monitor block is introduced by its display identifier, so that
+        # line closes the previous block and opens the next.
+        /Display Identifier/ {
+            if (seen) { counts = counts " " n }
+            seen = 1; n = 0; next
+        }
+        /ManagedSpaceID/ { if (seen) n++ }
+        END {
+            if (!seen) { exit }
+            counts = counts " " n
+            sub(/^ /, "", counts)
+            print counts
+        }'
 }
 
 # The Option+1..9 bindings written above are positional slots: macOS accepts
 # the write for a Space that doesn't exist, and the key then does nothing.
 # That looks exactly like a broken keybinding, so say which ones are dead.
 check_spaces_count() {
-    if ! _spaces=$(count_spaces); then
+    if ! _per_display=$(count_spaces_per_display); then
         warn "could not read the Spaces configuration; if Option+1..9 doesn't switch desktops, create nine Spaces in Mission Control (Ctrl-Up, then +)"
         return 0
     fi
-    if test "$_spaces" -lt 9; then
-        warn "only $_spaces Space(s) exist, so Option+$((_spaces + 1))..9 will do nothing until the rest are created in Mission Control (Ctrl-Up, then +)"
+    # No display in the plist is not "no Spaces": say the count is unknown
+    # rather than reporting a number that was never read.
+    if test -z "$_per_display"; then
+        warn "the Spaces configuration named no displays, so the Space count is unknown; if Option+1..9 doesn't switch desktops, create nine Spaces in Mission Control (Ctrl-Up, then +)"
         return 0
     fi
-    info "$_spaces Spaces found; Option+1..9 has a desktop to switch to"
+    info "Spaces per display: $_per_display"
+    _display_number=0
+    for _count in $_per_display; do
+        _display_number=$((_display_number + 1))
+        if test "$_count" -lt 9; then
+            warn "display $_display_number has $_count Space(s), so Option+$((_count + 1))..9 will do nothing there until the rest are created in Mission Control (Ctrl-Up, then +)"
+        fi
+    done
 }
 
 configure_spaces() {
