@@ -20,3 +20,4 @@ test:
 	./setup-macos_test
 	./kdeshortcut_test
 	./dvorak_test
+	./confinst_test

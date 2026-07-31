@@ -145,7 +145,12 @@ link_points_to()
 	link="$1"
 	file="$2"
 
-	test "$(readlink -m "$link")" = "$(readlink -m "$file")"
+	# `-ef` compares what the paths resolve to, so a link reached through
+	# other symlinks still matches and a dangling one doesn't. It replaces
+	# `readlink -m`, a GNU extension that BSD readlink (macOS) rejects with
+	# "illegal option -- m" -- both sides then came back empty, so every
+	# link compared equal and stale ones were never replaced.
+	test "$link" -ef "$file"
 }
 
 # make_links <sourcedir> <destdir> <prefix> [<overwrite>]
