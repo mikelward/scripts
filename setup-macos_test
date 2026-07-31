@@ -142,6 +142,16 @@ MOCK
     # machine, so the ordinary run has nothing to say about Option+1..9.
     stage_spaces 9
 
+    # Karabiner installed and its rule symlinked, i.e. the configured machine,
+    # so the ordinary run has nothing to warn about. Its tests remove one or
+    # the other.
+    # Contents/Info.plist plus Contents/MacOS, because that is what counts as
+    # installed -- a bare directory is what a half-finished install leaves.
+    mkdir -p "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/MacOS"
+    printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
+    mkdir -p "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications"
+    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
     # and the real ones beside the script.
@@ -870,6 +880,132 @@ test_yes_skips_the_preflight_pause() {
     assert_output_lacks "stdin is not a terminal"
 }
 
+# --- Karabiner-Elements ---
+
+# Remove the pre-installed Karabiner, i.e. pretend a fresh machine.
+remove_karabiner() {
+    rm -rf "$APPLICATIONS_DIR/Karabiner-Elements.app" \
+        "$USER_APPLICATIONS_DIR/Karabiner-Elements.app"
+}
+
+# Regression: an interrupted install leaves a directory with the right name and
+# nothing usable in it. Treating that as installed skipped Homebrew on every
+# later run and then told the user to enable a rule in an application that
+# can't start -- a transient failure made permanent.
+test_partial_karabiner_bundle_is_reinstalled() {
+    remove_karabiner
+    mkdir -p "$APPLICATIONS_DIR/Karabiner-Elements.app"
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask karabiner-elements"
+}
+
+# The other half of the same check: Info.plist present but no executable
+# directory is equally unusable.
+test_karabiner_without_executable_dir_is_reinstalled() {
+    remove_karabiner
+    mkdir -p "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents"
+    printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask karabiner-elements"
+}
+
+test_installs_karabiner_when_missing() {
+    remove_karabiner
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask karabiner-elements"
+}
+
+test_does_not_reinstall_karabiner() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "brew install --cask karabiner-elements"
+}
+
+# --no-install configures whatever is there; it must not reach for brew.
+test_no_install_skips_karabiner() {
+    remove_karabiner
+    run_macos --no-install --ignore-errors
+    assert_status 0 &&
+    assert_not_called "brew install --cask karabiner-elements" &&
+    assert_output_contains "Karabiner-Elements is not installed and --no-install was given"
+}
+
+# setup promises --no-sudo never prompts or escalates. Karabiner's cask is a
+# .pkg, so Homebrew hands it to the system installer and an administrator
+# prompt appears -- it has to be skipped rather than attempted.
+test_no_sudo_skips_karabiner_install() {
+    remove_karabiner
+    run_macos --no-sudo --ignore-errors
+    assert_status 0 &&
+    assert_not_called "brew install --cask karabiner-elements" &&
+    assert_output_contains "needs administrator rights and --no-sudo was given"
+}
+
+# --no-sudo must not touch Amethyst: its cask is a plain .app, so nothing
+# privileged is involved and skipping it would be a needless regression.
+test_no_sudo_still_installs_amethyst() {
+    remove_amethyst
+    run_macos --no-sudo --ignore-errors
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst"
+}
+
+test_missing_brew_does_not_abort_karabiner() {
+    remove_karabiner
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Homebrew not found, so Karabiner-Elements can't be installed"
+}
+
+# The rule is symlinked out of the conf repo, so a machine that hasn't run
+# confinst has Karabiner installed and no rule for it to load.
+test_missing_karabiner_rule_warns() {
+    rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "run confinst after cloning the conf repo"
+}
+
+# Karabiner lists an asset but doesn't enable it, and karabiner.json is
+# rewritten by the app -- so the enabling step is the user's, and saying so is
+# the only thing the script can do about it.
+test_says_how_to_enable_the_karabiner_rule() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Complex Modifications > Add rule"
+}
+
+# The preflight has to name the driver approval too: Karabiner is inert until
+# its system extension is allowed, which is a GUI-only step.
+test_preflight_names_karabiner_permissions() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "driver extension and Input Monitoring"
+}
+
+# AGENTS.md wants cost and reliability stated before an external dependency is
+# recommended, and Karabiner is heavier than most: a driver extension at boot,
+# a background service, and an MDM that may refuse it outright.
+test_preflight_states_karabiner_cost_and_reliability() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "free and open source" &&
+    assert_output_contains "driver extension that loads at boot" &&
+    assert_output_contains "managed Mac may refuse" &&
+    assert_output_contains "the keyboard keeps working"
+}
+
+# --no-install now skips two applications, so the help has to name both or it
+# is wrong precisely on the fresh machine where the flag matters.
+test_help_names_both_installs() {
+    run_macos --help
+    assert_status 0 &&
+    assert_output_contains "Amethyst or Karabiner-Elements"
+}
+
 # --- Amethyst ---
 
 test_enables_focus_follows_mouse() {
@@ -1163,6 +1299,9 @@ test_staged_bundle_clears_quarantine() {
 # assertion is worth.
 test_staged_bundle_falls_back_to_user_applications() {
     remove_amethyst
+    # Root can't be kept out by permissions, so this makes the directory
+    # genuinely absent instead -- which needs everything else out of it too.
+    remove_karabiner
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
     if test "$(id -u)" -eq 0; then
         rmdir "$APPLICATIONS_DIR"
@@ -1496,6 +1635,32 @@ run_test "no preflight pause without a terminal" \
     test_preflight_does_not_pause_without_a_terminal
 run_test "--yes skips the preflight pause" \
     test_yes_skips_the_preflight_pause
+run_test "installs Karabiner-Elements when missing" \
+    test_installs_karabiner_when_missing
+run_test "does not reinstall Karabiner-Elements" \
+    test_does_not_reinstall_karabiner
+run_test "a partial Karabiner bundle is reinstalled, not accepted" \
+    test_partial_karabiner_bundle_is_reinstalled
+run_test "a Karabiner bundle without an executable directory is reinstalled" \
+    test_karabiner_without_executable_dir_is_reinstalled
+run_test "--no-install skips installing Karabiner-Elements" \
+    test_no_install_skips_karabiner
+run_test "missing brew does not abort the Karabiner step" \
+    test_missing_brew_does_not_abort_karabiner
+run_test "--no-sudo skips the Karabiner install" \
+    test_no_sudo_skips_karabiner_install
+run_test "--no-sudo still installs Amethyst" \
+    test_no_sudo_still_installs_amethyst
+run_test "a missing Karabiner rule warns, not fatal" \
+    test_missing_karabiner_rule_warns
+run_test "says how to enable the Karabiner rule" \
+    test_says_how_to_enable_the_karabiner_rule
+run_test "the preflight names the Karabiner permissions" \
+    test_preflight_names_karabiner_permissions
+run_test "the preflight states Karabiner's cost and reliability" \
+    test_preflight_states_karabiner_cost_and_reliability
+run_test "--help names both applications --no-install skips" \
+    test_help_names_both_installs
 run_test "enables focus follows mouse" test_enables_focus_follows_mouse
 run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
 run_test "says Amethyst needs Accessibility access" \
