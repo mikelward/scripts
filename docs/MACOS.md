@@ -1,3 +1,7 @@
+---
+title: macOS desktop setup
+---
+
 # macOS desktop setup
 
 How the KDE/Krohnkite setup in `setup-kde` is reproduced on macOS by
@@ -19,6 +23,7 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
   - [What `setup-macos` requires](#what-setup-macos-requires)
   - [Install backends for Amethyst](#install-backends-for-amethyst)
 - [Do these by hand first](#do-these-by-hand-first)
+  - [And afterwards](#and-afterwards)
 - [Key mapping](#key-mapping)
   - [Modifier rotation](#modifier-rotation)
 - [How desktop switching works](#how-desktop-switching-works)
@@ -150,14 +155,24 @@ not desktop 7 exists, and the key simply does nothing when it doesn't. The
 script counts the Spaces afterwards and names which of `Option+1..9` are dead,
 but it can't fix it for you.
 
+With "Displays have separate Spaces" enabled, each display needs its own nine
+— the numbering is per display, so five Spaces on each of two displays leaves
+`Option+6..9` dead on both. The count is reported per display for that reason.
+
 **Quit System Settings.** It holds the keyboard shortcut registry in memory
 while open and can flush its cached copy back over the script's writes when it
 closes, silently reverting them. The script warns if it sees it running.
+
+### And afterwards
 
 **Grant Amethyst Accessibility access**, under System Settings > Privacy &
 Security > Accessibility. Amethyst moves and resizes windows through the
 Accessibility API and is completely inert without it — it will run, show its
 menu bar icon, and tile nothing.
+
+This one can only be done *after* the run, not before it: on a first run
+Amethyst isn't installed yet, so there's nothing to grant the permission to.
+The run repeats the instruction when it gets there.
 
 ## Key mapping
 
@@ -293,7 +308,7 @@ Two ways to get the cue back, neither installed or configured by the script:
   colored border around the focused window instead of dimming the others.
   Works with SIP fully enabled because it injects into nothing. This is the
   practical choice.
-- **HazeOver** — paid (roughly $5–10 one-time, also on Setapp). Actually dims
+- **HazeOver** — paid (around $10 one-time, also on Setapp). Actually dims
   the inactive windows, which is closer to the KDE behavior.
 
 Both run as a small always-on process. Neither touches shell startup, so
@@ -302,8 +317,9 @@ there's no latency cost on a new prompt.
 
 ## Troubleshooting
 
-**`Option+5..9` does nothing.** Fewer than nine Spaces exist. Create the rest
-in Mission Control; re-running `setup-macos` will confirm the count.
+**`Option+5..9` does nothing.** Fewer than nine Spaces exist on that display.
+Create the rest in Mission Control; re-running `setup-macos` reports the count
+per display.
 
 **Shortcuts reverted after the run.** System Settings was open and wrote its
 cached copy back. Quit it and re-run.
