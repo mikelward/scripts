@@ -125,6 +125,46 @@ extract_functions() {
     ' "$SETUP"
 }
 
+# The Homebrew environment lives at setup's top level rather than inside a
+# function, so extract_functions can't reach it. Pull the export lines out of
+# the source the same way, so a harness that replays them fails if setup stops
+# setting them -- a hand-written copy here would pass either way.
+extract_homebrew_env() {
+    grep '^export HOMEBREW_' "$SETUP"
+}
+
+# Run install_homebrew against a stub curl. The installer is fetched and run as
+# `/bin/bash -c "$(curl ...)"`, so having curl print a one-line script is
+# enough to see the environment the installer is actually handed -- bash runs
+# it for real, no stubbing of bash needed. PATH holds only the stub, so the
+# real brew (present on the GitHub Actions runners) can't short-circuit the
+# function before it gets there.
+run_homebrew_installer() {
+    brew_tmpdir="$(mktemp -d)"
+    brew_calls="$brew_tmpdir/calls"
+    cat > "$brew_tmpdir/curl" <<MOCK
+#!/bin/sh
+cat <<'INSTALLER'
+printf '%s\n' "installer ran [NONINTERACTIVE=\${NONINTERACTIVE:-unset}]" >> "$brew_calls"
+INSTALLER
+MOCK
+    chmod +x "$brew_tmpdir/curl"
+    # The only real tools the stub PATH needs: sh to run the extracted
+    # functions, cat for the stub curl itself.
+    for tool in sh cat; do
+        ln -s "$(command -v "$tool")" "$brew_tmpdir/$tool"
+    done
+
+    set +e
+    output="$(PATH="$brew_tmpdir" \
+        sh -c "$(extract_functions "info warn install_homebrew")
+install_homebrew" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$brew_calls" 2>/dev/null)"
+    rm -rf "$brew_tmpdir"
+}
+
 # Run set_default_terminal for one OS against mocked KDE/xdg tools.
 # terminal_mode=fail makes kwriteconfig6 and xdg-mime exit non-zero, so the
 # tests can check that a failure is reported rather than swallowed -- and that
@@ -177,7 +217,7 @@ run_macos_packages() {
     macos_calls="$macos_tmpdir/calls"
     cat > "$macos_tmpdir/brew" <<MOCK
 #!/bin/sh
-printf '%s\n' "brew \$*" >> "$macos_calls"
+printf '%s\n' "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}]" >> "$macos_calls"
 exit 1
 MOCK
     chmod +x "$macos_tmpdir/brew"
@@ -185,6 +225,7 @@ MOCK
     set +e
     output="$(PATH="$macos_tmpdir:$PATH" \
         sh -c "set -e
+$(extract_homebrew_env)
 OS=macos
 NPM=yes
 ROOT=yes
@@ -1017,6 +1058,28 @@ test_macos_brew_failure_still_attempts_later_steps() {
     assert_calls_contain "brew install zoxide" &&
     assert_calls_contain "brew install --cask android-platform-tools" &&
     assert_calls_contain "brew install kitty"
+}
+
+# Homebrew's ask mode is on by default, so each install below printed its plan
+# and waited for a yes whenever it pulled in a dependency -- which the core
+# formula list always does. Running setup is the yes. The mock reports what
+# brew inherited, and the harness replays setup's own export rather than a copy
+# of it, so dropping the export from the script fails this.
+test_brew_installs_do_not_ask_for_confirmation() {
+    run_macos_packages 0
+    assert_status 0 &&
+    assert_calls_contain "brew install zoxide [HOMEBREW_NO_ASK=1]" &&
+    assert_calls_contain "brew install --cask android-platform-tools [HOMEBREW_NO_ASK=1]"
+}
+
+# NONINTERACTIVE must not reach the Homebrew installer. It does more than skip
+# the opening RETURN: the installer switches its sudo calls to `sudo -n` and
+# skips the `sudo -v` that caches credentials, so a fresh Mac with no warm sudo
+# timestamp aborts with "Need sudo access on macOS" rather than asking for the
+# password -- and setup then skips every macOS package it exists to install.
+test_installer_can_still_ask_for_the_admin_password() {
+    run_homebrew_installer
+    assert_calls_contain "installer ran [NONINTERACTIVE=unset]"
 }
 
 # When Homebrew itself can't be made available there is nothing to install
@@ -1880,6 +1943,10 @@ run_test "macOS brew failures warn instead of aborting the bootstrap" \
     test_macos_brew_failures_are_not_fatal
 run_test "a failing brew still attempts the later macOS steps" \
     test_macos_brew_failure_still_attempts_later_steps
+run_test "brew installs don't stop for confirmation" \
+    test_brew_installs_do_not_ask_for_confirmation
+run_test "the Homebrew installer can still ask for the admin password" \
+    test_installer_can_still_ask_for_the_admin_password
 run_test "macOS without Homebrew skips the arm and continues" \
     test_macos_without_homebrew_skips_the_arm
 run_test "no unguarded brew install remains" \

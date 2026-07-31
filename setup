@@ -99,6 +99,18 @@ CONF_DIR="$HOME/conf"
 SRC_DIR="$HOME/src"
 ROOT_DIR="$SRC_DIR/root"
 
+# Homebrew's ask mode is on by default, so `brew install` prints its plan and
+# waits for a yes whenever the plan pulls in dependencies -- which every
+# formula and cask list here does. Running setup is the yes; re-asking per
+# package is a question the user already answered. Exported rather than passed
+# per call so it covers setup-macos too, and so it survives an older brew that
+# predates the --no-ask flag (an unknown HOMEBREW_ variable is ignored, an
+# unknown flag is a hard error).
+#
+# This deliberately stops at confirmations. The administrator password a .pkg
+# cask asks for is the user's to give, and nothing here suppresses it.
+export HOMEBREW_NO_ASK=1
+
 # Whether to install/configure graphical components. One of:
 #   auto - decide based on a detected display server (the default)
 #   yes  - forced on via --gui
@@ -752,6 +764,13 @@ install_homebrew() {
         return 0
     fi
     info "Installing Homebrew"
+    # Deliberately not NONINTERACTIVE=1, tempting as it looks: that suppresses
+    # more than the installer's opening RETURN. It switches the installer's
+    # sudo calls to `sudo -n` and skips the `sudo -v` that would cache
+    # credentials, so on a fresh Mac with no warm sudo timestamp the installer
+    # aborts with "Need sudo access on macOS" instead of asking for the
+    # password. The administrator password is the user's to give -- one RETURN
+    # on the one run that installs Homebrew is the better trade.
     if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"; then
         warn "Homebrew installation failed"
         return 1

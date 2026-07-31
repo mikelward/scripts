@@ -86,6 +86,13 @@ ASSUME_YES=no
 # which prompts for an administrator password. --no-sudo skips it.
 SUDO=yes
 
+# Homebrew's ask mode is on by default, so the cask installs below stop to
+# confirm a plan the caller already asked for. setup exports this too; set it
+# here as well because setup-macos is also run on its own. It stops at
+# confirmations -- the administrator password Karabiner's .pkg needs is the
+# user's to give, and nothing here suppresses it.
+export HOMEBREW_NO_ASK=1
+
 # Directory containing this script, resolved up front while $0 still means what
 # the caller typed. The launcher helpers the Quick Actions run live beside this
 # script, and during a fresh bootstrap `setup` runs it straight out of the

@@ -61,13 +61,21 @@ MOCK
 
     # pgrep exits 0 by default, i.e. the app is running and restart_app should
     # go on to killall it.
-    for cmd in hidutil launchctl killall brew; do
+    for cmd in hidutil launchctl killall; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
 exit 0
 MOCK
     done
+
+    # brew records its environment as well as its arguments: ask mode is
+    # Homebrew's default, and the only evidence it's off is what brew inherits.
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}]" >> "$CALLS"
+exit 0
+MOCK
 
     # pgrep answers "running" for everything except the settings app, which
     # would otherwise make every ordinary run warn about being clobbered. A
@@ -953,6 +961,18 @@ test_no_sudo_still_installs_amethyst() {
     assert_called "brew install --cask amethyst"
 }
 
+# Homebrew's ask mode is the default, so the cask installs stopped to confirm
+# a plan the caller had already asked for by running setup-macos. This is not
+# behind --yes: that flag skips the preflight pause, a separate question.
+test_cask_installs_do_not_ask_for_confirmation() {
+    remove_amethyst
+    remove_karabiner
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst [HOMEBREW_NO_ASK=1]" &&
+    assert_called "brew install --cask karabiner-elements [HOMEBREW_NO_ASK=1]"
+}
+
 test_missing_brew_does_not_abort_karabiner() {
     remove_karabiner
     run_macos_without brew --ignore-errors
@@ -1645,6 +1665,8 @@ run_test "a Karabiner bundle without an executable directory is reinstalled" \
     test_karabiner_without_executable_dir_is_reinstalled
 run_test "--no-install skips installing Karabiner-Elements" \
     test_no_install_skips_karabiner
+run_test "cask installs don't stop for confirmation" \
+    test_cask_installs_do_not_ask_for_confirmation
 run_test "missing brew does not abort the Karabiner step" \
     test_missing_brew_does_not_abort_karabiner
 run_test "--no-sudo skips the Karabiner install" \
