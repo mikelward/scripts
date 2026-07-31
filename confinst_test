@@ -1,0 +1,221 @@
+#!/bin/sh
+# Tests for confinst
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFINST="$SCRIPT_DIR/confinst"
+# The stub PATH shadows readlink, so assertions call the real one directly.
+REAL_READLINK="$(command -v readlink)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# Each test gets a throwaway $HOME with its own ~/conf to install from, plus a
+# stub PATH holding a BSD readlink. macOS readlink accepts only -f and -n, and
+# confinst has to work there without shelling out to the GNU-only -m.
+make_home() {
+    # -P because mktemp hands back a path through /var -> private/var on macOS,
+    # and the tests compare link targets as strings.
+    homedir="$(cd "$(mktemp -d)" && pwd -P)"
+    mkdir -p "$homedir/conf/vim"
+    printf 'bashrc\n' > "$homedir/conf/bashrc"
+    printf 'vimrc\n' > "$homedir/conf/vimrc"
+    printf 'plugin\n' > "$homedir/conf/vim/plugin.vim"
+
+    stubdir="$homedir/stub"
+    mkdir -p "$stubdir"
+    cat > "$stubdir/readlink" <<EOF
+#!/bin/sh
+# BSD readlink: -m is a GNU extension, so reject it the way macOS does.
+case "\$1" in
+    -*m*)
+        printf 'readlink: illegal option -- m\n' >&2
+        printf 'usage: readlink [-fn] [file ...]\n' >&2
+        exit 1
+        ;;
+esac
+exec $REAL_READLINK "\$@"
+EOF
+    chmod +x "$stubdir/readlink"
+}
+
+cleanup_home() {
+    rm -rf "$homedir"
+}
+
+# run_confinst [args...]: install into the throwaway $HOME with BSD readlink on
+# PATH, capturing combined output and exit status.
+run_confinst() {
+    set +e
+    output="$(HOME="$homedir" PATH="$stubdir:$PATH" "$CONFINST" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_links_to() {
+    actual="$("$REAL_READLINK" "$1" 2>/dev/null || printf '<not a symlink>')"
+    if test "$actual" != "$2"; then
+        echo "  FAIL: expected $1 -> $2, got $actual"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_output_contains() {
+    case "$output" in
+        *"$1"*) ;;
+        *)
+            echo "  FAIL: output does not contain '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_output_lacks() {
+    case "$output" in
+        *"$1"*)
+            echo "  FAIL: output contains '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+run_test() {
+    name="$1"
+    func="$2"
+    TESTS_RUN=$((TESTS_RUN + 1))
+    # TEST_FAILED catches asserts that fail mid-test: running "$func" as an
+    # `if` condition disables `set -e` inside it, so a failed assert that is
+    # not the last statement would otherwise be ignored.
+    TEST_FAILED=
+    make_home
+    if "$func" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $name"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $name"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+    cleanup_home
+}
+
+# --- linking ---
+
+test_links_files_with_dot_prefix() {
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc" &&
+    assert_links_to "$homedir/.vimrc" "$homedir/conf/vimrc"
+}
+
+test_recurses_into_directories() {
+    # Directories are mirrored, not symlinked, and only the top level gets the
+    # dot prefix: ~/conf/vim/plugin.vim becomes ~/.vim/plugin.vim.
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.vim/plugin.vim" "$homedir/conf/vim/plugin.vim"
+}
+
+test_correct_link_is_left_alone() {
+    ln -s "$homedir/conf/bashrc" "$homedir/.bashrc"
+    run_confinst --verbose
+    assert_status 0 &&
+    assert_output_contains "already points to" &&
+    assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc"
+}
+
+# Regression: with `readlink -m`, BSD readlink failed on both sides and the two
+# empty strings compared equal, so a link pointing somewhere else was reported
+# as already correct and left in place.
+test_stale_link_is_replaced() {
+    printf 'stale\n' > "$homedir/elsewhere"
+    ln -s "$homedir/elsewhere" "$homedir/.bashrc"
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc"
+}
+
+# Regression: the -m probe printed "readlink: illegal option -- m" on macOS,
+# twice per already-linked file.
+test_no_readlink_errors_on_bsd() {
+    ln -s "$homedir/conf/bashrc" "$homedir/.bashrc"
+    run_confinst
+    assert_status 0 &&
+    assert_output_lacks "illegal option"
+}
+
+test_dangling_link_is_replaced() {
+    ln -s "$homedir/gone" "$homedir/.bashrc"
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc"
+}
+
+test_existing_file_is_backed_up() {
+    printf 'mine\n' > "$homedir/.bashrc"
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc" &&
+    assert_output_contains "Moving $homedir/.bashrc to"
+    # The backup keeps the original contents under a timestamped name.
+    for backup in "$homedir"/.bashrc.*; do
+        test -f "$backup" || continue
+        test "$(cat "$backup")" = mine && return 0
+    done
+    echo "  FAIL: no backup holding the original contents"
+    TEST_FAILED=1
+    return 1
+}
+
+# --- options ---
+
+test_simulate_changes_nothing() {
+    run_confinst --simulate
+    assert_status 0 &&
+    assert_output_contains "Would run ln -s" &&
+    test ! -e "$homedir/.bashrc"
+}
+
+test_custom_prefix() {
+    run_confinst --prefix=dot-
+    assert_status 0 &&
+    assert_links_to "$homedir/dot-bashrc" "$homedir/conf/bashrc"
+}
+
+test_unknown_option_exits_two() {
+    run_confinst --nonesuch
+    assert_status 2 &&
+    assert_output_contains "Unknown option --nonesuch"
+}
+
+# --- run ---
+
+run_test "files are linked with the dot prefix" test_links_files_with_dot_prefix
+run_test "directories are mirrored, not linked" test_recurses_into_directories
+run_test "an already-correct link is left alone" test_correct_link_is_left_alone
+run_test "a link to the wrong file is replaced" test_stale_link_is_replaced
+run_test "BSD readlink produces no errors" test_no_readlink_errors_on_bsd
+run_test "a dangling link is replaced" test_dangling_link_is_replaced
+run_test "an existing file is backed up" test_existing_file_is_backed_up
+run_test "--simulate changes nothing" test_simulate_changes_nothing
+run_test "--prefix sets the link prefix" test_custom_prefix
+run_test "an unknown option exits 2" test_unknown_option_exits_two
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
