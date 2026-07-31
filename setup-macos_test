@@ -1028,10 +1028,25 @@ test_help_names_both_installs() {
 
 # --- Amethyst ---
 
-test_enables_focus_follows_mouse() {
+# Amethyst's focus-follows-mouse hit-tests only the windows it tracks, so it
+# focuses whatever sits under an untracked overlay and dismisses it -- popovers
+# and panels close as soon as the pointer reaches them (ianyh/Amethyst#277).
+# KWin's FocusFollowsMouse exempts popups; Amethyst has no equivalent, so this
+# is one of the settings that can't carry over from the KDE side.
+test_disables_focus_follows_mouse() {
     run_macos
     assert_status 0 &&
-    assert_called "defaults write com.amethyst.Amethyst focus-follows-mouse -bool true"
+    assert_called "defaults write com.amethyst.Amethyst focus-follows-mouse -bool false"
+}
+
+# Regression: the setting has to be written false, not merely left alone. A
+# machine configured by an earlier run already has true in its preferences,
+# and `defaults` keeps it there until something overwrites it -- so dropping
+# the write would silently leave every existing machine broken.
+test_focus_follows_mouse_not_left_enabled() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "focus-follows-mouse -bool true"
 }
 
 test_missing_amethyst_config() {
@@ -1683,7 +1698,9 @@ run_test "the preflight states Karabiner's cost and reliability" \
     test_preflight_states_karabiner_cost_and_reliability
 run_test "--help names both applications --no-install skips" \
     test_help_names_both_installs
-run_test "enables focus follows mouse" test_enables_focus_follows_mouse
+run_test "disables focus follows mouse" test_disables_focus_follows_mouse
+run_test "does not leave focus follows mouse enabled" \
+    test_focus_follows_mouse_not_left_enabled
 run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
 run_test "says Amethyst needs Accessibility access" \
     test_mentions_accessibility_permission

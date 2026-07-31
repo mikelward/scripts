@@ -376,9 +376,26 @@ application stalls the whole relayout.
 **Space-switch animation** can't be disabled. Turning on Reduce Motion makes
 it a crossfade rather than a slide, which is faster and less distracting.
 
-**Focus stealing prevention.** Amethyst has focus-follows-mouse (the script
-enables it), but there's no equivalent of KWin's `NextFocusPrefersMouse` or
-its focus-stealing prevention levels.
+**Focus follows mouse.** The script explicitly turns Amethyst's off, so this
+is the one KDE behavior that's deliberately *not* reproduced.
+
+Amethyst hit-tests only the windows it tracks and then focuses the topmost
+match. An overlay it doesn't track — a Chrome extension popover, a panel that
+floats by the `float-small-windows` rule — is invisible to that test, so the
+window *underneath* the overlay wins and gets focused, which deactivates the
+overlay's app and makes the overlay dismiss itself. Popovers close the instant
+the pointer reaches them. It's [ianyh/Amethyst#277][amethyst-277], open since
+2015.
+
+KWin doesn't have this problem: `FocusFollowsMouse` exempts popups, which is
+exactly why `setup-kde` picks it over `FocusUnderMouse`. Amethyst has no such
+exemption, no dwell delay, and no per-app exclusions, so there's no setting
+that softens it — the only fix is to leave it off.
+
+There's also no equivalent of KWin's `NextFocusPrefersMouse` or its
+focus-stealing prevention levels.
+
+[amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
 Two ways to get the cue back, neither installed or configured by the script:
@@ -409,6 +426,21 @@ Security > Accessibility.
 
 **Keyboard layout or modifiers unchanged.** Those are read by the login
 session — log out and back in.
+
+**Popovers and menus dismiss themselves as the pointer reaches them.**
+Amethyst's focus-follows-mouse is on. `setup-macos` turns it off, but the
+Preferences checkbox (Tweaks > Focus follows mouse) sets it back, and Amethyst
+flushes its preferences on quit — so turn it off in the UI, or quit Amethyst
+*before* writing the setting:
+
+```sh
+killall Amethyst
+defaults write com.amethyst.Amethyst focus-follows-mouse -bool false
+open -a Amethyst
+```
+
+See [focus follows mouse](#what-doesnt-carry-over) above for why it can't be
+made to work.
 
 **Numbered desktops switch to the wrong one.** The Spaces order drifted.
 `setup-macos` pins it, but verify "Automatically rearrange Spaces based on

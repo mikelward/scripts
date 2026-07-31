@@ -7,8 +7,9 @@
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
 # - Amethyst tiling window manager: installs it (Homebrew, or a staged bundle
-#   offline), then sets focus follows mouse. Its layouts, modifiers and margins
-#   come from ~/.amethyst.yml, which confinst symlinks out of the conf repo.
+#   offline). Its layouts, modifiers and margins come from ~/.amethyst.yml,
+#   which confinst symlinks out of the conf repo. Focus follows mouse is turned
+#   off -- see configure_amethyst for why it can't carry over from KDE.
 # - Karabiner-Elements, for the one binding the modifier rotation inverts:
 #   Alt+Tab. Its rule is symlinked out of the conf repo too.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
@@ -881,9 +882,20 @@ configure_amethyst() {
         warn "$HOME/.amethyst.yml not found; run confinst after cloning the conf repo"
     fi
 
-    # Enable focus follows mouse
-    info "Enabling focus follows mouse"
-    try defaults write com.amethyst.Amethyst focus-follows-mouse -bool true
+    # Disable focus follows mouse. The KDE side runs FocusFollowsMouse, but
+    # KWin exempts popups from it -- see the FocusUnderMouse note in setup-kde,
+    # where the same problem broke the application launcher. Amethyst has no
+    # such exemption: it hit-tests only the windows it tracks, so an untracked
+    # overlay (a Chrome extension popover, a System Settings panel) is invisible
+    # to it and it focuses whatever sits underneath, dismissing the overlay the
+    # moment the pointer reaches it. Upstream has had this open since 2015 as
+    # ianyh/Amethyst#277.
+    #
+    # Written as false rather than left unset: a machine configured by an
+    # earlier run already has true in its preferences, and dropping the line
+    # would leave that stale value in place.
+    info "Disabling focus follows mouse (dismisses popovers; ianyh/Amethyst#277)"
+    try defaults write com.amethyst.Amethyst focus-follows-mouse -bool false
 
     # Amethyst can't move a window without Accessibility access, and macOS only
     # grants that through an interactive prompt -- there's no defaults key for
