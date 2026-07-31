@@ -35,15 +35,18 @@ setup() {
     mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
     MACOS_SCRIPT="$SCRIPT_DIR/setup-macos"
 
-    # `defaults read` answers from a file when a test has staged one, and
-    # otherwise fails the way the real one does for a key that was never
-    # written. Everything else just records argv.
+    # `defaults read` answers from a file when a test has staged one for that
+    # domain, and otherwise fails the way the real one does for a key that was
+    # never written. Staging is per-domain because the script reads two of them
+    # for unrelated reasons -- the input sources and the Spaces layout -- and a
+    # single shared answer would feed each one the other's fixture.
+    # Everything else just records argv.
     cat > "$TEST_TMPDIR/bin/defaults" <<MOCK
 #!/bin/sh
 printf "%s\\n" "defaults \$*" >> "$CALLS"
 if test "\$1" = read; then
-    if test -f "$TEST_TMPDIR/defaults_read"; then
-        cat "$TEST_TMPDIR/defaults_read"
+    if test -f "$TEST_TMPDIR/defaults_read.\$2"; then
+        cat "$TEST_TMPDIR/defaults_read.\$2"
         exit 0
     fi
     echo "Domain/default pair does not exist" >&2
@@ -58,13 +61,28 @@ MOCK
 
     # pgrep exits 0 by default, i.e. the app is running and restart_app should
     # go on to killall it.
-    for cmd in hidutil launchctl killall pgrep brew; do
+    for cmd in hidutil launchctl killall brew; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
 exit 0
 MOCK
     done
+
+    # pgrep answers "running" for everything except the settings app, which
+    # would otherwise make every ordinary run warn about being clobbered. A
+    # test stages settings_app_running to say it is open.
+    cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pgrep \$*" >> "$CALLS"
+case "\$*" in
+    *"System Settings"*|*"System Preferences"*)
+        test -f "$TEST_TMPDIR/settings_app_running" && exit 0
+        exit 1
+        ;;
+esac
+exit 0
+MOCK
 
     # xattr is asked two different questions: -d removes the quarantine
     # attribute, -p reports whether anything still carries it. The default
@@ -120,6 +138,10 @@ MOCK
     # test_missing_amethyst_config removes it.
     touch "$TEST_TMPDIR/home/.amethyst.yml"
 
+    # Nine Spaces by default, for the same reason: that's the configured
+    # machine, so the ordinary run has nothing to say about Option+1..9.
+    stage_spaces 9
+
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
     # and the real ones beside the script.
@@ -174,10 +196,28 @@ teardown() {
     rm -rf "$TEST_TMPDIR"
 }
 
-# Stage the output `defaults read` should print, i.e. pretend the key is
-# already set to this.
+# Stage the output `defaults read DOMAIN` should print, i.e. pretend that
+# domain is already set to this.
 stage_defaults_read() {
-    printf "%s\n" "$1" > "$TEST_TMPDIR/defaults_read"
+    printf "%s\n" "$2" > "$TEST_TMPDIR/defaults_read.$1"
+}
+
+# Pretend N Spaces exist. count_spaces counts ManagedSpaceID keys, so the
+# fixture only has to carry one per Space.
+stage_spaces() {
+    _staged_spaces=
+    _remaining="$1"
+    while test "$_remaining" -gt 0; do
+        _staged_spaces="$_staged_spaces        ManagedSpaceID = $_remaining;
+"
+        _remaining=$((_remaining - 1))
+    done
+    stage_defaults_read com.apple.spaces "$_staged_spaces"
+}
+
+# Pretend System Settings is open, so its clobber warning fires.
+stage_settings_app_running() {
+    touch "$TEST_TMPDIR/settings_app_running"
 }
 
 # Remove the pre-installed Amethyst, i.e. pretend a fresh machine.
@@ -205,6 +245,10 @@ fail_defaults_write() {
 
 # Run setup-macos in the sandbox: fresh HOME, and a PATH of just the mock bin
 # plus the symlinked system utilities -- nothing from the real /usr/bin.
+#
+# stdin comes from /dev/null so the preflight pause is never reached: it only
+# prompts on a terminal, and without this a developer running `make test` from
+# one would block on it while CI sailed past.
 run_macos() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
@@ -214,7 +258,7 @@ run_macos() {
         USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
-        "$MACOS_SCRIPT" "$@" 2>&1)"
+        "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
     status=$?
     set -e
 }
@@ -241,7 +285,7 @@ run_macos_without() {
         USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
-        "$MACOS_SCRIPT" "$@" 2>&1)"
+        "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
     status=$?
     set -e
 }
@@ -417,7 +461,7 @@ test_enables_dvorak() {
 # stacked another Dvorak entry onto AppleEnabledInputSources on every run --
 # and setup is explicitly meant to be re-runnable.
 test_does_not_re_add_dvorak() {
-    stage_defaults_read '(
+    stage_defaults_read com.apple.HIToolbox '(
         {
         InputSourceKind = "Keyboard Layout";
         "KeyboardLayout ID" = 16300;
@@ -436,7 +480,7 @@ test_does_not_re_add_dvorak() {
 # machine as already configured -- then select a layout that isn't in the
 # enabled list. Matched on the layout ID instead.
 test_dvorak_variant_is_not_standard_dvorak() {
-    stage_defaults_read '(
+    stage_defaults_read com.apple.HIToolbox '(
         {
         InputSourceKind = "Keyboard Layout";
         "KeyboardLayout ID" = 16301;
@@ -618,6 +662,44 @@ test_disables_finder_search_hotkey() {
     assert_called "defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65"
 }
 
+# -dict-add replaces the whole entry, so a bare enabled=false would drop the
+# stock binding with it and leave nothing for System Settings to restore.
+# 1572864 is Cmd+Option, the modifier half of the original Cmd+Option+Space.
+test_disabled_finder_search_keeps_its_parameters() {
+    run_macos
+    assert_status 0 &&
+    assert_called "1572864"
+}
+
+# System Settings holds the shortcut registry while it's open and can write its
+# copy back over these, which looks exactly like the writes never happened.
+test_warns_when_settings_app_is_open() {
+    stage_settings_app_running
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "System Settings is running and can overwrite these shortcuts"
+}
+
+test_no_settings_app_warning_when_closed() {
+    run_macos
+    assert_status 0 &&
+    assert_output_lacks "can overwrite these shortcuts"
+}
+
+# A pgrep that failed says nothing about whether the app is open, so it must
+# not be reported as closed -- the same rule restart_app follows.
+test_unknown_settings_app_state_is_reported() {
+    cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pgrep \$*" >> "$CALLS"
+exit 2
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/pgrep"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not tell whether System Settings is running"
+}
+
 # Nine desktops, IDs 118-126, each on Option (modifier flag 524288).
 test_configures_nine_desktop_shortcuts() {
     run_macos
@@ -653,6 +735,78 @@ test_pins_the_spaces_order() {
     assert_status 0 &&
     assert_called "defaults write com.apple.dock mru-spaces -bool false" &&
     assert_called "killall Dock"
+}
+
+# macOS accepts a "switch to desktop N" binding for a Space that doesn't
+# exist, and the key then does nothing at all -- indistinguishable from a
+# binding that failed to write. Say which ones are dead instead.
+test_warns_when_too_few_spaces() {
+    stage_spaces 4
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "only 4 Space(s) exist, so Option+5..9 will do nothing"
+}
+
+test_no_spaces_warning_when_all_nine_exist() {
+    stage_spaces 9
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "9 Spaces found" &&
+    assert_output_lacks "will do nothing"
+}
+
+# More Spaces than the bindings use is fine -- every Option+1..9 still lands
+# somewhere, so there is nothing to report.
+test_no_spaces_warning_when_more_than_nine() {
+    stage_spaces 12
+    run_macos
+    assert_status 0 &&
+    assert_output_lacks "will do nothing"
+}
+
+# An unreadable Spaces plist is not "zero Spaces": say the count is unknown
+# rather than reporting a number that was never read.
+test_unreadable_spaces_config_is_reported() {
+    rm -f "$TEST_TMPDIR/defaults_read.com.apple.spaces"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not read the Spaces configuration" &&
+    assert_output_lacks "only 0 Space(s) exist"
+}
+
+# --- preflight ---
+
+test_preflight_names_the_manual_steps() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Create nine Spaces in Mission Control" &&
+    assert_output_contains "Quit System Settings" &&
+    assert_output_contains "Grant Amethyst Accessibility access"
+}
+
+# macOS has no dim-inactive equivalent, so the preflight names the two ways to
+# get a focus cue rather than leaving it as an unexplained gap.
+test_preflight_names_the_focus_cue_options() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "JankyBorders" &&
+    assert_output_contains "HazeOver"
+}
+
+# The pause only happens on a terminal: setup runs this as part of an
+# unattended bootstrap, where a prompt would block forever.
+test_preflight_does_not_pause_without_a_terminal() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "stdin is not a terminal" &&
+    assert_output_contains "macOS configured successfully"
+}
+
+test_yes_skips_the_preflight_pause() {
+    run_macos --yes
+    assert_status 0 &&
+    assert_output_contains "Create nine Spaces in Mission Control" &&
+    assert_output_lacks "stdin is not a terminal"
 }
 
 # --- Amethyst ---
@@ -1245,8 +1399,32 @@ run_test "applies the shortcut settings to this session" \
     test_applies_shortcut_settings
 run_test "missing activateSettings falls back to the logout advice" \
     test_missing_activate_settings_warns_about_logout
+run_test "a disabled Finder search keeps its stock binding" \
+    test_disabled_finder_search_keeps_its_parameters
+run_test "warns when System Settings is open to clobber the writes" \
+    test_warns_when_settings_app_is_open
+run_test "no clobber warning when System Settings is closed" \
+    test_no_settings_app_warning_when_closed
+run_test "an unknown System Settings state is reported, not read as closed" \
+    test_unknown_settings_app_state_is_reported
 run_test "pins the Spaces order so the numbered shortcuts hold" \
     test_pins_the_spaces_order
+run_test "warns which Option+N bindings have no Space to switch to" \
+    test_warns_when_too_few_spaces
+run_test "no Spaces warning when all nine exist" \
+    test_no_spaces_warning_when_all_nine_exist
+run_test "no Spaces warning when more than nine exist" \
+    test_no_spaces_warning_when_more_than_nine
+run_test "an unreadable Spaces config is reported, not counted as zero" \
+    test_unreadable_spaces_config_is_reported
+run_test "the preflight names the manual steps" \
+    test_preflight_names_the_manual_steps
+run_test "the preflight names the focus-cue options" \
+    test_preflight_names_the_focus_cue_options
+run_test "no preflight pause without a terminal" \
+    test_preflight_does_not_pause_without_a_terminal
+run_test "--yes skips the preflight pause" \
+    test_yes_skips_the_preflight_pause
 run_test "enables focus follows mouse" test_enables_focus_follows_mouse
 run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_config
 run_test "says Amethyst needs Accessibility access" \
