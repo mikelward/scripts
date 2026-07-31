@@ -42,13 +42,15 @@
 #        restart Finder and the Dock. Without any of them the settings are
 #        still written and the script says what needs a logout.
 #
-# MACOS.md covers the whole setup: the key mapping against the KDE/Krohnkite
+# docs/MACOS.md covers the whole setup: the key mapping against the KDE/Krohnkite
 # side, how the symbolic hotkeys work, what doesn't carry over from KWin, and
 # why Amethyst rather than yabai or AeroSpace.
 #
-# Three things here need a human first -- creating the Spaces, quitting System
-# Settings, and granting Amethyst Accessibility access -- and none of them can
-# be done from a script. The run opens by saying so and waiting for Enter; see
+# Two things here need a human first -- creating the Spaces and quitting System
+# Settings -- and a third, granting Amethyst Accessibility access, needs one
+# afterwards, since a first run installs Amethyst partway through and there is
+# nothing to grant the permission to until it has. None of the three can be
+# done from a script. The run opens by saying so and waiting for Enter; see
 # preflight. --yes skips the wait, and so does a non-terminal stdin, so an
 # unattended bootstrap doesn't block on an Enter that can never arrive.
 #
@@ -244,13 +246,20 @@ Before continuing, do these by hand -- this script can't:
      Space that doesn't exist yet.
   2. Quit System Settings. Left open, it can write its cached copy of the
      keyboard shortcuts back over the ones written here.
+
+Then once this run has finished:
+
   3. Grant Amethyst Accessibility access, under System Settings > Privacy &
      Security > Accessibility. It can't move or resize a window without it.
+     This run installs Amethyst if it isn't already there, so the permission
+     can only be granted afterwards -- the run says so again when it gets
+     there.
 
 Optional: macOS has no equivalent of KDE's dim-inactive effect. JankyBorders
-(`brew install borders`, free) outlines the focused window instead of dimming
-the others; HazeOver (paid) does the dimming itself. Neither is installed or
-configured here.
+(`brew install borders`, free) outlines the focused window; HazeOver (around
+$10 one-time) dims the others instead. Each runs as an always-on process,
+and neither is installed or configured here. If one is missing or stops
+running, the only consequence is losing the focus cue.
 
 The keyboard layout and modifier-key changes take effect at the next login.
 
