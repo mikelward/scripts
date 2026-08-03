@@ -89,6 +89,7 @@ TIMEOUT
   unset SHPOOL_SESSION_NAME
   unset SHPOOL_PREFIX
   unset SHPOOL_ATTACH_EXIT
+  unset SESSION_SHELL
   rm -f "$TEST_TMPDIR"/.autoshpool_switch*
   rm -f "$TEST_TMPDIR/.shpool_calls"
   rm -f "$TEST_TMPDIR/.shpool_sessions"
@@ -361,6 +362,62 @@ test_creates_session_1() {
   assert_status 0
   assert_called "shpool attach -d . 1"
   assert_output_contains "Creating shpool session 1"
+}
+
+test_switch_created_target_gets_session_shell() {
+  # A switch whose target doesn't exist yet creates it, so the launching shell
+  # is forwarded there too -- the prefix-mismatch switch and makeshpool both
+  # create through this path.
+  export SESSION_SHELL="/opt/shells/nu -l"
+  echo "myproject:1" > "$HOME/.autoshpool_switch"
+  echo "/home/u/proj" > "$HOME/.autoshpool_switch_pwd"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach -f -d /home/u/proj --cmd /opt/shells/nu -l myproject:1"
+}
+
+test_switch_existing_target_ignores_session_shell() {
+  # An existing switch target keeps the shell it was created with.
+  export SESSION_SHELL="/opt/shells/nu -l"
+  cat > "$HOME/.shpool_sessions" <<EOF
+myproject:1   2025-01-01T00:00:00Z   disconnected
+EOF
+  echo "myproject:1" > "$HOME/.autoshpool_switch"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach -f myproject:1"
+  if grep -q -- "--cmd" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: switch to an existing session passed --cmd"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
+}
+
+test_creates_session_with_session_shell() {
+  # SESSION_SHELL carries the launching shell's command line into the created
+  # session via --cmd, flags included.
+  export SESSION_SHELL="/opt/shells/nu -l"
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach -d . --cmd /opt/shells/nu -l 1"
+  assert_output_contains "Creating shpool session 1"
+}
+
+test_reattach_ignores_session_shell() {
+  # A session's shell is fixed when it is spawned: reattaching a disconnected
+  # session must not pass --cmd.
+  export SESSION_SHELL="/opt/shells/nu -l"
+  cat > "$HOME/.shpool_sessions" <<EOF
+3      2025-01-01T00:00:00Z   disconnected
+EOF
+  run_autoshpool
+  assert_status 0
+  assert_called "shpool attach 3"
+  if grep -q -- "--cmd" "$HOME/.shpool_calls" 2>/dev/null; then
+    echo "  FAIL: reattach passed --cmd"
+    echo "  calls: $(cat "$HOME/.shpool_calls" 2>/dev/null)"
+    return 1
+  fi
 }
 
 test_attaches_disconnected_first() {
@@ -996,6 +1053,10 @@ run_test "records the current directory for a prefix-mismatch switch" test_attac
 run_test "records no directory for a plain switch" test_plain_switch_records_no_pwd
 run_test "loop passes the recorded directory to shpool attach -d" test_loop_switch_passes_recorded_pwd_as_dir
 run_test "creates session 1 when no sessions exist" test_creates_session_1
+run_test "SESSION_SHELL runs the launching shell in a created session" test_creates_session_with_session_shell
+run_test "reattach keeps the session's shell despite SESSION_SHELL" test_reattach_ignores_session_shell
+run_test "a switch that creates its target forwards SESSION_SHELL" test_switch_created_target_gets_session_shell
+run_test "a switch to an existing target ignores SESSION_SHELL" test_switch_existing_target_ignores_session_shell
 run_test "attaches to disconnected session before creating new one" test_attaches_disconnected_first
 run_test "reuses a disconnected separatorless session on startup" test_reuses_separatorless_session
 run_test "reuses a separatorless session on a prefix-mismatch switch" test_mismatch_switch_reuses_separatorless_session
