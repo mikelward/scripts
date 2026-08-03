@@ -183,36 +183,16 @@ stopping at the file you opened.
   next check with whatever the client offers (`send_later`, a scheduled task /
   cron, `/loop`), and arm it *without asking*. Scheduling your own follow-up is
   routine hygiene, not a decision that needs approval. Someone else's open PR is
-  not your polling job — adopt one only when asked. Merging doesn't end the
-  watch either: reviewers and bots comment afterward, so drop to a slower
-  cadence (every half hour or so) until every late comment is handled *and* the
-  PR has gone about a day without a new one. Both, not either: at the moment of
-  merge "every comment handled" is vacuously true, so the quiet window has to
-  actually elapse.
-- **Three polling states, so the 5-minute cadence has an end.** Five minutes is
-  for a PR with something outstanding: CI running, a review requested, a comment
-  unanswered, a merge conflict. Once a PR is green, reviewed, and has nothing
-  left but the merge — or is merged and only waiting out late comments — drop to
-  half-hourly. Stop entirely when it merges or closes and the late-comment window
-  has passed. A PR that is green and waiting on a human overnight gets the slow
-  cadence, not the fast one; at roughly a dollar an hour the fast cadence is for
-  work in flight, not for a queue.
-- **What the polling costs.** Twelve wake-ups an hour per PR at the 5-minute
-  cadence, each one a model turn plus a handful of GitHub API calls. The API
-  calls are free of concern — trivial against the 5,000 requests/hour
-  authenticated limit. The model turns are the real cost: each re-reads the
-  conversation, so at Opus rates ($5 per million input tokens, $25 output, with
-  cached input reading at roughly a tenth of the input rate) a wake-up on a
-  large context runs on the order of ten cents, i.e. ~$1/hour per PR watched.
-  That is why the cadence drops as soon as nothing is pending. Owning the PR is
-  itself the decision to keep the slow-cadence watch running, overnight
-  included — don't ask for that. What's worth raising is holding the *fast*
-  cadence open unattended: when something has been outstanding for hours with
-  nothing moving, say so and drop to half-hourly rather than billing a dollar
-  an hour against a stalled queue. The
-  scheduler is the single point of failure: one missed re-arm ends the watch
-  silently, with no error anywhere. If you can't arm the next check, say so in
-  the reply rather than leaving a PR that looks watched and isn't.
+  not your polling job — adopt one only when asked. Keep polling until the PR
+  state is final: merged, with CI and Codex both reported on the final PR
+  head — or closed unmerged. Then run one last reply-or-resolve pass and
+  cancel the watch. Open a follow-up PR (with its own watch) for anything a
+  merged PR still needs.
+- **What the polling costs.** Twelve wake-ups an hour per PR, each a model turn
+  plus a few GitHub API calls — roughly a dollar an hour on a large context.
+  The scheduler is the single point of failure: one missed re-arm ends the
+  watch silently, with no error anywhere. If you can't arm the next check, say
+  so in the reply rather than leaving a PR that looks watched and isn't.
 - **One pending check per PR, not one per wake-up.** A webhook event can start a
   turn while a scheduled check is still pending; arming another there leaves two
   chains, each re-arming itself, and the cost doubles every time it happens.
@@ -298,11 +278,7 @@ stopping at the file you opened.
   matches a comment you just posted, it's your own echo — continue without
   comment. The test is "did *I* just post this body?", not "who is the
   author?".
-- **Keep watching merged PRs for late review comments.** Reviewers and bots
-  routinely comment after merge. Stay subscribed and handle each new comment
-  per the reply-or-resolve rule; stop once every post-merge comment is handled
-  *and* ~24h have passed without a new one — not the moment the known comments
-  run out.
+- **Canceling the watch**: see the polling bullet under **Autonomy**.
 
 ## Cost and reliability
 
