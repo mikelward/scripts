@@ -33,6 +33,12 @@
 # terminal's switch nor have its own session-creation derailed by it. A request
 # made outside any session has no owning loop, so it stays unkeyed and is
 # serviced by the next loop that wakes (or starts).
+#
+# When SESSION_SHELL is set (the launching shell's own command line, e.g.
+# "/path/to/nu -l"), sessions this loop creates run it via `shpool attach
+# --cmd`, so starting nu gets a nu session instead of the daemon's default
+# shell. Only creation honors it: a session's shell is fixed when it is
+# spawned, so reattaching keeps whatever shell the session already runs.
 
 switch_session_file="$HOME/.autoshpool_switch"
 switch_pwd_file="$HOME/.autoshpool_switch_pwd"
@@ -165,6 +171,10 @@ first_disconnected_session() {
 create_and_attach_next() {
   declare -A sessions
   local session
+  # Run the launching shell in the session we create (see the SESSION_SHELL
+  # note in the header); without it the daemon's default shell applies.
+  local -a cmd_args=()
+  test -n "${SESSION_SHELL:-}" && cmd_args=(--cmd "$SESSION_SHELL")
   # Read line by line so existing names are matched whole: the prefix comes from
   # the project basename, which can contain glob metacharacters (e.g. "a*b"),
   # and an unquoted $() would glob-expand or IFS-split such a name.
@@ -179,7 +189,7 @@ create_and_attach_next() {
     echo "Creating shpool session $session"
     # -d . opens the new session in the directory this loop runs from (where the
     # user started the shell), instead of shpool's daemon dir.
-    shpool attach -d . "$session"
+    shpool attach -d . "${cmd_args[@]}" "$session"
     rc=$?
     # A clean exit alone is not proof that we actually owned the session: see
     # wait_attach_settled for the busy race it re-checks the listing for. If we
@@ -524,10 +534,19 @@ autoshpool_loop() {
       # case as a silent no-op (exit 0 without attaching) -- the loop would
       # return 0 and the caller's `&& exit` would close this terminal with
       # nothing attached.
+      # A target that doesn't exist yet is being created by this attach, so it
+      # gets the launching shell like create_and_attach_next's sessions do (see
+      # SESSION_SHELL in the header); an existing target keeps its own shell.
+      # session_exists is best-effort: when shpool is hung it reports "no" and
+      # the extra --cmd is ignored by an attach that spawns nothing.
+      local -a cmd_args=()
+      if test -n "${SESSION_SHELL:-}" && ! session_exists "$switch_session"; then
+        cmd_args=(--cmd "$SESSION_SHELL")
+      fi
       if test -n "$switch_pwd"; then
-        shpool attach -f -d "$switch_pwd" "$switch_session"
+        shpool attach -f -d "$switch_pwd" "${cmd_args[@]}" "$switch_session"
       else
-        shpool attach -f "$switch_session"
+        shpool attach -f "${cmd_args[@]}" "$switch_session"
       fi
       rc=$?
       current_session="$switch_session"
