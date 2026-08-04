@@ -31,6 +31,12 @@ MOCK
     done
 
     chmod +x "$TEST_TMPDIR"/bin/*
+
+    # The live apply is on by default, so every run reaches for python3 to run
+    # kdeshortcut.py. Mock it from the start or the tests would push shortcuts
+    # into the session bus of whoever is running them. Tests that care about
+    # what it returns re-mock it with mock_python3.
+    mock_python3 0
 }
 
 teardown() {
@@ -165,11 +171,14 @@ MOCK
 # kglobalshortcutsrc as ${XDG_CONFIG_HOME:-$HOME/.config}, so on a machine
 # that exports it, overriding HOME alone leaves the script reading -- and
 # remove_stale_app_shortcut_groups rewriting -- the caller's real KDE config
-# while the assertions look at the sandbox.
+# while the assertions look at the sandbox. XDG_STATE_HOME is pinned for the
+# same reason: it's where the live apply puts kdeshortcut.py's crash journal,
+# and a test run must not touch the caller's real one.
 run_kde() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" "$@" 2>&1)"
@@ -183,6 +192,7 @@ run_kde_relative() {
     set +e
     output="$(cd "$(dirname "$KDE_SCRIPT")" && HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         ./setup-kde "$@" 2>&1)"
@@ -569,6 +579,10 @@ test_source_build_dir_is_unpredictable() {
 # A config-only run builds nothing, so it has no reason to create a scratch
 # directory at all. Uses a logging passthrough for mktemp, since the absence of
 # a directory that would be cleaned up anyway isn't otherwise observable.
+#
+# "mktemp -d" rather than mktemp: the run does take a temp *file* for the
+# shortcut batch, and that's the point of it -- only the -d form is the build
+# directory this is about.
 test_config_only_run_creates_no_build_dir() {
     cat > "$TEST_TMPDIR/bin/mktemp" <<MOCK
 #!/bin/sh
@@ -581,7 +595,7 @@ MOCK
     unset TMPDIR
     assert_status 0 &&
     assert_output_contains "KDE configured successfully" &&
-    assert_not_called "mktemp" &&
+    assert_not_called "mktemp -d" &&
     # And nothing was left behind under TMPDIR either.
     ! ls "$TEST_TMPDIR" | grep -q '^krohnkite-'
 }
@@ -897,13 +911,36 @@ assert_batch_contains() {
     fi
 }
 
-# The default must not touch the running session at all. kglobalaccel lives
-# inside kwin, so a mishandled call kills the compositor and every client with
-# it -- which is what happened when this defaulted to on. An unattended run
-# writes the config and says a logout is needed; nothing else.
-test_live_apply_is_off_by_default() {
+# Writing kglobalshortcutsrc configures nothing a user can press: kglobalaccel
+# reads that file once at startup and never again. A plain run must therefore
+# push the shortcuts into the running daemon, which is what the flag used to be
+# needed for -- and what made setup-kde look like it did nothing.
+test_live_apply_is_on_by_default() {
     mock_python3 0
     run_kde --no-install
+    assert_status 0 &&
+    assert_called "kdeshortcut.py --quiet --journal" &&
+    assert_output_contains "Shortcuts are live; no logout needed" &&
+    assert_output_contains "KDE configured successfully" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# --live-shortcuts is still accepted, for a caller that wants to state the
+# default rather than rely on it.
+test_live_shortcuts_flag_is_accepted() {
+    mock_python3 0
+    run_kde --no-install --live-shortcuts
+    assert_status 0 &&
+    assert_called "kdeshortcut.py --quiet --journal" &&
+    assert_output_contains "KDE configured successfully"
+}
+
+# --no-live-shortcuts writes the config and stops there: nothing reaches the
+# running session, and the run says so rather than implying the shortcuts work
+# now.
+test_no_live_shortcuts_skips_the_running_session() {
+    mock_python3 0
+    run_kde --no-install --no-live-shortcuts
     assert_status 0 &&
     assert_not_called "kdeshortcut.py" &&
     assert_output_contains "they apply at next login" &&
@@ -912,20 +949,31 @@ test_live_apply_is_off_by_default() {
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
 
-# The default path allocates no batch at all. It never reads one, so creating it
-# would put a temp file, a warning about a feature that wasn't requested, and an
-# append that can abort the run under set -e in the way of a plain config run.
-# An unusable TMPDIR is how that shows up: it must be a non-event here, while
-# --live-shortcuts still reports it (see the fallback test below).
-test_default_run_allocates_no_batch() {
+# Both flags stay in the help. --no-live-shortcuts is the one that now needs
+# finding: it's the escape hatch for a session with too much open to risk the
+# D-Bus call, and nobody reaches for a flag the help doesn't mention.
+test_live_shortcut_flags_in_usage() {
+    run_kde --help
+    assert_status 0 &&
+    assert_output_contains "--live-shortcuts" &&
+    assert_output_contains "--no-live-shortcuts"
+}
+
+# --no-live-shortcuts allocates no batch at all. It never reads one, so creating
+# it would put a temp file, a warning about a feature that was turned off, and
+# an append that can abort the run under set -e in the way of a plain config
+# run. An unusable TMPDIR is how that shows up: it must be a non-event here,
+# while the default still reports it (see the fallback test below).
+test_declined_live_apply_allocates_no_batch() {
     mock_python3 0
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         TMPDIR="$TEST_TMPDIR/no-such-dir" \
-        "$KDE_SCRIPT" --no-install 2>&1)"
+        "$KDE_SCRIPT" --no-install --no-live-shortcuts 2>&1)"
     status=$?
     set -e
     assert_status 0 &&
@@ -936,16 +984,6 @@ test_default_run_allocates_no_batch() {
     assert_not_called "kdeshortcut.py" &&
     # The config writes are unaffected by any of this.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
-}
-
-# --no-live-shortcuts is accepted explicitly, for a caller that wants to state
-# the default rather than rely on it.
-test_no_live_shortcuts_flag_is_accepted() {
-    mock_python3 0
-    run_kde --no-install --no-live-shortcuts
-    assert_status 0 &&
-    assert_not_called "kdeshortcut.py" &&
-    assert_output_contains "KDE configured successfully"
 }
 
 # Every shortcut written to the config is also handed to kdeshortcut.py, with
@@ -993,6 +1031,7 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         TMPDIR="$TEST_TMPDIR/no-such-dir" \
@@ -1075,6 +1114,7 @@ test_missing_python3_falls_back_to_logout_advice() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         PYTHON=no-such-python3 \
@@ -1257,12 +1297,16 @@ run_test "stale-group sweep rewrites through a symlink" \
     test_stale_group_sweep_follows_symlink
 run_test "stale-group sweep needs no python3" \
     test_stale_group_sweep_needs_no_python3
-run_test "the live apply is off by default" \
-    test_live_apply_is_off_by_default
-run_test "the default run allocates no shortcut batch" \
-    test_default_run_allocates_no_batch
-run_test "--no-live-shortcuts is accepted" \
-    test_no_live_shortcuts_flag_is_accepted
+run_test "the live apply is on by default" \
+    test_live_apply_is_on_by_default
+run_test "--live-shortcuts is accepted" \
+    test_live_shortcuts_flag_is_accepted
+run_test "--no-live-shortcuts skips the running session" \
+    test_no_live_shortcuts_skips_the_running_session
+run_test "--no-live-shortcuts allocates no shortcut batch" \
+    test_declined_live_apply_allocates_no_batch
+run_test "both live-shortcut flags are documented in usage" \
+    test_live_shortcut_flags_in_usage
 run_test "shortcuts are pushed to the running session" \
     test_shortcuts_pushed_to_running_session
 run_test "the shortcut batch file name is unpredictable" \

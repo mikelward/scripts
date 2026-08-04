@@ -13,16 +13,21 @@
 # them up: kwinrc via `kwin reconfigure`, Krohnkite by unloading and reloading
 # the script, the keyboard layout by kxkbrc's own watcher.
 #
-# Keyboard shortcuts are the exception, and deliberately so. kglobalaccel holds
-# the live shortcut registry in memory and only reads kglobalshortcutsrc at
-# startup, and in Plasma 6 it runs inside kwin -- so the D-Bus call that would
-# apply a shortcut now can, if the daemon mishandles it, kill the compositor
-# and every client with it. It's behind --live-shortcuts and off by default
-# until that path is confirmed on real hardware; see apply_shortcuts_live and
-# kdeshortcut.py.
+# Keyboard shortcuts need more than a file write: kglobalaccel holds the live
+# shortcut registry in memory and only reads kglobalshortcutsrc at startup, so
+# a written shortcut does nothing at all until the next login. The run
+# therefore pushes the whole batch into the running daemon as well; see
+# apply_shortcuts_live and kdeshortcut.py.
+#
+# That push isn't free of risk. In Plasma 6 kglobalaccel runs inside kwin, so a
+# call the daemon mishandles doesn't fail, it kills the compositor -- and on
+# Wayland that takes every client with it. kdeshortcut.py names each shortcut
+# in a crash journal before applying it, so a shortcut that does that is
+# skipped by every later run instead of crashing again. --no-live-shortcuts
+# skips the push entirely and leaves the shortcuts for the next login.
 #
 # Requires: kpackagetool6, kwriteconfig6
-# Wants: python3 plus either gdbus or python3-dbus, for --live-shortcuts
+# Wants: python3 plus either gdbus or python3-dbus, for the live apply
 #        (kdeshortcut.py). Without them the shortcuts are still written, and
 #        the script says a logout is needed.
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
@@ -32,7 +37,8 @@
 #           (build-from-source fallback when the release can't be fetched)
 #
 # Usage:
-#     setup-kde [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+#     setup-kde [--no-install] [--no-sudo] [--ignore-errors]
+#               [--no-live-shortcuts] [-h | --help]
 #
 # --no-install skips building/installing Krohnkite and only (re)applies the
 # KDE configuration. --ignore-errors keeps going past failures instead of
@@ -98,13 +104,19 @@ PYTHON="${PYTHON:-python3}"
 
 # Whether to push the shortcuts into the running session (--live-shortcuts).
 #
-# Off by default, and it has to stay off until the live path is confirmed on
-# real hardware: kglobalaccel runs inside kwin, so a call it mishandles doesn't
-# fail, it kills the compositor -- and on Wayland that takes every client with
-# it. The first version of this defaulted to on and did exactly that, losing a
-# session's worth of terminals. Writing the config and asking for a logout is
-# slower but can't cost you anything, so that's what an unattended run does.
-LIVE_SHORTCUTS_MODE=off
+# On by default, because writing the config alone doesn't configure anything a
+# user can press: kglobalaccel never re-reads kglobalshortcutsrc, so without
+# the push nothing works until the next login. That was the whole complaint
+# about the old default.
+#
+# The risk it trades against is real -- kglobalaccel runs inside kwin, so a
+# call it mishandles kills the compositor, and an early version of this did
+# exactly that. What makes on the right default now is kdeshortcut.py's crash
+# journal: the action being applied is named on disk before the call, so a
+# shortcut that takes the session down is skipped from then on rather than
+# crashing every run. --no-live-shortcuts still writes the config and asks for
+# a logout, for a session with too much open to risk.
+LIVE_SHORTCUTS_MODE=on
 
 info() {
     printf "%s\n" "$*"
@@ -126,7 +138,7 @@ is_command() {
 usage() {
     cat <<'USAGE'
 Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-                 [--live-shortcuts] [-h | --help]
+                 [--no-live-shortcuts] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
@@ -135,14 +147,14 @@ Options:
   --no-sudo        Accepted for consistency with setup; setup-kde uses no
                    sudo, so there's nothing to skip
   --ignore-errors  Keep going past failures instead of aborting on the first
-  --live-shortcuts Also apply the shortcuts to the running session, instead of
-                   leaving them for the next login. UNVERIFIED: kglobalaccel
-                   runs inside kwin, and a call it mishandles kills the
-                   compositor -- which on Wayland closes every window. Save
-                   your work first
+  --live-shortcuts The default: also apply the shortcuts to the running
+                   session, so they work without logging out
   --no-live-shortcuts
-                   The default: write the shortcuts and let the next login
-                   pick them up
+                   Only write the shortcuts and let the next login pick them
+                   up. The live apply calls kglobalaccel, which runs inside
+                   kwin, so a call it mishandles closes every window on
+                   Wayland; use this when the session has too much open to
+                   risk that
   -h, --help       Show this help and exit
 USAGE
 }
@@ -203,10 +215,10 @@ fi
 # only the live apply is lost -- but it can't pass silently either, so the
 # empty value is what apply_shortcuts_live reports on.
 #
-# Only allocated when the live apply was actually asked for. On the default path
-# the batch is never read, so creating it would mean a temp file, a warning
-# about a feature the user didn't request, and -- worse -- an append that can
-# abort the whole run under set -e for a file nothing consumes.
+# Not allocated under --no-live-shortcuts. The batch is never read on that
+# path, so creating it would mean a temp file, a warning about a feature the
+# user turned off, and -- worse -- an append that can abort the whole run under
+# set -e for a file nothing consumes.
 LIVE_SHORTCUTS=""
 if test "$LIVE_SHORTCUTS_MODE" = on; then
     if ! LIVE_SHORTCUTS="$(mktemp "${TMPDIR:-/tmp}/setup-kde-shortcuts-XXXXXX")"; then
@@ -553,8 +565,8 @@ configure_keyboard_layout() {
 # a line here, and the whole batch is pushed into the running daemon at the
 # end of the run. Tab-separated because action IDs contain spaces.
 record_live_shortcut() {
-    # No batch file means either the live apply wasn't asked for -- the default,
-    # where nothing would read it -- or mktemp failed, which was reported there.
+    # No batch file means either the live apply was declined -- where nothing
+    # would read it -- or mktemp failed, which was reported there.
     test -n "$LIVE_SHORTCUTS" || return 0
     printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-$2}" >> "$LIVE_SHORTCUTS"
 }
@@ -902,9 +914,9 @@ reload_kglobalaccel() {
 # what makes this session agree with it.
 apply_shortcuts_live() {
     if test "$LIVE_SHORTCUTS_MODE" != on; then
-        # Not a warning: this is the default, and the config is correct either
-        # way. Only the current session is behind.
-        info "Shortcuts written; they apply at next login (--live-shortcuts applies them now)"
+        # Not a warning: --no-live-shortcuts asked for exactly this, and the
+        # config is correct either way. Only the current session is behind.
+        info "Shortcuts written; they apply at next login (--no-live-shortcuts was given)"
         return 0
     fi
 

@@ -1467,16 +1467,17 @@ test_live_shortcuts_in_usage() {
     assert_output_contains "--no-live-shortcuts"
 }
 
-# --live-shortcuts is forwarded to setup-kde; the default is not. An unattended
-# bootstrap must not opt into a D-Bus call that can take the compositor down,
-# so the flag is only ever added when explicitly asked for.
+# The live apply is on by default -- without it the shortcuts do nothing until
+# the next login -- and whichever way it's set, the matching flag is forwarded
+# to setup-kde. Stating it outright is what keeps this run's effect on the
+# session from changing under it if setup-kde's own default moves again.
 test_live_shortcuts_parsing_and_forwarding() {
-    assert_source_contains "LIVE_SHORTCUTS=no" &&
+    assert_source_contains '^LIVE_SHORTCUTS=yes' &&
     assert_source_contains '[-]-live-shortcuts)' &&
     assert_source_contains '[-]-no-live-shortcuts)' &&
-    assert_source_contains "LIVE_SHORTCUTS=yes" &&
+    assert_source_contains "LIVE_SHORTCUTS=no" &&
     assert_source_contains 'KDE_SETUP_FLAGS --live-shortcuts' &&
-    # Never forwarded unconditionally: the guard is what keeps the default off.
+    assert_source_contains 'KDE_SETUP_FLAGS --no-live-shortcuts' &&
     assert_source_contains 'test "$LIVE_SHORTCUTS" = yes' &&
     # KDE-only: setup-macos shares DESKTOP_SETUP_FLAGS and rejects options it
     # doesn't know, so a KDE flag in there would abort the macOS run.
@@ -1814,7 +1815,7 @@ run_test "a caller whose URL isn't from the prefix skips the check" \
 run_test "--live-shortcuts and --no-live-shortcuts are accepted" \
     test_live_shortcuts_flags_accepted
 run_test "--live-shortcuts is documented in usage" test_live_shortcuts_in_usage
-run_test "--live-shortcuts forwards to setup-kde only when asked" \
+run_test "the live apply is on by default and forwarded either way" \
     test_live_shortcuts_parsing_and_forwarding
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted
 run_test "--no-sudo is documented in usage" test_no_sudo_in_usage
