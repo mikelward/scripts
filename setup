@@ -138,10 +138,10 @@ INSTALL=yes
 IGNORE_ERRORS=no
 
 # Whether to ask setup-kde to apply keyboard shortcuts to the running session
-# (--live-shortcuts). Off by default, matching setup-kde: the D-Bus call it
-# needs runs inside kwin and can take the compositor down, so opting in is a
-# deliberate, attended choice.
-LIVE_SHORTCUTS=no
+# (--live-shortcuts). On by default, matching setup-kde: kglobalaccel never
+# re-reads its config, so without the live apply the shortcuts do nothing until
+# the next login. --no-live-shortcuts opts out.
+LIVE_SHORTCUTS=yes
 
 # Whether to generate an SSH key. One of:
 #   auto - skip when a key is already available -- loaded in the agent
@@ -198,7 +198,7 @@ usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde] [--minimal | --full]
              [--no-install] [--no-sudo] [--no-root] [--ignore-errors]
-             [--live-shortcuts]
+             [--no-live-shortcuts]
              [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
@@ -229,12 +229,14 @@ Options:
                    instead. For machines where you have no root at all
   --ignore-errors  Keep going past failures instead of aborting on the first
                    one. Forwarded to setup-kde/macos
-  --live-shortcuts Ask setup-kde to apply the keyboard shortcuts to the running
-                   session instead of leaving them for the next login. Off by
-                   default: the call runs inside kwin and can crash it, closing
-                   every window on Wayland. Forwarded to setup-kde
+  --live-shortcuts The default; state it explicitly. setup-kde applies the
+                   keyboard shortcuts to the running session, so they work
+                   without logging out. Forwarded to setup-kde
   --no-live-shortcuts
-                   The default; state it explicitly. Forwarded to setup-kde
+                   Leave the keyboard shortcuts for the next login. The live
+                   apply calls kglobalaccel, which runs inside kwin, so a call
+                   it mishandles closes every window on Wayland. Forwarded to
+                   setup-kde
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
   --no-npm         Skip installing Node.js (node/npm) and the TypeScript
@@ -561,12 +563,14 @@ fi
 # Flags for setup-kde only, kept out of DESKTOP_SETUP_FLAGS because
 # setup-macos shares that and rejects anything it doesn't know.
 #
-# Only forwarded when asked for: setup-kde's default is not to touch the running
-# session, and an unattended bootstrap must not opt into a D-Bus call that can
-# take the compositor down. See setup-kde's apply_shortcuts_live.
+# Forwarded either way rather than letting setup-kde's default decide, so what
+# this run does to the session is stated outright and doesn't change under it
+# if that default moves again. See setup-kde's apply_shortcuts_live.
 KDE_SETUP_FLAGS=""
 if test "$LIVE_SHORTCUTS" = yes; then
     KDE_SETUP_FLAGS="$KDE_SETUP_FLAGS --live-shortcuts"
+else
+    KDE_SETUP_FLAGS="$KDE_SETUP_FLAGS --no-live-shortcuts"
 fi
 
 clone_or_pull() {
