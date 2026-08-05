@@ -778,7 +778,7 @@ configure_app_shortcuts() {
     remove_stale_app_shortcut_groups
 
     add_app_shortcut "browser1" "Meta+G"
-    add_app_shortcut "browser2" "Meta+H"
+    add_app_shortcut "browser2" "Meta+F"
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"

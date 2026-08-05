@@ -1168,7 +1168,7 @@ test_assigns_option_key_equivalents() {
     assert_status 0 &&
     assert_called "defaults write pbs NSServicesStatus -dict-add" &&
     assert_called '"key_equivalent" = "~g"' &&
-    assert_called '"key_equivalent" = "~h"' &&
+    assert_called '"key_equivalent" = "~f"' &&
     assert_called '"key_equivalent" = "~t"' &&
     assert_called '"key_equivalent" = "~w"' &&
     assert_called '"key_equivalent" = "~y"'

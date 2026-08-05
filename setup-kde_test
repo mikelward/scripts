@@ -1148,6 +1148,19 @@ test_unreachable_daemon_warns_and_continues() {
     assert_output_contains "KDE configured successfully"
 }
 
+# The launcher key map, pinned per launcher. Only browser1's key was asserted
+# before, so browser2 sat on the wrong key (Meta+H) unnoticed; the keys are
+# meant to match setup-macos row for row (see docs/MACOS.md).
+test_launch_shortcut_keys() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "--group shortcut-browser1.desktop --key _launch Meta+G," &&
+    assert_called "--group shortcut-browser2.desktop --key _launch Meta+F," &&
+    assert_called "--group shortcut-terminal.desktop --key _launch Meta+T," &&
+    assert_called "--group shortcut-terminal_on_workstation.desktop --key _launch Meta+W," &&
+    assert_called "--group shortcut-music.desktop --key _launch Meta+Y,"
+}
+
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch
 # shortcut pointing at its resolved path.
 #
@@ -1325,6 +1338,7 @@ run_test "a refused shortcut warns and the run continues" \
     test_failed_live_apply_warns_and_continues
 run_test "an unreachable daemon warns and the run continues" \
     test_unreachable_daemon_warns_and_continues
+run_test "each launcher gets its own key" test_launch_shortcut_keys
 run_test "app shortcut created for present launcher" \
     test_app_shortcut_created_for_present_launcher
 run_test "missing launcher is skipped, not fatal" \
