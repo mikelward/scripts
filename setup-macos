@@ -1164,7 +1164,7 @@ configure_app_shortcuts() {
     #
     # Shortcut keys (physical Win sends Option after the hidutil remap):
     #   Win+G → Option+G → browser1
-    #   Win+H → Option+H → browser2
+    #   Win+F → Option+F → browser2
     #   Win+T → Option+T → terminal
     #   Win+W → Option+W → terminal_on_workstation
     #   Win+Y → Option+Y → music
@@ -1175,7 +1175,7 @@ configure_app_shortcuts() {
     set --
     for entry in \
         "Launch Browser1:browser1:g" \
-        "Launch Browser2:browser2:h" \
+        "Launch Browser2:browser2:f" \
         "Launch Terminal:terminal:t" \
         "Launch Terminal on Workstation:terminal_on_workstation:w" \
         "Launch Music:music:y"; do

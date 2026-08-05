@@ -208,7 +208,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Set master window | `Win+Return` | `Win+Return` | Amethyst `swap-main` |
 | Launcher / Spotlight | — | `Win+Space` | symbolichotkeys (ID 64) |
 | Browser 1 | `Win+G` | `Win+G` | Automator Quick Action |
-| Browser 2 | `Win+H` | `Win+H` | Automator Quick Action |
+| Browser 2 | `Win+F` | `Win+F` | Automator Quick Action |
 | Terminal | `Win+T` | `Win+T` | Automator Quick Action |
 | Terminal on workstation | `Win+W` | `Win+W` | Automator Quick Action |
 | Music | `Win+Y` | `Win+Y` | Automator Quick Action |
