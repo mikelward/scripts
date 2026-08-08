@@ -52,6 +52,81 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/$1"
 }
 
+# qdbus6 mock standing in for a running plasmashell: evaluateScript answers
+# with the number of launcher widgets it pinned, the way print() in the Plasma
+# script does. Every other D-Bus call (kwin reconfigure, the effects reload)
+# keeps the default behavior of the plain mock.
+#
+# The service name is matched, not just the method: it's org.kde.plasmashell
+# (what KDBusService registers) while the object and interface are spelled
+# PlasmaShell, so a call to any other service fails the way a real bus does --
+# which is what makes the assertions below able to catch the wrong name.
+add_plasmashell_mock() {
+    cat > "$TEST_TMPDIR/bin/qdbus6" <<MOCK
+#!/bin/sh
+printf "%s\\n" "qdbus6 \$*" >> "$CALLS"
+case "\$1 \$3" in
+    "org.kde.plasmashell org.kde.PlasmaShell.evaluateScript")
+        echo "$1"
+        ;;
+    *" org.kde.PlasmaShell.evaluateScript")
+        echo "Service '\$1' does not exist" >&2
+        exit 1
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/qdbus6"
+}
+
+# Same, for a session where plasmashell isn't running: the scripting call
+# fails, everything else still answers.
+add_unreachable_plasmashell_mock() {
+    cat > "$TEST_TMPDIR/bin/qdbus6" <<MOCK
+#!/bin/sh
+printf "%s\\n" "qdbus6 \$*" >> "$CALLS"
+case "\$3" in
+    org.kde.PlasmaShell.evaluateScript)
+        echo "Cannot find 'org.kde.plasma.shell'" >&2
+        exit 1
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/qdbus6"
+}
+
+# A plasma-org.kde.plasma.desktop-appletsrc with the launcher at a group path
+# that isn't guessable -- ids are assigned when a widget is added -- plus a
+# containment and another applet that must be left alone.
+add_appletsrc() {
+    mkdir -p "$TEST_TMPDIR/home/.config"
+    cat > "$TEST_TMPDIR/home/.config/plasma-org.kde.plasma.desktop-appletsrc" <<'CONFIG'
+[Containments][1]
+plugin=org.kde.plasma.folder
+
+[Containments][2][Applets][7]
+plugin=org.kde.plasma.kickoff
+
+[Containments][2][Applets][8]
+plugin=org.kde.plasma.digitalclock
+CONFIG
+}
+
+# kwriteconfig6 that refuses to touch the applet config -- a read-only config
+# directory, a full disk -- while every other write still succeeds.
+add_failing_appletsrc_writes() {
+    cat > "$TEST_TMPDIR/bin/kwriteconfig6" <<MOCK
+#!/bin/sh
+printf "%s\\n" "kwriteconfig6 \$*" >> "$CALLS"
+case "\$*" in
+    *plasma-org.kde.plasma.desktop-appletsrc*) exit 1 ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kwriteconfig6"
+}
+
 # Run a copy of setup-kde from a directory with no launcher siblings. In the
 # real repo the launchers live beside setup-kde, so the sibling-directory
 # fallback would find them; tests about genuinely-missing launchers need the
@@ -663,6 +738,69 @@ test_configures_focus_follows_mouse() {
     run_kde --no-install
     assert_status 0 &&
     assert_called "kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse"
+}
+
+# Focus follows mouse closes Plasma popups the moment the pointer crosses onto
+# another window, because they hide themselves on focus loss. KWin window rules
+# can't exempt them -- the focus-follows-mouse path never consults focus
+# stealing prevention or focus protection -- so the launcher is pinned instead,
+# through plasmashell's scripting API when it's running.
+test_pins_launcher_through_plasmashell() {
+    add_plasmashell_mock 1
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "qdbus6 org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript" &&
+    assert_called 'widgets("org.kde.plasma.kickoff")' &&
+    assert_called 'writeConfig("pin", true)' &&
+    assert_output_contains "Pinned 1 application launcher(s) open" &&
+    assert_not_called "kwriteconfig6 --file plasma-org.kde.plasma.desktop-appletsrc"
+}
+
+# Nothing to pin is worth saying out loud (the launcher may be one of the other
+# ones, which have no pin), but it isn't a reason to go writing config files.
+test_warns_when_no_launcher_widget_is_pinned() {
+    add_plasmashell_mock 0
+    add_appletsrc
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "nothing to keep open" &&
+    assert_not_called "kwriteconfig6 --file plasma-org.kde.plasma.desktop-appletsrc"
+}
+
+# Without plasmashell the pin has to go into the applet config, and the group
+# path has to be found rather than assumed -- and only the launcher's own.
+test_pins_launcher_in_config_when_plasmashell_is_unreachable() {
+    add_unreachable_plasmashell_mock
+    add_appletsrc
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file plasma-org.kde.plasma.desktop-appletsrc --group Containments --group 2 --group Applets --group 7 --group Configuration --group General --key pin true" &&
+    assert_not_called "--group Applets --group 8 --group Configuration" &&
+    assert_output_contains "plasmashell picks it up when it next starts"
+}
+
+# pin_launcher_config runs on the left of a ||, so set -e doesn't cover it: a
+# write that fails has to be caught by hand, or the run claims a pin it never
+# made.
+test_failed_launcher_config_write_is_reported() {
+    add_unreachable_plasmashell_mock
+    add_appletsrc
+    add_failing_appletsrc_writes
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "could not write the pin for the launcher" &&
+    assert_output_lacks "plasmashell picks it up when it next starts"
+}
+
+# A machine with no Plasma config yet (bootstrapping before the first login)
+# has no launcher to pin. Say so and carry on -- the rest of the setup is
+# unaffected.
+test_missing_appletsrc_warns_but_setup_continues() {
+    add_unreachable_plasmashell_mock
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "the launcher keeps closing on focus loss" &&
+    assert_output_contains "KDE configured successfully"
 }
 
 test_configures_nine_desktops() {
@@ -1291,6 +1429,11 @@ run_test "missing git errors clearly once the fallback is reached" \
     test_missing_git_fallback_errors_clearly
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
+run_test "pins the launcher through plasmashell" test_pins_launcher_through_plasmashell
+run_test "warns when no launcher widget is pinned" test_warns_when_no_launcher_widget_is_pinned
+run_test "pins the launcher in config when plasmashell is unreachable" test_pins_launcher_in_config_when_plasmashell_is_unreachable
+run_test "a failed launcher config write is reported" test_failed_launcher_config_write_is_reported
+run_test "missing appletsrc warns but setup continues" test_missing_appletsrc_warns_but_setup_continues
 run_test "configures nine desktops" test_configures_nine_desktops
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout

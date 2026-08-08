@@ -3,7 +3,8 @@
 #
 # Sets up:
 # - Krohnkite tiling window manager
-# - Focus follows mouse (mouse precedence)
+# - Focus follows mouse (mouse precedence), with the application launcher
+#   pinned so mousing out doesn't close it
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
@@ -11,7 +12,9 @@
 # The KDE config files this writes are only what the *next* login loads, so
 # most steps are paired with the reload that makes the current session pick
 # them up: kwinrc via `kwin reconfigure`, Krohnkite by unloading and reloading
-# the script, the keyboard layout by kxkbrc's own watcher.
+# the script, the keyboard layout by kxkbrc's own watcher. The launcher pin
+# skips the file entirely when it can and goes through plasmashell's own
+# scripting API, which applies now and persists itself.
 #
 # Keyboard shortcuts need more than a file write: kglobalaccel holds the live
 # shortcut registry in memory and only reads kglobalshortcutsrc at startup, so
@@ -30,6 +33,9 @@
 # Wants: python3 plus either gdbus or python3-dbus, for the live apply
 #        (kdeshortcut.py). Without them the shortcuts are still written, and
 #        the script says a logout is needed.
+#        qdbus6, to pin the application launcher in the running session.
+#        Without it the applet config is written instead, and plasmashell
+#        picks it up when it next starts.
 # This helper does not use sudo: Krohnkite and every KDE setting are installed
 # for the current user, so setup-kde still works when system sudo is restricted.
 # Optional: homepkg (fetches Krohnkite's prebuilt .kwinscript release, the
@@ -490,6 +496,163 @@ configure_focus_follows_mouse() {
     kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse
     kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
     kwriteconfig6 --file kwinrc --group Windows --key FocusStealingPreventionLevel 2
+}
+
+# --- Keep the application launcher open when the pointer leaves it ---
+
+# Plasma popups hide themselves the moment they lose keyboard focus
+# (PopupPlasmaWindowPrivate::handleFocusChanged), so under focus follows mouse
+# the launcher disappears as soon as the pointer crosses onto a window behind
+# it -- upstream bug 431585.
+#
+# A KWin window rule for plasmashell can't fix that, however it's phrased. The
+# focus-follows-mouse path is Window::pointerEnterEvent ->
+# Workspace::requestDelayFocus -> Workspace::requestFocus, and none of those
+# consult the rules that focus stealing prevention (fsplevel) and focus
+# protection (fpplevel) hang off: checkFSP/checkFPP are only reached from
+# activation *requests* -- xdg-activation, _NET_ACTIVE_WINDOW, X11 focus-in.
+# Rules would matter if FocusStealingPreventionLevel above were raised to
+# High or Extreme, which stops the launcher from taking focus at all (bug
+# 377914); at Medium it opens and takes focus as it should.
+#
+# What Plasma does expose is the launcher's own "Keep Open" pin -- the
+# window-pin button in Kickoff's header, which binds hideOnWindowDeactivate to
+# !configuration.pin. A pinned launcher ignores focus loss entirely, so mousing
+# out leaves it up.
+#
+# The cost is bigger than it looks. Kickoff gates every close-on-activation
+# path on the same flag -- launching an entry (AbstractKickoffItemDelegate),
+# the Leave buttons, context menu actions -- so a pinned launcher stays up
+# after launching something too, not just after a click elsewhere. What's left
+# is the launcher button and Escape (CompactApplet.qml's Keys.onEscapePressed,
+# the one unconditional path), and Escape only reaches the launcher while it
+# holds keyboard focus, which under focus follows mouse means the pointer is
+# over it, the panel, or the desktop. The pin button unsets all this again from
+# the launcher itself.
+LAUNCHER_APPLET=org.kde.plasma.kickoff
+LAUNCHER_APPLETS_FILE=plasma-org.kde.plasma.desktop-appletsrc
+
+# Pin through plasmashell's scripting API. Preferred over writing the config
+# file: it reaches the running launcher, and plasmashell persists the change
+# itself. Returns non-zero when the launcher couldn't be pinned this way, so
+# the caller can fall back to the file.
+pin_launcher_live() {
+    if ! is_command qdbus6; then
+        warn "qdbus6 not found; writing the launcher config file instead"
+        return 1
+    fi
+
+    plasma_script=$(cat <<SCRIPT
+var pinned = 0;
+panels().concat(desktops()).forEach(function (container) {
+    container.widgets("$LAUNCHER_APPLET").forEach(function (widget) {
+        widget.currentConfigGroup = ["General"];
+        widget.writeConfig("pin", true);
+        widget.reloadConfig();
+        pinned += 1;
+    });
+});
+print(pinned);
+SCRIPT
+)
+
+    # qdbus6's own error is left on stderr: the ordinary cause is plasmashell
+    # not running (bootstrapping before the first KDE login), and anything else
+    # is worth seeing.
+    # The service is org.kde.plasmashell (KDBusService names it after the
+    # KAboutData component), even though the object and interface below are
+    # spelled PlasmaShell.
+    if ! pinned=$(qdbus6 org.kde.plasmashell /PlasmaShell \
+            org.kde.PlasmaShell.evaluateScript "$plasma_script"); then
+        warn "could not reach plasmashell; writing the launcher config file instead"
+        return 1
+    fi
+
+    pinned=$(printf '%s' "$pinned" | tr -d '[:space:]')
+    case "$pinned" in
+        "0")
+            # Pinning wrote nothing because there's nothing to pin -- a panel
+            # without a launcher widget, or one of the other launchers
+            # (Application Menu, Application Dashboard), which have no pin.
+            warn "no $LAUNCHER_APPLET widget found on any panel or desktop; nothing to keep open"
+            return 0
+            ;;
+        ""|*[!0-9]*)
+            warn "plasmashell did not report how many launchers were pinned (got '$pinned'); writing the config file instead"
+            return 1
+            ;;
+        *)
+            info "Pinned $pinned application launcher(s) open"
+            return 0
+            ;;
+    esac
+}
+
+# Fallback for when plasmashell isn't reachable: write pin=true straight into
+# the launcher's applet config.
+#
+# The applet's group path isn't fixed -- it's [Containments][<containment>]
+# [Applets][<applet>], with ids assigned when the widget was added -- so the
+# file has to be searched for the group whose plugin is the launcher.
+pin_launcher_config() {
+    config_file="${XDG_CONFIG_HOME:-$HOME/.config}/$LAUNCHER_APPLETS_FILE"
+    if ! test -f "$config_file"; then
+        warn "$config_file not found; the launcher keeps closing on focus loss until setup-kde runs against a configured Plasma session"
+        return 1
+    fi
+
+    # Collect the group paths first, then write -- same reasoning as
+    # unbind_all_krohnkite_shortcuts: kwriteconfig6 rewrites this very file,
+    # so writing from inside the read loop races KConfig's replacement of it.
+    launcher_groups=$(awk -v plugin="plugin=$LAUNCHER_APPLET" '
+        /^\[/     { group = $0; next }
+        $0 == plugin { print group }
+    ' "$config_file") || {
+        warn "could not read $config_file; the launcher will keep closing on focus loss"
+        return 1
+    }
+
+    if test -z "$launcher_groups"; then
+        warn "no $LAUNCHER_APPLET widget found in $config_file; nothing to keep open"
+        return 1
+    fi
+
+    # Each write is checked: this function is called on the left of a ||, so
+    # set -e doesn't apply to anything in it, and a read-only config directory
+    # or a full disk would otherwise reach the success message below with
+    # nothing written.
+    write_failures=0
+    while IFS= read -r group; do
+        test -n "$group" || continue
+        # "[Containments][2][Applets][7]" -> --group Containments --group 2 ...
+        group_args=()
+        for part in $(printf '%s' "$group" | tr -d '[' | tr ']' ' '); do
+            group_args+=(--group "$part")
+        done
+        kwriteconfig6 --file "$LAUNCHER_APPLETS_FILE" "${group_args[@]}" \
+            --group Configuration --group General --key pin true || {
+            warn "could not write the pin for the launcher at $group in $config_file"
+            write_failures=$((write_failures + 1))
+        }
+    done <<EOF
+$launcher_groups
+EOF
+
+    if test "$write_failures" -gt 0; then
+        return 1
+    fi
+
+    info "Launcher pinned in $LAUNCHER_APPLETS_FILE; plasmashell picks it up when it next starts"
+}
+
+configure_launcher_keep_open() {
+    info "Keeping the application launcher open when the pointer leaves it"
+    # Both helpers warn for themselves on the way out, and a launcher that
+    # couldn't be pinned is no reason to abandon the rest of the setup -- so
+    # the failure is reported but not propagated.
+    if ! pin_launcher_live; then
+        pin_launcher_config || return 0
+    fi
 }
 
 # --- Dim inactive windows ---
@@ -1002,6 +1165,7 @@ fi
 enable_krohnkite
 configure_krohnkite
 configure_focus_follows_mouse
+configure_launcher_keep_open
 configure_dim_inactive
 configure_desktops
 configure_keyboard_layout
