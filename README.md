@@ -43,9 +43,14 @@ The heavyweight extras (`helix jj nu`) come the same way on a privileged box
 without Homebrew: `setup` fetches the release artifacts rather than building
 them from source, so no Rust toolchain is installed. `--brew` (the default
 where `brew` is available, and on macOS) uses bottles instead; `--release`
-forces the release artifacts. `shpool` publishes no prebuilt artifact and is
-no longer installed by `setup` — sessions still prefer it when it's on `PATH`
-from somewhere else, and otherwise fall back to `tmux`.
+forces the release artifacts. `jj` is left out of that install whenever the
+box already has one `setup` didn't install — a distro package, a Homebrew
+formula — so the packaged copy stays the one that runs instead of being
+shadowed by a second install in `~/.local/bin`. A `jj` already under
+`~/.local` is `setup`'s own and keeps being refreshed. `shpool` publishes no
+prebuilt artifact and is no longer installed by `setup` — sessions still
+prefer it when it's on `PATH` from somewhere else, and otherwise fall back to
+`tmux`.
 
 On a host with no internet, stage a bundle instead. The one-shot bundle below
 covers them along with everything else, which is all a `--no-root` machine

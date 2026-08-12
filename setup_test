@@ -326,17 +326,86 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$helix_tmpdir"
 }
 
+# Symlink the named real tools into $1 and print the resulting directory, for
+# a harness that runs with PATH holding only its own sandbox -- so the jj (or
+# lack of one) on the machine running the tests can't decide the outcome.
+stub_path() {
+    stub_dir="$1"
+    shift
+    mkdir -p "$stub_dir"
+    for stub_tool in "$@"; do
+        ln -s "$(command -v "$stub_tool")" "$stub_dir/$stub_tool"
+    done
+    printf '%s' "$stub_dir"
+}
+
+# Put a stub jj on the sandbox PATH, and print the PATH to run with.
+#   $1  the sandbox HOME
+#   $2  the sandbox PATH directory
+#   $3  which jj: none | system (outside ~/.local, as a distro package installs
+#       it) | home (setup's own, in ~/.local/bin)
+stub_jj_path() {
+    case "$3" in
+        system)
+            printf '#!/bin/sh\n' > "$2/jj"
+            chmod +x "$2/jj"
+            ;;
+        home)
+            mkdir -p "$1/.local/bin"
+            printf '#!/bin/sh\n' > "$1/.local/bin/jj"
+            chmod +x "$1/.local/bin/jj"
+            printf '%s' "$1/.local/bin:$2"
+            return 0
+            ;;
+    esac
+    printf '%s' "$2"
+}
+
+# Run install_extras_brew against a mock brew, so the tests check which
+# formulae it asks for rather than what the source says.
+#   $1  which jj is already on PATH (default none), as stub_jj_path takes it
+# Leaves $calls set to the brew invocations.
+run_install_extras_brew() {
+    brew_jj="${1:-none}"
+    extras_tmpdir="$(mktemp -d)"
+    extras_home="$extras_tmpdir/home"
+    extras_calls="$extras_tmpdir/calls"
+    mkdir -p "$extras_home/.config"
+    extras_bin="$(stub_path "$extras_tmpdir/bin" sh rm)"
+    cat > "$extras_bin/brew" <<MOCK
+#!/bin/sh
+printf '%s\n' "brew \$*" >> "$extras_calls"
+MOCK
+    chmod +x "$extras_bin/brew"
+    extras_path="$(stub_jj_path "$extras_home" "$extras_bin" "$brew_jj")"
+
+    set +e
+    output="$(PATH="$extras_path" sh -c "set -e
+HOME='$extras_home'
+XDG_CONFIG_HOME='$extras_home/.config'
+SRC_DIR='$extras_home/src'
+$(extract_functions "info warn system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+install_extras_brew
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$extras_calls" 2>/dev/null)"
+    rm -rf "$extras_tmpdir"
+}
+
 # Run install_extras_release against a mock homepkg, so the tests check the
 # command it issues and what it does with the result.
 #   $1  exit status for the mock homepkg
 #   $2  what ~/.local/bin/hx is afterwards: yes (a release plain file, i.e.
 #       helix installed) | no (nothing) | env-link (homepkg's symlink into its
 #       conda env, from an earlier --no-root run)
+#   $3  which jj is already on PATH (default none), as stub_jj_path takes it
 # Leaves $calls set to the homepkg invocations and $helix_link_target to what
 # ~/.config/helix/runtime points at afterwards.
 run_install_extras_release() {
     release_status="$1"
     release_hx="$2"
+    release_jj="${3:-none}"
     release_tmpdir="$(mktemp -d)"
     release_home="$release_tmpdir/home"
     release_link="$release_home/.config/helix/runtime"
@@ -366,14 +435,16 @@ MOCK
         no)
             ;;
     esac
+    release_bin="$(stub_path "$release_tmpdir/bin" sh mkdir ln)"
+    release_path="$(stub_jj_path "$release_home" "$release_bin" "$release_jj")"
 
     set +e
-    output="$(sh -c "set -e
+    output="$(PATH="$release_path" sh -c "set -e
 HOME='$release_home'
 XDG_CONFIG_HOME='$release_home/.config'
 SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
-$(extract_functions "info warn link_helix_runtime install_extras_release")
+$(extract_functions "info warn system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -468,22 +539,30 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 }
 
 # Run install_home_tools against a mock homepkg, with the config runtime symlink
-# already pointing at a release payload, so the tests can check whether it's
-# cleared on the strength of which hx would actually run.
+# already pointing at a release payload, so the tests can check the tools it
+# asks for and whether the symlink is cleared on the strength of which hx would
+# actually run.
 #   $1  what ~/.local/bin/hx is: env-link (homepkg's symlink into its env) |
 #       release-file (a regular file the release path installed, which homepkg
 #       leaves alone) | absent
-# Leaves $helix_link_target set to what ~/.config/helix/runtime points at.
+#   $2  which jj is already on PATH (default none), as stub_jj_path takes it
+# Leaves $calls set to the homepkg invocations and $helix_link_target to what
+# ~/.config/helix/runtime points at.
 run_home_tools_helix() {
     ht_kind="$1"
+    ht_jj="${2:-none}"
     ht_tmpdir="$(mktemp -d)"
     ht_home="$ht_tmpdir/home"
     ht_env_bin="$ht_home/.local/share/homepkg/env/bin"
     ht_payload="$ht_home/.local/share/helix/runtime"
     ht_link="$ht_home/.config/helix/runtime"
+    ht_calls="$ht_tmpdir/calls"
     mkdir -p "$ht_home/.local/bin" "$ht_env_bin" "$ht_home/.config/helix" \
         "$ht_home/scripts" "$ht_payload"
-    printf '#!/bin/sh\nexit 0\n' > "$ht_home/scripts/homepkg"
+    cat > "$ht_home/scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$ht_calls"
+MOCK
     printf '#!/bin/sh\n' > "$ht_env_bin/hx"
     chmod +x "$ht_home/scripts/homepkg" "$ht_env_bin/hx"
     # The state a previous release-path run leaves behind.
@@ -499,20 +578,23 @@ run_home_tools_helix() {
         absent)
             ;;
     esac
+    ht_bin="$(stub_path "$ht_tmpdir/bin" sh rm readlink)"
+    ht_path="$(stub_jj_path "$ht_home" "$ht_bin" "$ht_jj")"
 
     set +e
-    output="$(sh -c "set -e
+    output="$(PATH="$ht_path" sh -c "set -e
 HOME='$ht_home'
 XDG_CONFIG_HOME='$ht_home/.config'
 SRC_DIR='$ht_home/src'
 SCRIPTS_DIR='$ht_home/scripts'
 MINIMAL_ENABLED=0
 NPM=yes
-$(extract_functions "info warn install_home_tools clear_managed_helix_runtime")
+$(extract_functions "info warn system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
 install_home_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
+    calls="$(cat "$ht_calls" 2>/dev/null)"
     if test -L "$ht_link"; then
         helix_link_target="$(readlink "$ht_link")"
     else
@@ -537,6 +619,17 @@ assert_calls_contain() {
         *"$1"*) ;;
         *)
             echo "  FAIL: calls do not contain '$1'"
+            echo "  calls: $calls"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_calls_lack() {
+    case "$calls" in
+        *"$1"*)
+            echo "  FAIL: calls unexpectedly contain '$1'"
             echo "  calls: $calls"
             TEST_FAILED=1
             return 1
@@ -731,8 +824,33 @@ test_cargo_flag_is_accepted_and_reported() {
 # The brew path installs helix/jj/nushell from homebrew-core, each on its own
 # so one failure doesn't block the rest.
 test_extras_brew_formulae() {
-    assert_source_contains 'for formula in helix jj nushell' &&
-    assert_source_contains 'brew install "$formula"'
+    run_install_extras_brew
+    assert_status 0 &&
+    assert_calls_contain "brew install helix" &&
+    assert_calls_contain "brew install jj" &&
+    assert_calls_contain "brew install nushell" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A jj the box already has -- a distro package, an earlier brew install -- is
+# left alone: installing another would leave two copies, one of them shadowing
+# the other on PATH, updating on different schedules.
+test_extras_brew_skips_an_installed_jj() {
+    run_install_extras_brew system
+    assert_status 0 &&
+    assert_calls_lack "brew install jj" &&
+    assert_calls_contain "brew install helix" &&
+    assert_calls_contain "brew install nushell" &&
+    assert_output_contains "jj is already installed at"
+}
+
+# ...but a jj under ~/.local is setup's own, from an earlier release or
+# homepkg install, so it's still setup's to keep up to date.
+test_extras_brew_installs_over_its_own_jj() {
+    run_install_extras_brew home
+    assert_status 0 &&
+    assert_calls_contain "brew install jj" &&
+    assert_output_lacks "jj is already installed at"
 }
 
 # shpool has no prebuilt artifact anywhere -- no release binaries, no bottle,
@@ -824,6 +942,24 @@ test_extras_release_uses_homepkg_github() {
     run_install_extras_release 0 yes
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$calls" "homepkg --backend github install helix jj nu"
+}
+
+# Same skip as the brew path: a jj installed from outside setup's own prefix
+# drops out of the release install rather than being shadowed by a second copy
+# in ~/.local/bin.
+test_extras_release_skips_an_installed_jj() {
+    run_install_extras_release 0 yes system
+    assert_status 0 &&
+    assert_eq "$calls" "homepkg --backend github install helix nu" &&
+    assert_output_contains "jj is already installed at"
+}
+
+# A jj in ~/.local/bin is the one this path installed last time, so it's
+# reinstalled (i.e. refreshed) rather than treated as somebody else's.
+test_extras_release_refreshes_its_own_jj() {
+    run_install_extras_release 0 yes home
+    assert_status 0 &&
     assert_eq "$calls" "homepkg --backend github install helix jj nu"
 }
 
@@ -1565,7 +1701,25 @@ test_no_root_installs_via_homepkg() {
     assert_source_contains 'elif test "$ROOT" = no; then' &&
     assert_source_contains '"$homepkg" install $tools' &&
     assert_source_contains "ripgrep fd bat fzf jq delta gh" &&
-    assert_source_contains 'tools="$tools helix jj nu"'
+    assert_source_contains 'tools="$tools $EXTRAS_TOOLS"'
+}
+
+# The extras ride along with the core set on the --no-root path, so the jj skip
+# has to hold there too -- the tools go into ~/.local/bin, which the conf repo
+# puts ahead of /usr/bin, so an unwanted jj there shadows the packaged one.
+test_home_tools_skips_an_installed_jj() {
+    run_home_tools_helix absent system
+    assert_status 0 &&
+    assert_calls_contain "homepkg install ripgrep" &&
+    assert_calls_lack " jj" &&
+    assert_calls_contain " helix nu" &&
+    assert_output_contains "jj is already installed at"
+}
+
+test_home_tools_installs_jj_when_absent() {
+    run_home_tools_helix absent
+    assert_status 0 &&
+    assert_calls_contain " helix jj nu"
 }
 
 # --no-root is a known option (accepted, not an "Unknown option" error) and is
@@ -1839,6 +1993,10 @@ run_test "--no-root installs CLI tools into a home prefix via homepkg" \
     test_no_root_installs_via_homepkg
 run_test "--no-root is accepted and documented" \
     test_no_root_accepted_and_documented
+run_test "the home-prefix install leaves an already-installed jj alone" \
+    test_home_tools_skips_an_installed_jj
+run_test "the home-prefix install includes jj when there is none" \
+    test_home_tools_installs_jj_when_absent
 run_test "home-prefix tool install degrades on failure" \
     test_home_tools_install_degrades
 run_test "home-prefix full install warns that shpool is unavailable" \
@@ -1884,6 +2042,10 @@ run_test "--cargo is accepted and reports what it does instead" \
     test_cargo_flag_is_accepted_and_reported
 run_test "brew extras install helix/jj/nushell per formula" \
     test_extras_brew_formulae
+run_test "brew extras leave an already-installed jj alone" \
+    test_extras_brew_skips_an_installed_jj
+run_test "brew extras still install a jj under ~/.local" \
+    test_extras_brew_installs_over_its_own_jj
 run_test "shpool is not installed, with a TODO and its service kept" \
     test_shpool_not_installed_with_todo
 run_test "an existing shpool unit file is left alone" \
@@ -1900,6 +2062,10 @@ run_test "an shpool service failure is reported, not fatal" \
     test_shpool_service_failure_is_reported_not_fatal
 run_test "the release extras path installs via homepkg's github backend" \
     test_extras_release_uses_homepkg_github
+run_test "the release extras path leaves an already-installed jj alone" \
+    test_extras_release_skips_an_installed_jj
+run_test "the release extras path refreshes a jj under ~/.local" \
+    test_extras_release_refreshes_its_own_jj
 run_test "a release extras failure warns instead of aborting" \
     test_extras_release_failure_is_not_fatal
 run_test "a partial release run still links the Helix runtime" \
