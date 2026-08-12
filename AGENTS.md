@@ -126,11 +126,18 @@ has stopped biting.
   unpushed-work checks report your own merged history back at you. When a
   sandbox pins the branch name, reset it and `--force-with-lease` in the same
   turn — that's routine on merged history, not something to ask about.
+- **Branches under your own `<agent>/` prefix are yours.** Create, push,
+  `--force-with-lease` and rename them freely — no permission, no announcement,
+  no per-branch confirmation. Only a branch outside that prefix, or `main`
+  itself, is a conversation. Deleting is the one the prefix can't settle: it
+  doesn't say which session made the branch, so delete the ones this session
+  created and ask about the rest.
 - **The agent authors; whoever merges takes over the committer line.** A squash
   or rebase merge rewrites the committer to the person who pressed the button —
   the repo owner normally, the agent itself when it merges under *drive* (see
   **Autonomy**). That's expected either way — never re-author or amend
-  already-merged commits to "fix" authorship or signing.
+  already-merged commits to "fix" authorship or signing, and don't narrate it: no note in the
+reply, no offer to correct it. It is not a finding.
 - **Unshallow before answering anything that depends on git history depth.**
   The sandbox clones shallow, so `git rev-list --count`, `git log` past the
   shallow boundary, and blame return wrong answers without warning. If
