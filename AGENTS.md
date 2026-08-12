@@ -13,6 +13,12 @@ dispatches to the per-platform `setup-kde` / `setup-macos` scripts. When you
 change a shared contract, follow it through every consumer rather than
 stopping at the file you opened.
 
+Keep this file as short as it can be and still work. Every session loads it
+whole, so each rule costs context on every turn: add one the first time
+something bites, say it once in the fewest words that carry the *why*, rewrite
+or trim an existing rule rather than appending beside it, and delete one that
+has stopped biting.
+
 ## Style
 
 - Preserve existing style unless there's a correctness issue. Match the
