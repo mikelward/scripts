@@ -182,6 +182,32 @@ has stopped biting.
   check. Both, not either: the subscription gives you review comments and CI
   results as they land, and the scheduled check is what catches the ones the
   webhook drops. A PR that is only subscribed looks watched and silently isn't.
+- **In the sandbox, a session rooted above this repo never loads its
+  `.claude/settings.json`.** Claude Code reads it from the session's own root,
+  so a session opened on the parent of several repos prompts for every
+  scheduler and GitHub call this repo already allows, and a watch stalls on a
+  dialog nobody is there to answer. Write the **intersection** of the open
+  repos' `permissions.allow` into `~/.claude/settings.json` at the start of
+  such a session: a home directory grant reaches every repo in the container,
+  so unanimous consent is the only thing it can safely carry — and anything in
+  the union but not the intersection is a difference to raise, not to assume
+  either way. A repo with no allowlist of its own has consented to
+  nothing, so it does narrow the intersection — but name the grants that
+  dropped and ask, rather than leaving a later stall with no visible cause;
+  the usual reason is a repo nobody has set up, not a decision anyone made.
+  Carry each repo's `deny` and `ask` rules across as well — copying `allow`
+  alone drops a restriction a repo declared — and mind the two directions separately where the
+  home file already exists: `allow` is *replaced* by the intersection, since an
+  entry sitting there that no open repo grants has no consent behind it, while
+  the `deny` and `ask` already in the file are kept, being restrictions
+  themselves — and recompute when the set of
+  open repos changes, since cloning one mid-session widens what these grants
+  already reach. The container is ephemeral, so it needs doing each time, and
+  whose home directory it is decides whether to do it at all: a container's,
+  discarded when the session ends, is fair game; a person's is not. A home that
+  outlives the session — an agent's own standing account — leaves these grants
+  reaching repos that never consented, in sessions nobody meant them for, so
+  restore what was there before when the session ends or don't write them.
 - **Poll your own open PRs every 5 minutes** — the ones you opened or were
   explicitly asked to watch — for new review comments, CI status, approvals, and
   the Codex thumbs up. Webhooks drop events, so a PR nobody is polling stalls
@@ -216,11 +242,15 @@ has stopped biting.
 - **A `send_later` one-shot re-arms itself +24h**, so "check in 5 minutes"
   silently becomes daily. Never leave a fired trigger to expire on its own, and
   check that the fire time it returned is the one you asked for — a five-minute
-  request came back as a hundred once, saying nothing.
+  request came back as a hundred once, saying nothing — and re-time it until it
+  is, or say in the reply that the watch is running at the wrong cadence.
+  Reading the wrong answer and accepting it is the same silence.
 - **`list_triggers` spans every session on the account.** Narrow it to this
   session's `persistent_session_id`, then to the trigger you actually mean (its
-  own id, or the PR its prompt names), before updating *or* deleting one — an
-  update reschedules whatever it matches as surely as a delete cancels it.
+  own id, once the PR its prompt names has narrowed the field), before updating
+  *or* deleting one — an update reschedules whatever it matches as surely as a
+  delete cancels it. If that filter turns up more than one, the extras are
+  duplicate chains: keep one and delete the rest.
 - **Never name a SHA in the check prompt.** It is written before the work it
   describes, so it is stale when it fires — say "the current head".
 - **"Drive" means run the loop automatically**: pick the next task, implement
