@@ -23,7 +23,9 @@
 # GitHub release artifacts, fetched into ~/.local by homepkg. Nothing is built
 # from source, so no Rust toolchain is installed either way. Pass --brew to
 # force Homebrew (installing it if needed) or --release to force the release
-# artifacts. shpool is no longer installed at all -- see the shpool note by
+# artifacts. jj is skipped when the box already has one setup didn't install
+# (a distro package, say), so the packaged copy stays the one that runs.
+# shpool is no longer installed at all -- see the shpool note by
 # install_extras. The extras are skipped when the disk is small (see
 # MIN_DISK_GB). Pass --minimal to force that lean profile, or --full to
 # install everything. To pass flags through a pipe:
@@ -1230,12 +1232,47 @@ clear_managed_helix_runtime() {
 
 # --- Install the heavyweight extras ---
 
+# Print the jj that something other than setup already put on PATH -- a distro
+# package (Fedora packages it as jujutsu), a Homebrew formula, a manual
+# install -- and return non-zero when there isn't one. setup's own extras
+# land under ~/.local (homepkg, release artifacts), so a jj there is ours to
+# keep refreshing rather than a reason to skip the install.
+#
+# This looks at the jj that would actually run, not at every jj on the box: with
+# a distro jj in /usr/bin and setup's own in ~/.local/bin, whichever PATH picks
+# is the one that matters. Installing over a packaged jj would leave a second
+# copy shadowing it, with two things updating on different schedules.
+system_jj() {
+    if ! jj_path="$(command -v jj)"; then
+        return 1
+    fi
+    case "$jj_path" in
+        "$HOME"/.local/*) return 1 ;;
+    esac
+    printf '%s\n' "$jj_path"
+}
+
+# Set EXTRAS_TOOLS to the heavyweight extras this run should install, dropping
+# jj when the box already has one setup didn't install. $1 is the nushell
+# package name, which differs by backend: homebrew-core calls it nushell,
+# homepkg's registry calls it nu.
+set_extras_tools() {
+    EXTRAS_TOOLS=helix
+    if jj_path="$(system_jj)"; then
+        info "jj is already installed at $jj_path; leaving it to whatever provides it"
+    else
+        EXTRAS_TOOLS="$EXTRAS_TOOLS jj"
+    fi
+    EXTRAS_TOOLS="$EXTRAS_TOOLS $1"
+}
+
 # helix, jj, and nushell live in homebrew-core with prebuilt Linux/macOS
 # bottles, each bottle carrying its own helix runtime.
 install_extras_brew() {
     # One formula at a time so a single failure doesn't block the rest.
     helix_installed=no
-    for formula in helix jj nushell; do
+    set_extras_tools nushell
+    for formula in $EXTRAS_TOOLS; do
         info "Installing $formula via Homebrew"
         if brew install "$formula"; then
             test "$formula" = helix && helix_installed=yes
@@ -1264,9 +1301,11 @@ install_extras_release() {
         warn "homepkg not found in the scripts repo; skipping helix, jj, and nushell"
         return 0
     fi
-    info "Installing helix, jj, and nushell from their GitHub release artifacts"
-    "$homepkg" --backend github install helix jj nu \
-        || warn "some of helix, jj, and nushell could not be installed from their releases (offline?)"
+    set_extras_tools nu
+    info "Installing the extras from their GitHub release artifacts: $EXTRAS_TOOLS"
+    # shellcheck disable=SC2086  # $EXTRAS_TOOLS is a space-separated list expanded into multiple args
+    "$homepkg" --backend github install $EXTRAS_TOOLS \
+        || warn "some of the extras could not be installed from their releases (offline?)"
     # A partial run can still have landed helix, so wire up its runtime on the
     # strength of the binary being there rather than of homepkg's exit status.
     # A release hx is a plain file; an hx that's a symlink is homepkg's, pointing
@@ -1336,7 +1375,8 @@ install_home_tools() {
         tools="$tools node typescript"
     fi
     if test "$MINIMAL_ENABLED" -eq 0; then
-        tools="$tools helix jj nu"
+        set_extras_tools nu
+        tools="$tools $EXTRAS_TOOLS"
         # shpool has no prebuilt artifact anywhere, so none of setup's install
         # paths can provide it (see the shpool note by install_extras).
         # start_services skips its user service when shpool is absent, so the
@@ -1372,7 +1412,7 @@ install_home_tools() {
         # already in the env -- and freshens them. Offline it warns and we rely
         # on whatever the bundle carried.
         info "Installing CLI tools from bundle (offline-capable): $bundle"
-        info "  a bundle installs its full contents; --minimal/--no-npm don't trim it"
+        info "  a bundle installs its full contents; --minimal/--no-npm and an already-installed jj don't trim it"
         if "$homepkg" install-bundle "$bundle"; then
             provisioned=yes
         else
