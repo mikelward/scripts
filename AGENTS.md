@@ -198,6 +198,25 @@ stopping at the file you opened.
   chains, each re-arming itself, and the cost doubles every time it happens.
   Before arming, reuse or cancel the pending one (`update_trigger`, or
   `delete_trigger` then re-arm) so exactly one check is outstanding.
+- **Arm the next check at the *start* of the turn that owes one.** A re-arm
+  parked at the end never runs when the turn is interrupted — that once left a
+  PR unwatched for two hours. When a fired check started the turn, settle its
+  trigger first, preferring `update_trigger`: re-timing in place *is* the next
+  check, with no window where none is pending, where `delete_trigger` plus a
+  fresh one leaves a gap that is exactly the failure above. Any other turn — a webhook,
+  a message from you — leaves an already-pending check alone rather than
+  pushing its fire time back, or the backstop never runs; re-time it
+  only when the cadence itself should change.
+- **A `send_later` one-shot re-arms itself +24h**, so "check in 5 minutes"
+  silently becomes daily. Never leave a fired trigger to expire on its own, and
+  check that the fire time it returned is the one you asked for — a five-minute
+  request came back as a hundred once, saying nothing.
+- **`list_triggers` spans every session on the account.** Narrow it to this
+  session's `persistent_session_id`, then to the trigger you actually mean (its
+  own id, or the PR its prompt names), before updating *or* deleting one — an
+  update reschedules whatever it matches as surely as a delete cancels it.
+- **Never name a SHA in the check prompt.** It is written before the work it
+  describes, so it is stale when it fires — say "the current head".
 - **"Drive" means run the loop automatically**: pick the next task, implement
   it, open the PR, send it for review, address every comment, merge once CI is
   green and Codex has left its thumbs up — then pick the next task and go around
