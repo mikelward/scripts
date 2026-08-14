@@ -195,9 +195,10 @@ reply, no offer to correct it. It is not a finding.
   is a separate thing and it is **opt-in** — it pushes every comment, check
   run and bot reply into the conversation as a raw event, which buries the
   thread the user is actually reading under machine chatter they didn't ask
-  for. Subscribe only when asked to, and unsubscribe as soon as the reason
-  for it passes.
-- **If a scheduler or GitHub call prompts, say so once and carry on.**
+  for. Opening a PR *subscribes this session to it automatically*, so
+  unsubscribe right after opening one unless you were asked to watch it that
+  way.
+- **If a scheduler, GitHub or `git push` call prompts, say so once and carry on.**
   Permissions load at session start, so writing a settings file mid-session
   can't fix the session you're in.
 - **Poll your own open PRs — every ~5 minutes while CI or the verdict is
@@ -241,8 +242,16 @@ reply, no offer to correct it. It is not a finding.
   *or* deleting one — an update reschedules whatever it matches as surely as a
   delete cancels it. If that filter turns up more than one, the extras are
   duplicate chains: keep one and delete the rest.
-- **Never name a SHA in the check prompt.** It is written before the work it
-  describes, so it is stale when it fires — say "the current head".
+- **Never name a SHA — or a list of PR numbers — in the check prompt.** Both
+  are written before the work they describe, so both are stale when it
+  fires, and a queued firing carries the prompt as it was when it was
+  queued: editing it mid-turn does not reach a check already on its way.
+  Name what to re-read.
+- **The scheduler's clock is not this container's.** `run_once_at` must be
+  in the future by the *scheduler's* reckoning, and an absolute time
+  computed from `date` here has been rejected as already past. Prefer a
+  relative delay where the client offers one; where it doesn't, read the
+  clock rather than assuming it, and leave margin.
 - **"Drive" means run the loop automatically**: pick the next task,
   implement it, open the PR, send it for review, address every comment,
   merge once CI is green and Codex's verdict for the current head is in —
