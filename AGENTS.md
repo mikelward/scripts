@@ -198,20 +198,12 @@ reply, no offer to correct it. It is not a finding.
   for. Subscribe only when asked to, and unsubscribe as soon as the reason
   for it passes.
 - **Permissions are granted before the session starts, so a rule here can't
-  fix them.** Claude Code loads `.claude/settings.json` from the session's
-  own root, so a session opened on the parent of several repos loads none of
-  them and prompts for every scheduler and GitHub call this repo already
-  allows — and a watch stalls on a dialog nobody is there to answer.
-  `$HOME/.claude/settings.json` is the file that reaches every repo in the
-  container, under full MCP identifiers
-  (`mcp__Claude_Code_Remote__send_later`, `…__create_trigger`,
-  `…__list_triggers`, `…__update_trigger`, `…__delete_trigger`, plus the
-  lowercase-server `mcp__claude-code-remote__*` variants — bare names match
-  nothing). But settings load at **startup**: writing that file from inside
-  a running session does nothing for that session, so it belongs in the
-  environment's setup script, not in an agent's task list. If calls are
-  prompting, say so once and carry on — don't spend the turn writing a file
-  that can't take effect.
+  fix them.** Copy this repo's `.claude/settings.json` allowlist — GitHub
+  calls as well as scheduler ones, under full MCP identifiers and both
+  server-name spellings, since bare names match nothing — into
+  `$HOME/.claude/settings.json` from the environment's setup script.
+  Settings load at startup, so writing that file mid-session does nothing
+  for that session; if calls are prompting, say so once and carry on.
 - **Poll your own open PRs — fast while a merge gate is pending, slow
   otherwise.** The two things nothing else reports are CI going green and
   the Codex 👍 (its "no suggestions" outcome is a reaction, not a comment),
@@ -339,6 +331,14 @@ reply, no offer to correct it. It is not a finding.
   the SHA and comment count, e.g. `Codex reviewed 87d9f02 — 0 comments`. Tie
   it to the *latest* pushed SHA so a stale review of a superseded commit isn't
   conflated with the current state.
+- **The thumbs up is a reaction on the PR body: `issue_read` →
+  `reactions.+1`.** A page fetch finds its review comment's `Useful?` bar
+  instead and reads true on any PR it has commented on. The count is an
+  aggregate and nothing here exposes who reacted, so **leave PR-body
+  reactions to Codex** — one from anyone else and the gate can no longer
+  tell them apart. `eyes` is Codex holding the commit and working, so
+  waiting is doing something; **no** reaction at all means it never picked
+  the push up and none is coming — comment `@codex review`, then wait.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
