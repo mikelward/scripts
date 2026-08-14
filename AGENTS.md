@@ -198,19 +198,20 @@ reply, no offer to correct it. It is not a finding.
   for. Subscribe only when asked to, and unsubscribe as soon as the reason
   for it passes.
 - **Permissions are granted before the session starts, so a rule here can't
-  fix them.** Copy the scheduler entries — the MCP ones and
-  `ScheduleWakeup`, which is not one — and the GitHub MCP entries, reads and
-  writes both, from this repo's `.claude/settings.json` into
-  `$HOME/.claude/settings.json`, from the environment's setup script, under
-  full MCP identifiers and both server-name spellings, since bare names
-  match nothing. Global writes are a deliberate trade the repo owner has
-  taken: any repo the account opens can then merge and comment unprompted,
-  and in exchange a session rooted above a repo — which loads no repo-local
-  settings — never stalls the watch on a prompt nobody is there to answer.
-  The `Bash` entries stay repo-local: `git push` and `curl` everywhere is
-  wider than the loop needs. Settings load at startup, so writing that file
-  mid-session does nothing for that session; if calls are prompting, say so
-  once and carry on.
+  fix them.** Copy what the unattended loop actually performs into
+  `$HOME/.claude/settings.json`, from the environment's setup script: the
+  scheduler entries — the MCP ones and `ScheduleWakeup`, which is not one —
+  the GitHub MCP entries, reads and writes both, and `Bash(git push:*)`,
+  under full MCP identifiers and both server-name spellings, since bare
+  names match nothing. A session rooted above several repos loads none of
+  their repo-local settings, so anything missing from that file stops the
+  watch at a prompt nobody is there to answer — the failure this exists to
+  prevent. The cost is real and the repo owner has taken it: any repo the
+  account opens can then push, comment and merge unprompted. `curl`,
+  `python3` and `git reset` stay repo-local, since the loop never needs
+  them. Settings load at startup, so writing that file mid-session does
+  nothing for that session; if calls are prompting, say so once and carry
+  on.
 - **Poll your own open PRs — every ~5 minutes while CI or the verdict is
   outstanding, ~30 once only a human is left.** Those two are what nothing
   else reports. Never end a turn idle with one of yours open: arm the next
@@ -349,9 +350,14 @@ reply, no offer to correct it. It is not a finding.
   have answered or fixed does not. Check who left each — the reaction count
   is anonymous, so leave PR-body reactions to Codex, and a human's review
   carries the same `commit_id` as Codex's.
-- **A finding can arrive as a top-level PR comment.** `get_review_comments`
-  returns only inline threads, so read `get_comments` too — a P1 sat
-  unanswered for two hours because a sweep of the threads never saw it.
+- **Read findings to the last page, and in both places.**
+  `get_review_comments` returns only inline threads, so a top-level comment
+  is invisible to it — read `get_comments` too. Both, and `get_reviews`,
+  page oldest first, so the newest is on the LAST page: `hasNextPage` is the
+  only thing that says you have seen it. Reading a middle page as the latest
+  is how a P1 sat unanswered for two hours, how a second one went unseen
+  while its PR was merged, and how a superseded review got reported as the
+  current verdict.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
