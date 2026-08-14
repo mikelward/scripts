@@ -193,33 +193,35 @@ reply, no offer to correct it. It is not a finding.
   GitHub pushes into the conversation are the fast one — opening a PR
   subscribes this session automatically, and that stays on until the PR is
   merged or closed. The scheduled check is the slow one, and it is what
-  catches whatever the webhooks drop, which is why both exist. Don't
-  unsubscribe to quiet the thread: skip the events that need no action —
-  your own replies echoing back, a deploy-preview bot, a check run that
-  passed — without narrating them, and reply only when something needs the
-  user.
+  catches whatever the webhooks drop. Don't unsubscribe to quiet the thread,
+  and don't relay it either: an event that needs no action — your own reply
+  echoing back, a deploy-preview bot, a check run that passed — ends the
+  turn with **no reply at all**. Not a summary, not a note that you are
+  skipping it. Saying "deploy preview, no action" is the noise, not the
+  filter.
 - **If a scheduler, GitHub or `git push` call prompts, say so once and carry on.**
   Permissions load at session start, so writing a settings file mid-session
   can't fix the session you're in.
-- **Poll your own open PRs — every ~5 minutes while CI or the verdict is
-  outstanding, ~30 once only a human is left.** Those two are what nothing
-  else reports. Never end a turn idle with one of yours open: arm the next
-  check with whatever the client offers (`send_later`, a scheduled task /
-  cron, `/loop`), and arm it *without asking* — that is hygiene, not a
-  decision. Someone else's PR is not your polling job unless you're asked.
-  Merged or closed is terminal: take one more check for CI and Codex on the
-  final head, but settle for what's known if a report may never land, then
-  run a last reply-or-resolve pass and cancel the watch in full — the
-  pending trigger, *and* the subscription (`unsubscribe_pr_activity`).
-  Open a follow-up PR, with its own watch, for anything a merged one still
-  needs.
-- **What the polling costs.** Twelve wake-ups an hour per PR at the fast
-  cadence, two at the slow one — each a model turn plus a few GitHub API
-  calls, so roughly a dollar an hour while a PR is waiting on its merge
-  gate. The scheduler is the single point of failure: one missed re-arm ends
-  the watch silently, with no error anywhere. If you can't arm the next
-  check, say so in the reply rather than leaving a PR that looks watched and
-  isn't.
+- **Poll your own open PRs as a slow backstop, ~30 minutes.** The
+  subscription already delivers CI and review activity within seconds, so a
+  five-minute loop on top of it buys nothing and costs a turn every time it
+  fires. What the poll is for is the two things webhooks drop — a CI result
+  that never arrives, and a Codex verdict that is a reaction and therefore
+  emits no event at all. Never end a turn idle with one of yours open: arm
+  the next check with whatever the client offers (`send_later`, a scheduled
+  task / cron, `/loop`), and arm it *without asking*. Someone else's PR is
+  not your polling job unless you're asked. Merged or closed is terminal:
+  take one more check for CI and Codex on the final head, settle for what's
+  known if a report may never land, then run a last reply-or-resolve pass
+  and cancel the watch in full — the pending trigger and that PR's
+  subscription (`unsubscribe_pr_activity` takes one PR, so it leaves any
+  other watch alone). Open a follow-up PR, with its own watch, for anything
+  a merged one still needs.
+- **What the polling costs.** Two wake-ups an hour per PR — each a model
+  turn plus a few GitHub API calls. The scheduler is the single point of
+  failure: one missed re-arm ends the watch silently, with no error
+  anywhere. If you can't arm the next check, say so in the reply rather than
+  leaving a PR that looks watched and isn't.
 - **One pending check per PR, settled at the top of the turn.** Two chains
   each re-arming themselves double the cost every time a webhook starts a
   turn while one is already pending; parking the re-arm at the *end* of the
@@ -247,11 +249,10 @@ reply, no offer to correct it. It is not a finding.
   fires, and a queued firing carries the prompt as it was when it was
   queued: editing it mid-turn does not reach a check already on its way.
   Name what to re-read.
-- **The scheduler's clock is not this container's.** `run_once_at` must be
-  in the future by the *scheduler's* reckoning, and an absolute time
-  computed from `date` here has been rejected as already past. Prefer a
-  relative delay where the client offers one; where it doesn't, read the
-  clock rather than assuming it, and leave margin.
+- **The scheduler's clock is not this container's.** An absolute
+  `run_once_at` computed from `date` here can be rejected as already past —
+  prefer a relative delay where the client offers one, or read the
+  scheduler's clock and leave margin.
 - **"Drive" means run the loop automatically**: pick the next task,
   implement it, open the PR, send it for review, address every comment,
   merge once CI is green and Codex's verdict for the current head is in —
