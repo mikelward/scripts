@@ -203,26 +203,32 @@ reply, no offer to correct it. It is not a finding.
 - **If a scheduler, GitHub or `git push` call prompts, say so once and carry on.**
   Permissions load at session start, so writing a settings file mid-session
   can't fix the session you're in.
-- **Poll your own open PRs: five minutes after a push, then ~30 minutes.**
-  With no subscription the check is the only thing that reports, and the
-  first one lands early because a push that Codex never picked up looks
-  exactly like one it is still reading — see the verdict rule for what to do
-  about it. Afterwards the slow cadence is enough. Never end a turn idle
-  with one of yours open: arm the next check with whatever the client offers
-  (`send_later`, a scheduled task / cron, `/loop`), and arm it *without
-  asking*. Someone else's PR is not your polling job unless you're asked.
-  Merged or closed is terminal: take one more check for CI and Codex on the
-  final head, settle for what's known if a report may never land, then run a
-  last reply-or-resolve pass and cancel the pending trigger. Open a
-  follow-up PR, with its own watch, for anything a merged one still needs.
-- **What the polling costs.** Two wake-ups an hour per PR, plus one per push
-  — each a model turn and a few GitHub API calls, so a few tens of cents an
-  hour while a PR waits on its merge gate, against roughly a dollar under
-  the old five-minute loop. The GitHub calls themselves are free, well
-  inside the 5,000/hour authenticated limit. The scheduler is the single
-  point of failure: one missed re-arm ends the watch silently, with no error
-  anywhere. If you can't arm the next check, say so in the reply rather than
-  leaving a PR that looks watched and isn't.
+- **Poll your own open PRs: every 4 minutes while a verdict is outstanding,
+  ~30 once it lands.** With no subscription the check is the only thing that
+  reports. Four is measured rather than guessed — Codex answers 2 to 5
+  minutes after a push, so a check on that interval catches it within one,
+  and a check that finds nothing ends the turn with no reply. Don't let the
+  interval decay as it waits: lateness does not mean wait longer, because
+  Codex either answers within those few minutes or never started, and the
+  answer to never-started is the nudge in the verdict rule, not a longer
+  wait. Once the verdict is in and only a human is left, drop to ~30. Never
+  end a turn idle with one of yours open: arm the next check with whatever
+  the client offers (`send_later`, a scheduled task / cron, `/loop`), and
+  arm it *without asking*. Someone else's PR is not your polling job unless
+  you're asked. Merged or closed is terminal: take one more check for CI and
+  Codex on the final head, settle for what's known if a report may never
+  land, then run a last reply-or-resolve pass and cancel the pending
+  trigger. Open a follow-up PR, with its own watch, for anything a merged
+  one still needs.
+- **What the polling costs.** A verdict normally costs one or two checks;
+  after that, two wake-ups an hour per PR while a human is the only thing
+  left. Each is a model turn and a few GitHub API calls — a few tens of
+  cents an hour, against roughly a dollar under the old standing five-minute
+  loop. The calls themselves are free, well inside the 5,000/hour
+  authenticated limit. The scheduler is the single point of failure: one
+  missed re-arm ends the watch silently, with no error anywhere. If you
+  can't arm the next check, say so in the reply rather than leaving a PR
+  that looks watched and isn't.
 - **One pending check per PR, settled at the top of the turn.** Two chains
   each re-arming themselves double the cost every time a webhook starts a
   turn while one is already pending; parking the re-arm at the *end* of the
