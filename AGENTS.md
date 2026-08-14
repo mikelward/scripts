@@ -197,15 +197,9 @@ reply, no offer to correct it. It is not a finding.
   thread the user is actually reading under machine chatter they didn't ask
   for. Subscribe only when asked to, and unsubscribe as soon as the reason
   for it passes.
-- **Permissions load at session start, so a rule here can't fix them.** The
-  unattended loop needs the scheduler entries (the MCP ones and
-  `ScheduleWakeup`), the GitHub MCP reads and writes, and `git push`. A
-  session rooted above the repo loads no repo-local settings, so those
-  belong in `$HOME/.claude/settings.json`, written by the environment's
-  setup script under both server-name spellings. The cost, which the repo
-  owner has taken: any repo the account opens can push, comment and merge
-  unprompted. Writing that file mid-session does nothing for that session;
-  if calls prompt, say so once and carry on.
+- **If a scheduler or GitHub call prompts, say so once and carry on.**
+  Permissions load at session start, so writing a settings file mid-session
+  can't fix the session you're in.
 - **Poll your own open PRs — every ~5 minutes while CI or the verdict is
   outstanding, ~30 once only a human is left.** Those two are what nothing
   else reports. Never end a turn idle with one of yours open: arm the next
