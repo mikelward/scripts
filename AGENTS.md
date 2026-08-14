@@ -189,42 +189,40 @@ reply, no offer to correct it. It is not a finding.
   owner's standing request for that PR, so a client-level rule reading "open a
   PR only when the user explicitly asks" is already satisfied — the ask is
   here, and it doesn't need repeating per branch.
-- **Opening the PR arms the watch, and it has two halves.** The events
-  GitHub pushes into the conversation are the fast one — opening a PR
-  subscribes this session automatically, and that stays on until the PR is
-  merged or closed. The scheduled check is the slow one, and it is what
-  catches whatever the webhooks drop. Don't unsubscribe to quiet the thread,
-  and don't relay it either: an event that needs no action — your own reply
-  echoing back, a deploy-preview bot, a check run that passed — ends the
-  turn with **no reply at all**. Not a summary, not a note that you are
-  skipping it. Saying "deploy preview, no action" is the noise, not the
-  filter.
+- **The scheduled check is the watch. Unsubscribe from PR activity
+  immediately.** Opening a PR subscribes this session automatically, and in
+  this client every subscribed event — each comment, review, check run, and
+  your own replies echoing back — is rendered into the user's conversation
+  as a raw payload. Nothing you write or refrain from writing changes that:
+  the delivery is the client's, not yours, so it cannot be filtered,
+  softened or skipped from here. The only control is the subscription
+  itself, so call `unsubscribe_pr_activity` for a PR as soon as you open it,
+  and read its state on the scheduled check instead. This reverses an
+  earlier version of this rule that said to keep the subscription and skip
+  the noisy events; that is not possible, and a day was spent proving it.
 - **If a scheduler, GitHub or `git push` call prompts, say so once and carry on.**
   Permissions load at session start, so writing a settings file mid-session
   can't fix the session you're in.
-- **Poll your own open PRs: one check five minutes after a push, then ~30
-  minutes.** The subscription delivers CI and review activity within
-  seconds, so a standing five-minute loop buys nothing and costs a turn
-  every time it fires. What it cannot deliver is Codex never picking the
-  push up: no review, no reaction, no event, and silence that looks
-  identical to still-reading. That is what the five-minute check is for —
-  nothing from Codex by then means comment `@codex review`, once. After that
-  the webhooks carry it and the slow check is the backstop for what they
-  drop. Never end a turn idle with one of yours open: arm the next check
-  with whatever the client offers (`send_later`, a scheduled task / cron,
-  `/loop`), and arm it *without asking*. Someone else's PR is not your
-  polling job unless you're asked. Merged or closed is terminal: take one
-  more check for CI and Codex on the final head, settle for what's known if
-  a report may never land, then run a last reply-or-resolve pass and cancel
-  the watch in full — the pending trigger and that PR's subscription
-  (`unsubscribe_pr_activity` takes one PR, so it leaves any other watch
-  alone). Open a follow-up PR, with its own watch, for anything a merged one
-  still needs.
+- **Poll your own open PRs: five minutes after a push, then ~30 minutes.**
+  With no subscription the check is the only thing that reports, and the
+  first one lands early because a push that Codex never picked up looks
+  exactly like one it is still reading — see the verdict rule for what to do
+  about it. Afterwards the slow cadence is enough. Never end a turn idle
+  with one of yours open: arm the next check with whatever the client offers
+  (`send_later`, a scheduled task / cron, `/loop`), and arm it *without
+  asking*. Someone else's PR is not your polling job unless you're asked.
+  Merged or closed is terminal: take one more check for CI and Codex on the
+  final head, settle for what's known if a report may never land, then run a
+  last reply-or-resolve pass and cancel the pending trigger. Open a
+  follow-up PR, with its own watch, for anything a merged one still needs.
 - **What the polling costs.** Two wake-ups an hour per PR, plus one per push
-  — each a model turn and a few GitHub API calls. The scheduler is the
-  single point of failure: one missed re-arm ends the watch silently, with
-  no error anywhere. If you can't arm the next check, say so in the reply
-  rather than leaving a PR that looks watched and isn't.
+  — each a model turn and a few GitHub API calls, so a few tens of cents an
+  hour while a PR waits on its merge gate, against roughly a dollar under
+  the old five-minute loop. The GitHub calls themselves are free, well
+  inside the 5,000/hour authenticated limit. The scheduler is the single
+  point of failure: one missed re-arm ends the watch silently, with no error
+  anywhere. If you can't arm the next check, say so in the reply rather than
+  leaving a PR that looks watched and isn't.
 - **One pending check per PR, settled at the top of the turn.** Two chains
   each re-arming themselves double the cost every time a webhook starts a
   turn while one is already pending; parking the re-arm at the *end* of the
