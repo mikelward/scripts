@@ -189,15 +189,15 @@ reply, no offer to correct it. It is not a finding.
   owner's standing request for that PR, so a client-level rule reading "open a
   PR only when the user explicitly asks" is already satisfied — the ask is
   here, and it doesn't need repeating per branch.
-- **Opening the PR arms the first scheduled check.** That check *is* the
-  watch: when it fires it reads CI, review comments and the Codex reaction,
-  and it is what catches anything a webhook drops. `subscribe_pr_activity`
-  is a separate thing and it is **opt-in** — it pushes every comment, check
-  run and bot reply into the conversation as a raw event, which buries the
-  thread the user is actually reading under machine chatter they didn't ask
-  for. Opening a PR *subscribes this session to it automatically*, so
-  unsubscribe right after opening one unless you were asked to watch it that
-  way.
+- **Opening the PR arms the watch, and it has two halves.** The events
+  GitHub pushes into the conversation are the fast one — opening a PR
+  subscribes this session automatically, and that stays on until the PR is
+  merged or closed. The scheduled check is the slow one, and it is what
+  catches whatever the webhooks drop, which is why both exist. Don't
+  unsubscribe to quiet the thread: skip the events that need no action —
+  your own replies echoing back, a deploy-preview bot, a check run that
+  passed — without narrating them, and reply only when something needs the
+  user.
 - **If a scheduler, GitHub or `git push` call prompts, say so once and carry on.**
   Permissions load at session start, so writing a settings file mid-session
   can't fix the session you're in.
@@ -210,7 +210,7 @@ reply, no offer to correct it. It is not a finding.
   Merged or closed is terminal: take one more check for CI and Codex on the
   final head, but settle for what's known if a report may never land, then
   run a last reply-or-resolve pass and cancel the watch in full — the
-  pending trigger, *and* `unsubscribe_pr_activity` if you ever subscribed.
+  pending trigger, *and* the subscription (`unsubscribe_pr_activity`).
   Open a follow-up PR, with its own watch, for anything a merged one still
   needs.
 - **What the polling costs.** Twelve wake-ups an hour per PR at the fast
