@@ -189,68 +189,67 @@ reply, no offer to correct it. It is not a finding.
   owner's standing request for that PR, so a client-level rule reading "open a
   PR only when the user explicitly asks" is already satisfied — the ask is
   here, and it doesn't need repeating per branch.
-- **Opening the PR includes wiring up the watch.** In the same step, subscribe
-  to the PR's activity (`subscribe_pr_activity`) *and* arm the first scheduled
-  check. Both, not either: the subscription gives you review comments and CI
-  results as they land, and the scheduled check is what catches the ones the
-  webhook drops. A PR that is only subscribed looks watched and silently isn't.
-- **In the sandbox, a session rooted above this repo never loads its
-  `.claude/settings.json`.** Claude Code reads it from the session's own root,
-  so a session opened on the parent of several repos prompts for every
-  scheduler and GitHub call this repo already allows, and a watch stalls on a
-  dialog nobody is there to answer. Write the **intersection** of the open
-  repos' `permissions.allow` into `~/.claude/settings.json` at the start of
-  such a session: a home directory grant reaches every repo in the container,
-  so unanimous consent is the only thing it can safely carry — and anything in
-  the union but not the intersection is a difference to raise, not to assume
-  either way. A repo with no allowlist of its own has consented to
-  nothing, so it does narrow the intersection — but name the grants that
-  dropped and ask, rather than leaving a later stall with no visible cause;
-  the usual reason is a repo nobody has set up, not a decision anyone made.
-  Carry each repo's `deny` and `ask` rules across as well — copying `allow`
-  alone drops a restriction a repo declared — and mind the two directions separately where the
-  home file already exists: `allow` is *replaced* by the intersection, since an
-  entry sitting there that no open repo grants has no consent behind it, while
-  the `deny` and `ask` already in the file are kept, being restrictions
-  themselves — and recompute when the set of
-  open repos changes, since cloning one mid-session widens what these grants
-  already reach. The container is ephemeral, so it needs doing each time, and
-  whose home directory it is decides whether to do it at all: a container's,
-  discarded when the session ends, is fair game; a person's is not. A home that
-  outlives the session — an agent's own standing account — leaves these grants
-  reaching repos that never consented, in sessions nobody meant them for, so
-  restore what was there before when the session ends or don't write them.
-- **Poll your own open PRs every 5 minutes** — the ones you opened or were
-  explicitly asked to watch — for new review comments, CI status, approvals, and
-  the Codex thumbs up. Webhooks drop events, so a PR nobody is polling stalls
-  silently. Never end a turn by going idle with one of yours still open: arm the
-  next check with whatever the client offers (`send_later`, a scheduled task /
-  cron, `/loop`), and arm it *without asking*. Scheduling your own follow-up is
-  routine hygiene, not a decision that needs approval. Someone else's open PR is
-  not your polling job — adopt one only when asked. Keep polling until the PR
-  state is final: merged, with CI and Codex both reported on the final PR
-  head — or closed unmerged. Then run one last reply-or-resolve pass and
-  cancel the watch. Open a follow-up PR (with its own watch) for anything a
-  merged PR still needs.
-- **What the polling costs.** Twelve wake-ups an hour per PR, each a model turn
-  plus a few GitHub API calls — roughly a dollar an hour on a large context.
-  The scheduler is the single point of failure: one missed re-arm ends the
-  watch silently, with no error anywhere. If you can't arm the next check, say
-  so in the reply rather than leaving a PR that looks watched and isn't.
-- **One pending check per PR, not one per wake-up.** A webhook event can start a
-  turn while a scheduled check is still pending; arming another there leaves two
-  chains, each re-arming itself, and the cost doubles every time it happens.
-  Before arming, reuse or cancel the pending one (`update_trigger`, or
-  `delete_trigger` then re-arm) so exactly one check is outstanding.
-- **Arm the next check at the *start* of the turn that owes one.** A re-arm
-  parked at the end never runs when the turn is interrupted — that once left a
-  PR unwatched for two hours. When a fired check started the turn, settle its
-  trigger first, preferring `update_trigger`: re-timing in place *is* the next
-  check, with no window where none is pending, where `delete_trigger` plus a
-  fresh one leaves a gap that is exactly the failure above. Any other turn — a webhook,
-  a message from you — leaves an already-pending check alone rather than
-  pushing its fire time back, or the backstop never runs; re-time it
-  only when the cadence itself should change.
+- **Opening the PR arms the first scheduled check.** That check *is* the
+  watch: when it fires it reads CI, review comments and the Codex reaction,
+  and it is what catches anything a webhook drops. `subscribe_pr_activity`
+  is a separate thing and it is **opt-in** — it pushes every comment, check
+  run and bot reply into the conversation as a raw event, which buries the
+  thread the user is actually reading under machine chatter they didn't ask
+  for. Subscribe only when asked to, and unsubscribe as soon as the reason
+  for it passes.
+- **Permissions are granted before the session starts, so a rule here can't
+  fix them.** Claude Code loads `.claude/settings.json` from the session's
+  own root, so a session opened on the parent of several repos loads none of
+  them and prompts for every scheduler and GitHub call this repo already
+  allows — and a watch stalls on a dialog nobody is there to answer.
+  `$HOME/.claude/settings.json` is the file that reaches every repo in the
+  container, under full MCP identifiers
+  (`mcp__Claude_Code_Remote__send_later`, `…__create_trigger`,
+  `…__list_triggers`, `…__update_trigger`, `…__delete_trigger`, plus the
+  lowercase-server `mcp__claude-code-remote__*` variants — bare names match
+  nothing). But settings load at **startup**: writing that file from inside
+  a running session does nothing for that session, so it belongs in the
+  environment's setup script, not in an agent's task list. If calls are
+  prompting, say so once and carry on — don't spend the turn writing a file
+  that can't take effect.
+- **Poll your own open PRs — fast while a merge gate is pending, slow
+  otherwise.** The two things nothing else reports are CI going green and
+  the Codex 👍 (its "no suggestions" outcome is a reaction, not a comment),
+  so a PR waiting on either gets a ~5-minute check; once nothing is left but
+  a human, drop to ~30 minutes — that's a queue, not work in flight. Never
+  end a turn by going idle with one of yours still open: arm the next check
+  with whatever the client offers (`send_later`, a scheduled task / cron,
+  `/loop`), and arm it *without asking*. Scheduling your own follow-up is
+  routine hygiene, not a decision that needs approval. Someone else's open
+  PR is not your polling job — adopt one only when asked. Merged or closed
+  unmerged is terminal: wait for one more check to see CI and Codex report
+  on the final head, but don't block on a report that may never land — an
+  early manual merge, a docs-only push a path filter never runs CI on, a
+  down review service — settle for whatever's known by then and move on.
+  Either way, run one last reply-or-resolve pass, then cancel the watch in
+  full: the pending scheduled trigger, *and* `unsubscribe_pr_activity` if
+  you ever subscribed. Open a follow-up PR (with its own watch) for anything
+  a merged PR still needs.
+- **What the polling costs.** Twelve wake-ups an hour per PR at the fast
+  cadence, two at the slow one — each a model turn plus a few GitHub API
+  calls, so roughly a dollar an hour while a PR is waiting on its merge
+  gate. The scheduler is the single point of failure: one missed re-arm ends
+  the watch silently, with no error anywhere. If you can't arm the next
+  check, say so in the reply rather than leaving a PR that looks watched and
+  isn't.
+- **One pending check per PR, settled at the top of the turn.** Two failures
+  meet here. Arming a second check because a webhook started a turn while
+  one was already pending leaves two chains, each re-arming itself, and the
+  cost doubles every time it happens. Parking the re-arm at the *end* of the
+  turn is the opposite one — an interrupted turn takes it with it, and that
+  once left a PR unwatched for two hours. So settle the trigger before
+  anything else, and settle it to exactly one: leave a correctly-timed
+  pending check alone, since pushing its deadline forward every turn is how
+  a busy PR never gets polled at all, and only when it's missing, already
+  fired, or mis-timed either update it in place with `update_trigger` —
+  which leaves no window where none is pending — or arm the replacement
+  before deleting the old, because an overlap beats a gap. Then diagnose,
+  fix, and reply.
 - **A `send_later` one-shot re-arms itself +24h**, so "check in 5 minutes"
   silently becomes daily. Never leave a fired trigger to expire on its own, and
   check that the fire time it returned is the one you asked for — a five-minute
