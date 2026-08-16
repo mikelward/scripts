@@ -22,3 +22,4 @@ test:
 	./kdeshortcut_test
 	./dvorak_test
 	./confinst_test
+	./repo-rules_test

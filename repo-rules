@@ -1,0 +1,634 @@
+#!/bin/sh
+# Manage a GitHub repository's branch ruleset: which checks a merge requires.
+#
+# Usage:
+#     repo-rules [--dry-run] [--force] [--ruleset NAME] OWNER/REPO CHECK...
+#     repo-rules --ruleset=gates owner/repo gate codex
+#
+# Requires the gh CLI, authenticated with admin rights on the repository.
+#
+# Cost and reliability: free. Every call is GitHub's REST API, which allows
+# 5,000 authenticated requests an hour; a typical run spends four or five and
+# a worst case -- a check that has never reported, so every head the bounded
+# scan below offers is walked -- spends about four hundred, whatever the size
+# of the repository. Expect a second or two, up to a minute for that worst
+# case. It is not on any hot path: nothing here runs from
+# a shell prompt. Every failure mode is loud and leaves the ruleset untouched
+# -- no gh (refuses, exit 1), not authenticated or lacking admin (the first
+# call fails, exit 1), GitHub down or rate limited (same), and a failed read
+# never reads as "this check has never reported".
+#
+# What it does: makes CHECK... required on the default branch, via a ruleset
+# it owns by name, so a pull request cannot merge until each one passes --
+# requires every review conversation to be resolved, the branch to be up to
+# date with the base, and allows rebase as the only merge method.
+#
+# Conversation resolution is not optional here, because it closes the gap the
+# checks cannot: a reviewer's comment is not a check, so a finding raised and
+# never answered blocks nothing, and a green tick reads as agreement it never
+# was. Requiring resolution makes "somebody replied" a precondition for merge
+# rather than a courtesy. It requires the threads be RESOLVED, not agreed --
+# resolving a thread you disagree with is one click, so this costs a rebuttal
+# and never a merge.
+#
+# Why a named ruleset rather than editing whatever is there: a repository's
+# protections may include rules this script knows nothing about, and writing
+# the whole object back would silently drop them. It creates its own ruleset,
+# and touches no other.
+#
+# The guard that earns this script: it REFUSES to require a check that has
+# never reported. A required check that never runs blocks every merge
+# forever, with no error anywhere to say why -- and the failure looks exactly
+# like a stuck queue. A typo ("sweeep") or a check that only exists on a
+# branch not yet merged both land there. Pass --force when you are knowingly
+# requiring one that is about to start reporting.
+#
+# Check names are handled one per line throughout, never as a space-separated
+# list. Real names contain spaces -- "Analyze (actions)" is one CodeQL emits
+# -- and a split one produces contexts like "Analyze" and "(actions)" that
+# pass validation individually and then never report, which is the exact
+# failure this script exists to prevent, caused by the script itself.
+
+set -eu
+
+PROGRAM="$(basename "$0")"
+RULESET="merge gates"
+DRY_RUN=0
+FORCE=0
+
+error() {
+    echo "$PROGRAM: $*" >&2
+}
+
+usage() {
+    cat <<EOF
+Usage: $PROGRAM [--dry-run] [--force] [--ruleset NAME] OWNER/REPO CHECK...
+
+Make each CHECK a required status check on OWNER/REPO's default branch,
+require every review conversation to be resolved and the branch to be up to
+date with the base, and allow rebase as the only merge method.
+
+  --dry-run        Print what would change; make no writes.
+  --force          Require a check even if it has never reported.
+  --ruleset NAME   Name of the ruleset to own (default: "$RULESET").
+  -h, --help       This message.
+
+Examples:
+  $PROGRAM owner/repo gate codex
+  $PROGRAM --dry-run owner/other-repo gate codex Vercel
+EOF
+}
+
+while test $# -gt 0; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        --force) FORCE=1; shift ;;
+        --ruleset) shift; test $# -gt 0 || { error "--ruleset needs a name"; exit 2; }
+                   RULESET="$1"; shift ;;
+        --ruleset=*) RULESET="${1#--ruleset=}"; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) error "unknown option '$1'"; usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+
+test $# -ge 2 || { usage >&2; exit 2; }
+
+REPO="$1"; shift
+# Strictly OWNER/REPO, because `gh api` substitutes `{owner}` and `{repo}` in
+# an endpoint from the current checkout or $GH_REPO. A literal `{owner}/{repo}`
+# passes a shape check and then every call in this script silently retargets
+# whatever repository the shell happens to be in -- with admin credentials, and
+# with the output still naming `{owner}/{repo}`. Only the characters GitHub
+# allows in an owner or a repository name get through.
+case "$REPO" in
+    */*/*|/*|*/) error "'$REPO' is not OWNER/REPO"; exit 2 ;;
+    */*) ;;
+    *) error "'$REPO' is not OWNER/REPO"; exit 2 ;;
+esac
+case "$REPO" in
+    *[!A-Za-z0-9._/-]*)
+        error "'$REPO' contains characters GitHub does not allow in an owner or"
+        error "repository name. Note that gh expands '{owner}' and '{repo}' from"
+        error "the current checkout, so such an argument would target a different"
+        error "repository than the one named."
+        exit 2 ;;
+esac
+
+command -v gh >/dev/null 2>&1 || {
+    error "gh is not installed. It carries the authentication this needs;"
+    error "installing it is less work than reimplementing that with curl."
+    exit 1
+}
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT INT TERM
+
+# The branch to protect, and whether the repository permits a rebase merge at
+# all. The branch is asked for rather than assumed: not every repository calls
+# it main, and requiring checks on a branch that does not exist silently
+# protects nothing.
+if gh api "repos/$REPO" --jq '.default_branch, .allow_rebase_merge' > "$WORK/repo"; then
+    DEFAULT_BRANCH="$(sed -n 1p "$WORK/repo")"
+    ALLOW_REBASE="$(sed -n 2p "$WORK/repo")"
+else
+    error "could not read $REPO"
+    exit 1
+fi
+test -n "$DEFAULT_BRANCH" || { error "could not read $REPO's default branch"; exit 1; }
+
+# A ruleset NARROWS what the repository permits; it cannot enable a method the
+# repository has turned off. So allowing only rebase on a repository with
+# rebase merging disabled leaves the intersection empty and nothing can merge
+# -- the never-merges trap this script exists to prevent, sprung by the script.
+# Refused rather than fixed: turning on a repository-wide merge setting is not
+# something a run asked to set a check list should do behind the operator.
+if test "$ALLOW_REBASE" != true; then
+    error "$REPO has rebase merging disabled, and this ruleset allows only"
+    error "rebase. A ruleset narrows what the repository permits and cannot"
+    error "enable a method, so together they would leave no way to merge"
+    error "anything. Enable 'Allow rebase merging' in the repository's pull"
+    error "request settings first."
+    exit 1
+fi
+
+# A JSON string literal, with the two characters that would otherwise end it
+# escaped. Check names are free text from the caller.
+json_string() {
+    printf '"%s"' "$(printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+}
+
+# Refused rather than escaped, and for two reasons. JSON requires control
+# characters to be escaped, so an unescaped tab produces a malformed body and
+# a confusing API error instead of a clear refusal here. And a newline would
+# corrupt the line-per-name handling below -- the wanted list, the reported
+# list and `grep -qxF` are all line-based -- so a name containing one could
+# read as two names, neither of which is what the caller asked for.
+reject_control_chars() {
+    case "$1" in
+        *[[:cntrl:]]*)
+            error "$2 contains a control character (tab, newline, or similar)."
+            error "Check names are compared and recorded one per line, so such a"
+            error "name cannot be handled unambiguously. Refusing rather than"
+            error "guessing what was meant."
+            exit 2 ;;
+    esac
+}
+
+reject_control_chars "$RULESET" "the --ruleset name"
+
+# The names asked for, validated once and kept in the JSON encoding the
+# reported list arrives in -- see collect_reported for why it is encoded.
+: > "$WORK/wanted"
+contexts=""
+for check in "$@"; do
+    test -n "$check" || { error "empty check name"; exit 2; }
+    reject_control_chars "$check" "check name '$check'"
+    json_string "$check" >> "$WORK/wanted"
+    printf '\n' >> "$WORK/wanted"
+    contexts="$contexts{\"context\":$(json_string "$check")},"
+done
+contexts="${contexts%,}"
+
+# Whether the repository has no commits at all. Asked of the branch list --
+# documented, and empty only for a repository with nothing pushed -- rather
+# than by matching the text of gh's 409, which is not an interface. A failed
+# call answers "no": the caller then fails closed, which is the right way to
+# be wrong here.
+repo_is_empty() {
+    gh api "repos/$REPO/branches?per_page=1" --jq 'length' > "$WORK/branches" || return 1
+    test "$(cat "$WORK/branches")" = 0
+}
+
+# Whether NAME (JSON-encoded) is in the reported list. grep answers 0 for
+# found and 1 for not found, and 2 or more for "I could not tell you" -- an
+# unreadable file, an I/O error. Reading that third answer as "not found"
+# prints exactly the claim this script exists to make trustworthy, so it
+# aborts instead. The status is captured in the `else` branch, where `$?` is
+# still the condition's; after a whole `if` it would be the if's own 0.
+reported() {
+    if grep -qxF -- "$1" "$WORK/reported"; then
+        return 0
+    else
+        status=$?
+    fi
+    if test "$status" -ne 1; then
+        error "could not search the list of reported checks: grep exited $status."
+        error "Refusing to call a check unreported on the strength of a search"
+        error "that did not finish."
+        exit 1
+    fi
+    return 1
+}
+
+all_wanted_found() {
+    while read -r want; do
+        reported "$want" || return 1
+    done < "$WORK/wanted"
+}
+
+# Every requested check name this repository has reported, into
+# $WORK/reported. Returns non-zero if ANY call failed, rather than letting a
+# rate limit or a permission error look like "this check has never reported"
+# -- which would reject a valid name, or with --force write a ruleset on the
+# strength of a safety check that never completed. A pipeline would report
+# only the last command's status, so each call is checked where it is made.
+#
+# Heads are taken in stages and the walk STOPS as soon as every requested name
+# has been seen. The question is only whether each name has reported anywhere,
+# and the default branch usually settles it; without the early exit a hundred
+# recent pull requests cost two hundred sequential `gh` processes, which is a
+# visible hang and a chunk of the hour's API quota.
+#
+# A run still missing a name walks everything the stages offer -- and those
+# stages are BOUNDED at one page each, so the worst case is around 200 heads
+# and 400 calls whatever the repository's size. An unbounded walk over every
+# open pull request is the version of this that a repository with thousands of
+# them turns into a hang and a rate limit.
+collect_reported() {
+    : > "$WORK/reported"
+    for stage in default open closed; do
+        : > "$WORK/heads"
+        case "$stage" in
+            # `#` is legal in a git ref name and starts a URL fragment, which
+            # is never sent, so naming the branch in the path would quietly
+            # query the wrong one. This endpoint already defaults to it.
+            default)
+                if gh api "repos/$REPO/commits?per_page=1" \
+                    --jq '.[0].sha' > "$WORK/heads"; then
+                    :
+                elif repo_is_empty; then
+                    # A repository with no commits answers 409 here, and that
+                    # is a KNOWN zero-report answer rather than a failed read:
+                    # nothing has ever run because nothing has ever been
+                    # pushed. Failing closed on it would make a brand new
+                    # repository the one place --force cannot do its job --
+                    # setting the gates up before the checks first report.
+                    : > "$WORK/heads"
+                else
+                    return 1
+                fi ;;
+            # One page, most recently updated first -- NOT paginated. A
+            # repository with thousands of open pull requests would otherwise
+            # cost two calls per head with no upper bound, which is a visible
+            # hang and can exhaust the hour's quota outright. The bound is
+            # honest in the safe direction: a name that reported only on some
+            # older head reads as never reported, which refuses and names
+            # --force, rather than passing a check that never runs.
+            open) gh api "repos/$REPO/pulls?state=open&per_page=100&sort=updated&direction=desc" \
+                --jq '.[].head.sha' > "$WORK/heads" || return 1 ;;
+            # A check that runs only on `pull_request` never reports on the
+            # default branch, so a repository with nothing open would look as
+            # though it had never run. One page, deliberately: paginating
+            # `state=all` walks every pull request the repository ever had.
+            closed) gh api "repos/$REPO/pulls?state=closed&per_page=100&sort=updated&direction=desc" \
+                --jq '.[].head.sha' > "$WORK/heads" || return 1 ;;
+        esac
+        while read -r sha; do
+            test -n "$sha" || continue
+            # Check runs and commit statuses are different objects, and a
+            # ruleset can require either -- `codex` is a status, `gate` is a
+            # check run. Both paginate: a name on page two is
+            # indistinguishable from a name that never reported.
+            #
+            # `@json` because this file is one name per line and a name is
+            # free text an app chose: a check run called "build\nand test"
+            # would arrive as two lines, and a caller asking for `build` would
+            # then be told it had reported when nothing of that name ever did
+            # -- the never-reports trap, sprung by the guard against it.
+            gh api --paginate "repos/$REPO/commits/$sha/check-runs" --jq '.check_runs[].name | @json' >> "$WORK/reported" || return 1
+            gh api --paginate "repos/$REPO/commits/$sha/status" --jq '.statuses[].context | @json' >> "$WORK/reported" || return 1
+            if all_wanted_found; then break; fi
+        done < "$WORK/heads"
+        if all_wanted_found; then break; fi
+    done
+    sort -u -o "$WORK/reported" "$WORK/reported"
+}
+
+collect_reported || {
+    error "could not read which checks have reported on $REPO"
+    error "Refusing to guess: an incomplete answer here either rejects a valid"
+    error "check or, with --force, requires one on the strength of a safety"
+    error "check that did not finish."
+    exit 1
+}
+
+: > "$WORK/missing"
+for check in "$@"; do
+    reported "$(json_string "$check")" \
+        || printf '%s\n' "$check" >> "$WORK/missing"
+done
+
+if test -s "$WORK/missing"; then
+    missing="$(sed 's/^/  /' "$WORK/missing")"
+    if test "$FORCE" -eq 1; then
+        error "requiring checks that have never reported on $REPO:"
+        error "$missing"
+        error "(--force given; a merge will block until each one reports)"
+    else
+        error "these checks have never reported on $REPO:"
+        error "$missing"
+        error "A required check that never reports blocks every merge, with no"
+        error "error to say why. Check the spelling, or merge the branch that"
+        error "adds it first. Pass --force to require it anyway."
+        error "(Looked at the default branch's head, the 100 most recently"
+        error "updated open pull requests and the 100 most recently updated"
+        error "closed ones -- bounded, so a name that last reported on an"
+        error "older head than those lands here too.)"
+        exit 1
+    fi
+fi
+
+
+# Update the ruleset this script owns, or create it. Matched by name, so a
+# rerun with a different check list replaces that list rather than adding a
+# second ruleset that quietly ANDs with the first.
+#
+# A failed lookup must NOT read as "there is no ruleset": that would POST a
+# duplicate whose stale check list then ANDs with this one, which is the
+# outcome the whole named-ruleset approach exists to avoid.
+if EXISTING="$(gh api --paginate "repos/$REPO/rulesets?includes_parents=false" --jq ".[] | select(.name == $(json_string "$RULESET")) | .id")"; then
+    :
+else
+    error "could not list $REPO's rulesets, so cannot tell whether '$RULESET'"
+    error "already exists. Creating one now could duplicate it, and two"
+    error "rulesets AND together — the stale one would keep requiring checks"
+    error "this run was meant to replace."
+    exit 1
+fi
+
+# A name match is not ownership. If a ruleset with this name already exists
+# and carries rules this script does not write, replacing its rule list would
+# silently delete protections -- breaking the promise at the top of this file
+# that it touches no other ruleset. A name is just a name; what proves the
+# ruleset is ours is that it contains only the rule types we manage.
+if test -n "$EXISTING"; then
+    # Not `gh ... | sort` -- a pipeline reports the LAST command's status, so
+    # sort's success would mask a failed read. Same shape as the bug this
+    # script was reviewed for; it is easy to write twice.
+    if gh api "repos/$REPO/rulesets/$EXISTING" --jq '.enforcement, (.rules[].type)' > "$WORK/inspect"; then
+        ENFORCEMENT="$(sed -n 1p "$WORK/inspect")"
+        sed 1d "$WORK/inspect" > "$WORK/types"
+        # Deleting the managed types is the test, rather than comparing against
+        # a list of the allowed combinations: with two rule types a ruleset can
+        # legitimately hold either or both, and enumerating those spellings is
+        # a thing to get wrong again the moment a third is added.
+        # No `sort -u` in front of this. It was there to dedupe the error
+        # listing, and it made a pipeline whose status was `sed`'s -- so a
+        # failing sort would have left UNMANAGED empty and read as "nothing
+        # here but our own rules". The third time that shape appeared in this
+        # file, and the answer is to delete the command rather than check it:
+        # a repeated name in an error message costs nothing.
+        UNMANAGED="$(sed '/^required_status_checks$/d; /^pull_request$/d' "$WORK/types")"
+    else
+        error "could not read ruleset '$RULESET' (id $EXISTING) to check what it"
+        error "contains. Refusing to overwrite rules that cannot be inspected."
+        exit 1
+    fi
+    # `evaluate` and `disabled` rulesets do not block anything, so writing a
+    # check list into one and reporting success would name a gate that is not
+    # a gate -- the same lie as a ruleset updated with no checks in it.
+    # Refused rather than activated: enforcement is a deliberate choice this
+    # run was not asked to make, and flipping it is not a side effect of
+    # setting a check list.
+    if test "$ENFORCEMENT" != active; then
+        error "ruleset '$RULESET' (id $EXISTING) on $REPO is '$ENFORCEMENT', not"
+        error "'active', so its rules block nothing. Setting a check list on it"
+        error "would report a gate that does not gate. Activate it, or point this"
+        error "run at a different ruleset with --ruleset."
+        exit 1
+    fi
+    if test -n "$UNMANAGED"; then
+        error "ruleset '$RULESET' (id $EXISTING) on $REPO holds rules this script"
+        error "does not manage:"
+        printf '%s\n' "$UNMANAGED" | sed 's/^/  /' >&2
+        error "Overwriting it would delete them. Rename that ruleset, or point"
+        error "this run at a different one with --ruleset."
+        exit 1
+    fi
+fi
+
+# Rulesets AGGREGATE: a pull request must satisfy every one that applies to
+# the branch, and `allowed_merge_methods` INTERSECTS across them. So another
+# active ruleset allowing only squash turns this one's rebase-only into an
+# empty intersection and nothing can merge. The repository-level check above
+# cannot see that, and an inherited organization ruleset is invisible to the
+# `includes_parents=false` lookup this script uses to find its own.
+#
+# The comparison is against the scope BEING WRITTEN, not the default branch.
+# An update preserves the existing ruleset's conditions, so a managed ruleset
+# scoped to `release` must be checked against what else applies to `release`
+# -- checking `main` there would miss the conflict entirely and report success.
+if test -n "$EXISTING"; then
+    # shellcheck disable=SC2016  # jq program, not shell interpolation
+    SCOPE="$(gh api "repos/$REPO/rulesets/$EXISTING" \
+        --jq '{include: [.conditions.ref_name.include[]?],
+               exclude: [.conditions.ref_name.exclude[]?]} | @json')" || {
+        error "could not read ruleset '$RULESET' (id $EXISTING) to see which"
+        error "branches it covers. Refusing to guess at what else applies there."
+        exit 1
+    }
+else
+    SCOPE='{"include":["~DEFAULT_BRANCH"],"exclude":[]}'
+fi
+
+# Matching is literal -- `~DEFAULT_BRANCH` normalized on both sides, `~ALL` a
+# wildcard -- and GitHub's `fnmatch` patterns are NOT evaluated. But an
+# unevaluated scope is reported rather than passed over: a squash-only ruleset
+# on `refs/heads/*` covers this branch and letting it through silently is the
+# never-merges trap the whole scan exists to prevent. So a ruleset that rules
+# out rebase lands in one of two lists -- a definite conflict, or one whose
+# scope this script cannot decide -- and both stop the run. Refusing to decide
+# beats reimplementing GitHub's ref matching and being wrong about it in
+# silence, and it only ever triggers on a ruleset that really does exclude
+# rebase. Exclusions count as undecidable for the same reason, from the other
+# direction: an `exclude` can carve this branch back out of an overlap, so a
+# literal match with one present is not proof of a conflict.
+find_merge_method_conflicts() {
+    : > "$WORK/conflicts"
+    gh api --paginate "repos/$REPO/rulesets?includes_parents=true" \
+        --jq '.[].id' > "$WORK/all_rulesets" || return 1
+    while read -r id; do
+        test -n "$id" || continue
+        test "$id" != "${EXISTING:-}" || continue
+        # shellcheck disable=SC2016  # jq program, not shell interpolation
+        REPO_RULES_BRANCH="$DEFAULT_BRANCH" REPO_RULES_SCOPE="$SCOPE" \
+        gh api "repos/$REPO/rulesets/$id" --jq '
+            def norm: map(if . == "~DEFAULT_BRANCH"
+                          then "refs/heads/" + env.REPO_RULES_BRANCH
+                          else . end);
+            select(.enforcement == "active")
+            | (env.REPO_RULES_SCOPE | fromjson) as $our
+            | ($our.include | norm) as $ours
+            | ([.conditions.ref_name.include[]?] | norm) as $theirs
+            | select([.rules[]? | select(.type == "pull_request")
+                      | .parameters.allowed_merge_methods // empty]
+                | any(index("rebase") | not))
+            | if (($ours + $theirs) | any(test("[*?[]")))
+                 or (($our.exclude + [.conditions.ref_name.exclude[]?])
+                     | length > 0)
+              then "unknown " + .name
+              elif ($ours | index("~ALL")) or ($theirs | index("~ALL"))
+                   or ([$theirs[] | select(IN($ours[]))] | length > 0)
+              then "conflict " + .name
+              else empty
+              end' >> "$WORK/conflicts" || return 1
+    done < "$WORK/all_rulesets"
+}
+
+find_merge_method_conflicts || {
+    error "could not read $REPO's other rulesets, so cannot tell whether one of"
+    error "them rules out a rebase merge. Refusing to guess: rulesets aggregate,"
+    error "and a conflict would leave no way to merge anything."
+    exit 1
+}
+# A space separates the verdict from the name, and `sed` rather than a
+# pipeline through `grep`: a pipeline reports only the last command's status,
+# which is how a failed read reads as "no conflicts" -- the shape three
+# earlier findings on this script had in common.
+sed -n 's/^conflict //p' "$WORK/conflicts" > "$WORK/definite"
+sed -n 's/^unknown //p' "$WORK/conflicts" > "$WORK/undecidable"
+if test -s "$WORK/definite"; then
+    error "another active ruleset on $REPO excludes rebase from its allowed"
+    error "merge methods, and covers the same branches as this one:"
+    sed 's/^/  /' "$WORK/definite" >&2
+    error "Rulesets aggregate, so together they would leave no method that"
+    error "satisfies both and nothing could merge. Reconcile them first."
+    exit 1
+fi
+if test -s "$WORK/undecidable"; then
+    error "another active ruleset on $REPO excludes rebase from its allowed"
+    error "merge methods, on a scope this script cannot evaluate:"
+    sed 's/^/  /' "$WORK/undecidable" >&2
+    error "Its conditions use a pattern (such as 'refs/heads/*') or an"
+    error "exclusion, and this script matches branch names literally rather"
+    error "than reimplementing GitHub's ref matching. If that ruleset covers"
+    error "this branch the two would leave no way to merge anything, so this"
+    error "refuses rather than guess. Check it, then narrow either scope."
+    exit 1
+fi
+
+# The body. Two paths, and the difference is the point.
+#
+# CREATE builds it from scratch: default branch, actively enforced,
+# `strict_required_status_checks_policy` true -- a check that passed against a
+# stale base has not tested what will land. It serializes merges, and that is
+# accepted. Its `pull_request` rule asks for ZERO approving reviews and no
+# code-owner or last-push approval -- requiring an approval is a policy about
+# who may merge, which is not what this script is for. `allowed_merge_methods`
+# is rebase only: a squash or a merge commit rewrites or hides the commits
+# that were reviewed, and one commit per logical change is the shape these
+# repositories keep. Squash and merge-commit disappear from the pull request's
+# button once this is set.
+#
+# UPDATE does NOT build it. It fetches the existing ruleset and edits only
+# the check list inside it, because a PUT replaces the whole object and this
+# script does not know every field GitHub puts there. Rebuilding cost four
+# review findings in a row -- conditions, enforcement, bypass_actors, the
+# strict policy -- each one a field silently reset as a side effect of
+# setting a check list, and each found only because someone looked. Editing
+# the fetched object preserves the fields nobody has thought of yet, which is
+# the only version of this that stays correct as the API grows.
+#
+# Either managed rule is ADDED when the fetched ruleset lacks it. The
+# ownership check accepts a ruleset holding just one of the two, and a `map`
+# over the rules edits only what is already there -- so without this a ruleset
+# carrying only `pull_request` would take the PUT, report the checks as
+# updated, and require none of them. A gate reported as set and not set is
+# worse than one that failed to write.
+#
+# `integration_id` is why the check list is merged rather than replaced: an
+# entry bound to a GitHub App means only that app can satisfy the check, and
+# rebuilding entries from names alone would drop the binding and let any
+# integration reporting the same name open the gate.
+build_update_body() {
+    # shellcheck disable=SC2016  # $rule/$have/$want/$c are jq variables, not shell
+    REPO_RULES_CONTEXTS="[$contexts]" \
+    gh api "repos/$REPO/rulesets/$EXISTING" --jq '
+        del(.id, .node_id, .source, .source_type, .created_at, .updated_at,
+            ._links, .current_user_can_bypass)
+        | .rules = ((.rules // [])
+            | map(
+                if .type == "required_status_checks" then
+                    . as $rule
+                    | (($rule.parameters.required_status_checks // [])) as $have
+                    | (env.REPO_RULES_CONTEXTS | fromjson) as $want
+                    | .parameters.required_status_checks =
+                        [ $want[] | .context as $c
+                          | (($have[] | select(.context == $c)) // {context: $c}) ]
+                    | .parameters.strict_required_status_checks_policy = true
+                elif .type == "pull_request" then
+                    .parameters.required_review_thread_resolution = true
+                    | .parameters.allowed_merge_methods = ["rebase"]
+                else . end)
+            | if any(.[]; .type == "required_status_checks") then .
+              else . + [{type: "required_status_checks", parameters: {
+                  strict_required_status_checks_policy: true,
+                  required_status_checks:
+                      (env.REPO_RULES_CONTEXTS | fromjson)}}]
+              end
+            | if any(.[]; .type == "pull_request") then .
+              else . + [{type: "pull_request", parameters: {
+                  required_approving_review_count: 0,
+                  dismiss_stale_reviews_on_push: false,
+                  require_code_owner_review: false,
+                  require_last_push_approval: false,
+                  required_review_thread_resolution: true,
+                  allowed_merge_methods: ["rebase"]}}]
+              end)
+    ' > "$WORK/body"
+}
+
+BODY="{
+  \"name\": $(json_string "$RULESET"),
+  \"target\": \"branch\",
+  \"enforcement\": \"active\",
+  \"conditions\": {\"ref_name\": {\"include\": [\"~DEFAULT_BRANCH\"], \"exclude\": []}},
+  \"rules\": [
+    {\"type\": \"required_status_checks\",
+     \"parameters\": {
+       \"strict_required_status_checks_policy\": true,
+       \"required_status_checks\": [$contexts]
+     }},
+    {\"type\": \"pull_request\",
+     \"parameters\": {
+       \"required_review_thread_resolution\": true,
+       \"allowed_merge_methods\": [\"rebase\"],
+       \"required_approving_review_count\": 0,
+       \"dismiss_stale_reviews_on_push\": false,
+       \"require_code_owner_review\": false,
+       \"require_last_push_approval\": false
+     }}
+  ]
+}"
+
+describe_checks() {
+    for check in "$@"; do printf '  %s\n' "$check"; done
+}
+
+if test "$DRY_RUN" -eq 1; then
+    if test -n "$EXISTING"; then
+        # No branch named: an update preserves whatever scope the ruleset
+        # already has, which may not be the default branch at all.
+        echo "$REPO: would update ruleset '$RULESET' (id $EXISTING); scope unchanged"
+    else
+        echo "$REPO: would create ruleset '$RULESET' on $DEFAULT_BRANCH"
+    fi
+    echo "  required checks:"
+    describe_checks "$@"
+    echo "  review conversations must be resolved"
+    echo "  the branch must be up to date with the base"
+    echo "  rebase is the only merge method"
+    exit 0
+fi
+
+if test -n "$EXISTING"; then
+    build_update_body || { error "could not read ruleset '$RULESET' to update it"; exit 1; }
+    gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
+    echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
+else
+    printf '%s' "$BODY" | gh api --method POST "repos/$REPO/rulesets" --input - >/dev/null
+    echo "$REPO: created ruleset '$RULESET' on $DEFAULT_BRANCH"
+fi
+describe_checks "$@"
