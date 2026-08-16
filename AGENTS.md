@@ -71,6 +71,10 @@ has stopped biting.
   placeholders (`/home/user`, `host1`, `git@example.com:org/repo.git`) in
   examples and fixtures. If a bug report contains any of it, paraphrase in
   the commit / PR — don't quote verbatim. When in doubt, ask before pushing.
+- **This account's own public repos are not user data** — decline a privacy
+  finding against `mikelward/lanes`. Then it's a documentation call:
+  `owner/repo` for the shape of an argument, the real name when the example is
+  about that repo.
 - **Script output is not one of those artifacts.** It prints on the user's own
   terminal, and naming hosts, paths and remotes is usually the point of the
   message. Redact only secrets: tokens, keys, and passwords embedded in URLs.
