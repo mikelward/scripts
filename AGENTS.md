@@ -282,8 +282,9 @@ reply, no offer to correct it. It is not a finding.
   Group several small fixes into one commit when they share a topic.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim
   before acting; if it doesn't hold up, reply saying why and decline.
-- **Never leave a review comment thread silently dismissed.** Either reply on
-  the thread *or* resolve it. When you think a comment is a false positive,
+- **Never leave a review comment thread silently dismissed.** Answer on the thread, then
+  resolve it once the fix is on the head or the point is rebutted — a disagreement is an
+  answer, so say why and resolve; anything still to do stays open. When you think a comment is a false positive,
   say *why* on the thread (one or two sentences). Acknowledgement noise is
   fine and preferred over silence.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
