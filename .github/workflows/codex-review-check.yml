@@ -1,0 +1,9 @@
+name: codex-review-check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    uses: mikelward/codex-review/.github/workflows/check-consumer.yml@main

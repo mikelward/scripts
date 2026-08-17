@@ -1,120 +1,20 @@
 # Republishes Codex's review verdict as the `codex` commit status a ruleset
 # can require. Codex posts no check run, and a clean pass is only a reaction
-# on the pull request body — which emits no webhook — so this polls rather
+# on the pull request body -- which emits no webhook -- so this polls rather
 # than reacting to an event.
 #
-# The sweep itself lives in mikelward/codex-review, with its own suite and
-# its design written up there. What stays HERE is the part that cannot be
-# shared: the boundary deciding who may run it with a token that can open the
-# gate. Every line below is deliberate, and `workflows_test` pins it,
-# because each wrong setting produces no error — just a gate that quietly
-# stops working.
+# Every line below is deliberate, and each wrong setting produces no error at
+# all -- just a merge gate that quietly stops working, or one that can never
+# clear. The reasoning is in docs/CONSUMER.md of mikelward/codex-review, not
+# repeated here: it used to be a 144-line header duplicated in nine
+# repositories, which is how it went stale in six of them.
 #
-# Scheduled workflows only run from the default branch, so this does nothing
-# until it merges.
+# REQUIRE `codex`. DO NOT REQUIRE `sweep`, and require branches up to date.
+# Both are explained there, and both are load-bearing.
 #
-# REQUIRE `codex`. DO NOT REQUIRE `sweep` -- four review rounds established
-# why, and each round found the same wall from a different side.
-#
-# The tempting idea: `codex` is the mark this job leaves and `sweep` is
-# whether the job ran, so requiring both would close the window where a head
-# already carrying `codex: success` has its verdict changed with no push -- a
-# second pull request opening on the same commit, or a re-read asked for with
-# `@codex review` -- and the run that would flip the mark dies before writing
-# anything, leaving the stale success standing.
-#
-# It does not work, because a check run lands wherever its EVENT decides while
-# the verdict is a commit status on a specific SHA:
-#
-#   - `pull_request_target` attaches to the PULL REQUEST HEAD (verified:
-#     mikelward/mesh#522, run 31945656570), as does
-#     `pull_request_review_comment` (verified: mikelward/lanes, run
-#     31967032933).
-#   - `issue_comment` and `workflow_run` run against the DEFAULT BRANCH, so
-#     their checks land there and cannot invalidate anything on the head.
-#
-# And the part that makes requiring it actively unsafe rather than merely
-# incomplete: a concurrency group holds ONE pending run. `cancel-in-progress:
-# false` preserves the run in progress, not the one queued behind it -- so a
-# `pull_request_target` run waiting behind a 55-minute sweep is canceled and
-# replaced by the next schedule, comment or relay to arrive. That queueing is
-# ordinary, not rare: observed at 13 minutes on mesh#522 and 3 minutes on
-# mikelward/lanes#3.
-# The replacement reports against `main`, so the pull request head is left
-# with a canceled `sweep` or none at all, and a required check in that state
-# blocks the merge with no way to clear it -- the hourly backstop reports
-# against `main` too. Requiring `sweep` would build the never-reports trap
-# this whole engine exists to avoid.
-#
-# The real fix belongs in the shared action, which already enumerates the open
-# pull requests it is about to sweep and therefore knows each head: writing
-# `pending` to those heads before it does any work invalidates the stale
-# verdict on every route, with no dependence on where a check run lands. That
-# is a change to mikelward/codex-review; this file cannot do it without
-# duplicating that enumeration behind `statuses: write`.
-#
-# Until then the window stays open and is accepted: it needs a verdict change
-# with no push AND the sweep dying before its first write. `codex` alone is
-# the gate.
-#
-# This block is worded from evidence because guessing it cost four rounds and
-# three reversals, each one a single observation generalized -- a delayed
-# `sweep` read as an absent one (it was the queue), then the opposite. Where a
-# claim here is not backed by a run someone looked at, it says so.
+# check_consumer.py compares this file byte for byte, so an edit here fails until
+# it is re-approved centrally.
 name: codex-review
-
-# No `workflow_dispatch`, and no bare `pull_request`: both take the workflow
-# definition from the ref under test, so a branch could ship its own sweep,
-# keep the `statuses: write` token, and publish `codex: success` for itself.
-# `pull_request_target` does not have that hole — GitHub takes the definition
-# from the BASE ref — and it starts the loop the moment a push lands, since
-# pushes emit real webhooks even though reactions never do.
-#
-# `closed` is for the shared-head case: two open pull requests on one head
-# both publish `failure`, and closing one is the webhook-capable transition
-# that clears the survivor.
-#
-# `edited` appears twice, for two unrelated reasons. On `pull_request_target`
-# it catches a RETARGET: pointing a pull request at a different base changes
-# the reviewed diff, sometimes completely, while the head SHA and its
-# `codex: success` stand still -- and GitHub emits `edited` for that, not
-# `synchronize`, so without it a stale verdict stays mergeable until the
-# hourly backstop happens along. On the comment events it hears a nudge
-# edited into an existing comment.
-#
-# The two comment events are NOT base-ref-pinned, which is easy to assume and
-# is false: in mikelward/lanes a `pull_request_review_comment` ran this file
-# *from the pull request branch*, with `statuses: write`, while `main` still
-# held the old one. No guard written in this file can close that — an
-# `if:` on the actor, a narrower `permissions:` block, a step diffing against
-# `main` are all supplied by the same branch they would constrain.
-#
-# They stay anyway, and not because the exposure is small: the trigger list
-# was never what held it back. Reaching that route needs a branch in THIS
-# repository, and anyone who can push one can publish `codex: success` far
-# more simply with any workflow declaring `on: push` and
-# `permissions: statuses: write`. Dropping these two would close one door in
-# a room with an open wall, while costing the rebuttal round its minute clock
-# — a finding answered in a reply plus an `@codex review` nudge changes the
-# verdict with no push and no reaction webhook anywhere. What would actually
-# bind, the day push access goes to someone whose merges should not be
-# self-approvable, is holding the credential in an environment whose
-# deployment-branch policy allows only `main`, so a branch's job cannot obtain
-# it at all. Editing the trigger list is not that, and must not be mistaken
-# for it.
-#
-# `workflow_run` relays `pull_request_review` from the unprivileged listener.
-# A verdict submitted as a review with no inline comments emits neither
-# comment event and no reaction, so nothing else hears it — but that event is
-# merge-ref, so it must not start a status-writing workflow directly.
-#
-# The HOURLY schedule is the backstop, not the clock. The events start a run
-# within seconds; everything the schedule alone catches is rare and fails
-# CLOSED (a dropped webhook leaves the new head pending), and any comment on
-# the pull request clears those on demand. On a private repository each idle
-# fire bills a full minute, so hourly (~720/month) is the deliberate trade
-# against `*/15`'s ~2,900. Free on this public one. Off the hour, dodging the
-# shared scheduler's stampede.
 on:
   schedule:
     - cron: '23 * * * *'
@@ -127,45 +27,17 @@ on:
   workflow_run:
     workflows: [codex-review-listener]
     types: [completed]
-
-# Exactly what a sweep needs: read the open pull requests, read check suites
-# (they date a head whose arrival the timeline does not record), write the
-# status. This workflow must remain the ONLY holder of `statuses: write` here
-# — a commit status belongs to the SHA, so a second writer is an unordered
-# write, and one delayed past this run's exit can overwrite a just-published
-# verdict with a stale one. A test scans every workflow for that scope.
 permissions:
   contents: read
   pull-requests: read
   checks: read
   statuses: write
-
-# A concurrency group is a repo-wide namespace, so this also serializes
-# against any predecessor still in flight — a workflow file being deleted does
-# not cancel a run of it already looping. `cancel-in-progress` stays false: a
-# canceled loop is a gate that stopped sweeping mid-review.
 concurrency:
   group: codex-review
   cancel-in-progress: false
-
 jobs:
   sweep:
     runs-on: ubuntu-latest
-    # Ten minutes past the action's 55-minute loop, so a hung API call cannot
-    # hold the runner — and the concurrency queue behind it — to the 6-hour
-    # job default, stalling the gate silently.
     timeout-minutes: 65
     steps:
-      # `@main`, not a tag or a SHA. The action has no build step and no
-      # dependencies, so the file that runs is the file you can read, and its
-      # repository is first-party — a pin would guard a capability an attacker
-      # has by the time it matters, while costing a pull request in every
-      # consumer to bump. This step is where a broken sweep dies, before it
-      # can write anything -- see the header for why the failed job's own
-      # check is NOT a usable backstop for that, and why `codex` is the only
-      # check to require.
-      #
-      # No checkout, on purpose: the sweep needs nothing from this tree, and a
-      # checkout would put a token-bearing .git/config within reach of a job
-      # that writes statuses.
       - uses: mikelward/codex-review@main
