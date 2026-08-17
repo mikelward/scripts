@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Declared rather than inherited. With no block here the job takes the
+# repository's default GITHUB_TOKEN permission -- a setting no file in the
+# repo can see, and one that may be read/write, which would let this job write
+# the `codex` commit status codex-review.yml must be the only writer of. This
+# job runs the test suite; it has never needed to write anything.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

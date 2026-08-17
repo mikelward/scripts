@@ -1,5 +1,5 @@
 #!/bin/sh
-# Tests for the codex-review workflows.
+# Tests for the codex-review workflow pair.
 #
 # The sweep's own logic and tests live in mikelward/codex-review; what is
 # pinned here is the part that stays in a repository: which events may run a
@@ -7,26 +7,34 @@
 # value whose wrong setting produces no error at all -- just a merge gate that
 # quietly stops working, or one that can never clear.
 #
-# Read as patterns over YAML, which is an approximation of YAML and known to
-# be. It is worth it because the alternative is a parser this repo has no
-# reason to depend on; the risk is bounded by these being pins on exact
-# strings that a human wrote and a human will edit.
+# Two rules hold this file together, and both were learned the same way, by
+# review finding a YAML notation the checks did not see:
+#
+# 1. NO NEGATIVE ASSERTIONS. Absence is unbounded, so asserting a forbidden
+#    string is missing only rejects the spellings someone anticipated;
+#    `write-all`, a `.yaml` filename, `statuses: "write"` and
+#    `"pull_request":` have each sailed past one across the sibling repos.
+#    Compare whole sets and whole blocks instead.
+# 2. THE WORKFLOWS THEMSELVES ARE PINNED AS TEXT. Rule 1 still leaves the
+#    extractors -- trigger keys, permissions blocks -- as patterns over YAML,
+#    which is an approximation of YAML and known to be. The first two cases
+#    compare each file's directive lines against an expected list, so nothing
+#    under test is extracted or approximated. The cases after them can be
+#    fooled; the pins cannot, so a mutation that slips past one still fails
+#    the other. Keep it that way.
+#
+# Comments are stripped before every comparison: these files carry more prose
+# than YAML, and every phrase this suite looks for is also something the
+# headers have to be able to *discuss*.
 
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)/.github/workflows"
-SWEEP="$DIR/codex-review.yml"
-LISTENER="$DIR/codex-review-listener.yml"
+WORKFLOW=codex-review.yml
+LISTENER=codex-review-listener.yml
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
-
-# The trigger assertions read the `on:` block alone. The header above it
-# explains at length why `workflow_dispatch` and a bare `pull_request` are
-# absent, so a whole-file scan for those names matches the prose and passes
-# while saying nothing about the triggers.
-sed -n '/^on:/,/^permissions:/p' "$SWEEP" > "$WORK/on"
-ON="$WORK/on"
 
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -49,93 +57,296 @@ finish_case() {
 
 # Records a failure and returns zero: `set -e` is on, so returning non-zero
 # would kill the run at the first one and skip the summary.
-assert_matches() {
-    if ! grep -qF -- "$2" "$1"; then
-        echo "  FAIL: $(basename "$1") must contain '$2'"
-        TEST_FAILED=1
+fail() {
+    echo "  FAIL: $1"
+    TEST_FAILED=1
+}
+
+# A workflow's directive lines: comments and blanks dropped, trailing space
+# trimmed. What every comparison below reads.
+directives() {
+    sed -e 's/[[:space:]]*$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$DIR/$1"
+}
+
+# Compares a file's directives against the expected list on stdin, printing a
+# diff on mismatch so a failure names the line that moved.
+assert_directives() {
+    cat > "$WORK/expected"
+    directives "$1" > "$WORK/actual"
+    if ! diff -u "$WORK/expected" "$WORK/actual" > "$WORK/diff"; then
+        fail "$1 is not what this test pins (- expected, + actual):"
+        sed 's/^/    /' "$WORK/diff"
     fi
 }
 
-assert_lacks() {
-    if grep -qF -- "$2" "$1"; then
-        echo "  FAIL: $(basename "$1") must NOT contain '$2'"
-        TEST_FAILED=1
-    fi
+# Every `permissions:` block in a workflow, top-level or per-job, as a flat
+# listing prefixed by block number.
+#
+# The key is matched with optional quotes, because `"permissions":` is valid
+# YAML naming the same key. Without that, a workflow could keep its approved
+# top-level block and add a job-level `"permissions": write-all` that this
+# scan never sees -- the allowlist comparing only the blocks it found, and
+# passing. That is the exact false pass the allowlist exists to remove, so the
+# extractor has to be at least as permissive as YAML is.
+#
+# Per-job blocks are deliberately included, so a job-level grant cannot hide
+# under a top-level block that disclaims it. A block runs until a line
+# indented no deeper than its own key, so a one-line flow mapping
+# (`permissions: {statuses: write}`) comes back as itself and fails the
+# comparison rather than parsing to nothing.
+permission_blocks() {
+    directives "$1" | awk '
+        function indent(s,   i) { i = match(s, /[^ \t]/); return i ? i - 1 : -1 }
+        {
+            if (inside) {
+                if (indent($0) == -1 || indent($0) <= depth) inside = 0
+                else { print n "\t" $0; next }
+            }
+            if (match($0, /^[ \t]*["'"'"']?permissions["'"'"']?[ \t]*:/)) {
+                n++; depth = indent($0); inside = 1
+                print n "\t" $0
+            }
+        }
+    '
+}
+
+# The top-level keys of the `on:` mapping, unquoted and sorted.
+#
+# Compared as a SET below rather than probed for forbidden names:
+# `"pull_request":` is valid YAML naming the same trigger, and a check for the
+# absence of `pull_request:` sails straight past it. A set has nothing to
+# spell -- anything added, removed or renamed fails, in whatever notation.
+trigger_keys() {
+    directives "$WORKFLOW" | awk '
+        function indent(s,   i) { i = match(s, /[^ \t]/); return i ? i - 1 : -1 }
+        /^["'"'"']?on["'"'"']?[ \t]*:/ { inside = 1; next }
+        inside {
+            if (indent($0) == 0) { inside = 0; next }
+            if (depth == 0) depth = indent($0)
+            if (indent($0) != depth) next
+            if (match($0, /^[ \t]*["'"'"']?[A-Za-z_][A-Za-z0-9_-]*["'"'"']?[ \t]*:/)) {
+                key = $0
+                gsub(/^[ \t]*["'"'"']?/, "", key)
+                sub(/["'"'"']?[ \t]*:.*$/, "", key)
+                print key
+            }
+        }
+    ' | sort
+}
+
+# The `on:` block alone, for the completeness checks that explain WHY each
+# trigger is present.
+triggers() {
+    directives "$WORKFLOW" | awk '
+        /^["'"'"']?on["'"'"']?[ \t]*:/ { inside = 1 }
+        /^["'"'"']?permissions["'"'"']?[ \t]*:/ { inside = 0 }
+        inside
+    '
 }
 
 # ---------------------------------------------------------------------------
 
-test_case "the sweep runs the shared action unpinned and checks nothing out"
-# `@main` is deliberate: the action has no build step and no dependencies, so
-# the file that runs is the file you can read. No checkout, also deliberate --
-# it would put a token-bearing .git/config within reach of a job that can
-# write commit statuses.
-assert_matches "$SWEEP" "uses: mikelward/codex-review@main"
-assert_lacks "$SWEEP" "actions/checkout"
+test_case "the sweep is exactly this, line for line"
+# The gate the rest of this file only describes. Every case below extracts
+# something with a pattern, and patching the notation that slipped past buys
+# the next one; this one has nothing to extract. Any edit in any notation
+# changes these lines and has to be re-approved by editing the list. Comments
+# and blanks are excluded, so the prose above each stanza stays free to change.
+assert_directives "$WORKFLOW" <<'EOF'
+name: codex-review
+on:
+  schedule:
+    - cron: '23 * * * *'
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize, edited, closed]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  workflow_run:
+    workflows: [codex-review-listener]
+    types: [completed]
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: write
+concurrency:
+  group: codex-review
+  cancel-in-progress: false
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: mikelward/codex-review@main
+EOF
 finish_case
 
-test_case "the sweep starts on every event that can change the verdict"
-assert_matches "$ON" "pull_request_target:"
-# `edited` is load-bearing: retargeting a pull request changes the reviewed
-# diff without moving the head SHA, and GitHub emits `edited` rather than
-# `synchronize` for it, so an existing `codex: success` would stand over a
-# diff nothing had read.
-assert_matches "$ON" "types: [opened, reopened, ready_for_review, synchronize, edited, closed]"
-assert_matches "$ON" "workflows: [codex-review-listener]"
+test_case "the listener is exactly this, line for line"
+# Pinned for the same reason, and it matters more than its four directives
+# suggest: this file is what makes it safe for the sweep to hear
+# `pull_request_review` at all. Grant it any permissions and the relay stops
+# being a relay.
+assert_directives "$LISTENER" <<'EOF'
+name: codex-review-listener
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+permissions: {}
+jobs:
+  heard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: 'true'
+EOF
 finish_case
 
-test_case "the sweep starts on no event that lets a branch supply its own"
-# `workflow_dispatch` takes a ref and runs the file FROM that ref; a bare
-# `pull_request` has the same hole via the merge ref; and
-# `pull_request_review` is merge-ref too, which is why it lives on the
-# unprivileged listener instead.
-assert_lacks "$ON" "workflow_dispatch"
-assert_lacks "$ON" "  pull_request:"
-assert_lacks "$ON" "  pull_request_review:"
+test_case "the sweep starts on exactly these events and no others"
+# The security-critical one. `workflow_dispatch` takes a ref and GitHub runs
+# the workflow file from it, so a branch could supply its own steps and keep
+# the write token; a bare `pull_request` has the same hole via the merge ref.
+# Pinning the action version does not help when the branch supplies the job
+# around it.
+trigger_keys > "$WORK/keys"
+cat > "$WORK/keys-expected" <<'EOF'
+issue_comment
+pull_request_review_comment
+pull_request_target
+schedule
+workflow_run
+EOF
+if ! diff -u "$WORK/keys-expected" "$WORK/keys" > "$WORK/keys-diff"; then
+    fail "the trigger key set changed (- expected, + actual):"
+    sed 's/^/    /' "$WORK/keys-diff"
+fi
 finish_case
 
-test_case "the sweep keeps its loop envelope and hourly backstop"
-# A canceled loop is a gate that stopped sweeping mid-review; 65 minutes caps
-# a hung API call ten past the action's own 55-minute loop.
-assert_matches "$ON" "cron: '23 * * * *'"
-assert_matches "$SWEEP" "cancel-in-progress: false"
-assert_matches "$SWEEP" "timeout-minutes: 65"
+test_case "the sweep starts the loop on every pull request change that matters"
+# `pull_request_target` takes the definition from the BASE ref, so unlike
+# dispatch a pull request cannot bring its own sweep -- and it is the only
+# event-driven start available, since reactions emit no webhook at all.
+# `reopened` reuses an unchanged SHA that may still carry an earlier
+# `codex: success`; `closed` clears a shared-head failure the moment the
+# duplicate goes away; and `edited` on THIS stream is the retarget, which
+# changes the reviewed diff while the head SHA and its verdict stand still.
+triggers > "$WORK/on"
+for want in opened reopened ready_for_review synchronize edited closed; do
+    grep -q "types: \[.*\b$want\b.*\]" "$WORK/on" || fail "no \`$want\` in the trigger types"
+done
+grep -A1 'pull_request_target:' "$WORK/on" | grep -q 'edited' \
+    || fail "\`edited\` is not on the pull_request_target stream, where the retarget arrives"
 finish_case
 
-test_case "the sweep job is named, and is not a required check"
-# Pinned so the header's reasoning keeps naming a job that exists -- NOT
-# because a ruleset requires it. Requiring `sweep` is unsafe: a concurrency
-# group holds one pending run, so a head-associated run queued behind a long
-# sweep is canceled and its replacement reports against the default branch,
-# leaving the head with a required check that can never clear.
-assert_matches "$SWEEP" "  sweep:"
-assert_matches "$SWEEP" "DO NOT REQUIRE \`sweep\`"
+test_case "the sweep starts the loop on comment events, for the round with no push"
+# A rebuttal plus an "@codex review" nudge changes the verdict with no
+# pull_request event anywhere, and the reactions that follow emit nothing.
+# Both streams also fire on `edited`, since a nudge edited into an existing
+# comment is dated by its edit.
+grep -q 'issue_comment:' "$WORK/on" || fail "no issue_comment trigger"
+grep -q 'pull_request_review_comment:' "$WORK/on" || fail "no pull_request_review_comment trigger"
+count=$(grep -c 'types: \[created, edited\]' "$WORK/on" || true)
+test "$count" -eq 2 || fail "expected both comment streams on [created, edited], found $count"
 finish_case
 
-test_case "the listener holds nothing and is named at both ends"
-# Renaming one end without the other severs the relay silently, and a verdict
-# submitted as a review with no inline comments then goes unheard.
-assert_matches "$LISTENER" "name: codex-review-listener"
-assert_matches "$LISTENER" "pull_request_review:"
-assert_matches "$LISTENER" "permissions: {}"
+test_case "the sweep relays bare-review verdicts through the unprivileged listener"
+# A verdict submitted as a review with NO inline comments emits neither comment
+# event and no reaction, so without this relay nothing hears it until the
+# hourly schedule. It cannot be heard directly: GitHub resolves a
+# `pull_request_review` workflow against the pull request's merge ref, so on a
+# file holding `statuses: write` a same-repository branch could substitute its
+# own steps. `workflow_run` always runs the default branch's definition.
+#
+# Both ends are checked because the relay is a name match, so renaming one
+# alone severs it in silence.
+grep -q 'workflows: \[codex-review-listener\]' "$WORK/on" \
+    || fail "the sweep does not name the listener"
+directives "$LISTENER" | grep -q '^name: codex-review-listener$' \
+    || fail "the listener does not carry the name the relay looks for"
 finish_case
 
-test_case "the sweep is the only workflow here that can write statuses"
-# A commit status belongs to the SHA, so a second writer is an unordered
-# write: one delayed past this run's exit overwrites a fresh verdict with a
-# stale one, and nothing reports that it happened.
-found=0
+test_case "the sweep keeps its backstop schedule and loop envelope"
+# The schedule only has to keep a run alive; the run is the clock. A canceled
+# loop is a gate that stopped sweeping mid-review, and without a timeout a
+# wedged API call keeps the runner for the 6-hour default with the queued
+# successor behind it. Above the action's own 55-minute loop, or a healthy run
+# gets killed.
+directives "$WORKFLOW" > "$WORK/yml"
+grep -q "cron: '23 \* \* \* \*'" "$WORK/yml" || fail "the hourly backstop moved"
+grep -q 'cancel-in-progress: false' "$WORK/yml" || fail "the loop can be canceled mid-review"
+minutes=$(sed -n 's/.*timeout-minutes:[[:space:]]*\([0-9]*\).*/\1/p' "$WORK/yml")
+test "${minutes:-0}" -gt 55 || fail "timeout-minutes must exceed the action's 55-minute loop (found ${minutes:-none})"
+finish_case
+
+test_case "the sweep runs the shared action as its only step"
+# One step, and it is the action. Counted rather than asserted absent: a
+# checkout would put this repo's code in the same job as the write token for
+# no reason, and "no checkout" is a denylist of one where "one step" is the
+# property actually wanted.
+steps=$(sed -n '/^[[:space:]]*steps:/,$p' "$WORK/yml" | grep -c '^[[:space:]]*-[[:space:]]' || true)
+test "$steps" -eq 1 || fail "the sweep job must have exactly one step (found $steps)"
+grep -q 'uses: mikelward/codex-review@main' "$WORK/yml" || fail "the shared action is not the step"
+finish_case
+
+test_case "the sweep is the only workflow here that can write commit statuses"
+# The sweep's correctness leans on being the sole writer: a second writer is
+# an unordered write, and one delayed past the loop's exit overwrites a
+# just-published success with nothing left to notice.
+#
+# Pinned by ALLOWLIST rather than by forbidden spellings, and that is the whole
+# design. YAML has unboundedly many notations for one mapping -- `write-all`,
+# `statuses: "write"`, `"statuses": write`, a flow mapping -- and a denylist has
+# to know them all while an honest refactor needs only one. Comparing each
+# other workflow's blocks against the exact ones it is known to need inverts
+# that. Declaring NO block is rejected too, since that inherits the
+# repository's default GITHUB_TOKEN permission, a setting no file here reads.
+allowed() {
+    case "$1" in
+        codex-review-listener.yml) printf '1\tpermissions: {}\n' ;;
+        test.yml) printf '1\tpermissions:\n1\t  contents: read\n' ;;
+        *) return 1 ;;
+    esac
+}
+scanned=0
+others=0
 for f in "$DIR"/*.yml "$DIR"/*.yaml; do
     test -e "$f" || continue
-    found=$((found + 1))
-    case "$f" in
-        "$SWEEP") assert_matches "$f" "statuses: write" ;;
-        *) assert_lacks "$f" "statuses: write" ;;
-    esac
+    scanned=$((scanned + 1))
+    name=$(basename "$f")
+    test "$name" = "$WORKFLOW" && continue
+    others=$((others + 1))
+    if ! allowed "$name" > "$WORK/perm-expected"; then
+        fail "$name has no allowlist entry -- add one deliberately, after checking it cannot write commit statuses"
+        continue
+    fi
+    permission_blocks "$name" > "$WORK/perm-actual"
+    if ! diff -u "$WORK/perm-expected" "$WORK/perm-actual" > "$WORK/perm-diff"; then
+        fail "$name's permissions changed -- re-approve them (- expected, + actual):"
+        sed 's/^/    /' "$WORK/perm-diff"
+    fi
 done
-if test "$found" -lt 2; then
-    echo "  FAIL: the scan must have something to scan (found $found)"
-    TEST_FAILED=1
+# Two guards on the guard: an empty listing would make the loop vacuous, and a
+# WORKFLOW that no longer names a real file would quietly move the file under
+# test into the others, where it fails on its own `statuses: write`.
+test "$others" -gt 0 || fail "the scan must have other workflows to compare (found $others)"
+test -f "$DIR/$WORKFLOW" || fail "$WORKFLOW does not name a real file"
+finish_case
+
+test_case "the sweep grants exactly the scope it needs, in one block"
+# Exact, and exactly one block: a per-job grant must not be able to add to what
+# the top-level one declares.
+permission_blocks "$WORKFLOW" > "$WORK/sweep-perm"
+cat > "$WORK/sweep-perm-expected" <<'EOF'
+1	permissions:
+1	  contents: read
+1	  pull-requests: read
+1	  checks: read
+1	  statuses: write
+EOF
+if ! diff -u "$WORK/sweep-perm-expected" "$WORK/sweep-perm" > "$WORK/sweep-perm-diff"; then
+    fail "the sweep's own permissions changed (- expected, + actual):"
+    sed 's/^/    /' "$WORK/sweep-perm-diff"
 fi
 finish_case
 
