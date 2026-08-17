@@ -2,6 +2,7 @@ name: codex-review-check
 on:
   push:
   pull_request_target:
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
