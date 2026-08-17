@@ -1,0 +1,68 @@
+# Republishes Codex's review verdict as the `codex` commit status the main
+# ruleset requires. The sweep itself — the minute loop, the freshness bounds,
+# the unanswered-head decay — lives in mikelward/codex-review, shared across
+# the repos, with its own tests and its design written up in its README and
+# source. This file keeps only what has to stay in the CONSUMER repo, and
+# every line of it is deliberate:
+#
+# - The triggers: pushes and comments start a run within seconds (both take
+#   the workflow definition from the default branch, so a PR cannot bring its
+#   own sweep); `closed` clears a shared-head failure the moment a duplicate
+#   PR goes away; `edited` hears a nudge edited into an existing comment;
+#   `workflow_run` relays `pull_request_review` from the unprivileged
+#   listener — findings submitted as a review with no inline comments emit
+#   neither a comment event nor a reaction, and that event is merge-ref
+#   (the PR supplies the definition), so it must not start this
+#   status-writing workflow directly. The
+#   HOURLY schedule is only the backstop for the fail-closed states nothing
+#   emits an event for (a dropped webhook, a reaction after the loop parked) —
+#   any comment on the PR clears those on demand too, and on a private repo
+#   each idle fire bills a full minute, so hourly (~720 min/month) is the
+#   deliberate trade against `*/15`'s ~2,900.
+# - No `workflow_dispatch`: it took a ref, and GitHub runs the workflow file
+#   from that ref — a branch could ship its own sweep and publish
+#   `codex: success` for itself.
+# - The permissions grant the action's token exactly what a sweep needs, and
+#   this workflow must remain the ONLY one holding `statuses: write` — a
+#   second writer is an ordering race with the verdict (the deleted
+#   codex-verdict-reset workflow was that bug). A test pins all of this.
+# - `@main`, not a tag or SHA: the action has no build step and no
+#   dependencies, so the file that runs is the file you can read — and its
+#   repo is first-party. Pinning would only delay fixes reaching the gate.
+name: codex-review
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize, closed]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  workflow_run:
+    workflows: [codex-review-listener]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  statuses: write
+
+concurrency:
+  group: codex-review
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # Ten minutes past the action's 55-minute loop, so a hung API call cannot
+    # hold the runner (and the concurrency queue behind it) to the 6-hour
+    # job default.
+    timeout-minutes: 65
+    steps:
+      # No checkout, on purpose: the sweep needs nothing from this
+      # repository's tree, and a checkout would only put a token-bearing
+      # .git/config within reach of a job that writes statuses.
+      - uses: mikelward/codex-review@main

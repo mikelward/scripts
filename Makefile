@@ -21,3 +21,4 @@ test:
 	./kdeshortcut_test
 	./dvorak_test
 	./confinst_test
+	./codex-review_test

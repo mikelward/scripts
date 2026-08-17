@@ -1,0 +1,142 @@
+#!/bin/bash
+# Tests for the codex-review workflow pair, which republishes Codex's review
+# verdict as the `codex` commit status the ruleset requires. The sweep itself
+# lives in mikelward/codex-review and is tested there; what this pins is the
+# part that has to be right in the CONSUMER repo, where getting it wrong is
+# silent:
+#
+#   - a workflow that can write commit statuses must never take its
+#     definition from a pull request's own ref, or a branch could publish
+#     `codex: success` for itself;
+#   - it must be the ONLY workflow holding `statuses: write`, since a second
+#     writer races the verdict;
+#   - the listener exists precisely because `pull_request_review` is a
+#     merge-ref event, so it must hold no permissions at all.
+#
+# These are properties of the files, so the tests read the files. Following
+# the runenv_test conventions.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKFLOWS="$SCRIPT_DIR/.github/workflows"
+SWEEP="$WORKFLOWS/codex-review.yml"
+LISTENER="$WORKFLOWS/codex-review-listener.yml"
+
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() { :; }
+teardown() { :; }
+
+fail() {
+  echo "  FAIL: $1"
+  TEST_FAILED=1
+}
+
+assert_file_contains() {
+  if ! grep -qF "$2" "$1"; then
+    fail "$(basename "$1") is missing '$2'"
+  fi
+}
+
+assert_file_lacks() {
+  if grep -qF "$2" "$1"; then
+    fail "$(basename "$1") must not contain '$2'"
+  fi
+}
+
+# These files explain themselves at length, and the comments name the very
+# triggers the tests forbid ("No `workflow_dispatch`: it took a ref"). Strip
+# comment lines before asserting about configuration, or the prose fails the
+# test it is describing.
+config_only() {
+  grep -v '^[[:space:]]*#' "$1"
+}
+
+assert_config_lacks() {
+  if config_only "$1" | grep -qF "$2"; then
+    fail "$(basename "$1") must not configure '$2'"
+  fi
+}
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+test_both_workflows_exist() {
+  test -f "$SWEEP" || fail "codex-review.yml is missing"
+  test -f "$LISTENER" || fail "codex-review-listener.yml is missing"
+}
+
+# Unpinned on purpose: the action has no build step and no dependencies, so
+# the file that runs is the file you can read, and pinning would only delay
+# fixes reaching the gate.
+test_runs_the_shared_action_with_no_checkout() {
+  assert_file_contains "$SWEEP" "uses: mikelward/codex-review@main"
+  # A checkout would leave a token-bearing .git/config within reach of a job
+  # that writes statuses.
+  assert_config_lacks "$SWEEP" "actions/checkout"
+}
+
+# workflow_dispatch takes a ref and GitHub runs the workflow file from it, so
+# a branch could ship its own sweep and approve itself.
+test_no_ref_taking_trigger_on_the_status_writer() {
+  assert_config_lacks "$SWEEP" "workflow_dispatch"
+  # pull_request_review is a merge-ref event; it reaches the sweep only via
+  # the listener's workflow_run, whose definition comes from the default
+  # branch.
+  assert_config_lacks "$SWEEP" "pull_request_review:"
+  assert_file_contains "$SWEEP" "workflows: [codex-review-listener]"
+}
+
+test_listener_holds_nothing() {
+  assert_file_contains "$LISTENER" "pull_request_review:"
+  assert_file_contains "$LISTENER" "permissions: {}"
+  assert_config_lacks "$LISTENER" "statuses: write"
+  assert_config_lacks "$LISTENER" "actions/checkout"
+}
+
+test_is_the_only_writer_of_commit_statuses() {
+  local f
+  for f in "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml; do
+    test -e "$f" || continue
+    test "$f" = "$SWEEP" && continue
+    if config_only "$f" | grep -qF "statuses: write"; then
+      fail "$(basename "$f") also writes commit statuses; that races the verdict"
+    fi
+  done
+}
+
+# Hourly, off the hour: the schedule is only the backstop for states nothing
+# emits an event for, and on a private repo each idle fire bills a minute.
+test_backstop_schedule_is_hourly_off_the_hour() {
+  if ! grep -qE "cron: '[1-5][0-9] \* \* \* \*'" "$SWEEP"; then
+    fail "expected an hourly cron at a non-zero minute"
+  fi
+}
+
+test_loop_envelope_is_bounded() {
+  assert_file_contains "$SWEEP" "cancel-in-progress: false"
+  assert_file_contains "$SWEEP" "timeout-minutes:"
+}
+
+run_test "both workflows are present" test_both_workflows_exist
+run_test "runs the shared action, unpinned, with no checkout" test_runs_the_shared_action_with_no_checkout
+run_test "the status writer takes no ref-taking trigger" test_no_ref_taking_trigger_on_the_status_writer
+run_test "the listener holds no permissions" test_listener_holds_nothing
+run_test "it is the only workflow writing commit statuses" test_is_the_only_writer_of_commit_statuses
+run_test "the backstop schedule is hourly, off the hour" test_backstop_schedule_is_hourly_off_the_hour
+run_test "the loop envelope is bounded" test_loop_envelope_is_bounded
+
+echo "$TESTS_PASSED/$TESTS_RUN tests passed"
+test "$TESTS_FAILED" -eq 0
