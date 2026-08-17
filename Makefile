@@ -1,4 +1,5 @@
 test:
+	./workflows_test
 	./autoshpool_test
 	./autotmux_test
 	./autosession_test
