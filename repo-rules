@@ -3,7 +3,7 @@
 #
 # Usage:
 #     repo-rules [--dry-run] [--force] [--ruleset NAME] OWNER/REPO CHECK...
-#     repo-rules --ruleset=gates owner/repo gate codex
+#     repo-rules --ruleset=gates owner/repo lanes codex
 #
 # Requires the gh CLI, authenticated with admin rights on the repository.
 #
@@ -74,8 +74,8 @@ date with the base, and allow rebase as the only merge method.
   -h, --help       This message.
 
 Examples:
-  $PROGRAM owner/repo gate codex
-  $PROGRAM --dry-run owner/other-repo gate codex Vercel
+  $PROGRAM owner/repo lanes codex
+  $PROGRAM --dry-run owner/other-repo lanes codex Vercel
 EOF
 }
 
@@ -288,7 +288,7 @@ collect_reported() {
         while read -r sha; do
             test -n "$sha" || continue
             # Check runs and commit statuses are different objects, and a
-            # ruleset can require either -- `codex` is a status, `gate` is a
+            # ruleset can require either -- `codex` is a status, `lanes` is a
             # check run. Both paginate: a name on page two is
             # indistinguishable from a name that never reported.
             #

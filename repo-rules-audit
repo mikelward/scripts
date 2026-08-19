@@ -4,7 +4,7 @@
 #
 # Usage:
 #     repo-rules-audit [--branch NAME] OWNER/REPO CHECK...
-#     repo-rules-audit owner/repo gate codex
+#     repo-rules-audit owner/repo lanes codex
 #
 # Requires the gh CLI, authenticated on the repository (read access only --
 # this makes no writes). See repo-rules for the companion tool that sets
@@ -67,8 +67,8 @@ Also reports any bypass actor on a ruleset that plainly covers the branch.
 Exit status: 0 clean, 1 a gap was found (or could not be read), 2 usage.
 
 Examples:
-  $PROGRAM owner/repo gate codex
-  $PROGRAM --branch release owner/other-repo gate
+  $PROGRAM owner/repo lanes codex
+  $PROGRAM --branch release owner/other-repo lanes
 EOF
 }
 
