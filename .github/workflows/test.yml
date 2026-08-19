@@ -12,8 +12,14 @@ on:
     # as satisfied, so skipping the lane on a "harmless" edit would let a
     # newer skipped run replace a red verdict on the same head.
     types: [opened, synchronize, reopened, edited]
-  # Nothing in this repo dispatches this workflow today; the input exists
-  # so `gh workflow run test.yml -f pr=...` can, naming the PR it reports for.
+  # Nothing in this repo dispatches this workflow today; the input exists so
+  # `gh workflow run test.yml --ref <PR-head-branch> -f pr=<number>` can. The
+  # check-run this produces is attributed to whatever ref was dispatched
+  # against, not to inputs.pr — omitting --ref runs it against main instead,
+  # and the gate then correctly refuses (mikelward/lanes's
+  # verifyDispatchBinding rejects a dispatch whose commit isn't the named
+  # PR's own head), so it can never satisfy that PR's required check either
+  # way. --ref is what makes the two actually agree.
   workflow_dispatch:
     inputs:
       pr:
