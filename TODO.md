@@ -2,10 +2,12 @@
 
 ## Review and merge gates
 
-- [ ] Require the existing `test` check in the ruleset —
-      `.github/workflows/test.yml` already runs `make test` on every pull
-      request and push to main, so the gate exists and only the
-      requirement is missing.
+- [ ] Require the `lanes` check in the ruleset, not `test` — `test` now
+      skips on a docs-only diff (see `.github/lanes.conf`), and a skipped
+      required check counts as satisfied, so requiring `test` directly
+      would let a docs-only PR through with no check actually enforcing
+      the allowed prefixes or independently re-deriving the skip. `lanes`
+      is the one that always runs and always reports.
 - [ ] Verify the settings half of the fleet's bar — every repository
       works the same: comprehensive automated review, required merge
       gates, and auto-merge. A ruleset on the default branch requiring
