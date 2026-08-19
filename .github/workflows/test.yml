@@ -60,6 +60,14 @@ jobs:
     if: needs.classify.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A pull_request run's default ref is already the right merge
+          # commit; only a dispatched run needs steering — its default ref
+          # is whatever branch the dispatch targeted, not the PR named by
+          # inputs.pr, so this job would otherwise test the wrong commit
+          # while classify/lanes (which read the PR via the API, not the
+          # checkout) correctly reported on the named PR.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/merge', inputs.pr) || github.sha }}
       - run: make test
 
   # The one check the ruleset should require. Always runs, always reports —
