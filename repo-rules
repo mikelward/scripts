@@ -791,9 +791,16 @@ check_allow_rebase || exit 1
 
 if test -n "$EXISTING"; then
     check_ruleset_ownership "$EXISTING" || exit 1
-    # CREATE has no scope to re-validate here: it's always the default
-    # branch, fixed for the whole run, so only the update path needs this.
-    validate_merge_method_scope || exit 1
+fi
+
+# Applies to both paths: CREATE's own scope is fixed (always the default
+# branch), but the OTHER rulesets it might conflict with are not -- one
+# could be added, or narrowed to exclude rebase, on that branch while this
+# was waiting on confirmation, same as the update path's scope can move
+# into a conflict that did not exist when the early check ran.
+validate_merge_method_scope || exit 1
+
+if test -n "$EXISTING"; then
     refresh_body || { error "could not re-read ruleset '$RULESET' to write it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
