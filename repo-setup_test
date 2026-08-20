@@ -1,0 +1,1247 @@
+#!/bin/sh
+# Tests for repo-setup
+#
+# repo-setup is a thin composer over the real repo-rules and repo-secrets
+# scripts (not a reimplementation), so these tests put the REAL repo-rules
+# and repo-secrets on PATH alongside repo-setup, backed by one fake gh that
+# answers everything all three need. That exercises the actual subprocess
+# composition -- the flags repo-setup passes through, when it confirms once
+# instead of three times, how it aggregates each step's success/failure --
+# rather than a mock of what repo-rules/repo-secrets are assumed to do. The
+# gh fixture is kept in a fixed "happy path" shape for repo-rules (no
+# existing ruleset, no other rulesets, every requested check already
+# reported, rebase merging allowed) and repo-secrets (no existing secrets,
+# no existing environment): both of those scripts already have their own
+# exhaustive test suites covering their own edge cases, so this suite's job
+# is repo-setup's own orchestration, not re-proving theirs.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUITE_TMP="$(mktemp -d)"
+# Codex review: same trap bug as the scripts under test -- trapping INT/TERM
+# alongside EXIT on one line replaces bash's default terminate-on-signal
+# action with "clean up, then resume the script", so canceling this suite
+# (CI's own timeout/cancel, or a local Ctrl-C) would remove SUITE_TMP and
+# then keep running the remaining test cases against it, reporting
+# confusing unrelated failures instead of actually stopping.
+trap 'rm -rf "$SUITE_TMP"' EXIT
+trap 'rm -rf "$SUITE_TMP"; exit 130' INT
+trap 'rm -rf "$SUITE_TMP"; exit 143' TERM
+REPO_SETUP="$SCRIPT_DIR/repo-setup"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+TESTS_SKIPPED=0
+
+# The interactive-confirmation cases need a real pseudo-terminal, the same
+# way repo-rules_test and repo-secrets_test's own confirm-prompt cases do:
+# `test -t 0` is what repo-setup's own prompt gates on, and no plain pipe or
+# file redirect can make that true. See repo-rules_test's own note on why
+# presence of `script(1)` alone is not enough to gate on (macOS's BSD
+# `script` has no `-c`).
+if printf 'x\n' | script -qec true /dev/null >/dev/null 2>&1; then
+    HAVE_PTY=yes
+else
+    HAVE_PTY=no
+    echo "NOTE: script(1) here doesn't support the -qec invocation these tests"
+    echo "      need, so the interactive-confirmation cases will be skipped."
+    echo "      CI runs on ubuntu-latest, which has util-linux's, so the"
+    echo "      coverage is never optional there."
+fi
+
+# make_gh: build a fake gh (plus real repo-rules/repo-secrets on the same
+# PATH) in a fresh dir, and echo that dir.
+#   $1 = newline-separated check-run names the repo has reported (default:
+#        repo-rules' own fleet defaults, "lanes codex zizmor")
+#   $2 = newline-separated secret names that already exist repo-level
+#   $3 = substring of a call to fail with a simulated error
+#   $4 = newline-separated secret names a SECOND (or later) listing call on
+#        the same secrets-list endpoint sees -- defaults to the same as $2,
+#        so every existing caller is unaffected. Set this differently from
+#        $2 to simulate a secret being created by someone else in the
+#        window between repo-setup's own preview and its later revalidation
+#        or real apply (both of which re-invoke repo-secrets fresh).
+#   $5 = newline-separated check-run names a SECOND (or later) check-runs
+#        call sees -- defaults to the same as $1, so every existing caller
+#        is unaffected. Set this differently from $1 to simulate a check
+#        reporting (or a required check disappearing) between repo-setup's
+#        own ruleset preview and its later revalidation/real apply.
+# App-installation fixtures ($dir/installations, $dir/install_members) start
+# empty and are populated per test case with plain `printf`, same as the
+# other suites' post-make_gh fixture tweaks.
+make_gh() {
+    dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+    mkdir -p "$dir/bin"
+    printf '%s\n' "${1-lanes
+codex
+zizmor}" > "$dir/checks"
+    printf '%s\n' "${2-}" > "$dir/existing_secret_names"
+    printf '%s' "${3-}" > "$dir/fail_on"
+    printf '%s\n' "${4-${2-}}" > "$dir/existing_secret_names_at_recheck"
+    printf '%s\n' "${5-${1-lanes
+codex
+zizmor}}" > "$dir/checks_at_recheck"
+    : > "$dir/env_exists"
+    : > "$dir/installations"
+    : > "$dir/install_members"
+    printf '999\n' > "$dir/repo_id"
+    ln -s "$SCRIPT_DIR/repo-rules" "$dir/bin/repo-rules"
+    ln -s "$SCRIPT_DIR/repo-secrets" "$dir/bin/repo-secrets"
+    cat > "$dir/bin/gh" <<'EOF'
+#!/bin/sh
+# Fake gh combining what repo-rules, repo-secrets, and repo-setup's own
+# native App-installation step each need. Logs every call.
+dir="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$dir/calls"
+
+if test -s "$dir/fail_on" && echo "$*" | grep -qF "$(cat "$dir/fail_on")"; then
+    echo "gh: simulated failure" >&2
+    exit 1
+fi
+
+emit_names() {
+    sed 's/\\/\\\\/g; s/"/\\"/g; s/^/"/; s/$/"/' "$1"
+}
+
+# list_secret_names: a SECOND (or later) call to the same secrets-list
+# endpoint sees existing_secret_names_at_recheck instead of
+# existing_secret_names, so a test can simulate a secret being created by
+# someone else between repo-setup's own preview and a later re-invocation
+# of repo-secrets. Tracked per-endpoint (repo-level vs. per-environment
+# secrets are different endpoints, and share no count), since both share
+# the identical shape within their own scope and there's nothing else to
+# tell repeated calls apart by. Same technique as repo-secrets_test's own
+# list_names().
+list_secret_names() {
+    counter_file="$dir/list_calls.$(echo "$1" | tr -c 'A-Za-z0-9' '_')"
+    count="$(cat "$counter_file" 2>/dev/null || echo 0)"
+    count=$((count + 1))
+    echo "$count" > "$counter_file"
+    if test "$count" -ge 2; then
+        # fail_secrets_at_recheck: absent by default (every existing
+        # caller unaffected). When present, a SECOND (or later) call
+        # fails outright instead of returning names -- simulates the
+        # revalidation's own repo-secrets --dry-run genuinely erroring
+        # (auth expired, GitHub down), as distinct from the plan merely
+        # having changed.
+        if test -e "$dir/fail_secrets_at_recheck"; then
+            echo "gh: simulated failure on revalidation" >&2
+            exit 1
+        fi
+        names_file="$dir/existing_secret_names_at_recheck"
+    else
+        names_file="$dir/existing_secret_names"
+    fi
+    grep -v '^$' "$names_file" || true
+}
+
+# list_checks: same call-counting technique as list_secret_names, for the
+# commits/*/check-runs endpoint repo-rules reads -- a SECOND (or later)
+# call sees checks_at_recheck instead of checks, so a test can simulate a
+# check reporting (or a required check disappearing) between repo-setup's
+# own ruleset preview and its later revalidation/real apply.
+list_checks() {
+    counter_file="$dir/list_calls.checkruns"
+    count="$(cat "$counter_file" 2>/dev/null || echo 0)"
+    count=$((count + 1))
+    echo "$count" > "$counter_file"
+    if test "$count" -ge 2; then
+        # fail_checks_at_recheck: same toggle as list_secret_names' own
+        # fail_secrets_at_recheck, for the ruleset's revalidation instead
+        # of a secret's.
+        if test -e "$dir/fail_checks_at_recheck"; then
+            echo "gh: simulated failure on revalidation" >&2
+            exit 1
+        fi
+        emit_names "$dir/checks_at_recheck"
+    else
+        emit_names "$dir/checks"
+    fi
+}
+
+# gh secret set NAME --repo REPO [--env ENV]  (repo-secrets' own encryption path)
+if test "$1" = secret; then
+    shift; shift  # drop "secret" "set"
+    name="$1"; shift
+    repo=""; env=""
+    while test $# -gt 0; do
+        case "$1" in
+            --repo) shift; repo="$1" ;;
+            --env) shift; env="$1" ;;
+        esac
+        shift
+    done
+    safe="$(echo "$repo" | tr '/' '_')"
+    if test -n "$env"; then
+        cat > "$dir/written.$safe.$env.$name"
+    else
+        cat > "$dir/written.$safe.$name"
+    fi
+    exit 0
+fi
+
+# gh api [--method X] ENDPOINT [--jq EXPR] [--paginate] [--input FILE]
+endpoint=""
+method=""
+jqexpr=""
+inputfile=""
+skip=no
+want=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --method) method="$arg" ;; --jq) jqexpr="$arg" ;; --input) inputfile="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        api) ;;
+        --method|--jq|--input) skip=yes; want="$arg" ;;
+        --paginate|--silent) ;;
+        -*) echo "gh: unknown flag $arg" >&2; exit 1 ;;
+        *) endpoint="$arg" ;;
+    esac
+done
+
+if test -n "$method" && test "$method" != GET; then
+    if test -n "$inputfile" && test "$inputfile" != -; then
+        : # nothing reads the body back in these tests
+    else
+        cat > /dev/null
+    fi
+    echo "$endpoint" >> "$dir/writes"
+    exit 0
+fi
+
+case "$endpoint" in
+    user/installations)
+        # $jqexpr embeds the slug and the target repo's owner as:
+        # select(.app_slug=="SLUG" and (.account.login | ascii_downcase) ==
+        # ("OWNER" | ascii_downcase)). Fixture rows are
+        # slug\tid\tselection\taccount; matched on both, case-insensitively
+        # (tolower), same as the real jq's ascii_downcase comparison.
+        slug="$(printf '%s' "$jqexpr" | sed -n 's/.*app_slug=="\([^"]*\)".*/\1/p')"
+        owner="$(printf '%s' "$jqexpr" | sed -n 's/.*== ("\([^"]*\)" | ascii_downcase).*/\1/p')"
+        awk -F'\t' -v s="$slug" -v o="$owner" \
+            '$1==s && tolower($4)==tolower(o) {printf "%s\t%s\n",$2,$3}' \
+            "$dir/installations" ;;
+    user/installations/*/repositories)
+        id="$(echo "$endpoint" | sed 's#user/installations/##; s#/repositories##')"
+        awk -F'\t' -v i="$id" '$1==i {print $2}' "$dir/install_members" ;;
+    */environments/*/secrets)
+        if test -s "$dir/env_exists"; then
+            list_secret_names "$endpoint"
+        else
+            echo "gh: HTTP 404: Not Found (https://api.github.com/$endpoint)" >&2
+            exit 1
+        fi ;;
+    */environments/*)
+        # A plain GET on the environment itself -- repo-secrets' own
+        # revalidation immediately before the create PUT. The PUT itself
+        # never reaches this case (it short-circuits above on --method).
+        if test -s "$dir/env_exists"; then
+            : # exists -- nothing to print, just exit 0
+        else
+            echo "gh: HTTP 404: Not Found (https://api.github.com/$endpoint)" >&2
+            exit 1
+        fi ;;
+    */actions/secrets)
+        list_secret_names "$endpoint" ;;
+    */rulesets\?includes_parents=true*)
+        : ;; # no other rulesets to conflict with
+    */rulesets*)
+        : ;; # no existing "merge gates" ruleset -- always the create path
+    */commits/*/check-runs*)
+        list_checks ;;
+    */commits/*/status*)
+        : ;;
+    */pulls\?*)
+        : ;;
+    */commits\?*)
+        echo deadbee ;;
+    repos/*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *default_branch*)     echo main ;;
+            .id)                  cat "$dir/repo_id" ;;
+            *) echo "gh: unhandled repos/ jq '$jqexpr'" >&2; exit 1 ;;
+        esac ;;
+    *) echo "gh: unhandled endpoint '$endpoint'" >&2; exit 1 ;;
+esac
+EOF
+    chmod +x "$dir/bin/gh"
+    echo "$dir"
+}
+
+run() {
+    dir="$1"; shift
+    set +e
+    output="$(PATH="$dir/bin:$PATH" "$REPO_SETUP" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+# Like run(), but with stdin from /dev/null explicitly (a plain command
+# substitution's stdin is already not a terminal, but this makes the
+# "non-interactive" property of each of these cases explicit rather than
+# incidental).
+run_noninteractive() {
+    dir="$1"; shift
+    set +e
+    output="$(PATH="$dir/bin:$PATH" "$REPO_SETUP" "$@" < /dev/null 2>&1)"
+    status=$?
+    set -e
+}
+
+quote_args() {
+    out=""
+    for a in "$@"; do
+        out="$out'$(printf '%s' "$a" | sed "s/'/'\\\\''/g")' "
+    done
+    printf '%s' "$out"
+}
+
+# Drives repo-setup with a real pseudo-terminal on stdin (via `script`) and
+# feeds it one line of canned input, so a case can reach the actual
+# confirm/read branch. Same shape as repo-rules_test's run_repo_rules_pty.
+run_pty() {
+    dir="$1"; shift
+    answer="$1"; shift
+    set +e
+    output="$(printf '%s\n' "$answer" | PATH="$dir/bin:$PATH" script -qec \
+        "$REPO_SETUP $(quote_args "$@")" /dev/null 2>&1)"
+    status=$?
+    set -e
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+    fi
+}
+
+assert_output() {
+    case "$output" in
+        *"$1"*) ;;
+        *) echo "  FAIL: expected output to contain '$1'"
+           echo "  output: $output"
+           TEST_FAILED=1 ;;
+    esac
+}
+
+assert_no_output() {
+    case "$output" in
+        *"$1"*) echo "  FAIL: expected output NOT to contain '$1'"
+                echo "  output: $output"
+                TEST_FAILED=1 ;;
+    esac
+}
+
+assert_written() {
+    d="$1"; safe="$2"; name="$3"; env="${4-}"
+    if test -n "$env"; then
+        f="$d/written.$safe.$env.$name"
+    else
+        f="$d/written.$safe.$name"
+    fi
+    test -f "$f" || { echo "  FAIL: expected a write to $safe ($name${env:+, env $env}), found none"; TEST_FAILED=1; }
+}
+
+assert_not_written() {
+    d="$1"; safe="$2"; name="$3"
+    if test -f "$d/written.$safe.$name" || ls "$d"/written."$safe".*."$name" >/dev/null 2>&1; then
+        echo "  FAIL: expected NO write to $safe ($name), but one happened"
+        TEST_FAILED=1
+    fi
+}
+
+assert_no_writes() {
+    d="$1"
+    if test -s "$d/writes"; then
+        echo "  FAIL: expected no gh writes at all, got:"
+        cat "$d/writes"
+        TEST_FAILED=1
+    fi
+}
+
+assert_call_count() {
+    d="$1"; needle="$2"; expected="$3"
+    got="$(grep -cF "$needle" "$d/calls" || true)"
+    if test "$got" -ne "$expected"; then
+        echo "  FAIL: expected $expected call(s) matching '$needle', got $got"
+        TEST_FAILED=1
+    fi
+}
+
+test_case() {
+    TEST_SKIPPED=0
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=0
+    echo "TEST: $1"
+}
+
+skip_case() {
+    TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+    echo "  SKIP: $1"
+    TEST_SKIPPED=1
+}
+
+finish_case() {
+    if test "${TEST_SKIPPED:-0}" -eq 1; then
+        TESTS_RUN=$((TESTS_RUN - 1))
+        return
+    fi
+    if test "$TEST_FAILED" -eq 0; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+        echo "  PASS"
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+# ---------------------------------------------------------------------------
+
+test_case "--force applies immediately, no prompt, ruleset created"
+dir="$(make_gh)"
+run "$dir" --force owner/repo
+assert_status 0
+assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
+finish_case
+
+test_case "--dry-run prints the combined plan and makes no writes at all"
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --dry-run --secret TOKEN="$dir/value.txt" --app codex owner/repo
+assert_status 0
+assert_output "owner/repo:"
+assert_output "ruleset (repo-rules):"
+assert_output "secrets (repo-secrets):"
+assert_output "App installation membership:"
+assert_output "would add owner/repo"
+assert_no_writes "$dir"
+assert_not_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "without --force and without a terminal, nothing is changed"
+dir="$(make_gh)"
+run_noninteractive "$dir" owner/repo
+assert_status 1
+assert_output "stdin is not a terminal"
+assert_no_writes "$dir"
+finish_case
+
+test_case "an interactive 'y' confirms once and applies every requested step"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; else
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run_pty "$dir" y --secret TOKEN="$dir/value.txt" owner/repo
+assert_status 0
+assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
+assert_written "$dir" owner_repo TOKEN
+fi
+finish_case
+
+test_case "an interactive 'n' confirms nothing and applies nothing"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; else
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run_pty "$dir" n --secret TOKEN="$dir/value.txt" owner/repo
+assert_status 1
+assert_output "not confirmed"
+assert_no_writes "$dir"
+assert_not_written "$dir" owner_repo TOKEN
+fi
+finish_case
+
+test_case "the interactive prompt asks once for the whole repository, not once per step"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; else
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run_pty "$dir" y --secret TOKEN="$dir/value.txt" --app codex owner/repo
+# One "Apply this to" prompt, however many steps were requested.
+got="$(printf '%s' "$output" | grep -c "Apply this to" || true)"
+if test "$got" -ne 1; then
+    echo "  FAIL: expected exactly 1 confirmation prompt, got $got"
+    TEST_FAILED=1
+fi
+fi
+finish_case
+
+test_case "--no-rules skips the ruleset step entirely"
+dir="$(make_gh)"
+run "$dir" --force --no-rules owner/repo
+assert_status 0
+assert_no_writes "$dir"
+assert_no_output "ruleset"
+finish_case
+
+test_case "--no-rules and --rule together are a usage error"
+dir="$(make_gh)"
+run "$dir" --no-rules --rule lanes owner/repo
+assert_status 2
+finish_case
+
+test_case "--rule is passed through to repo-rules as the required check"
+dir="$(make_gh "only-this-check")"
+run "$dir" --force --rule only-this-check owner/repo
+assert_status 0
+assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
+finish_case
+
+test_case "a --rule check name containing a space survives intact to repo-rules"
+# Regression test: RULES used to be handed to repo-rules through an
+# unquoted expansion under the default (space-splitting) IFS, so a name
+# like repo-rules' own documented CodeQL example ("Analyze (actions)")
+# arrived there as two separate, wrong check names instead of one.
+dir="$(make_gh "Analyze (actions)")"
+run "$dir" --dry-run --rule "Analyze (actions)" owner/repo
+assert_status 0
+assert_no_output "never reported"
+finish_case
+
+test_case "a --rule value with an embedded newline is a usage error, not two silent checks"
+# Codex review: RULES/SECRETS/APPS use a newline as the delimiter BETWEEN
+# entries specifically so one entry can contain a space -- but that means a
+# literal newline WITHIN one entry is indistinguishable from two entries.
+# --rule "$(printf 'foo\nbar')" used to silently become two separate
+# required checks passed to repo-rules, bypassing repo-rules' own
+# control-character rejection entirely (it only ever sees the two already-
+# split, clean halves -- never the newline that would have failed its own
+# validation).
+dir="$(make_gh)"
+run "$dir" --force --rule "$(printf 'foo
+bar')" owner/repo
+assert_status 2
+assert_output "contains a newline"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "a --secret value with an embedded newline is a usage error, not a second, unrelated write"
+# Codex review, same shape as --rule but worse in effect: a newline inside
+# one --secret spec used to silently split into TWO independent
+# repo-secrets invocations -- one write the caller asked for, plus a second
+# one for a different NAME they never mentioned.
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --no-rules --secret "$(printf 'TOKEN=%s
+EXTRA=%s' "$dir/value.txt" "$dir/value.txt")" owner/repo
+assert_status 2
+assert_output "contains a newline"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "an --app value with an embedded newline is a usage error, not two silent App checks"
+dir="$(make_gh)"
+run "$dir" --force --no-rules --app "$(printf 'foo
+bar')" owner/repo
+assert_status 2
+assert_output "contains a newline"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+# The old sh version accumulated RULES as a newline-delimited string and
+# filtered it with `grep -v '^$' || true` before the repo-rules call, which
+# is where the grep-exit-status-conflation bug this used to guard against
+# (any grep failure, not just "no matches", silently read as "no rules")
+# lived. The bash rewrite stores RULES as a real array and rejects an empty
+# or newline-containing --rule value at parse time (see the tests above and
+# below), so nothing is ever filtered out of RULES after that point -- it is
+# passed straight through to repo-rules ("${RULES[@]}") with no intervening
+# grep call to fail. The bug class is gone by construction, not patched.
+
+test_case "an empty --rule value is a usage error, not a silent fall-through to repo-rules' own defaults"
+# Codex review: a wrapper that expands an unset value into --rule "" (or
+# --rule=) used to survive parsing -- the empty entry was stripped out of
+# RULES by the newline-filter before the repo-rules call, so it silently
+# ran with zero --rule args and fell through to repo-rules' own defaults
+# ("lanes codex zizmor") instead of the caller's intended set. Caught here.
+dir="$(make_gh)"
+run "$dir" --force --rule "" owner/repo
+assert_status 2
+assert_output "non-empty check name"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "an empty --rule= value is a usage error"
+dir="$(make_gh)"
+run "$dir" --force --rule= owner/repo
+assert_status 2
+assert_output "non-empty check name"
+finish_case
+
+test_case "--secret NAME=PATH is passed through to repo-secrets as a repository secret"
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --no-rules --secret TOKEN="$dir/value.txt" owner/repo
+assert_status 0
+assert_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "--secret NAME@ENV=PATH is passed through as an environment-scoped secret"
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --no-rules --secret TOKEN@lanes="$dir/value.txt" owner/repo
+assert_status 0
+assert_written "$dir" owner_repo TOKEN lanes
+assert_call_count "$dir" "PUT repos/owner/repo/environments/lanes" 1
+finish_case
+
+test_case "a --secret PATH containing a space survives intact to repo-secrets"
+# Regression test: SECRETS entries used to be iterated with a plain
+# `for spec in $SECRETS`, which splits on the same default IFS -- a PATH
+# like "my secret.txt" (a realistic filename on any real filesystem)
+# arrived at repo-secrets as two broken arguments instead of one --file.
+dir="$(make_gh)"
+mkdir -p "$dir/my secret dir"
+printf 'sekrit' > "$dir/my secret dir/value.txt"
+run "$dir" --force --no-rules --secret "TOKEN=$dir/my secret dir/value.txt" owner/repo
+assert_status 0
+assert_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "each --secret's dry-run preview gets its own file, not one keyed by name+env"
+# Codex review: the dry-run preview file used to be keyed by
+# "$SPEC_NAME.${SPEC_ENV:-none}" -- an omitted --env and an explicit
+# --env none both bucket to the literal string "none", so --secret
+# TOKEN=... (repository-level) and --secret TOKEN@none=... (a real
+# environment happening to be named "none", a valid name under this
+# script's own character check) collide on the same file. The second
+# write silently clobbers the first's preview, so the dry-run plan shows
+# the SAME (environment 'none') content twice instead of one
+# (repository-level) preview and one (environment 'none') preview.
+dir="$(make_gh "" "TOKEN")"
+printf yes > "$dir/env_exists"
+printf sekrit > "$dir/value.txt"
+run "$dir" --dry-run --no-rules --secret "TOKEN=$dir/value.txt" --secret "TOKEN@none=$dir/value.txt" owner/repo
+assert_status 0
+assert_output "(environment 'none')"
+if test "$(printf '%s\n' "$output" | grep -c "(repository-level)")" -ne 1; then
+    echo "  FAIL: expected exactly one '(repository-level)' preview, the repository-level"
+    echo "  secret's own -- got the (environment 'none') preview's content instead,"
+    echo "  clobbered onto the same file"
+    TEST_FAILED=1
+fi
+finish_case
+
+test_case "an entirely empty --secret value is a usage error, not a silently dropped entry"
+# Codex review: an empty --secret ("" or --secret=) used to be appended to
+# SECRETS as a lone blank line, and iterating SECRETS with `for spec in
+# $SECRETS` under IFS=newline treats a run of nothing but separator
+# characters as zero fields (leading/trailing IFS whitespace is stripped) --
+# so the loop that would have caught this via parse_secret_spec's own
+# "missing '='" check never ran at all. The step silently did nothing for
+# that entry instead of failing.
+dir="$(make_gh)"
+run "$dir" --force --secret "" owner/repo
+assert_status 2
+assert_output "non-empty"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "a malformed --secret spec is a usage error before any gh call runs"
+# Regression test: parse_secret_spec's own comment says a malformed --secret
+# is "a usage error before anything runs, not a surprise partway through the
+# plan" -- but it was only ever called lazily, after gh had already been
+# invoked to build the rest of the plan.
+dir="$(make_gh)"
+run "$dir" --force --secret 'not-a-valid-spec' owner/repo
+assert_status 2
+assert_output "NAME[@ENV]=PATH"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls at all before the usage error, got:"
+    cat "$dir/calls"
+    TEST_FAILED=1
+fi
+finish_case
+
+test_case "a --secret with an empty NAME is a usage error before any gh call runs"
+dir="$(make_gh)"
+run "$dir" --force --secret '=path' owner/repo
+assert_status 2
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "a --secret with an @ but an empty ENV is a usage error, not a silent repository-level secret"
+# Regression: NAME@=PATH left SPEC_ENV empty, indistinguishable downstream
+# from NAME=PATH (no @ at all) -- Codex review. The user wrote the @,
+# meaning they wanted an environment scope; this must not be silently
+# downgraded to a repository-level secret instead.
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --secret "TOKEN@=$dir/value.txt" owner/repo
+assert_status 2
+assert_output "empty ENV"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "two --secret entries targeting the same NAME+ENV scope is a usage error before any gh call runs"
+# Codex review: each --secret's dry-run preview inspects the same
+# not-yet-written remote state independently, so --secret TOKEN=first
+# --secret TOKEN=second both report "new" with no warning -- but the real
+# apply then writes them in order and the second silently overwrites the
+# first, with the final value depending on argument order. Rejected
+# outright rather than left for the preview to somehow account for a
+# still-pending sibling write.
+dir="$(make_gh)"
+printf first > "$dir/first.txt"
+printf second > "$dir/second.txt"
+run "$dir" --force --secret "TOKEN=$dir/first.txt" --secret "TOKEN=$dir/second.txt" owner/repo
+assert_status 2
+assert_output "repeats an earlier --secret"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "two --secret entries with the same NAME but different ENV are not treated as duplicates"
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --dry-run --no-rules --secret "TOKEN=$dir/value.txt" --secret "TOKEN@lanes=$dir/value.txt" owner/repo
+assert_status 0
+assert_no_output "repeats an earlier --secret"
+finish_case
+
+test_case "the same NAME+ENV in a different NAME case is still caught as a duplicate"
+# GitHub secret names are case-insensitive (stored uppercase internally),
+# same reasoning as the App-membership and repo-secrets' own NAME checks.
+dir="$(make_gh)"
+printf first > "$dir/first.txt"
+printf second > "$dir/second.txt"
+run "$dir" --force --secret "TOKEN=$dir/first.txt" --secret "token=$dir/second.txt" owner/repo
+assert_status 2
+assert_output "repeats an earlier --secret"
+finish_case
+
+test_case "the same NAME+ENV in a different ENV case is also caught as a duplicate"
+# Codex review: GitHub treats deployment environment names
+# case-insensitively too, same as secret names.
+dir="$(make_gh)"
+printf first > "$dir/first.txt"
+printf second > "$dir/second.txt"
+run "$dir" --force --secret "TOKEN@Prod=$dir/first.txt" --secret "TOKEN@prod=$dir/second.txt" owner/repo
+assert_status 2
+assert_output "repeats an earlier --secret"
+finish_case
+
+test_case "a --secret name invalid to repo-secrets (not just to this script's own coarser check) blocks the whole apply before the ruleset step runs"
+# Codex review: parse_secret_spec only validates the NAME[@ENV]=PATH shape,
+# not repo-secrets' own stricter secret-name rules (letters, digits,
+# underscores only) -- a hyphenated name like BAD-NAME passes this
+# script's own check and is only caught once repo-secrets' own --dry-run
+# preview runs it for real, setting SECRETS_DRYRUN_FAILED. A real --force
+# run used to never check that flag at all (it only gated --dry-run's own
+# exit code), so it fell straight through to apply anyway -- mutating the
+# ruleset before ever reaching the secret step that would report the
+# problem, contradicting parse_secret_spec's own comment that a malformed
+# --secret is "a usage error before anything runs."
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --secret "BAD-NAME=$dir/value.txt" owner/repo
+assert_status 1
+assert_output "the preview above failed"
+if grep -q "POST repos/owner/repo/rulesets" "$dir/calls"; then
+    echo "  FAIL: the ruleset step must not run when the secrets preview already failed"
+    TEST_FAILED=1
+fi
+finish_case
+
+test_case "a --secret PATH that cannot be read is a usage error before any gh call runs"
+dir="$(make_gh)"
+run "$dir" --force --secret "TOKEN=$dir/does-not-exist.txt" owner/repo
+assert_status 2
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "--app resolves an installation scoped to 'selected' and not yet a member: adds it"
+dir="$(make_gh)"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --force --no-rules --app codex owner/repo
+assert_status 0
+assert_call_count "$dir" "PUT user/installations/111/repositories/999" 1
+finish_case
+
+test_case "a 'selected' installation not yet a member still confirms the repo itself exists before planning ADD"
+# Codex review: absent from a 'selected' installation's member list is
+# ambiguous the same way ALREADY_ALL's bare scope check was -- $REPO can be
+# genuinely not-yet-added, or it can be a typo'd/inaccessible repo that
+# would never appear in ANY installation's member list either way. The real
+# apply's ADD case already resolves $REPO's id before adding it and would
+# catch a typo there, but a --dry-run planning ADD purely on "not in the
+# list" reported success for a step that would actually fail at apply time.
+dir="$(make_gh "" "" "repos/owner/typo-repo")"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --dry-run --no-rules --app codex owner/typo-repo
+assert_status 1
+assert_no_output "would add"
+assert_output "could not confirm owner/typo-repo exists"
+finish_case
+
+test_case "--app disambiguates by account when the same App is installed on more than one account"
+# Regression: user/installations lists every installation the authenticated
+# user can see, across every account they belong to -- filtering on slug
+# alone rejected an unambiguous target whenever the same App was ALSO
+# installed on some other account this user can see (a personal install
+# alongside an org install, say). REPO_OWNER (from owner/repo) is what
+# resolves it, the same way a repo's own account disambiguates it on
+# GitHub's UI.
+dir="$(make_gh)"
+printf 'codex\t222\tselected\tsome-other-org\ncodex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --force --no-rules --app codex owner/repo
+assert_status 0
+assert_no_output "more than one installation"
+assert_call_count "$dir" "PUT user/installations/111/repositories/999" 1
+assert_call_count "$dir" "PUT user/installations/222/repositories/999" 0
+finish_case
+
+test_case "--app resolves an installation already scoped to 'all': nothing to add"
+dir="$(make_gh)"
+printf 'codex\t111\tall\towner\n' > "$dir/installations"
+run "$dir" --dry-run --no-rules --app codex owner/repo
+assert_status 0
+assert_output "already covered"
+assert_no_writes "$dir"
+finish_case
+
+test_case "--app on an installation scoped to 'all' still confirms the repo itself exists"
+# Codex review: unlike ALREADY_MEMBER (which only ever reports success from
+# a real gh api response naming the repo), ALREADY_ALL used to report
+# success purely from the installation's own scope, without ever checking
+# $REPO exists. An App-only run against a typo'd or inaccessible repo
+# exited 0 claiming coverage of a repo nothing confirmed was real.
+dir="$(make_gh "" "" "repos/owner/typo-repo")"
+printf 'codex\t111\tall\towner\n' > "$dir/installations"
+run "$dir" --force --no-rules --app codex owner/typo-repo
+assert_status 1
+assert_output "could not confirm owner/typo-repo exists"
+assert_output "failed on:"
+assert_output "app:codex"
+finish_case
+
+test_case "--app resolves an installation already a member: nothing to add"
+dir="$(make_gh)"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+printf '111\towner/repo\n' > "$dir/install_members"
+run "$dir" --dry-run --no-rules --app codex owner/repo
+assert_status 0
+assert_output "already a member"
+assert_no_writes "$dir"
+finish_case
+
+test_case "--app resolves membership case-insensitively against the repo's own canonical casing"
+# Codex review: GitHub's .full_name is returned in the repo's own canonical
+# casing, which can differ from however the caller typed --app's OWNER/REPO
+# argument (repository names resolve case-insensitively). An exact-case
+# miss here planned ADD for a repo that's already a member, which can then
+# fail outright for a credential allowed to list an installation's
+# repositories but not modify them -- reporting failure on a state that
+# already held.
+dir="$(make_gh)"
+printf 'codex\t111\tselected\tOwner\n' > "$dir/installations"
+printf '111\tOwner/Repo\n' > "$dir/install_members"
+run "$dir" --dry-run --no-rules --app codex Owner/repo
+assert_status 0
+assert_output "already a member"
+assert_no_writes "$dir"
+finish_case
+
+# The old sh version's App-membership check was `grep -qxFi "$REPO" ...`,
+# which treats a real grep failure (status 2) identically to "not a member"
+# (status 1) and silently plans ADD on no real evidence -- tested above by
+# shadowing grep's exact `-qxFi` flag shape. The bash rewrite replaced that
+# grep call with file_contains_ci(), a plain read loop over the freshly
+# written member list; a failed `< "$file"` redirection there is caught
+# explicitly (`[[ -r "$file" ]] || return 2`, and `done < "$file" || return
+# 2` around the loop itself) and returned as status 2, distinct from status
+# 1 ("read the whole file, no match"), with the app_plan_line() call site
+# treating 2 as an error rather than ADD -- see repo-setup's file_contains_ci
+# and its comment for why this needed an explicit check rather than relying
+# on `set -e` (a redirection failure inside a function called as an `if`
+# condition does not trigger `set -e`, so it silently falls through to
+# whatever the function does next unless caught). There is no black-box way
+# left to force this path the way grep could be shadowed on PATH: the read
+# happens synchronously, in-process, on a file this same script wrote an
+# instant earlier, with no external command and no test hook to intercept
+# in between -- genuinely unreachable rather than merely rare. Left
+# unexercised here rather than adding a test-only hook to production code;
+# the 0/1/2 contract and its call site are verified by inspection.
+
+test_case "--app names a slug with no installation on this account at all: reported as an error"
+dir="$(make_gh)"
+# $dir/installations stays empty: no App with this slug is installed anywhere.
+run "$dir" --force --no-rules --app not-installed-anywhere owner/repo
+assert_status 1
+assert_output "no installation of an App with slug 'not-installed-anywhere' was found"
+assert_output "failed on:"
+assert_output "app:not-installed-anywhere"
+assert_no_writes "$dir"
+finish_case
+
+test_case "an entirely empty --app value is a usage error, not a silently skipped App step"
+# Codex review: an empty --app ("" or --app=) used to be appended to APPS
+# as a lone blank line. `for slug in $APPS` under IFS=newline treats a
+# string made of nothing but separator characters as zero fields (leading
+# and trailing IFS whitespace is stripped), so the loop that builds and
+# applies the App plan never ran at all -- App installation membership was
+# silently never checked or ensured, while `test -n "$APPS"` still being
+# true made the script print an (empty) "App installation membership:"
+# section and exit 0, reporting success on a step that did nothing.
+dir="$(make_gh)"
+run "$dir" --force --no-rules --app "" owner/repo
+assert_status 2
+assert_output "non-empty slug"
+if test -s "$dir/calls"; then
+    echo "  FAIL: expected no gh calls before the usage error"; TEST_FAILED=1
+fi
+finish_case
+
+test_case "--app --dry-run makes no App-installation writes"
+dir="$(make_gh)"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --dry-run --no-rules --app codex owner/repo
+assert_status 0
+assert_output "would add owner/repo"
+assert_no_writes "$dir"
+finish_case
+
+test_case "every step is attempted even when an earlier one fails"
+# The ruleset step is forced to fail (the create POST itself), while a
+# secret and an App membership are also requested -- both must still be
+# applied, and the final failure list must name only the step that failed.
+dir="$(make_gh "" "" "POST repos/owner/repo/rulesets")"
+printf 'sekrit' > "$dir/value.txt"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --force --secret TOKEN="$dir/value.txt" --app codex owner/repo
+assert_status 1
+assert_output "failed on:"
+assert_output "ruleset"
+assert_written "$dir" owner_repo TOKEN
+assert_call_count "$dir" "PUT user/installations/111/repositories/999" 1
+finish_case
+
+test_case "a failing secret does not block the ruleset or App steps"
+dir="$(make_gh "" "" "secret set")"
+printf 'sekrit' > "$dir/value.txt"
+printf 'codex\t111\tselected\towner\n' > "$dir/installations"
+run "$dir" --force --secret TOKEN="$dir/value.txt" --app codex owner/repo
+assert_status 1
+assert_output "failed on:"
+assert_output "secret:TOKEN"
+assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
+assert_call_count "$dir" "PUT user/installations/111/repositories/999" 1
+finish_case
+
+test_case "a secret plan that changed since it was confirmed is refused, not silently applied"
+# Codex review: the confirmation can sit for an arbitrary amount of real
+# time, and the real apply below invokes repo-secrets fresh, as its own
+# process, which rebuilds its plan from scratch. If a secret shown here as
+# "new" was created by someone else in that window, the child's own plan
+# now reads "overwrite" -- and since that's not the "new" case, neither
+# repo-secrets' own late TOCTOU recheck nor its confirmation prompt (which
+# --force suppresses) catches it, so the value only ever confirmed as a
+# new write would otherwise get silently overwritten. $4="TOKEN" makes the
+# SECOND (or later) call to the secrets-list endpoint see TOKEN as already
+# existing -- the first call (repo-setup's own preview) still sees it as
+# absent, matching the "shown as new, changed before the real apply" shape.
+dir="$(make_gh "" "" "" "TOKEN")"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --no-rules --secret "TOKEN=$dir/value.txt" owner/repo
+assert_status 1
+assert_output "plan for --secret TOKEN"
+assert_output "changed since it"
+assert_not_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "a secret revalidation that fails outright is reported as that failure, not as a changed plan"
+# Codex review: same defect as the ruleset revalidation above, for a
+# secret's own recheck -- its exit status used to be discarded (`|| :`)
+# too, so a genuine failure of the recheck itself got misreported as "the
+# plan changed since it was confirmed" instead of as the failure it
+# actually was. fail_secrets_at_recheck makes the SECOND (the
+# revalidation's) call to the secrets-list endpoint fail outright.
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+touch "$dir/fail_secrets_at_recheck"
+run "$dir" --force --no-rules --secret "TOKEN=$dir/value.txt" owner/repo
+assert_status 1
+assert_output "revalidating the plan for --secret TOKEN failed"
+assert_output "simulated failure on revalidation"
+assert_no_output "changed since it was confirmed"
+assert_not_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "a stale secret is skipped, but the ruleset step (which ran first and could itself be the delay) is not"
+# Codex review, round 2: the earlier fix revalidated every secret's plan
+# ONCE, collectively, before the whole apply section -- so a stale plan
+# caused by the RULESET step's own duration (it runs first, and can take
+# real time) was still an unclosed window. Now revalidated per secret,
+# immediately before that secret's own apply, inside the same loop as the
+# apply itself -- proven here by running WITH the ruleset step enabled
+# (not --no-rules) and confirming it still applies even though the secret
+# that comes after it is stale and skipped.
+dir="$(make_gh "" "" "" "TOKEN")"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --secret "TOKEN=$dir/value.txt" owner/repo
+assert_status 1
+assert_output "failed on:"
+assert_output "secret:TOKEN"
+assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
+assert_not_written "$dir" owner_repo TOKEN
+finish_case
+
+test_case "a ruleset plan that changed since it was confirmed is refused, not silently applied"
+# Codex review: same plan-staleness risk as secrets, but for the ruleset
+# step. The confirmation prompt can sit for an arbitrary amount of real
+# time, and the real apply below invokes repo-rules fresh, as its own
+# process, which rebuilds its plan from scratch -- if the ruleset's own
+# state changed in that window, this --force call would silently apply a
+# DIFFERENT plan than the one shown and confirmed. $1="" (nothing reported
+# at preview time) with $5=the full default set (all reported by recheck
+# time) makes repo-rules' own dry-run output differ between the two calls
+# -- the first mentions checks that have never reported, the second does
+# not.
+dir="$(make_gh "" "" "" "" "lanes
+codex
+zizmor")"
+run "$dir" --force owner/repo
+assert_status 1
+assert_output "plan for the ruleset changed"
+assert_output "changed since it was confirmed"
+if test -s "$dir/writes"; then
+    echo "  FAIL: expected no ruleset write once its plan was found stale"
+    TEST_FAILED=1
+fi
+finish_case
+
+test_case "a ruleset revalidation that fails outright is reported as that failure, not as a changed plan"
+# Codex review: the revalidation's own --dry-run used to have its exit
+# status discarded (`|| :`), so a genuine failure of the recheck itself
+# (expired auth, GitHub unreachable, an API error) produced output that
+# merely differed from the confirmed preview -- and got reported as "the
+# plan changed since it was confirmed", which is wrong and actively
+# misleading about the real cause. fail_checks_at_recheck makes the
+# SECOND (the revalidation's) call to the check-runs endpoint fail
+# outright rather than returning names.
+dir="$(make_gh)"
+touch "$dir/fail_checks_at_recheck"
+run "$dir" --force owner/repo
+assert_status 1
+assert_output "revalidating the ruleset plan failed"
+assert_output "simulated failure on revalidation"
+assert_no_output "changed since it was confirmed"
+if test -s "$dir/writes"; then
+    echo "  FAIL: expected no ruleset write when its revalidation itself failed"
+    TEST_FAILED=1
+fi
+finish_case
+
+test_case "a --secret file edited after the preview deploys the snapshotted bytes, not the new ones"
+# Codex review: the plan-staleness comparison compares the secret's REMOTE
+# state (new/overwrite), never the local file's CONTENTS -- so if
+# --file's target were re-read at every later use, an edit during the
+# confirmation prompt, the ruleset step, or an earlier secret's own apply
+# would deploy DIFFERENT bytes than what was true when the plan was built
+# and shown. Each --secret's value is now snapshotted once, before
+# anything is shown, and every later use (the preview's own dry-run, the
+# revalidation recheck, the real apply) reads that snapshot instead of
+# re-reading $SPEC_PATH. repo-secrets ITSELF already copies --file into
+# its own private work dir before its first gh call, which would mask
+# this bug if the edit landed too early (during the very first repo-
+# secrets invocation) -- so the edit here is timed to the SECOND call to
+# the secrets-list endpoint instead, which is the revalidation recheck's
+# own repo-secrets invocation, reading $SPEC_PATH (or the snapshot) fresh,
+# strictly after the preview's own read already completed.
+# Codex review: a fixed `sleep 2` after the marker only makes the race
+# unlikely, not impossible -- if the test controller (this script) is
+# itself descheduled for more than 2s after the marker file appears (a
+# busy/loaded runner), the fake gh's sleep elapses first and repo-setup
+# proceeds into the real apply before the edit below has happened, so the
+# test would pass even against a reverted fix without ever having
+# exercised it. Replaced with an explicit handshake: the fake gh blocks
+# on a `read` from a FIFO after touching the marker, and nothing unblocks
+# it until this script has made its edit and written to that FIFO --
+# there is no timing window left to race, whatever the runner's load.
+dir="$(make_gh)"
+printf 'original-value' > "$dir/value.txt"
+mkfifo "$dir/release"
+mv "$dir/bin/gh" "$dir/bin/gh.real"
+cat > "$dir/bin/gh" << EOF
+#!/bin/sh
+case " \$* " in
+    *"actions/secrets"*)
+        counter_file="$dir/secrets_list_calls"
+        count="\$(cat "\$counter_file" 2>/dev/null || echo 0)"
+        count=\$((count + 1))
+        echo "\$count" > "\$counter_file"
+        if test "\$count" -eq 2; then
+            touch "$dir/second-list-call-landed"
+            read -r _ < "$dir/release"
+        fi
+        ;;
+esac
+exec "$dir/bin/gh.real" "\$@"
+EOF
+chmod +x "$dir/bin/gh"
+PATH="$dir/bin:$PATH" "$REPO_SETUP" --force --no-rules --secret "TOKEN=$dir/value.txt" \
+    owner/repo >"$dir/run.out" 2>&1 &
+run_pid=$!
+waited=0
+reached=0
+while test "$waited" -lt 10; do
+    if test -f "$dir/second-list-call-landed"; then
+        reached=1
+        break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+if test "$reached" -eq 0; then
+    echo "  FAIL: repo-setup never reached the recheck's secrets-list call in 10s"
+    TEST_FAILED=1
+    kill -TERM "$run_pid" 2>/dev/null
+    # Unblock a fake gh that might be waiting on the FIFO so it isn't left
+    # as an orphan once this test's directory is removed; nothing is
+    # listening if it never reached that point, so don't let this hang.
+    (printf 'go\n' > "$dir/release" 2>/dev/null &)
+    wait "$run_pid" 2>/dev/null || true
+else
+    printf 'edited-after-preview' > "$dir/value.txt"
+    # Only after the edit above is on disk does the fake gh's blocked
+    # read return, so repo-setup cannot reach the real apply any earlier
+    # than this -- the ordering is enforced by the FIFO, not by timing.
+    printf 'go\n' > "$dir/release"
+    status=0
+    wait "$run_pid" 2>/dev/null || status=$?
+    output="$(cat "$dir/run.out")"
+    assert_status 0
+    assert_written "$dir" owner_repo TOKEN
+    if test -f "$dir/written.owner_repo.TOKEN"; then
+        got="$(cat "$dir/written.owner_repo.TOKEN")"
+        if test "$got" != "original-value"; then
+            echo "  FAIL: expected the snapshotted value 'original-value', got '$got'"
+            TEST_FAILED=1
+        fi
+    fi
+fi
+finish_case
+
+test_case "a --dry-run plan for a never-reported check still shows the full plan, not just an error"
+# Regression test: the real apply below always runs repo-rules with
+# --force, which also bypasses repo-rules' own never-reported-check guard
+# (not just its confirmation prompt) -- so the preview has to pass --force
+# too, or a check that simply hasn't reported yet shows here as a dry-run
+# failure the real (always-forced) apply would not actually hit.
+dir="$(make_gh "")"  # nothing has reported anything
+run "$dir" --dry-run --rule brand-new-check owner/repo
+assert_status 0
+assert_output "never reported"
+assert_output "--force given"
+assert_output "would create ruleset"
+finish_case
+
+test_case "SIGTERM during the apply sequence aborts rather than continuing to later steps"
+# Same trap bug/fix as repo-secrets: trapping INT/TERM alongside EXIT on
+# one line replaces bash's default terminate-on-signal action with "run
+# the handler, then resume the script". repo-setup runs three independent
+# apply steps (ruleset, secrets, App membership) in sequence under one
+# WORK dir and one top-level trap, so this matters even more here: a
+# signal during the FIRST step must not let the remaining two run anyway.
+# Every real gh call repo-rules/repo-secrets/repo-setup itself makes goes
+# through this one fake gh, so sleeping on its very first invocation (of
+# any kind) is an early-enough hook to prove the fix aborts before even
+# the ruleset step, let alone secrets, ever completes.
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+mv "$dir/bin/gh" "$dir/bin/gh.real"
+cat > "$dir/bin/gh" << EOF
+#!/bin/sh
+if test ! -f "$dir/first-call-landed"; then
+    touch "$dir/first-call-landed"
+    "$dir/bin/gh.real" "\$@" > /tmp/first-call-out.\$\$ 2>&1
+    rc=\$?
+    cat /tmp/first-call-out.\$\$
+    rm -f /tmp/first-call-out.\$\$
+    sleep 5
+    exit \$rc
+fi
+exec "$dir/bin/gh.real" "\$@"
+EOF
+chmod +x "$dir/bin/gh"
+PATH="$dir/bin:$PATH" "$REPO_SETUP" --force --secret "TOKEN=$dir/value.txt" owner/repo \
+    >"$dir/run.out" 2>&1 &
+run_pid=$!
+waited=0
+reached=0
+while test "$waited" -lt 10; do
+    if test -f "$dir/first-call-landed"; then
+        reached=1
+        break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+done
+if test "$reached" -eq 0; then
+    echo "  FAIL: repo-setup never reached its first gh call in 10s"
+    TEST_FAILED=1
+    kill -TERM "$run_pid" 2>/dev/null
+    wait "$run_pid" 2>/dev/null || true
+else
+    kill -TERM "$run_pid"
+    status=0
+    wait "$run_pid" 2>/dev/null || status=$?
+    output="$(cat "$dir/run.out")"
+    assert_status 143
+    if ls "$dir"/written.* >/dev/null 2>&1; then
+        echo "  FAIL: expected no secret write once the apply sequence was interrupted"
+        TEST_FAILED=1
+    fi
+fi
+finish_case
+
+test_case "unknown option is a usage error"
+dir="$(make_gh)"
+run "$dir" --nonsense owner/repo
+assert_status 2
+finish_case
+
+test_case "exactly one OWNER/REPO is required"
+dir="$(make_gh)"
+run "$dir" --force
+assert_status 2
+finish_case
+
+test_case "rejects an OWNER/REPO shaped like an owner/repo/extra path"
+dir="$(make_gh)"
+run "$dir" --force owner/repo/extra
+assert_status 2
+finish_case
+
+test_case "--app rejects a slug with characters this script does not handle"
+dir="$(make_gh)"
+run "$dir" --force --app 'not a slug' owner/repo
+assert_status 2
+finish_case
+
+# ---------------------------------------------------------------------------
+
+echo
+echo "Tests run: $TESTS_RUN, passed: $TESTS_PASSED, failed: $TESTS_FAILED, skipped: $TESTS_SKIPPED"
+test "$TESTS_FAILED" -eq 0
