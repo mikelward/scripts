@@ -653,6 +653,16 @@ describe_checks() {
     for check in "$@"; do printf '  %s\n' "$check"; done
 }
 
+# Wraps build_update_body with the split of its two-line output into the
+# change verdict and the body file, so both call sites below -- the early
+# one that decides NEEDS_WRITE and the later one that refreshes the
+# snapshot right before writing -- share the same parsing.
+refresh_body() {
+    build_update_body || return 1
+    CHANGE_STATUS="$(sed -n 1p "$WORK/transform")"
+    sed 1d "$WORK/transform" > "$WORK/body"
+}
+
 # Computed once, ahead of both --dry-run and the real write, so each reports
 # the same answer: whether there is anything to change at all. A create has
 # nothing to compare against and always needs one; an update asks the
@@ -661,9 +671,7 @@ describe_checks() {
 # from what the write actually does.
 NEEDS_WRITE=1
 if test -n "$EXISTING"; then
-    build_update_body || { error "could not read ruleset '$RULESET' to compute the update"; exit 1; }
-    CHANGE_STATUS="$(sed -n 1p "$WORK/transform")"
-    sed 1d "$WORK/transform" > "$WORK/body"
+    refresh_body || { error "could not read ruleset '$RULESET' to compute the update"; exit 1; }
     test "$CHANGE_STATUS" = unchanged && NEEDS_WRITE=0
 fi
 
@@ -696,8 +704,14 @@ fi
 
 if test "$FORCE" -ne 1; then
     if test -t 0; then
-        describe_plan "$@"
-        printf 'Apply this change to %s? [y/N] ' "$REPO"
+        # To stderr, not stdout: stdin being a terminal doesn't mean stdout
+        # is one too (`output=$(repo-rules ...)` from an interactive shell
+        # has both), and a prompt that lands in a captured stdout is a
+        # question nobody sees asked while the script still blocks on an
+        # answer. Piping stdout elsewhere is common enough to guard against
+        # on its own, without also requiring stdout to be a terminal.
+        describe_plan "$@" >&2
+        printf 'Apply this change to %s? [y/N] ' "$REPO" >&2
         read -r CONFIRM || CONFIRM=""
         case "$CONFIRM" in
             [Yy]|[Yy][Ee][Ss]) ;;
@@ -715,6 +729,15 @@ if test "$FORCE" -ne 1; then
 fi
 
 if test -n "$EXISTING"; then
+    # Refreshed right before writing, not reused from the snapshot the
+    # confirmation prompt showed: another admin or process could have
+    # changed the ruleset in whatever time an interactive user spent
+    # deciding, and writing that stale snapshot back would silently discard
+    # the concurrent change. This can't close the window to zero -- another
+    # write could still land between this fetch and the PUT below -- but it
+    # shrinks "however long a human takes to answer a prompt" down to one
+    # API round trip.
+    refresh_body || { error "could not re-read ruleset '$RULESET' to write it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
 else
