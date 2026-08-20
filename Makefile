@@ -24,3 +24,4 @@ test:
 	./repo-rules_test
 	./repo-rules-audit_test
 	./repo-list_test
+	./repo-secrets_test
