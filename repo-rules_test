@@ -306,7 +306,7 @@ test_case "requires checks that have reported"
 dir="$(make_gh 'test
 codex
 sweep' '')"
-run_repo_rules "$dir" mikelward/lanes test codex sweep
+run_repo_rules "$dir" --force mikelward/lanes test codex sweep
 assert_status 0
 assert_output "created ruleset"
 assert_body "$dir" '"context":"test"'
@@ -340,7 +340,7 @@ test_case "updates the ruleset it owns instead of creating a second"
 # demanding a check that no longer exists.
 dir="$(make_gh 'test
 codex' '42')"
-run_repo_rules "$dir" mikelward/lanes test codex
+run_repo_rules "$dir" --force mikelward/lanes test codex
 assert_status 0
 assert_output "updated ruleset"
 grep -q "PUT repos/mikelward/lanes/rulesets/42" "$dir/calls" || {
@@ -385,7 +385,7 @@ test_case "defaults to lanes, codex and zizmor when no CHECK is named"
 dir="$(make_gh 'lanes
 codex
 zizmor' '')"
-run_repo_rules "$dir" mikelward/lanes
+run_repo_rules "$dir" --force mikelward/lanes
 assert_status 0
 assert_body "$dir" '"context":"lanes"'
 assert_body "$dir" '"context":"codex"'
@@ -394,7 +394,7 @@ finish_case
 
 test_case "an explicit CHECK list overrides the default rather than adding to it"
 dir="$(make_gh 'sweep' '')"
-run_repo_rules "$dir" mikelward/lanes sweep
+run_repo_rules "$dir" --force mikelward/lanes sweep
 assert_status 0
 assert_body "$dir" '"context":"sweep"'
 assert_body_lacks "$dir" '"context":"lanes"'
@@ -417,7 +417,7 @@ test_case "keeps a check name with spaces as one context"
 # exists to prevent.
 dir="$(make_gh 'Analyze (actions)
 test' '')"
-run_repo_rules "$dir" mikelward/lanes "Analyze (actions)" test
+run_repo_rules "$dir" --force mikelward/lanes "Analyze (actions)" test
 assert_status 0
 assert_body "$dir" '"context":"Analyze (actions)"'
 assert_no_output "never reported"
@@ -427,7 +427,7 @@ finish_case
 
 test_case "escapes a check name that would break the JSON"
 dir="$(make_gh 'say "hi"' '')"
-run_repo_rules "$dir" mikelward/lanes 'say "hi"'
+run_repo_rules "$dir" --force mikelward/lanes 'say "hi"'
 assert_status 0
 assert_body "$dir" '\"hi\"'
 finish_case
@@ -436,7 +436,7 @@ test_case "sees a check that only a paginated response reaches"
 # A name on page two is indistinguishable from one that never reported, so
 # without --paginate this is refused and the merge gate is never set.
 dir="$(make_gh 'test' '' 'late-reporter')"
-run_repo_rules "$dir" mikelward/lanes test late-reporter
+run_repo_rules "$dir" --force mikelward/lanes test late-reporter
 assert_status 0
 assert_body "$dir" '"context":"late-reporter"'
 finish_case
@@ -488,7 +488,7 @@ fi
 test_case "updates one that holds only the rule it manages"
 if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
 dir="$(make_gh 'test' '42' '' '' 'required_status_checks')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_output "updated ruleset"
 finish_case
@@ -525,7 +525,7 @@ if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
 # policy -- which is why the update now EDITS the fetched object instead.
 dir="$(make_gh 'test
 codex' '42')"
-run_repo_rules "$dir" mikelward/lanes test codex
+run_repo_rules "$dir" --force mikelward/lanes test codex
 assert_status 0
 assert_body "$dir" 'refs/heads/release'          # conditions
 assert_body "$dir" '"enforcement": "active"'     # round-tripped, not rebuilt
@@ -567,7 +567,7 @@ finish_case
 
 test_case "creating chooses the default branch, actively enforced"
 dir="$(make_gh 'test' '')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '~DEFAULT_BRANCH'
 assert_body "$dir" '"enforcement": "active"'
@@ -578,7 +578,7 @@ test_case "sees a check that only ever reported on a closed pull request"
 # so a repository with nothing open would look as though it had never run.
 dir="$(make_gh 'test' '')"
 printf 'pr-only-check\n' > "$dir/closed_checks"
-run_repo_rules "$dir" mikelward/lanes test pr-only-check
+run_repo_rules "$dir" --force mikelward/lanes test pr-only-check
 assert_status 0
 assert_body "$dir" '"context":"pr-only-check"'
 finish_case
@@ -590,7 +590,7 @@ test_case "creating also requires resolution and allows rebase only"
 # Rebase alone, because a squash or merge commit rewrites or hides the commits
 # that were reviewed.
 dir="$(make_gh 'test' '')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"required_review_thread_resolution": true'
 assert_body "$dir" '"required_approving_review_count": 0'
@@ -604,7 +604,7 @@ if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
 # The fixture ruleset holds only required_status_checks, which is what every
 # ruleset this script created before today looks like.
 dir="$(make_gh 'test' '42')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"required_review_thread_resolution": true'
 # `gh api --jq` pretty-prints, so the array spans lines: assert the field and
@@ -634,7 +634,7 @@ cat > "$dir/ruleset" <<'RULESET'
     "required_review_thread_resolution":false}}]}
 RULESET
 printf 'pull_request\nrequired_status_checks\n' > "$dir/rule_types"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"required_review_thread_resolution": true'
 assert_body "$dir" '"required_approving_review_count": 2'
@@ -652,7 +652,7 @@ test_case "a ruleset holding both managed rules is still ours to update"
 if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
 dir="$(make_gh 'test' '42' '' '' 'pull_request
 required_status_checks')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_output "updated ruleset"
 finish_case
@@ -687,7 +687,7 @@ cat > "$dir/ruleset" <<'RULESET'
     "required_review_thread_resolution":true}}]}
 RULESET
 printf 'pull_request\n' > "$dir/rule_types"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"required_status_checks"'
 assert_body "$dir" '"context": "test"'
@@ -701,7 +701,7 @@ if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
 dir="$(make_gh 'test' '42')"
 sed 's/"strict_required_status_checks_policy":true/"strict_required_status_checks_policy":false/' \
     "$dir/ruleset" > "$dir/ruleset.new" && mv "$dir/ruleset.new" "$dir/ruleset"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"strict_required_status_checks_policy": true'
 finish_case
@@ -726,7 +726,7 @@ test_case "stops scanning heads once every requested check is found"
 # and a chunk of the hour's API quota, and the default branch usually settles
 # the question. The closed-pull-request listing must not even be reached.
 dir="$(make_gh 'test' '')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 if grep -q "state=closed" "$dir/calls"; then
     echo "  FAIL: kept scanning after every requested check was found"
@@ -763,7 +763,7 @@ cat > "$dir/other_ruleset" <<'RULESET'
  "rules":[{"type":"pull_request","parameters":{
     "allowed_merge_methods":["squash","rebase"]}}]}
 RULESET
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"context":"test"'
 finish_case
@@ -801,7 +801,7 @@ cat > "$dir/other_ruleset" <<'RULESET'
  "rules":[{"type":"pull_request","parameters":{
     "allowed_merge_methods":["squash"]}}]}
 RULESET
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"context": "test"'
 finish_case
@@ -858,7 +858,7 @@ cat > "$dir/other_ruleset" <<'RULESET'
  "rules":[{"type":"pull_request","parameters":{
     "allowed_merge_methods":["squash","rebase"]}}]}
 RULESET
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_body "$dir" '"context":"test"'
 finish_case
@@ -954,9 +954,116 @@ test_case "asks for the default branch head without naming it in the path"
 # sent, so `release#1` interpolated into the endpoint would query `release`.
 # The fixture fails any call naming the branch; reaching exit 0 means none did.
 dir="$(make_gh 'test' '' '' '/commits/release' 'required_status_checks' 'release#1')"
-run_repo_rules "$dir" mikelward/lanes test
+run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 finish_case
+
+test_case "refuses to write without --force when stdin is not a terminal"
+# The suite's own stdin is never a terminal, so this is the ordinary case for
+# every other test here -- what makes this one distinct is that it omits
+# --force on purpose, to pin the refusal itself: applying an unconfirmed
+# admin-level change non-interactively would defeat the point of asking, and
+# blocking on a question nobody can answer would hang whatever ran it.
+dir="$(make_gh 'test' '')"
+run_repo_rules "$dir" mikelward/lanes test
+assert_status 1
+assert_output "not a terminal"
+assert_output "--force"
+assert_no_write "$dir"
+finish_case
+
+test_case "an update also refuses without --force when stdin is not a terminal"
+if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
+# Same refusal, on the update path -- a real change is computed (this
+# fixture's ruleset lacks a pull_request rule, so one would be added), so
+# this is NOT the already-matches shortcut below; it is the confirmation
+# gate declining to write unconfirmed.
+dir="$(make_gh 'test' '42')"
+run_repo_rules "$dir" mikelward/lanes test
+assert_status 1
+assert_output "not a terminal"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "a ruleset that already matches is left alone, even without --force"
+if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
+# Nothing to confirm when nothing would change -- the confirmation step
+# (and its refusal above) never applies here, so no --force is needed either.
+dir="$(make_gh 'test' '42' '' '' 'required_status_checks
+pull_request')"
+cat > "$dir/ruleset" <<'RULESET'
+{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{
+    "strict_required_status_checks_policy":true,
+    "required_status_checks":[{"context":"test"}]}},
+   {"type":"pull_request","parameters":{
+    "required_approving_review_count":0,
+    "dismiss_stale_reviews_on_push":false,
+    "require_code_owner_review":false,
+    "require_last_push_approval":false,
+    "required_review_thread_resolution":true,
+    "allowed_merge_methods":["rebase"]}}]}
+RULESET
+run_repo_rules "$dir" mikelward/lanes test
+assert_status 0
+assert_output "already matches"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "--dry-run also reports a ruleset that already matches"
+if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
+dir="$(make_gh 'test' '42' '' '' 'required_status_checks
+pull_request')"
+cat > "$dir/ruleset" <<'RULESET'
+{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{
+    "strict_required_status_checks_policy":true,
+    "required_status_checks":[{"context":"test"}]}},
+   {"type":"pull_request","parameters":{
+    "required_approving_review_count":0,
+    "dismiss_stale_reviews_on_push":false,
+    "require_code_owner_review":false,
+    "require_last_push_approval":false,
+    "required_review_thread_resolution":true,
+    "allowed_merge_methods":["rebase"]}}]}
+RULESET
+run_repo_rules "$dir" --dry-run mikelward/lanes test
+assert_status 0
+assert_output "already matches"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "--force still skips the write when nothing would change"
+if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
+# --force means "don't ask", not "write regardless" -- a real PUT here would
+# be a no-op API call for no reason, on every rerun of an already-correct repo.
+dir="$(make_gh 'test' '42' '' '' 'required_status_checks
+pull_request')"
+cat > "$dir/ruleset" <<'RULESET'
+{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{
+    "strict_required_status_checks_policy":true,
+    "required_status_checks":[{"context":"test"}]}},
+   {"type":"pull_request","parameters":{
+    "required_approving_review_count":0,
+    "dismiss_stale_reviews_on_push":false,
+    "require_code_owner_review":false,
+    "require_last_push_approval":false,
+    "required_review_thread_resolution":true,
+    "allowed_merge_methods":["rebase"]}}]}
+RULESET
+run_repo_rules "$dir" --force mikelward/lanes test
+assert_status 0
+assert_output "already matches"
+assert_no_write "$dir"
+finish_case
+fi
 
 # ---------------------------------------------------------------------------
 
