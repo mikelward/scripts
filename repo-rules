@@ -161,33 +161,48 @@ command -v gh >/dev/null 2>&1 || {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-# The branch to protect, and whether the repository permits a rebase merge at
-# all. The branch is asked for rather than assumed: not every repository calls
-# it main, and requiring checks on a branch that does not exist silently
-# protects nothing.
-if gh api "repos/$REPO" --jq '.default_branch, .allow_rebase_merge' > "$WORK/repo"; then
-    DEFAULT_BRANCH="$(sed -n 1p "$WORK/repo")"
-    ALLOW_REBASE="$(sed -n 2p "$WORK/repo")"
+# The branch to protect, established once: not every repository calls it
+# main, and requiring checks on a branch that does not exist silently
+# protects nothing. Never re-read after this -- SCOPE's normalization and
+# every merge-method comparison below are pinned to this one value, and
+# letting it drift mid-run would desynchronize them from each other in a
+# way nothing here is built to detect.
+if gh api "repos/$REPO" --jq '.default_branch' > "$WORK/repo"; then
+    DEFAULT_BRANCH="$(cat "$WORK/repo")"
 else
     error "could not read $REPO"
     exit 1
 fi
 test -n "$DEFAULT_BRANCH" || { error "could not read $REPO's default branch"; exit 1; }
 
+# Whether the repository still permits a rebase merge at all, on its own
+# because -- unlike the default branch -- this genuinely can change between
+# an early check and a later one, and the write must reflect its state AT
+# THE WRITE, not whatever it was when the plan was drawn.
+#
 # A ruleset NARROWS what the repository permits; it cannot enable a method the
 # repository has turned off. So allowing only rebase on a repository with
 # rebase merging disabled leaves the intersection empty and nothing can merge
 # -- the never-merges trap this script exists to prevent, sprung by the script.
 # Refused rather than fixed: turning on a repository-wide merge setting is not
 # something a run asked to set a check list should do behind the operator.
-if test "$ALLOW_REBASE" != true; then
-    error "$REPO has rebase merging disabled, and this ruleset allows only"
-    error "rebase. A ruleset narrows what the repository permits and cannot"
-    error "enable a method, so together they would leave no way to merge"
-    error "anything. Enable 'Allow rebase merging' in the repository's pull"
-    error "request settings first."
-    exit 1
-fi
+check_allow_rebase() {
+    ALLOW_REBASE="$(gh api "repos/$REPO" --jq '.allow_rebase_merge')" || {
+        error "could not read $REPO to check whether rebase merging is still"
+        error "allowed. Refusing to guess."
+        return 1
+    }
+    if test "$ALLOW_REBASE" != true; then
+        error "$REPO has rebase merging disabled, and this ruleset allows only"
+        error "rebase. A ruleset narrows what the repository permits and cannot"
+        error "enable a method, so together they would leave no way to merge"
+        error "anything. Enable 'Allow rebase merging' in the repository's pull"
+        error "request settings first."
+        return 1
+    fi
+}
+
+check_allow_rebase || exit 1
 
 # A JSON string literal, with the two characters that would otherwise end it
 # escaped. Check names are free text from the caller.
@@ -377,6 +392,14 @@ if test -s "$WORK/missing"; then
 fi
 
 
+# The query that finds a ruleset named $RULESET, used to establish EXISTING
+# below and, on the create path, run again right before the write to catch
+# one that appeared in the meantime -- see the write section.
+lookup_existing_ruleset() {
+    gh api --paginate "repos/$REPO/rulesets?includes_parents=false" \
+        --jq ".[] | select(.name == $(json_string "$RULESET")) | .id"
+}
+
 # Update the ruleset this script owns, or create it. Matched by name, so a
 # rerun with a different check list replaces that list rather than adding a
 # second ruleset that quietly ANDs with the first.
@@ -384,7 +407,7 @@ fi
 # A failed lookup must NOT read as "there is no ruleset": that would POST a
 # duplicate whose stale check list then ANDs with this one, which is the
 # outcome the whole named-ruleset approach exists to avoid.
-if EXISTING="$(gh api --paginate "repos/$REPO/rulesets?includes_parents=false" --jq ".[] | select(.name == $(json_string "$RULESET")) | .id")"; then
+if EXISTING="$(lookup_existing_ruleset)"; then
     :
 else
     error "could not list $REPO's rulesets, so cannot tell whether '$RULESET'"
@@ -399,11 +422,17 @@ fi
 # silently delete protections -- breaking the promise at the top of this file
 # that it touches no other ruleset. A name is just a name; what proves the
 # ruleset is ours is that it contains only the rule types we manage.
-if test -n "$EXISTING"; then
+#
+# Takes the id as an argument rather than reading $EXISTING directly, so the
+# write section can re-run it against the SAME id it already has right
+# before the write -- catching enforcement flipped off, or an unmanaged rule
+# added, in whatever time an interactive user spent on the confirm prompt.
+check_ruleset_ownership() {
+    ruleset_id="$1"
     # Not `gh ... | sort` -- a pipeline reports the LAST command's status, so
     # sort's success would mask a failed read. Same shape as the bug this
     # script was reviewed for; it is easy to write twice.
-    if gh api "repos/$REPO/rulesets/$EXISTING" --jq '.enforcement, (.rules[].type)' > "$WORK/inspect"; then
+    if gh api "repos/$REPO/rulesets/$ruleset_id" --jq '.enforcement, (.rules[].type)' > "$WORK/inspect"; then
         ENFORCEMENT="$(sed -n 1p "$WORK/inspect")"
         sed 1d "$WORK/inspect" > "$WORK/types"
         # Deleting the managed types is the test, rather than comparing against
@@ -418,9 +447,9 @@ if test -n "$EXISTING"; then
         # a repeated name in an error message costs nothing.
         UNMANAGED="$(sed '/^required_status_checks$/d; /^pull_request$/d' "$WORK/types")"
     else
-        error "could not read ruleset '$RULESET' (id $EXISTING) to check what it"
+        error "could not read ruleset '$RULESET' (id $ruleset_id) to check what it"
         error "contains. Refusing to overwrite rules that cannot be inspected."
-        exit 1
+        return 1
     fi
     # `evaluate` and `disabled` rulesets do not block anything, so writing a
     # check list into one and reporting success would name a gate that is not
@@ -429,20 +458,24 @@ if test -n "$EXISTING"; then
     # run was not asked to make, and flipping it is not a side effect of
     # setting a check list.
     if test "$ENFORCEMENT" != active; then
-        error "ruleset '$RULESET' (id $EXISTING) on $REPO is '$ENFORCEMENT', not"
+        error "ruleset '$RULESET' (id $ruleset_id) on $REPO is '$ENFORCEMENT', not"
         error "'active', so its rules block nothing. Setting a check list on it"
         error "would report a gate that does not gate. Activate it, or point this"
         error "run at a different ruleset with --ruleset."
-        exit 1
+        return 1
     fi
     if test -n "$UNMANAGED"; then
-        error "ruleset '$RULESET' (id $EXISTING) on $REPO holds rules this script"
+        error "ruleset '$RULESET' (id $ruleset_id) on $REPO holds rules this script"
         error "does not manage:"
         printf '%s\n' "$UNMANAGED" | sed 's/^/  /' >&2
         error "Overwriting it would delete them. Rename that ruleset, or point"
         error "this run at a different one with --ruleset."
-        exit 1
+        return 1
     fi
+}
+
+if test -n "$EXISTING"; then
+    check_ruleset_ownership "$EXISTING" || exit 1
 fi
 
 # Rulesets AGGREGATE: a pull request must satisfy every one that applies to
@@ -745,25 +778,48 @@ if test "$FORCE" -ne 1; then
     fi
 fi
 
+# Every check below is re-run right before writing, not reused from what the
+# confirmation prompt was built from: another admin or process could have
+# changed the repository or the ruleset in whatever time an interactive user
+# spent deciding -- disabled rebase merging, flipped enforcement off, added
+# an unmanaged rule, moved the ruleset to a different branch, or (on the
+# create path) created a same-named ruleset of its own. None of these close
+# their window to zero -- another write could still land between these
+# calls and the actual PUT/POST -- but together they shrink "however long a
+# human takes to answer a prompt" down to a handful of API round trips.
+check_allow_rebase || exit 1
+
 if test -n "$EXISTING"; then
-    # Both re-run right before writing, not reused from what the
-    # confirmation prompt was built from: another admin or process could
-    # have changed the ruleset -- including moving it to a different
-    # branch -- in whatever time an interactive user spent deciding.
-    # Re-validating the scope catches a conflict the earlier check couldn't
-    # have seen yet (or clears one that no longer applies); refreshing the
-    # body keeps a stale snapshot from silently discarding a concurrent
-    # change when it's written. Neither closes the window to zero -- another
-    # write could still land between these calls and the PUT below -- but
-    # together they shrink "however long a human takes to answer a prompt"
-    # down to a couple of API round trips. CREATE has no scope to
-    # re-validate here: it's always the default branch, fixed for the whole
-    # run, so only the update path needs this.
+    check_ruleset_ownership "$EXISTING" || exit 1
+    # CREATE has no scope to re-validate here: it's always the default
+    # branch, fixed for the whole run, so only the update path needs this.
     validate_merge_method_scope || exit 1
     refresh_body || { error "could not re-read ruleset '$RULESET' to write it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
 else
+    # The create-path counterpart of the ownership re-check above: nothing
+    # existed under this name a moment ago, but a rerun of this script, or
+    # another admin, could have created one while this one was waiting on
+    # confirmation. Proceeding would POST a duplicate that ANDs with it --
+    # the exact outcome the whole named-ruleset design exists to avoid -- so
+    # this refuses rather than silently switching to the update path, which
+    # would mean re-running every check the update path already did earlier
+    # against a ruleset this run never validated ownership of at all.
+    if JUST_CREATED="$(lookup_existing_ruleset)"; then
+        if test -n "$JUST_CREATED"; then
+            error "ruleset '$RULESET' now exists on $REPO (id $JUST_CREATED) --"
+            error "created while this was waiting on confirmation. Refusing to"
+            error "create a duplicate, which would AND with it. Rerun to update"
+            error "it instead."
+            exit 1
+        fi
+    else
+        error "could not check whether '$RULESET' was created on $REPO in the"
+        error "meantime. Refusing to guess: creating now could produce a"
+        error "duplicate that ANDs with it."
+        exit 1
+    fi
     printf '%s' "$BODY" | gh api --method POST "repos/$REPO/rulesets" --input - >/dev/null
     echo "$REPO: created ruleset '$RULESET' on $DEFAULT_BRANCH"
 fi
