@@ -2,8 +2,13 @@
 # Manage a GitHub repository's branch ruleset: which checks a merge requires.
 #
 # Usage:
-#     repo-rules [--dry-run] [--force] [--ruleset NAME] OWNER/REPO CHECK...
+#     repo-rules [--dry-run] [--force] [--ruleset NAME] OWNER/REPO [CHECK...]
 #     repo-rules --ruleset=gates owner/repo lanes codex
+#
+# CHECK defaults to `lanes codex zizmor` -- this fleet's usual merge gates
+# (the docs-vs-code lane split, Codex's review verdict, zizmor's workflow-
+# injection scan) -- when none is named, so the common case needs no typing.
+# Pass explicit names to require a different or additional set.
 #
 # Requires the gh CLI, authenticated with admin rights on the repository.
 #
@@ -55,6 +60,11 @@ PROGRAM="$(basename "$0")"
 RULESET="merge gates"
 DRY_RUN=0
 FORCE=0
+# This fleet's usual three: the lanes docs-vs-code split, Codex's review
+# verdict, and zizmor's workflow-injection scan. Kept as one shell variable
+# rather than duplicated into both usage() and the arg-parsing default below,
+# so the two cannot drift apart the way a copy-pasted literal would.
+DEFAULT_CHECKS="lanes codex zizmor"
 
 error() {
     echo "$PROGRAM: $*" >&2
@@ -62,11 +72,12 @@ error() {
 
 usage() {
     cat <<EOF
-Usage: $PROGRAM [--dry-run] [--force] [--ruleset NAME] OWNER/REPO CHECK...
+Usage: $PROGRAM [--dry-run] [--force] [--ruleset NAME] OWNER/REPO [CHECK...]
 
 Make each CHECK a required status check on OWNER/REPO's default branch,
 require every review conversation to be resolved and the branch to be up to
-date with the base, and allow rebase as the only merge method.
+date with the base, and allow rebase as the only merge method. CHECK
+defaults to: $DEFAULT_CHECKS
 
   --dry-run        Print what would change; make no writes.
   --force          Require a check even if it has never reported.
@@ -74,6 +85,7 @@ date with the base, and allow rebase as the only merge method.
   -h, --help       This message.
 
 Examples:
+  $PROGRAM owner/repo
   $PROGRAM owner/repo lanes codex
   $PROGRAM --dry-run owner/other-repo lanes codex Vercel
 EOF
@@ -93,9 +105,17 @@ while test $# -gt 0; do
     esac
 done
 
-test $# -ge 2 || { usage >&2; exit 2; }
+test $# -ge 1 || { usage >&2; exit 2; }
 
 REPO="$1"; shift
+# No CHECK named: fall back to this fleet's usual three rather than refusing.
+# `set --` replaces the positional parameters with the default list, so every
+# check below (validation, the reported-check scan, the request body) sees
+# exactly what it would if the caller had typed the names out.
+if test $# -eq 0; then
+    # shellcheck disable=SC2086  # word-splitting is the point: three names, not one
+    set -- $DEFAULT_CHECKS
+fi
 # Strictly OWNER/REPO, because `gh api` substitutes `{owner}` and `{repo}` in
 # an endpoint from the current checkout or $GH_REPO. A literal `{owner}/{repo}`
 # passes a shape check and then every call in this script silently retargets
