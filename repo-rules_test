@@ -23,6 +23,22 @@ else
     echo "      Install jq to run them ('brew install jq', 'apt install jq')."
 fi
 
+# The interactive-confirmation cases need a real pseudo-terminal: the script
+# only prompts when `test -t 0` says stdin is one, and no plain pipe or file
+# redirect can make that true. `script` (util-linux) allocates one and
+# forwards its own stdin to it, which is the only way to feed a canned
+# y/n answer to the actual confirm/read branch rather than the
+# always-non-interactive refusal every other case in this suite exercises.
+if command -v script >/dev/null 2>&1; then
+    HAVE_PTY=yes
+else
+    HAVE_PTY=no
+    echo "NOTE: script(1) is not installed, so the interactive-confirmation"
+    echo "      cases will be skipped. It ships with util-linux on Linux; CI"
+    echo "      runs on ubuntu-latest, which has it, so the coverage is never"
+    echo "      optional there."
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # One directory for every fixture, removed on exit. A per-fixture mktemp with
 # no cleanup left thirty trees behind per run.
@@ -184,6 +200,36 @@ run_repo_rules() {
     dir="$1"; shift
     set +e
     output="$(PATH="$dir/bin:$PATH" "$REPO_RULES" "$@" 2>&1)"
+    status=$?
+    set -e
+}
+
+# Single-quotes each argument, escaping any embedded single quote, so it can
+# be embedded literally inside the double-quoted `script -c` command string
+# below. Only needed for the PTY cases: their arguments are fixed literals
+# chosen for this suite, not caller-supplied text, so a simpler quoting
+# scheme than the rest of this file's JSON-escaping is fine here.
+quote_args() {
+    out=""
+    for a in "$@"; do
+        out="$out'$(printf '%s' "$a" | sed "s/'/'\\\\''/g")' "
+    done
+    printf '%s' "$out"
+}
+
+# Like run_repo_rules, but drives repo-rules with a real pseudo-terminal on
+# stdin (via `script`) and feeds it one line of canned input, so a case can
+# reach the actual confirm/read branch instead of the always-non-interactive
+# refusal every other case here exercises. `2>&1` is on the OUTER command,
+# not inside the `script -c` string, so it also captures what repo-rules now
+# writes to its own stderr (the prompt and the plan, moved there so a
+# captured stdout doesn't hide them -- see repo-rules itself).
+run_repo_rules_pty() {
+    dir="$1"; shift
+    answer="$1"; shift
+    set +e
+    output="$(printf '%s\n' "$answer" | PATH="$dir/bin:$PATH" script -qec \
+        "$REPO_RULES $(quote_args "$@")" /dev/null 2>&1)"
     status=$?
     set -e
 }
@@ -1061,6 +1107,124 @@ RULESET
 run_repo_rules "$dir" --force mikelward/lanes test
 assert_status 0
 assert_output "already matches"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "an interactive yes applies the change"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; finish_case; else
+dir="$(make_gh 'test' '')"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 0
+assert_output "Apply this change to mikelward/lanes?"
+assert_output "created ruleset"
+assert_body "$dir" '"context":"test"'
+finish_case
+fi
+
+test_case "an interactive no leaves the ruleset unwritten"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; finish_case; else
+dir="$(make_gh 'test' '')"
+run_repo_rules_pty "$dir" 'n' mikelward/lanes test
+assert_status 1
+assert_output "Apply this change to mikelward/lanes?"
+assert_output "not confirmed"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "writes the ruleset as it is right before the write, not as it was at the prompt"
+if test "$HAVE_PTY" = no || test "$HAVE_JQ" = no; then skip_case "needs script(1) and jq"; finish_case; else
+# Simulates a concurrent change landing while an interactive user is still
+# looking at the confirmation prompt: the fake gh here swaps the served
+# ruleset content the moment it has been read once for the full transform
+# (the same read the confirmation prompt is built from), so a second read
+# -- the refresh right before the PUT -- sees a DIFFERENT object. If the
+# write used the snapshot from the prompt instead, the "concurrent" bypass
+# rule added below would silently vanish from what gets pushed.
+dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+mkdir -p "$dir/bin"
+cat > "$dir/ruleset-v1" <<'RULESET'
+{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{
+    "strict_required_status_checks_policy":true,
+    "required_status_checks":[{"context":"test"}]}}]}
+RULESET
+cat > "$dir/ruleset-v2" <<'RULESET'
+{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+ "bypass_actors":[{"actor_id":9,"actor_type":"Team","bypass_mode":"always"}],
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{
+    "strict_required_status_checks_policy":true,
+    "required_status_checks":[{"context":"test"}]}}]}
+RULESET
+cp "$dir/ruleset-v1" "$dir/ruleset"
+printf '0\n' > "$dir/transform_reads"
+cat > "$dir/bin/gh" <<'GHEOF'
+#!/bin/sh
+d="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$d/calls"
+skip=no; want=""; jqexpr=""; inputfile=""; method=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --jq) jqexpr="$arg" ;; --input) inputfile="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        --method|--jq|--input|-H|--header) skip=yes; want="$arg" ;;
+        *) ;;
+    esac
+done
+prev=""
+for arg in "$@"; do
+    case "$prev" in --method) method="$arg" ;; esac
+    prev="$arg"
+done
+if test -n "$method" && test "$method" != GET; then
+    if test -n "$inputfile" && test "$inputfile" != -; then cp "$inputfile" "$d/body"
+    else cat > "$d/body"; fi
+    exit 0
+fi
+case "$*" in
+    *"/rulesets/42"*)
+        case "$jqexpr" in
+            *".rules[].type"*) echo active; echo required_status_checks ;;
+            *"REPO_RULES_CONTEXTS"*)
+                n="$(cat "$d/transform_reads")"
+                if test "$n" -eq 0; then
+                    jq -r "$jqexpr" < "$d/ruleset-v1"
+                    printf '1\n' > "$d/transform_reads"
+                else
+                    jq -r "$jqexpr" < "$d/ruleset-v2"
+                fi ;;
+            *) jq -r "$jqexpr" < "$d/ruleset" ;;
+        esac ;;
+    *"includes_parents=false"*) echo 42 ;;
+    *"includes_parents=true"*) echo 42 ;;
+    *"repos/"*"/commits/"*"/check-runs"*) echo '"test"' ;;
+    *"repos/"*"/commits/"*"/status"*) : ;;
+    *"/pulls?"*) : ;;
+    *"/commits?"*) echo deadbee ;;
+    *"repos/"*) echo main; echo true ;;
+esac
+GHEOF
+chmod +x "$dir/bin/gh"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 0
+assert_body "$dir" '"actor_id": 9'
+finish_case
+fi
+
+test_case "an interactive non-yes answer on an update declines too"
+if test "$HAVE_PTY" = no || test "$HAVE_JQ" = no; then skip_case "needs script(1) and jq"; finish_case; else
+# Same refusal on the update path, where a real change is computed (this
+# fixture's ruleset lacks a pull_request rule, so one would be added).
+dir="$(make_gh 'test' '42')"
+run_repo_rules_pty "$dir" 'nope' mikelward/lanes test
+assert_status 1
+assert_output "not confirmed"
 assert_no_write "$dir"
 finish_case
 fi
