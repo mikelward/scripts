@@ -1,3 +1,4 @@
+#!/bin/bash
 test "${CHROME_REMOTE_DESKTOP_SESSION:-0}" -eq 1 && exit 1
 
 screensaver lock
