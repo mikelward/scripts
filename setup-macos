@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Configure macOS desktop environment.
 #
 # Sets up:

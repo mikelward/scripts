@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # List Android package versions from a bugreport.
 sed -n '
 /^  Package \[/ {

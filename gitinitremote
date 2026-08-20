@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # gitinitremote
 # turns a local directory into a new remote git repository,

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # shellcheck shell=dash  # relies on `local`, provided by dash and other /bin/sh implementations
 # installs UNIX configuration files
 

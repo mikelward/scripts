@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Create tarballs of configuration directories.
 
 trap "exit" INT TERM QUIT

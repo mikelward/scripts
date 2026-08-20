@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for gittossh
 #
 # These build throwaway git repositories with git init + git remote (no network

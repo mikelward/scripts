@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # prints a question and returns 0 (true) if the user said "y", 1 (false) otherwise
 
 if test $# -eq 0; then

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for setup-kde
 #
 # Runs setup-kde --no-install (so nothing is cloned or built) against a

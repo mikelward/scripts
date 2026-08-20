@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # package - package manager dispatcher
 # Abstracts differences between dnf, yum, and apt-get.
 
