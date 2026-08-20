@@ -197,9 +197,14 @@ case "$*" in
     # apart from a failed read. A fixture that does not set it has one.
     *"/branches"*)  cat "$dir/branch_count" ;;
     *"/commits/"*)  echo "deadbee" ;;
-    # `repos/OWNER/REPO`: the default branch and whether a rebase merge is
-    # permitted, in the order the script's --jq asks for them.
-    *"repos/"*)     cat "$dir/branch" "$dir/allow_rebase" ;;
+    # `repos/OWNER/REPO`: the default branch (asked once, early) and whether
+    # a rebase merge is permitted (asked separately, and asked again right
+    # before a write -- see check_allow_rebase in the script).
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) cat "$dir/allow_rebase" ;;
+            *) cat "$dir/branch" ;;
+        esac ;;
 esac
 EOF
     chmod +x "$dir/bin/gh"
@@ -1217,7 +1222,11 @@ case "$*" in
     *"repos/"*"/commits/"*"/status"*) : ;;
     *"/pulls?"*) : ;;
     *"/commits?"*) echo deadbee ;;
-    *"repos/"*) echo main; echo true ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *) echo main ;;
+        esac ;;
 esac
 GHEOF
 chmod +x "$dir/bin/gh"
@@ -1322,7 +1331,11 @@ case "$*" in
     *"repos/"*"/commits/"*"/status"*) : ;;
     *"/pulls?"*) : ;;
     *"/commits?"*) echo deadbee ;;
-    *"repos/"*) echo main; echo true ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *) echo main ;;
+        esac ;;
 esac
 GHEOF
 chmod +x "$dir/bin/gh"
@@ -1330,6 +1343,122 @@ run_repo_rules_pty "$dir" 'y' mikelward/lanes test
 assert_status 1
 assert_output "excludes rebase"
 assert_output "org squash policy"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "refuses to write if rebase merging is disabled while the prompt is open"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; finish_case; else
+# The create path: simplest place to prove check_allow_rebase is re-run,
+# since it needs no jq and no existing ruleset. The repository answers
+# `true` on the early check (so the prompt is even reached) and `false` on
+# the one right before the write, as if an admin turned it off in between.
+dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+mkdir -p "$dir/bin"
+printf '0\n' > "$dir/rebase_reads"
+cat > "$dir/bin/gh" <<'GHEOF'
+#!/bin/sh
+d="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$d/calls"
+skip=no; want=""; jqexpr=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --jq) jqexpr="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        --method|--jq|--input|-H|--header) skip=yes; want="$arg" ;;
+        *) ;;
+    esac
+done
+case "$*" in
+    *"includes_parents=false"*) : ;;
+    *"repos/"*"/commits/"*"/check-runs"*) echo '"test"' ;;
+    *"repos/"*"/commits/"*"/status"*) : ;;
+    *"/pulls?"*) : ;;
+    *"/commits?"*) echo deadbee ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*)
+                n="$(cat "$d/rebase_reads")"
+                if test "$n" -eq 0; then
+                    echo true
+                    printf '1\n' > "$d/rebase_reads"
+                else
+                    echo false
+                fi ;;
+            *) echo main ;;
+        esac ;;
+esac
+GHEOF
+chmod +x "$dir/bin/gh"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 1
+assert_output "rebase merging disabled"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "refuses to create a duplicate if the name appeared while the prompt is open"
+if test "$HAVE_PTY" = no; then skip_case "needs script(1)"; finish_case; else
+# The create path's counterpart to the update path's ownership re-check:
+# the name-search answers empty on the early lookup (so this run commits to
+# creating) and non-empty on the one right before the POST, as if another
+# run -- or another admin -- created the same name in the meantime.
+dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+mkdir -p "$dir/bin"
+printf '0\n' > "$dir/lookup_reads"
+cat > "$dir/bin/gh" <<'GHEOF'
+#!/bin/sh
+d="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$d/calls"
+skip=no; want=""; jqexpr=""; inputfile=""; method=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --jq) jqexpr="$arg" ;; --input) inputfile="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        --method|--jq|--input|-H|--header) skip=yes; want="$arg" ;;
+        *) ;;
+    esac
+done
+prev=""
+for arg in "$@"; do
+    case "$prev" in --method) method="$arg" ;; esac
+    prev="$arg"
+done
+if test -n "$method" && test "$method" != GET; then
+    if test -n "$inputfile" && test "$inputfile" != -; then cp "$inputfile" "$d/body"
+    else cat > "$d/body"; fi
+    exit 0
+fi
+case "$*" in
+    *"includes_parents=false"*)
+        n="$(cat "$d/lookup_reads")"
+        if test "$n" -eq 0; then
+            printf '1\n' > "$d/lookup_reads"
+        else
+            echo 77
+        fi ;;
+    *"repos/"*"/commits/"*"/check-runs"*) echo '"test"' ;;
+    *"repos/"*"/commits/"*"/status"*) : ;;
+    *"/pulls?"*) : ;;
+    *"/commits?"*) echo deadbee ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *) echo main ;;
+        esac ;;
+esac
+GHEOF
+chmod +x "$dir/bin/gh"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 1
+assert_output "now exists"
+assert_output "id 77"
 assert_no_write "$dir"
 finish_case
 fi
