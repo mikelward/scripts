@@ -456,18 +456,20 @@ fi
 # An update preserves the existing ruleset's conditions, so a managed ruleset
 # scoped to `release` must be checked against what else applies to `release`
 # -- checking `main` there would miss the conflict entirely and report success.
-if test -n "$EXISTING"; then
-    # shellcheck disable=SC2016  # jq program, not shell interpolation
-    SCOPE="$(gh api "repos/$REPO/rulesets/$EXISTING" \
-        --jq '{include: [.conditions.ref_name.include[]?],
-               exclude: [.conditions.ref_name.exclude[]?]} | @json')" || {
-        error "could not read ruleset '$RULESET' (id $EXISTING) to see which"
-        error "branches it covers. Refusing to guess at what else applies there."
-        exit 1
-    }
-else
-    SCOPE='{"include":["~DEFAULT_BRANCH"],"exclude":[]}'
-fi
+compute_scope() {
+    if test -n "$EXISTING"; then
+        # shellcheck disable=SC2016  # jq program, not shell interpolation
+        SCOPE="$(gh api "repos/$REPO/rulesets/$EXISTING" \
+            --jq '{include: [.conditions.ref_name.include[]?],
+                   exclude: [.conditions.ref_name.exclude[]?]} | @json')" || {
+            error "could not read ruleset '$RULESET' (id $EXISTING) to see which"
+            error "branches it covers. Refusing to guess at what else applies there."
+            return 1
+        }
+    else
+        SCOPE='{"include":["~DEFAULT_BRANCH"],"exclude":[]}'
+    fi
+}
 
 # Matching is literal -- `~DEFAULT_BRANCH` normalized on both sides, `~ALL` a
 # wildcard -- and GitHub's `fnmatch` patterns are NOT evaluated. But an
@@ -513,37 +515,52 @@ find_merge_method_conflicts() {
     done < "$WORK/all_rulesets"
 }
 
-find_merge_method_conflicts || {
-    error "could not read $REPO's other rulesets, so cannot tell whether one of"
-    error "them rules out a rebase merge. Refusing to guess: rulesets aggregate,"
-    error "and a conflict would leave no way to merge anything."
-    exit 1
+# Ties compute_scope and find_merge_method_conflicts together into one
+# refusal-or-nothing check, so it can be run twice: once early (fail fast,
+# before showing a plan for a write that might not even be possible), and
+# once more right before the actual write, on whatever the ruleset's scope
+# is BY THEN -- an admin could move a managed ruleset from one branch to
+# another while an interactive user is still looking at the confirmation
+# prompt, and the merge-method conflict this creates or resolves has to be
+# checked against the scope actually being written, not the one that was
+# true when the prompt was drawn.
+validate_merge_method_scope() {
+    compute_scope || return 1
+
+    find_merge_method_conflicts || {
+        error "could not read $REPO's other rulesets, so cannot tell whether one of"
+        error "them rules out a rebase merge. Refusing to guess: rulesets aggregate,"
+        error "and a conflict would leave no way to merge anything."
+        return 1
+    }
+    # A space separates the verdict from the name, and `sed` rather than a
+    # pipeline through `grep`: a pipeline reports only the last command's
+    # status, which is how a failed read reads as "no conflicts" -- the shape
+    # three earlier findings on this script had in common.
+    sed -n 's/^conflict //p' "$WORK/conflicts" > "$WORK/definite"
+    sed -n 's/^unknown //p' "$WORK/conflicts" > "$WORK/undecidable"
+    if test -s "$WORK/definite"; then
+        error "another active ruleset on $REPO excludes rebase from its allowed"
+        error "merge methods, and covers the same branches as this one:"
+        sed 's/^/  /' "$WORK/definite" >&2
+        error "Rulesets aggregate, so together they would leave no method that"
+        error "satisfies both and nothing could merge. Reconcile them first."
+        return 1
+    fi
+    if test -s "$WORK/undecidable"; then
+        error "another active ruleset on $REPO excludes rebase from its allowed"
+        error "merge methods, on a scope this script cannot evaluate:"
+        sed 's/^/  /' "$WORK/undecidable" >&2
+        error "Its conditions use a pattern (such as 'refs/heads/*') or an"
+        error "exclusion, and this script matches branch names literally rather"
+        error "than reimplementing GitHub's ref matching. If that ruleset covers"
+        error "this branch the two would leave no way to merge anything, so this"
+        error "refuses rather than guess. Check it, then narrow either scope."
+        return 1
+    fi
 }
-# A space separates the verdict from the name, and `sed` rather than a
-# pipeline through `grep`: a pipeline reports only the last command's status,
-# which is how a failed read reads as "no conflicts" -- the shape three
-# earlier findings on this script had in common.
-sed -n 's/^conflict //p' "$WORK/conflicts" > "$WORK/definite"
-sed -n 's/^unknown //p' "$WORK/conflicts" > "$WORK/undecidable"
-if test -s "$WORK/definite"; then
-    error "another active ruleset on $REPO excludes rebase from its allowed"
-    error "merge methods, and covers the same branches as this one:"
-    sed 's/^/  /' "$WORK/definite" >&2
-    error "Rulesets aggregate, so together they would leave no method that"
-    error "satisfies both and nothing could merge. Reconcile them first."
-    exit 1
-fi
-if test -s "$WORK/undecidable"; then
-    error "another active ruleset on $REPO excludes rebase from its allowed"
-    error "merge methods, on a scope this script cannot evaluate:"
-    sed 's/^/  /' "$WORK/undecidable" >&2
-    error "Its conditions use a pattern (such as 'refs/heads/*') or an"
-    error "exclusion, and this script matches branch names literally rather"
-    error "than reimplementing GitHub's ref matching. If that ruleset covers"
-    error "this branch the two would leave no way to merge anything, so this"
-    error "refuses rather than guess. Check it, then narrow either scope."
-    exit 1
-fi
+
+validate_merge_method_scope || exit 1
 
 # The body. Two paths, and the difference is the point.
 #
@@ -729,14 +746,20 @@ if test "$FORCE" -ne 1; then
 fi
 
 if test -n "$EXISTING"; then
-    # Refreshed right before writing, not reused from the snapshot the
-    # confirmation prompt showed: another admin or process could have
-    # changed the ruleset in whatever time an interactive user spent
-    # deciding, and writing that stale snapshot back would silently discard
-    # the concurrent change. This can't close the window to zero -- another
-    # write could still land between this fetch and the PUT below -- but it
-    # shrinks "however long a human takes to answer a prompt" down to one
-    # API round trip.
+    # Both re-run right before writing, not reused from what the
+    # confirmation prompt was built from: another admin or process could
+    # have changed the ruleset -- including moving it to a different
+    # branch -- in whatever time an interactive user spent deciding.
+    # Re-validating the scope catches a conflict the earlier check couldn't
+    # have seen yet (or clears one that no longer applies); refreshing the
+    # body keeps a stale snapshot from silently discarding a concurrent
+    # change when it's written. Neither closes the window to zero -- another
+    # write could still land between these calls and the PUT below -- but
+    # together they shrink "however long a human takes to answer a prompt"
+    # down to a couple of API round trips. CREATE has no scope to
+    # re-validate here: it's always the default branch, fixed for the whole
+    # run, so only the update path needs this.
+    validate_merge_method_scope || exit 1
     refresh_body || { error "could not re-read ruleset '$RULESET' to write it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
