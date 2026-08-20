@@ -1,1 +1,2 @@
+#!/bin/bash
 chrome --app="https://discord.com/app"
