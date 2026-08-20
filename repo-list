@@ -1,0 +1,217 @@
+#!/bin/sh
+# List a GitHub account's repositories, one OWNER/REPO per line.
+#
+# Usage:
+#     repo-list [--owner OWNER] [--include-forks] [--include-archived]
+#     repo-list
+#     repo-list --owner some-org
+#
+# OWNER defaults to whoever gh is authenticated as. Forks and archived
+# repositories are excluded by default; --include-forks / --include-archived
+# widen that.
+#
+# Requires the gh CLI, authenticated (read access only -- this makes no
+# writes).
+#
+# Cost and reliability: free. A couple of GitHub REST API calls plus one
+# paginated call over the repository list (5,000 authenticated requests an
+# hour). Expect well under a second for a fleet this size.
+#
+# Exit status: 0 on success (zero repositories is a legitimate answer, not a
+# failure), 1 if gh failed, 2 for a usage error.
+#
+# The one property this script exists for: it NEVER prints a partial list.
+# Every fan-out over this fleet (repo-rules-audit, repo-secrets, repo-setup)
+# is meant to loop over this script's output, so an error partway through
+# pagination that still printed the repos read so far would make "missing
+# one" silent -- worse than printing nothing, because a short list still
+# looks like a complete one. So output is buffered to a file and only
+# emitted after every read that built it has exited 0.
+#
+# Private repositories: GET /users/{name}/repos only ever returns PUBLIC
+# repositories, even for your own account authenticated as yourself -- it is
+# not the same as "everything I can see". Listing your own account's private
+# repos needs GET /user/repos instead (no path parameter, defaults to every
+# visibility), and listing an organization's needs GET /orgs/{org}/repos.
+# This script picks between them rather than always using the public-only
+# endpoint, which would silently drop every private repo in the fleet --
+# exactly the failure this tool exists to prevent, caused by this tool.
+
+set -eu
+
+PROGRAM="$(basename "$0")"
+OWNER=""
+OWNER_GIVEN=0
+INCLUDE_FORKS=0
+INCLUDE_ARCHIVED=0
+
+error() {
+    echo "$PROGRAM: $*" >&2
+}
+
+usage() {
+    cat <<EOF
+Usage: $PROGRAM [--owner OWNER] [--include-forks] [--include-archived]
+
+List OWNER's repositories (default: whoever gh is authenticated as), one
+OWNER/REPO per line, sorted. Forks and archived repositories are excluded
+unless asked for.
+
+  --owner OWNER        List this account's repositories instead of the
+                        authenticated user's. If OWNER is not an
+                        organization gh can see, only its public
+                        repositories can be listed -- the API has no way to
+                        list somebody else's private repos regardless of
+                        credentials.
+  --include-forks       Include forks.
+  --include-archived    Include archived repositories.
+  -h, --help            This message.
+EOF
+}
+
+while test $# -gt 0; do
+    case "$1" in
+        --owner) shift; test $# -gt 0 || { error "--owner needs a name"; exit 2; }
+                 OWNER="$1"; OWNER_GIVEN=1; shift ;;
+        --owner=*) OWNER="${1#--owner=}"; OWNER_GIVEN=1; shift ;;
+        --include-forks) INCLUDE_FORKS=1; shift ;;
+        --include-archived) INCLUDE_ARCHIVED=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) error "unknown option '$1'"; usage >&2; exit 2 ;;
+        *) error "unexpected argument '$1'"; usage >&2; exit 2 ;;
+    esac
+done
+
+test $# -eq 0 || { error "unexpected argument '$1'"; usage >&2; exit 2; }
+
+command -v gh >/dev/null 2>&1 || {
+    error "gh is not installed. It carries the authentication this needs;"
+    error "installing it is less work than reimplementing that with curl."
+    exit 1
+}
+
+WORK="$(mktemp -d)"
+# Separate INT/TERM handlers, not one EXIT/INT/TERM trap for all three:
+# setting a trap on INT or TERM replaces sh's default terminate-on-signal
+# action with "run the handler, then resume the script" -- a SIGTERM
+# arriving while gh is running would clean up WORK and then keep executing
+# against a now-deleted directory instead of stopping, exiting with
+# whatever that produces instead of the expected 130/143.
+trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK"; exit 130' INT
+trap 'rm -rf "$WORK"; exit 143' TERM
+
+if SELF="$(gh api user --jq .login)"; then
+    :
+else
+    error "could not determine the authenticated user"
+    exit 1
+fi
+test -n "$SELF" || { error "gh reported an empty authenticated username"; exit 1; }
+
+if test "$OWNER_GIVEN" -eq 1 && test -z "$OWNER"; then
+    # Codex review: an explicitly empty --owner (--owner='' or --owner '')
+    # was indistinguishable from an omitted one once it's just $OWNER --
+    # the fallback below would have silently substituted the authenticated
+    # user, retargeting a batch a wrapper script meant to point elsewhere
+    # (e.g. an unset variable expanded into --owner "$X") onto this
+    # account's own repos instead of failing on the mistake.
+    error "--owner was given an empty value; drop --owner entirely to use"
+    error "the authenticated user, or pass a real account name."
+    exit 2
+fi
+if test -z "$OWNER"; then
+    OWNER="$SELF"
+fi
+
+case "$OWNER" in
+    *[!A-Za-z0-9._-]*)
+        error "'$OWNER' contains characters GitHub does not allow in an account name"
+        exit 2 ;;
+esac
+
+# GitHub account names are case-insensitive (SomeUser and someuser are the
+# same account), but a plain = comparison isn't -- lowercased on both sides
+# so a differently-cased --owner still matches SELF instead of silently
+# falling through to the public-only users/{name}/repos path below and
+# dropping every private repo in the fleet.
+OWNER_LOWER=$(echo "$OWNER" | tr 'A-Z' 'a-z')
+SELF_LOWER=$(echo "$SELF" | tr 'A-Z' 'a-z')
+
+# Extra gh api arguments, only for the user/repos case below.
+AFFILIATION_ARGS=""
+if test "$OWNER_LOWER" = "$SELF_LOWER"; then
+    # The authenticated user's own repos, every visibility they can see --
+    # this is the one endpoint that is not public-only for your own account.
+    # affiliation=owner explicitly: GET /user/repos defaults to
+    # owner,collaborator,organization_member, which also returns repos this
+    # account can merely push to (someone else's, or an org's) -- exactly
+    # the repos a fan-out into repo-secrets/repo-setup must NOT touch.
+    # --method GET because gh api switches to POST the instant a -f field is
+    # given, per `gh api --help`.
+    ENDPOINT="user/repos"
+    AFFILIATION_ARGS="--method GET -f affiliation=owner"
+elif gh api "orgs/$OWNER" >/dev/null 2>"$WORK/org_probe.err"; then
+    # An org the caller can see: this lists every repo visible to them,
+    # private included, same as /user/repos does for a personal account.
+    ENDPOINT="orgs/$OWNER/repos"
+elif grep -q 'HTTP 404' "$WORK/org_probe.err"; then
+    # A genuine "no such org" -- OWNER is (or might be) an individual
+    # account instead. Only THIS specific failure may fall through to the
+    # public-only endpoint.
+    ENDPOINT="users/$OWNER/repos"
+    error "note: '$OWNER' is not an organization gh can see -- only its"
+    error "public repositories can be listed. There is no API that lists"
+    error "somebody else's private repos, whatever credentials are used."
+else
+    # Any OTHER probe failure (403/SSO, a transient 5xx, network) is NOT
+    # proof that OWNER is an individual account -- Codex review: reading it
+    # that way and falling back to the public-only endpoint would have this
+    # exit 0 with a silently incomplete list for a real, existing org this
+    # call merely couldn't reach right now, which is exactly the failure
+    # mode this script exists to prevent (see the header comment).
+    error "could not determine whether '$OWNER' is an organization:"
+    sed 's/^/  /' "$WORK/org_probe.err" >&2
+    exit 1
+fi
+
+# full_name, fork, and archived come back as one @tsv line per repo. Filtered
+# in shell rather than in the --jq expression itself: gh api's --jq is a
+# single fixed program per call (no --arg/--argjson the way a standalone jq
+# binary has), so branching on INCLUDE_FORKS/INCLUDE_ARCHIVED inside the
+# expression means building it as a string -- readable here, in plain shell,
+# instead.
+#
+# $AFFILIATION_ARGS unquoted is deliberate word-splitting: it's either empty
+# or exactly the two fixed tokens set above, never user input.
+if ! gh api --paginate "$ENDPOINT" $AFFILIATION_ARGS \
+    --jq '.[] | [.full_name, .fork, .archived] | @tsv' \
+    > "$WORK/repos.tsv" 2>"$WORK/repos.err"; then
+    error "could not list $OWNER's repositories:"
+    sed 's/^/  /' "$WORK/repos.err" >&2
+    exit 1
+fi
+
+: > "$WORK/repos"
+# `|| test -n "$full_name"` is not a style choice: without it, a final TSV
+# line with no trailing newline (gh --paginate joins pages verbatim, so a
+# truncated last page ends exactly there) is silently dropped by the while
+# loop -- `read` returns nonzero on that line even though it populated the
+# variables, and a plain `while read ...` skips the body on a nonzero read.
+# Caught by this script's own test suite reporting a fixture repo as missing
+# with no error at all -- exactly the silent-gap failure this tool exists to
+# prevent, and it would have been real against any upstream response that
+# happened to end without a trailing newline.
+while IFS="$(printf '\t')" read -r full_name is_fork is_archived || test -n "$full_name"; do
+    test -n "$full_name" || continue
+    if test "$is_fork" = "true" && test "$INCLUDE_FORKS" -ne 1; then
+        continue
+    fi
+    if test "$is_archived" = "true" && test "$INCLUDE_ARCHIVED" -ne 1; then
+        continue
+    fi
+    echo "$full_name" >> "$WORK/repos"
+done < "$WORK/repos.tsv"
+
+sort "$WORK/repos"

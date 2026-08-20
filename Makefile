@@ -23,3 +23,4 @@ test:
 	./confinst_test
 	./repo-rules_test
 	./repo-rules-audit_test
+	./repo-list_test
