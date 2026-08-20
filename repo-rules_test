@@ -1463,6 +1463,69 @@ assert_no_write "$dir"
 finish_case
 fi
 
+test_case "refuses to create if a conflicting ruleset appears while the prompt is open"
+if test "$HAVE_PTY" = no || test "$HAVE_JQ" = no; then skip_case "needs script(1) and jq"; finish_case; else
+# The create path's own scope is fixed (~DEFAULT_BRANCH for the whole run),
+# but what it might conflict with is not: a squash-only ruleset added to the
+# default branch while the prompt is open has nothing to conflict with on
+# the early check (it doesn't exist yet) and everything to conflict with on
+# the late one, right before the POST.
+dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+mkdir -p "$dir/bin"
+cat > "$dir/other-ruleset" <<'RULESET'
+{"id":99,"name":"org squash policy","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"pull_request","parameters":{
+    "allowed_merge_methods":["squash"]}}]}
+RULESET
+printf '0\n' > "$dir/conflict_reads"
+cat > "$dir/bin/gh" <<'GHEOF'
+#!/bin/sh
+d="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$d/calls"
+skip=no; want=""; jqexpr=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --jq) jqexpr="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        --method|--jq|--input|-H|--header) skip=yes; want="$arg" ;;
+        *) ;;
+    esac
+done
+case "$*" in
+    *"/rulesets/99"*) jq -r "$jqexpr" < "$d/other-ruleset" ;;
+    *"includes_parents=false"*) : ;;
+    *"includes_parents=true"*)
+        n="$(cat "$d/conflict_reads")"
+        if test "$n" -eq 0; then
+            :
+            printf '1\n' > "$d/conflict_reads"
+        else
+            echo 99
+        fi ;;
+    *"repos/"*"/commits/"*"/check-runs"*) echo '"test"' ;;
+    *"repos/"*"/commits/"*"/status"*) : ;;
+    *"/pulls?"*) : ;;
+    *"/commits?"*) echo deadbee ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *) echo main ;;
+        esac ;;
+esac
+GHEOF
+chmod +x "$dir/bin/gh"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 1
+assert_output "excludes rebase"
+assert_output "org squash policy"
+assert_no_write "$dir"
+finish_case
+fi
+
 # ---------------------------------------------------------------------------
 
 echo
