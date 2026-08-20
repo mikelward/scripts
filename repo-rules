@@ -48,6 +48,21 @@
 # branch not yet merged both land there. Pass --force when you are knowingly
 # requiring one that is about to start reporting.
 #
+# Before writing, if the computed ruleset differs from what already exists on
+# GitHub (or nothing exists there yet), this prints what would change and
+# asks for confirmation. Applying an admin-level change to a repository's
+# merge gates is not something a rerun, a typo'd argument, or a script running
+# unattended should ever do silently -- the same reasoning as the never-
+# reported guard above, aimed at the write itself rather than at one check
+# name. --force skips the question, the same flag that skips the
+# never-reported guard, since both mean "I have already decided; stop
+# asking." Run with no terminal on stdin and without --force, it refuses to
+# guess which answer was meant and leaves the ruleset untouched -- silently
+# applying an unconfirmed change would defeat the point of asking, and
+# blocking on a question nobody can answer would hang whatever ran it.
+# Nothing to change (the computed ruleset already matches what is there)
+# skips the question entirely, since there is nothing to confirm.
+#
 # Check names are handled one per line throughout, never as a space-separated
 # list. Real names contain spaces -- "Analyze (actions)" is one CodeQL emits
 # -- and a split one produces contexts like "Analyze" and "(actions)" that
@@ -80,7 +95,8 @@ date with the base, and allow rebase as the only merge method. CHECK
 defaults to: $DEFAULT_CHECKS
 
   --dry-run        Print what would change; make no writes.
-  --force          Require a check even if it has never reported.
+  --force          Require a check even if it has never reported, and apply
+                   the change without asking for confirmation.
   --ruleset NAME   Name of the ruleset to own (default: "$RULESET").
   -h, --help       This message.
 
@@ -562,13 +578,20 @@ fi
 # entry bound to a GitHub App means only that app can satisfy the check, and
 # rebuilding entries from names alone would drop the binding and let any
 # integration reporting the same name open the gate.
+#
+# Also reports whether anything would actually change, as its first line of
+# output -- "unchanged" or "changed" -- ahead of the body on the rest. This
+# is what lets the confirmation step below know there is nothing to ask about
+# without a second read of the ruleset, and jq's `==` compares the two
+# objects structurally, so key order and how the two were assembled cannot
+# manufacture a false "changed".
 build_update_body() {
-    # shellcheck disable=SC2016  # $rule/$have/$want/$c are jq variables, not shell
+    # shellcheck disable=SC2016  # $rule/$have/$want/$c/$orig/$rules/$target are jq variables, not shell
     REPO_RULES_CONTEXTS="[$contexts]" \
     gh api "repos/$REPO/rulesets/$EXISTING" --jq '
-        del(.id, .node_id, .source, .source_type, .created_at, .updated_at,
-            ._links, .current_user_can_bypass)
-        | .rules = ((.rules // [])
+        (del(.id, .node_id, .source, .source_type, .created_at, .updated_at,
+             ._links, .current_user_can_bypass)) as $orig
+        | (($orig.rules // [])
             | map(
                 if .type == "required_status_checks" then
                     . as $rule
@@ -596,8 +619,11 @@ build_update_body() {
                   require_last_push_approval: false,
                   required_review_thread_resolution: true,
                   allowed_merge_methods: ["rebase"]}}]
-              end)
-    ' > "$WORK/body"
+              end) as $rules
+        | ($orig + {rules: $rules}) as $target
+        | (if $orig == $target then "unchanged" else "changed" end),
+          $target
+    ' > "$WORK/transform"
 }
 
 BODY="{
@@ -627,7 +653,23 @@ describe_checks() {
     for check in "$@"; do printf '  %s\n' "$check"; done
 }
 
-if test "$DRY_RUN" -eq 1; then
+# Computed once, ahead of both --dry-run and the real write, so each reports
+# the same answer: whether there is anything to change at all. A create has
+# nothing to compare against and always needs one; an update asks the
+# ruleset itself, via build_update_body's own "unchanged"/"changed" verdict
+# -- so this never re-derives that comparison a second way that could drift
+# from what the write actually does.
+NEEDS_WRITE=1
+if test -n "$EXISTING"; then
+    build_update_body || { error "could not read ruleset '$RULESET' to compute the update"; exit 1; }
+    CHANGE_STATUS="$(sed -n 1p "$WORK/transform")"
+    sed 1d "$WORK/transform" > "$WORK/body"
+    test "$CHANGE_STATUS" = unchanged && NEEDS_WRITE=0
+fi
+
+# Shared by --dry-run and the confirmation prompt below, so what is asked
+# and what is merely reported read identically.
+describe_plan() {
     if test -n "$EXISTING"; then
         # No branch named: an update preserves whatever scope the ruleset
         # already has, which may not be the default branch at all.
@@ -640,11 +682,39 @@ if test "$DRY_RUN" -eq 1; then
     echo "  review conversations must be resolved"
     echo "  the branch must be up to date with the base"
     echo "  rebase is the only merge method"
+}
+
+if test -n "$EXISTING" && test "$NEEDS_WRITE" -eq 0; then
+    echo "$REPO: ruleset '$RULESET' (id $EXISTING) already matches; nothing to do"
     exit 0
 fi
 
+if test "$DRY_RUN" -eq 1; then
+    describe_plan "$@"
+    exit 0
+fi
+
+if test "$FORCE" -ne 1; then
+    if test -t 0; then
+        describe_plan "$@"
+        printf 'Apply this change to %s? [y/N] ' "$REPO"
+        read -r CONFIRM || CONFIRM=""
+        case "$CONFIRM" in
+            [Yy]|[Yy][Ee][Ss]) ;;
+            *) error "not confirmed; leaving $REPO's ruleset '$RULESET' unchanged."
+               exit 1 ;;
+        esac
+    else
+        error "stdin is not a terminal and --force was not given, so leaving"
+        error "$REPO's ruleset '$RULESET' unchanged rather than either blocking on"
+        error "a question nobody can answer or silently applying a change nobody"
+        error "confirmed. Pass --force to apply it non-interactively, or run this"
+        error "from a terminal."
+        exit 1
+    fi
+fi
+
 if test -n "$EXISTING"; then
-    build_update_body || { error "could not read ruleset '$RULESET' to update it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
 else
