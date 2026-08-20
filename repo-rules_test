@@ -371,7 +371,7 @@ finish_case
 
 test_case "rejects bad usage"
 dir="$(make_gh 'test' '')"
-run_repo_rules "$dir" mikelward/lanes
+run_repo_rules "$dir"
 assert_status 2
 run_repo_rules "$dir" lanes test
 assert_status 2
@@ -379,6 +379,27 @@ assert_output "not OWNER/REPO"
 run_repo_rules "$dir" --nonsense mikelward/lanes test
 assert_status 2
 assert_output "unknown option"
+finish_case
+
+test_case "defaults to lanes, codex and zizmor when no CHECK is named"
+dir="$(make_gh 'lanes
+codex
+zizmor' '')"
+run_repo_rules "$dir" mikelward/lanes
+assert_status 0
+assert_body "$dir" '"context":"lanes"'
+assert_body "$dir" '"context":"codex"'
+assert_body "$dir" '"context":"zizmor"'
+finish_case
+
+test_case "an explicit CHECK list overrides the default rather than adding to it"
+dir="$(make_gh 'sweep' '')"
+run_repo_rules "$dir" mikelward/lanes sweep
+assert_status 0
+assert_body "$dir" '"context":"sweep"'
+assert_body_lacks "$dir" '"context":"lanes"'
+assert_body_lacks "$dir" '"context":"codex"'
+assert_body_lacks "$dir" '"context":"zizmor"'
 finish_case
 
 test_case "--help exits 0 and writes nothing"

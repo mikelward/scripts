@@ -3,8 +3,11 @@
 # merge gates, reading GitHub's own merged view rather than any one ruleset.
 #
 # Usage:
-#     repo-rules-audit [--branch NAME] OWNER/REPO CHECK...
+#     repo-rules-audit [--branch NAME] OWNER/REPO [CHECK...]
 #     repo-rules-audit owner/repo lanes codex
+#
+# CHECK defaults to `lanes codex zizmor` -- the same default repo-rules
+# uses -- when none is named.
 #
 # Requires the gh CLI, authenticated on the repository (read access only --
 # this makes no writes). See repo-rules for the companion tool that sets
@@ -47,6 +50,11 @@ set -eu
 
 PROGRAM="$(basename "$0")"
 BRANCH=""
+# Same list and same reasoning as repo-rules' DEFAULT_CHECKS: one shell
+# variable, not a literal repeated in usage() and the arg-parsing default
+# below, so auditing can't silently drift from what repo-rules sets by
+# default.
+DEFAULT_CHECKS="lanes codex zizmor"
 
 error() {
     echo "$PROGRAM: $*" >&2
@@ -54,12 +62,13 @@ error() {
 
 usage() {
     cat <<EOF
-Usage: $PROGRAM [--branch NAME] OWNER/REPO CHECK...
+Usage: $PROGRAM [--branch NAME] OWNER/REPO [CHECK...]
 
 Report whether OWNER/REPO's branch (default: the repository's default
 branch) requires each CHECK to pass, requires conversation resolution and
 an up-to-date branch before merging, and blocks force pushes and deletion.
 Also reports any bypass actor on a ruleset that plainly covers the branch.
+CHECK defaults to: $DEFAULT_CHECKS
 
   --branch NAME   Check this branch instead of the repository's default.
   -h, --help      This message.
@@ -67,6 +76,7 @@ Also reports any bypass actor on a ruleset that plainly covers the branch.
 Exit status: 0 clean, 1 a gap was found (or could not be read), 2 usage.
 
 Examples:
+  $PROGRAM owner/repo
   $PROGRAM owner/repo lanes codex
   $PROGRAM --branch release owner/other-repo lanes
 EOF
@@ -84,9 +94,16 @@ while test $# -gt 0; do
     esac
 done
 
-test $# -ge 2 || { usage >&2; exit 2; }
+test $# -ge 1 || { usage >&2; exit 2; }
 
 REPO="$1"; shift
+# No CHECK named: fall back to the same default repo-rules uses, same
+# mechanism as there -- see its comment for why `set --` rather than a
+# separate variable threaded through every check below.
+if test $# -eq 0; then
+    # shellcheck disable=SC2086  # word-splitting is the point: three names, not one
+    set -- $DEFAULT_CHECKS
+fi
 # Strictly OWNER/REPO -- see repo-rules for why: gh expands a literal
 # '{owner}/{repo}' from the current checkout, which would silently retarget
 # every call in this script to whatever repository the shell happens to be
@@ -102,8 +119,6 @@ case "$REPO" in
         error "repository name."
         exit 2 ;;
 esac
-
-test $# -ge 1 || { error "at least one CHECK is required"; usage >&2; exit 2; }
 
 # Refused rather than escaped, same as repo-rules: json_string below only
 # escapes the two characters that would otherwise end a JSON string, not a

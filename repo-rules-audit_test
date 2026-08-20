@@ -424,10 +424,31 @@ assert_status 2
 assert_output "is not OWNER/REPO"
 finish_case
 
-test_case "refuses with no CHECK named"
+test_case "refuses with no REPO named"
 dir="$(make_gh)"
-run "$dir" mikelward/lanes
+run "$dir"
 assert_status 2
+finish_case
+
+test_case "defaults to lanes, codex and zizmor when no CHECK is named"
+dir="$(make_gh)"
+printf '%s' "$CLEAN_RULES" \
+    | jq '(.[] | select(.type == "required_status_checks") | .parameters.required_status_checks) = [{"context":"lanes"},{"context":"codex"},{"context":"zizmor"}]' \
+    > "$dir/rules.json"
+run "$dir" mikelward/lanes
+assert_status 0
+assert_output "[ok] 'lanes' is a required status check"
+assert_output "[ok] 'codex' is a required status check"
+assert_output "[ok] 'zizmor' is a required status check"
+finish_case
+
+test_case "an explicit CHECK list overrides the default rather than adding to it"
+dir="$(make_gh)"
+run "$dir" mikelward/lanes sweep
+assert_status 1
+assert_output "[GAP] 'sweep' is NOT a required status check"
+assert_no_output "'lanes' is a required status check"
+assert_no_output "'zizmor' is a required status check"
 finish_case
 
 test_case "a failed read of the effective rules is reported, not read as a gap"
