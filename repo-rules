@@ -161,12 +161,8 @@ command -v gh >/dev/null 2>&1 || {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-# The branch to protect, established once: not every repository calls it
-# main, and requiring checks on a branch that does not exist silently
-# protects nothing. Never re-read after this -- SCOPE's normalization and
-# every merge-method comparison below are pinned to this one value, and
-# letting it drift mid-run would desynchronize them from each other in a
-# way nothing here is built to detect.
+# The branch to protect: not every repository calls it main, and requiring
+# checks on a branch that does not exist silently protects nothing.
 if gh api "repos/$REPO" --jq '.default_branch' > "$WORK/repo"; then
     DEFAULT_BRANCH="$(cat "$WORK/repo")"
 else
@@ -174,6 +170,31 @@ else
     exit 1
 fi
 test -n "$DEFAULT_BRANCH" || { error "could not read $REPO's default branch"; exit 1; }
+
+# Re-reading this is safe, and once is not enough: `~DEFAULT_BRANCH` in a
+# ruleset's own conditions is a live GitHub-resolved token, never expanded
+# to a literal name by anything this script writes -- so a later refresh
+# here cannot desynchronize a write body, only make the merge-method
+# conflict scan (the one place $DEFAULT_BRANCH is actually compared against
+# something) agree with what GitHub will apply the written ruleset to. If
+# the repository's default branch itself changes while an interactive user
+# is still deciding, the early scan checked the wrong branch entirely --
+# same shape as every other write-time revalidation here, just one level
+# up. Also updates the create-path "on $DEFAULT_BRANCH" message, which
+# reporting the stale name would otherwise leave subtly wrong too.
+refresh_default_branch() {
+    NEW_DEFAULT_BRANCH="$(gh api "repos/$REPO" --jq '.default_branch')" || {
+        error "could not read $REPO to check whether its default branch has"
+        error "changed. Refusing to guess which branch a $DEFAULT_BRANCH"
+        error "written as ~DEFAULT_BRANCH would actually apply to."
+        return 1
+    }
+    test -n "$NEW_DEFAULT_BRANCH" || {
+        error "could not read $REPO's default branch."
+        return 1
+    }
+    DEFAULT_BRANCH="$NEW_DEFAULT_BRANCH"
+}
 
 # Whether the repository still permits a rebase merge at all, on its own
 # because -- unlike the default branch -- this genuinely can change between
@@ -797,7 +818,10 @@ fi
 # branch), but the OTHER rulesets it might conflict with are not -- one
 # could be added, or narrowed to exclude rebase, on that branch while this
 # was waiting on confirmation, same as the update path's scope can move
-# into a conflict that did not exist when the early check ran.
+# into a conflict that did not exist when the early check ran. Refreshed
+# right before, so "the default branch" means the same thing here as it
+# will to GitHub when the write actually lands.
+refresh_default_branch || exit 1
 validate_merge_method_scope || exit 1
 
 if test -n "$EXISTING"; then
