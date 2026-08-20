@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Manage a GitHub repository's branch ruleset: which checks a merge requires.
 #
 # Usage:

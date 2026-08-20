@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Bootstrap script for setting up a new machine.
 #
 # Usage:

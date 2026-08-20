@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Report whether a repository's default branch actually enforces a set of
 # merge gates, reading GitHub's own merged view rather than any one ruleset.
 #

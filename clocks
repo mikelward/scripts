@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 format="%a %H:%M"
 #format="%a %I:%M %p"

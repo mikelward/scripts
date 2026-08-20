@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for setup-macos
 #
 # setup-macos is pure configuration -- every step is a `defaults` write, a

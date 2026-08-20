@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for repo-rules
 #
 # These put a fake gh on PATH, so nothing here touches the network or needs a

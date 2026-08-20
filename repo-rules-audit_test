@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for repo-rules-audit
 #
 # Same shape as repo-rules_test: a fake gh on PATH, recording every call, so

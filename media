@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Control media playback.
 
 send_key() {

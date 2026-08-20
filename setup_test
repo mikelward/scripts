@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # The `$...` inside the assert_source_contains checks below are deliberate
 # literals matched against the setup script's source, not expansions.
 # shellcheck disable=SC2016

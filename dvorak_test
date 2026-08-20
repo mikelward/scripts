@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Tests for dvorak
 
 set -e

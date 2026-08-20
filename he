@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # he - print brief help about a single option or command
 # Mikel Ward <mikel@mikelward.com>
 

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Close stdout and stderr so it doesn't keep the terminal open.
 exec >/dev/null 2>/dev/null
