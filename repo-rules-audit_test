@@ -40,10 +40,13 @@ CLEAN_RULES='[
 
 # make_gh: build a fake gh in a fresh dir and echo that dir.
 #   $1 = default branch name (used only if the script has to ask for it)
+#   $2 = whether repos/$REPO/branches/master should answer as existing
+#        (default: "false" -- no master branch, the ordinary case)
 make_gh() {
     dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
     mkdir -p "$dir/bin"
     printf '%s\n' "${1:-main}" > "$dir/default_branch"
+    printf '%s\n' "${2:-false}" > "$dir/master_branch_exists"
     : > "$dir/ruleset_ids"
     printf '%s' "$CLEAN_RULES" > "$dir/rules.json"
     : > "$dir/fail_on"
@@ -56,6 +59,16 @@ if test -s "$dir/fail_on" && echo "$*" | grep -qF "$(cat "$dir/fail_on")"; then
     exit 1
 fi
 case "$*" in
+    # Matched before the generic "repos/" case below: the master-branch
+    # existence probe is a plain GET on repos/OWNER/REPO/branches/master,
+    # which also contains "repos/" and would otherwise be swallowed by it.
+    *"/branches/master"*)
+        if test "$(cat "$dir/master_branch_exists")" = true; then
+            echo '{"name":"master"}'
+        else
+            echo "gh: HTTP 404: Not Found (https://api.github.com/repos/o/r/branches/master)" >&2
+            exit 1
+        fi ;;
     *"/rules/branches/"*) cat "$dir/rules.json" ;;
     *"/rulesets?"*)       cat "$dir/ruleset_ids" ;;
     *"/rulesets/"*)
@@ -165,6 +178,10 @@ assert_output "[ok] force pushes are blocked"
 assert_output "[ok] branch deletion is blocked"
 assert_output "[ok] no bypass actor"
 assert_output "[ok] the default branch is named 'main'"
+# Vacuously true: the fixture returns no rulesets at all, same as the
+# "no bypass actor" claim just above it.
+assert_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+assert_output "[ok] no branch literally named 'master'"
 assert_no_output "GAP"
 finish_case
 
@@ -233,7 +250,7 @@ dir="$(make_gh)"
 echo 42 > "$dir/ruleset_ids"
 cat > "$dir/ruleset.42.json" <<'EOF'
 {"id":42,"name":"merge gates",
- "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":[]}},
  "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}
 EOF
 run "$dir" mikelward/lanes gate
@@ -247,7 +264,7 @@ dir="$(make_gh)"
 echo 42 > "$dir/ruleset_ids"
 cat > "$dir/ruleset.42.json" <<'EOF'
 {"id":42,"name":"merge gates",
- "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":[]}},
  "bypass_actors":[]}
 EOF
 run "$dir" mikelward/lanes gate
@@ -393,12 +410,17 @@ assert_output "jq failed"
 assert_no_output "[GAP]"
 finish_case
 
-test_case "--branch overrides the default, skips asking for it, and skips the main-name check"
+test_case "--branch overrides the default and skips the main-name check, but still resolves the real default for the targeting check"
+# It no longer skips asking for the real default outright: default_branch_matches
+# needs it to tell "auditing a named branch that happens to be the default"
+# apart from "auditing some other branch entirely" (the targeting-check gate,
+# fixed below). What it still skips is the main-name check specifically --
+# ASKED_DEFAULT governs that one alone.
 dir="$(make_gh unused-branch)"
 run "$dir" --branch release mikelward/lanes gate
 assert_status 0
 assert_call "$dir" "/rules/branches/release"
-assert_no_call "$dir" "repos/mikelward/lanes --jq .default_branch"
+assert_call "$dir" "repos/mikelward/lanes --jq .default_branch"
 assert_no_output "the default branch is"
 finish_case
 
@@ -458,6 +480,252 @@ run "$dir" mikelward/lanes gate
 assert_status 1
 assert_output "could not read"
 assert_no_output "[GAP]"
+finish_case
+
+test_case "a ruleset covering the default branch that also targets main and master is clean"
+# Non-vacuous version of the earlier "fully gated" case: an actual ruleset is
+# present and its own conditions carry all three refs.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"merge gates",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+finish_case
+
+test_case "a ruleset covering the default branch but missing refs/heads/master is a gap"
+# The backdoor itself: a ruleset created before repo-rules widened its
+# targeting only ever covers ~DEFAULT_BRANCH, leaving a literal master
+# branch outside every check it requires.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"merge gates",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 1
+assert_output "[GAP] a ruleset covering main does not target all of the default branch, refs/heads/main and refs/heads/master:"
+assert_output "merge gates: does not target refs/heads/main, refs/heads/master"
+finish_case
+
+test_case "an include listing all three refs but excluding master literally is still a gap"
+# An include list is not the whole story: a ruleset that includes all three
+# refs but literally excludes refs/heads/master leaves master exactly as
+# unprotected as if it had never been listed in include at all.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"merge gates",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":["refs/heads/master"]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 1
+assert_output "[GAP] a ruleset covering main does not target all of the default branch, refs/heads/main and refs/heads/master:"
+assert_output "merge gates: does not target refs/heads/master"
+finish_case
+
+test_case "a ~ALL ruleset that literally excludes master is still a gap"
+# Same bug, via the ~ALL shortcut: ~ALL covers everything only until an
+# exclude entry carves a branch back out.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"org gate",
+ "conditions":{"ref_name":{"include":["~ALL"],"exclude":["refs/heads/master"]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 1
+assert_output "org gate: does not target refs/heads/master"
+finish_case
+
+test_case "a glob in exclude never reaches the targeting check -- the verdict computation already routes it to unevaluated"
+# Not new coverage of the targeting check itself: the outer verdict logic
+# (exc_pattern) sends any ruleset with a glob in exclude to "unevaluated"
+# before verdict can ever be "covers", so the targeting jq's own $exc is
+# always fully literal by the time it runs. This pins that invariant --
+# same scenario the pre-existing "a non-literal exclude entry downgrades..."
+# test above exercises, confirmed here to also produce no targeting output.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"pattern-excluding gate",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":["refs/heads/ma-*"]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[CHECK] rulesets with a pattern this script did not evaluate"
+assert_output "pattern-excluding gate (matches: ~DEFAULT_BRANCH, refs/heads/main, refs/heads/master)"
+assert_no_output "[GAP]"
+finish_case
+
+test_case "an unrelated literal exclude entry does not affect targeting completeness"
+# The regression case for the fix above: excluding some other branch
+# entirely must not itself trigger a gap or an unevaluated verdict.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"merge gates",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":["refs/heads/other"]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+finish_case
+
+test_case "an explicit --branch naming the actual default branch still gets the targeting check"
+# ASKED_DEFAULT only means "no --branch was given" -- it is not the same
+# question as "is the audited branch the repository's real default", and
+# the targeting check is about the latter.
+dir="$(make_gh main)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"merge gates",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" --branch main mikelward/lanes gate
+assert_status 1
+assert_output "[GAP] a ruleset covering main does not target all of the default branch, refs/heads/main and refs/heads/master:"
+assert_output "merge gates: does not target refs/heads/main, refs/heads/master"
+finish_case
+
+test_case "the targeting check does not apply to a ruleset scoped to a non-default branch"
+# --branch given explicitly: a ruleset legitimately scoped to something other
+# than the default branch (a release branch, say) has no reason to carry
+# repo-rules' default-branch convention, so this must stay silent.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"release gates",
+ "conditions":{"ref_name":{"include":["refs/heads/release"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" --branch release mikelward/lanes gate
+assert_status 0
+assert_no_output "does not target"
+assert_no_output "targets the default branch"
+finish_case
+
+test_case "a ~ALL-scoped ruleset counts as targeting all three refs"
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"org gate",
+ "conditions":{"ref_name":{"include":["~ALL"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+finish_case
+
+test_case "a literal match alongside an unrelated glob is reported unevaluated, not clean or a gap"
+# The literal entry is enough to cover the branch (verdict "covers"), but a
+# glob elsewhere in the same include list might or might not also reach main
+# or master -- this script does not reimplement GitHub's ref matching to
+# find out, so it refuses to guess either way. And since targeting genuinely
+# could not be confirmed for this ruleset, the "[ok] every ruleset ... targets"
+# summary must not print either -- that would be a false all-clear over an
+# audit that was never completed.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"mixed gate",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/hotfix-*"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[CHECK] rulesets with a pattern this script did not evaluate"
+assert_output "mixed gate (targeting not evaluated: another ref pattern is present)"
+assert_no_output "[GAP]"
+assert_no_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+finish_case
+
+test_case "all three refs present literally alongside an unrelated glob is complete, not unevaluated"
+# Codex review: literal coverage must be checked FIRST. A ruleset that
+# already spells out all three refs literally is fully evaluated regardless
+# of what else include also contains -- flagging it for manual review just
+# because an unrelated glob (refs/heads/release-*, say) also sits in the
+# same list is a false "needs a human" over targeting that is demonstrably
+# already complete.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"fully covered gate",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master","refs/heads/release-*"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+assert_no_output "fully covered gate"
+assert_no_output "[GAP]"
+finish_case
+
+test_case "the outer branch-coverage unevaluated case also suppresses the targeting [ok] line"
+# A SEPARATE unevaluated path from the one above: here the ruleset's
+# coverage of $BRANCH itself can't be determined at all (include is a glob
+# with no literal match), so this script cannot tell whether the ruleset
+# covers main or what it targets -- distinct from "covers, but a required
+# ref might be behind a glob" (the case the earlier "mixed gate" test
+# covers). Either way, claiming "every ruleset ... targets ..." would be a
+# false all-clear over a ruleset whose relevance was never established.
+dir="$(make_gh)"
+echo 42 > "$dir/ruleset_ids"
+cat > "$dir/ruleset.42.json" <<'EOF'
+{"id":42,"name":"pattern-scoped gate",
+ "conditions":{"ref_name":{"include":["refs/heads/release-*"],"exclude":[]}},
+ "bypass_actors":[]}
+EOF
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[CHECK] rulesets with a pattern this script did not evaluate"
+assert_output "pattern-scoped gate (matches: refs/heads/release-*)"
+assert_no_output "[GAP]"
+assert_no_output "[ok] every ruleset covering main targets the default branch, refs/heads/main and refs/heads/master"
+finish_case
+
+test_case "a repository with an actual master branch is a gap"
+dir="$(make_gh main true)"
+run "$dir" mikelward/lanes gate
+assert_status 1
+assert_output "[GAP] a branch literally named 'master' exists"
+finish_case
+
+test_case "a repository with no master branch stays clean on that check"
+dir="$(make_gh main false)"
+run "$dir" mikelward/lanes gate
+assert_status 0
+assert_output "[ok] no branch literally named 'master'"
+finish_case
+
+test_case "the master-branch check runs even when auditing a non-default branch"
+# It is a fact about the repository, not about whichever branch was named.
+dir="$(make_gh main true)"
+run "$dir" --branch release mikelward/lanes gate
+assert_status 1
+assert_output "[GAP] a branch literally named 'master' exists"
+finish_case
+
+test_case "a failed master-branch probe is reported, not read as a gap or a clean bill"
+dir="$(make_gh)"
+echo "/branches/master" > "$dir/fail_on"
+run "$dir" mikelward/lanes gate
+assert_status 1
+assert_output "could not check whether"
+assert_no_output "[GAP] a branch literally named"
+assert_no_output "[ok] no branch literally named"
 finish_case
 
 # ---------------------------------------------------------------------------
