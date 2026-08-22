@@ -166,6 +166,13 @@ fi
 
 # ---------------------------------------------------------------------------
 
+test_case "prints its own deprecation notice"
+dir="$(make_gh)"
+run "$dir" mikelward/lanes gate codex
+assert_status 0
+assert_output "repo-rules-audit: deprecated: superseded by 'repo audit'"
+finish_case
+
 test_case "a fully gated branch reports clean and exits 0"
 dir="$(make_gh)"
 run "$dir" mikelward/lanes gate codex

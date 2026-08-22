@@ -1,6 +1,11 @@
 #!/bin/bash
 # Manage a GitHub repository's branch ruleset: which checks a merge requires.
 #
+# Deprecated: ruleset composition is now part of `repo setup` in
+# mikelward/repo, a Python rewrite with the same behavior. This script
+# stays as-is; fixes and new features go there instead. See that repo's
+# AGENTS.md.
+#
 # Usage:
 #     repo-rules [--dry-run] [--force] [--ruleset NAME] OWNER/REPO [CHECK...]
 #     repo-rules --ruleset=gates owner/repo lanes codex
@@ -94,6 +99,12 @@ DEFAULT_CHECKS="lanes codex zizmor"
 error() {
     echo "$PROGRAM: $*" >&2
 }
+
+# Silenced when repo-setup is the caller -- it prints this same notice once
+# itself and sets this before shelling out here, so a single repo-setup run
+# doesn't repeat it once per repo-rules call.
+test -n "${REPO_TOOLS_DEPRECATION_SHOWN:-}" ||
+    error "deprecated: ruleset composition is now part of 'repo setup' in mikelward/repo (same behavior, actively maintained -- see that repo's README)"
 
 usage() {
     cat <<EOF

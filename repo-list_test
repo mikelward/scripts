@@ -21,6 +21,9 @@ trap 'rm -rf "$SUITE_TMP"' EXIT
 trap 'rm -rf "$SUITE_TMP"; exit 130' INT
 trap 'rm -rf "$SUITE_TMP"; exit 143' TERM
 REPO_LIST="$SCRIPT_DIR/repo-list"
+# repo-list prints this on every run, before anything else -- the assertions
+# below that check exact combined output need to account for it.
+DEPRECATION_LINE="repo-list: deprecated: superseded by 'repo list' in mikelward/repo (same behavior, actively maintained -- see that repo's README)"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -176,7 +179,8 @@ forked/repo	true	false
 old/repo	false	true")"
 run_repo_list "$dir"
 assert_status 0
-assert_output_equals "a/repo
+assert_output_equals "$DEPRECATION_LINE
+a/repo
 b/repo"
 assert_call "$dir" "user/repos"
 finish_case
@@ -186,7 +190,8 @@ dir="$(make_gh mikelward "kept/repo	false	false
 forked/repo	true	false")"
 run_repo_list "$dir" --include-forks
 assert_status 0
-assert_output_equals "forked/repo
+assert_output_equals "$DEPRECATION_LINE
+forked/repo
 kept/repo"
 finish_case
 
@@ -195,7 +200,8 @@ dir="$(make_gh mikelward "kept/repo	false	false
 old/repo	false	true")"
 run_repo_list "$dir" --include-archived
 assert_status 0
-assert_output_equals "kept/repo
+assert_output_equals "$DEPRECATION_LINE
+kept/repo
 old/repo"
 finish_case
 
@@ -210,7 +216,8 @@ test_case "--owner matching self in a different case still uses user/repos"
 dir="$(make_gh mikelward "a/repo	false	false")"
 run_repo_list "$dir" --owner MikelWard
 assert_status 0
-assert_output_equals "a/repo"
+assert_output_equals "$DEPRECATION_LINE
+a/repo"
 assert_call "$dir" "user/repos"
 finish_case
 
@@ -238,7 +245,8 @@ test_case "--owner for a visible org uses orgs/OWNER/repos"
 dir="$(make_gh mikelward "" yes "org/private-repo	false	false" "")"
 run_repo_list "$dir" --owner some-org
 assert_status 0
-assert_output_equals "org/private-repo"
+assert_output_equals "$DEPRECATION_LINE
+org/private-repo"
 assert_call "$dir" "orgs/some-org/repos"
 finish_case
 
@@ -320,7 +328,7 @@ test_case "an empty fleet is success, not an error"
 dir="$(make_gh mikelward "")"
 run_repo_list "$dir"
 assert_status 0
-assert_output_equals ""
+assert_output_equals "$DEPRECATION_LINE"
 finish_case
 
 test_case "SIGTERM while gh is running aborts rather than resuming against a deleted WORK"
@@ -373,8 +381,10 @@ else
     wait "$run_pid" 2>/dev/null || status=$?
     output="$(cat "$dir/run.out")"
     assert_status 143
-    if test -n "$output"; then
-        echo "  FAIL: expected no output when killed mid-listing, got: $output"
+    # The deprecation notice prints unconditionally before any gh call, so
+    # it's expected here -- what must NOT appear is any partial listing.
+    if test "$output" != "$DEPRECATION_LINE"; then
+        echo "  FAIL: expected only the deprecation notice when killed mid-listing, got: $output"
         TEST_FAILED=1
     fi
 fi

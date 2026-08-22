@@ -2,6 +2,10 @@
 # Report whether a repository's default branch actually enforces a set of
 # merge gates, reading GitHub's own merged view rather than any one ruleset.
 #
+# Deprecated: superseded by `repo audit` in mikelward/repo, a Python
+# rewrite with the same behavior. This script stays as-is; fixes and new
+# features go there instead. See that repo's AGENTS.md.
+#
 # Usage:
 #     repo-rules-audit [--branch NAME] OWNER/REPO [CHECK...]
 #     repo-rules-audit owner/repo lanes codex
@@ -70,6 +74,8 @@ DEFAULT_CHECKS="lanes codex zizmor"
 error() {
     echo "$PROGRAM: $*" >&2
 }
+
+error "deprecated: superseded by 'repo audit' in mikelward/repo (same behavior, actively maintained -- see that repo's README)"
 
 usage() {
     cat <<EOF
