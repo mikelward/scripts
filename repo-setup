@@ -3,6 +3,10 @@
 # fanned-out Actions secrets, and GitHub App installation membership, in
 # one call.
 #
+# Deprecated: superseded by `repo setup` in mikelward/repo, a Python
+# rewrite with the same behavior. This script stays as-is; fixes and new
+# features go there instead. See that repo's AGENTS.md.
+#
 # Usage:
 #     repo-setup [--dry-run] [--force] [--no-rules] [--rule CHECK]...
 #                [--secret NAME[@ENV]=PATH]... [--app SLUG]... OWNER/REPO
@@ -87,6 +91,13 @@ APPS=()
 error() {
     echo "$PROGRAM: $*" >&2
 }
+
+error "deprecated: superseded by 'repo setup' in mikelward/repo (same behavior, actively maintained -- see that repo's README)"
+# repo-setup shells out to repo-rules and repo-secrets (a dry-run preview
+# call, then a real apply call, per step) -- without this, a single
+# repo-setup invocation would print this same notice up to four more
+# times, once per child call, on top of the one just above.
+export REPO_TOOLS_DEPRECATION_SHOWN=1
 
 # A rule/secret/app value with an embedded newline would otherwise pass
 # through as a single array element (bash arrays don't split on it the way

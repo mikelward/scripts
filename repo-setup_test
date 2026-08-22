@@ -410,6 +410,25 @@ assert_status 0
 assert_call_count "$dir" "POST repos/owner/repo/rulesets" 1
 finish_case
 
+test_case "prints its own deprecation notice once, and suppresses repo-rules'/repo-secrets' own"
+# repo-setup shells out to the real repo-rules and repo-secrets (symlinked
+# into $dir/bin above), each via its own dry-run preview call plus a real
+# apply call -- so without the REPO_TOOLS_DEPRECATION_SHOWN handshake, this
+# single invocation would print the deprecation notice up to five times.
+dir="$(make_gh)"
+printf 'sekrit' > "$dir/value.txt"
+run "$dir" --force --secret TOKEN="$dir/value.txt" owner/repo
+assert_status 0
+notice_count="$(printf '%s\n' "$output" | grep -c "^repo-setup: deprecated:")"
+if test "$notice_count" -ne 1; then
+    echo "  FAIL: expected exactly one repo-setup deprecation notice, got $notice_count"
+    echo "  output: $output"
+    TEST_FAILED=1
+fi
+assert_no_output "repo-rules: deprecated"
+assert_no_output "repo-secrets: deprecated"
+finish_case
+
 test_case "--dry-run prints the combined plan and makes no writes at all"
 dir="$(make_gh)"
 printf 'sekrit' > "$dir/value.txt"
