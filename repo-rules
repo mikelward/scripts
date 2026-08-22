@@ -26,7 +26,17 @@
 # What it does: makes CHECK... required on the default branch, via a ruleset
 # it owns by name, so a pull request cannot merge until each one passes --
 # requires every review conversation to be resolved, the branch to be up to
-# date with the base, and allows rebase as the only merge method.
+# date with the base, and allows rebase as the only merge method. A ruleset
+# this script CREATES targets ~DEFAULT_BRANCH together with the literal
+# refs/heads/main and refs/heads/master, not the default branch alone: a
+# repository whose default branch was ever renamed away from "master" (or
+# one that never got renamed) can still have a branch literally called
+# master sitting around, and a push or merge straight into it would bypass
+# every check this script exists to require. An UPDATE leaves an existing
+# ruleset's targeting alone, the same as every other field this script does
+# not manage -- see the CREATE-vs-UPDATE split lower down, and
+# repo-rules-audit for what flags a ruleset that predates this and never
+# picked up the wider targeting.
 #
 # Conversation resolution is not optional here, because it closes the gap the
 # checks cannot: a reviewer's comment is not a check, so a finding raised and
@@ -180,8 +190,9 @@ test -n "$DEFAULT_BRANCH" || { error "could not read $REPO's default branch"; ex
 # the repository's default branch itself changes while an interactive user
 # is still deciding, the early scan checked the wrong branch entirely --
 # same shape as every other write-time revalidation here, just one level
-# up. Also updates the create-path "on $DEFAULT_BRANCH" message, which
-# reporting the stale name would otherwise leave subtly wrong too.
+# up. Also updates the create-path "on $DEFAULT_BRANCH, main and master"
+# message, which reporting the stale name would otherwise leave subtly
+# wrong too.
 refresh_default_branch() {
     NEW_DEFAULT_BRANCH="$(gh api "repos/$REPO" --jq '.default_branch')" || {
         error "could not read $REPO to check whether its default branch has"
@@ -414,8 +425,10 @@ fi
 
 
 # The query that finds a ruleset named $RULESET, used to establish EXISTING
-# below and, on the create path, run again right before the write to catch
-# one that appeared in the meantime -- see the write section.
+# below and run again right before the write on both paths -- on create, to
+# catch one that appeared in the meantime; on update, to catch $RULESET
+# having been renamed away from id $EXISTING (or onto a different ruleset
+# entirely) -- see the write section.
 lookup_existing_ruleset() {
     gh api --paginate "repos/$REPO/rulesets?includes_parents=false" \
         --jq ".[] | select(.name == $(json_string "$RULESET")) | .id"
@@ -510,6 +523,10 @@ fi
 # An update preserves the existing ruleset's conditions, so a managed ruleset
 # scoped to `release` must be checked against what else applies to `release`
 # -- checking `main` there would miss the conflict entirely and report success.
+# The create path's own scope is fixed rather than read back, so it has to be
+# kept in sync by hand with BODY's own conditions below: ~DEFAULT_BRANCH,
+# refs/heads/main and refs/heads/master together, so master is never the one
+# branch a freshly created ruleset forgets to cover.
 compute_scope() {
     if test -n "$EXISTING"; then
         # shellcheck disable=SC2016  # jq program, not shell interpolation
@@ -521,7 +538,7 @@ compute_scope() {
             return 1
         }
     else
-        SCOPE='{"include":["~DEFAULT_BRANCH"],"exclude":[]}'
+        SCOPE='{"include":["~DEFAULT_BRANCH","refs/heads/main","refs/heads/master"],"exclude":[]}'
     fi
 }
 
@@ -627,7 +644,15 @@ validate_merge_method_scope || exit 1
 # is rebase only: a squash or a merge commit rewrites or hides the commits
 # that were reviewed, and one commit per logical change is the shape these
 # repositories keep. Squash and merge-commit disappear from the pull request's
-# button once this is set.
+# button once this is set. `conditions.ref_name.include` names three refs, not
+# one: `~DEFAULT_BRANCH` together with the literal `refs/heads/main` and
+# `refs/heads/master`, so a branch literally called master -- a leftover from
+# a rename, or one that was simply never renamed -- cannot be pushed or merged
+# into with none of this applied. Listing `refs/heads/main` alongside
+# `~DEFAULT_BRANCH` when main IS the default is redundant, not wrong: GitHub
+# accepts the duplicate, and the alternative is knowing in advance which of
+# the three names the default branch is, which is exactly what this script
+# cannot assume (see the header comment above).
 #
 # UPDATE does NOT build it. It fetches the existing ruleset and edits only
 # the check list inside it, because a PUT replaces the whole object and this
@@ -701,7 +726,7 @@ BODY="{
   \"name\": $(json_string "$RULESET"),
   \"target\": \"branch\",
   \"enforcement\": \"active\",
-  \"conditions\": {\"ref_name\": {\"include\": [\"~DEFAULT_BRANCH\"], \"exclude\": []}},
+  \"conditions\": {\"ref_name\": {\"include\": [\"~DEFAULT_BRANCH\", \"refs/heads/main\", \"refs/heads/master\"], \"exclude\": []}},
   \"rules\": [
     {\"type\": \"required_status_checks\",
      \"parameters\": {
@@ -754,7 +779,7 @@ describe_plan() {
         # already has, which may not be the default branch at all.
         echo "$REPO: would update ruleset '$RULESET' (id $EXISTING); scope unchanged"
     else
-        echo "$REPO: would create ruleset '$RULESET' on $DEFAULT_BRANCH"
+        echo "$REPO: would create ruleset '$RULESET' on $DEFAULT_BRANCH, main and master"
     fi
     echo "  required checks:"
     describe_checks "$@"
@@ -803,11 +828,12 @@ fi
 # confirmation prompt was built from: another admin or process could have
 # changed the repository or the ruleset in whatever time an interactive user
 # spent deciding -- disabled rebase merging, flipped enforcement off, added
-# an unmanaged rule, moved the ruleset to a different branch, or (on the
-# create path) created a same-named ruleset of its own. None of these close
-# their window to zero -- another write could still land between these
-# calls and the actual PUT/POST -- but together they shrink "however long a
-# human takes to answer a prompt" down to a handful of API round trips.
+# an unmanaged rule, moved the ruleset to a different branch, renamed it away
+# from '$RULESET' (or renamed a different one onto it), or (on the create
+# path) created a same-named ruleset of its own. None of these close their
+# window to zero -- another write could still land between these calls and
+# the actual PUT/POST -- but together they shrink "however long a human
+# takes to answer a prompt" down to a handful of API round trips.
 check_allow_rebase || exit 1
 
 if test -n "$EXISTING"; then
@@ -825,6 +851,36 @@ refresh_default_branch || exit 1
 validate_merge_method_scope || exit 1
 
 if test -n "$EXISTING"; then
+    # The rename TOCTOU check_ruleset_ownership's own re-check above cannot
+    # close: that call re-inspects id $EXISTING's enforcement and rule types,
+    # which catches someone editing what id $EXISTING points to, but not
+    # someone RENAMING it away, or renaming a DIFFERENT ruleset onto
+    # '$RULESET', while this was waiting on confirmation. Either way,
+    # '$RULESET' no longer names the ruleset this run validated ownership
+    # of by id, so the PUT below -- addressed by id, never by name -- would
+    # silently modify whatever ruleset now holds id $EXISTING under a claim
+    # of having updated the one named '$RULESET'. Re-resolving the name
+    # right before the write, and refusing on any mismatch, is the write-time
+    # counterpart of the create path's own duplicate re-check just below.
+    if STILL_EXISTING="$(lookup_existing_ruleset)"; then
+        if test "$STILL_EXISTING" != "$EXISTING"; then
+            error "ruleset '$RULESET' on $REPO no longer resolves to id $EXISTING --"
+            if test -n "$STILL_EXISTING"; then
+                error "it now names id $STILL_EXISTING instead, renamed while this was"
+            else
+                error "renamed away while this was waiting on confirmation, and nothing"
+                error "else has taken the name."
+            fi
+            error "Refusing to write to id $EXISTING under a name it no longer owns."
+            error "Rerun to see the current plan."
+            exit 1
+        fi
+    else
+        error "could not check whether '$RULESET' still resolves to ruleset id"
+        error "$EXISTING on $REPO. Refusing to write under a name that could no"
+        error "longer be the one this run validated."
+        exit 1
+    fi
     refresh_body || { error "could not re-read ruleset '$RULESET' to write it"; exit 1; }
     gh api --method PUT "repos/$REPO/rulesets/$EXISTING" --input "$WORK/body" >/dev/null
     echo "$REPO: updated ruleset '$RULESET' (its scope is unchanged)"
@@ -852,6 +908,6 @@ else
         exit 1
     fi
     printf '%s' "$BODY" | gh api --method POST "repos/$REPO/rulesets" --input - >/dev/null
-    echo "$REPO: created ruleset '$RULESET' on $DEFAULT_BRANCH"
+    echo "$REPO: created ruleset '$RULESET' on $DEFAULT_BRANCH, main and master"
 fi
 describe_checks "$@"

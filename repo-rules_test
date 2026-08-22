@@ -634,6 +634,41 @@ assert_body "$dir" '~DEFAULT_BRANCH'
 assert_body "$dir" '"enforcement": "active"'
 finish_case
 
+test_case "creating targets the default branch, main and master together"
+# The backdoor this closes: a ruleset scoped only to ~DEFAULT_BRANCH leaves a
+# branch literally named master unprotected if the default branch was ever
+# renamed away from it (or never renamed at all).
+dir="$(make_gh 'test' '')"
+run_repo_rules "$dir" --force mikelward/lanes test
+assert_status 0
+assert_body "$dir" '"~DEFAULT_BRANCH"'
+assert_body "$dir" '"refs/heads/main"'
+assert_body "$dir" '"refs/heads/master"'
+assert_output "on main, main and master"
+finish_case
+
+test_case "refuses to create when another ruleset excludes rebase only on refs/heads/master"
+if test "$HAVE_JQ" = no; then skip_case "needs a jq binary"; finish_case; else
+# Before this change, a create-path ruleset only ever scoped itself to
+# ~DEFAULT_BRANCH, so a squash-only ruleset scoped to the literal master
+# branch alone would never have been checked at all. Now that a fresh
+# ruleset also targets refs/heads/master, this must be caught the same way
+# a conflict on the default branch already is.
+dir="$(make_gh 'test' '' '' '' 'required_status_checks' 'main' 'true' 'active' '99')"
+cat > "$dir/other_ruleset" <<'RULESET'
+{"id":99,"name":"legacy master squash policy","enforcement":"active",
+ "conditions":{"ref_name":{"include":["refs/heads/master"],"exclude":[]}},
+ "rules":[{"type":"pull_request","parameters":{
+    "allowed_merge_methods":["squash"]}}]}
+RULESET
+run_repo_rules "$dir" mikelward/lanes test
+assert_status 1
+assert_output "legacy master squash policy"
+assert_output "excludes rebase"
+assert_no_write "$dir"
+finish_case
+fi
+
 test_case "sees a check that only ever reported on a closed pull request"
 # A check running only on `pull_request` never reports on the default branch,
 # so a repository with nothing open would look as though it had never run.
@@ -1586,6 +1621,97 @@ assert_status 1
 assert_output "excludes rebase"
 assert_output "trunk squash policy"
 assert_no_write "$dir"
+finish_case
+fi
+
+test_case "refuses to write when the ruleset was renamed away while the prompt was open"
+if test "$HAVE_PTY" = no || test "$HAVE_JQ" = no; then skip_case "needs script(1) and jq"; finish_case; else
+# check_ruleset_ownership's own re-check (re-run right before the write, same
+# as everywhere else in this section) re-inspects id 42's enforcement and
+# rule types -- it catches someone editing what id 42 IS, but not someone
+# RENAMING '$RULESET' away from it while this was waiting on confirmation.
+# The PUT below addresses the ruleset by id, never by name, so without this
+# check it would silently write to whatever ruleset now holds id 42 while
+# claiming to have updated the one named 'merge gates'. The name resolves to
+# 42 on the early lookup (before the prompt) and to a DIFFERENT id, 77, on
+# the one right before the write.
+dir="$(mktemp -d "$SUITE_TMP/fixture.XXXXXX")"
+mkdir -p "$dir/bin"
+printf '0\n' > "$dir/lookup_reads"
+cat > "$dir/bin/gh" <<'GHEOF'
+#!/bin/sh
+d="$(dirname "$(dirname "$0")")"
+echo "$*" >> "$d/calls"
+skip=no; want=""; jqexpr=""; inputfile=""; method=""
+for arg in "$@"; do
+    if test "$skip" = yes; then
+        skip=no
+        case "$want" in --jq) jqexpr="$arg" ;; --input) inputfile="$arg" ;; esac
+        continue
+    fi
+    case "$arg" in
+        --method|--jq|--input|-H|--header) skip=yes; want="$arg" ;;
+        *) ;;
+    esac
+done
+prev=""
+for arg in "$@"; do
+    case "$prev" in --method) method="$arg" ;; esac
+    prev="$arg"
+done
+if test -n "$method" && test "$method" != GET; then
+    if test -n "$inputfile" && test "$inputfile" != -; then cp "$inputfile" "$d/body"
+    else cat > "$d/body"; fi
+    exit 0
+fi
+case "$*" in
+    *"includes_parents=false"*)
+        n="$(cat "$d/lookup_reads")"
+        if test "$n" -eq 0; then
+            echo 42
+            printf '1\n' > "$d/lookup_reads"
+        else
+            echo 77
+        fi ;;
+    *"/rulesets/42"*)
+        case "$jqexpr" in
+            *".rules[].type"*) echo active; echo required_status_checks ;;
+            *) echo '{"id":42,"name":"merge gates","target":"branch","enforcement":"active",
+                "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+                "rules":[{"type":"required_status_checks","parameters":{
+                   "strict_required_status_checks_policy":true,
+                   "required_status_checks":[{"context":"test"}]}}]}' | jq -r "$jqexpr" ;;
+        esac ;;
+    *"includes_parents=true"*) echo 42 ;;
+    *"repos/"*"/commits/"*"/check-runs"*) echo '"test"' ;;
+    *"repos/"*"/commits/"*"/status"*) : ;;
+    *"/pulls?"*) : ;;
+    *"/commits?"*) echo deadbee ;;
+    *"repos/"*)
+        case "$jqexpr" in
+            *allow_rebase_merge*) echo true ;;
+            *) echo main ;;
+        esac ;;
+esac
+GHEOF
+chmod +x "$dir/bin/gh"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 1
+assert_output "no longer resolves"
+assert_output "id 77"
+assert_no_write "$dir"
+finish_case
+fi
+
+test_case "writes normally when the ruleset still resolves to the same id right before the write"
+if test "$HAVE_PTY" = no || test "$HAVE_JQ" = no; then skip_case "needs script(1) and jq"; finish_case; else
+# The regression case for the fix above: an ordinary run, where the name
+# resolves to the same id both times, must not be refused by the new check.
+dir="$(make_gh 'test' '42')"
+run_repo_rules_pty "$dir" 'y' mikelward/lanes test
+assert_status 0
+assert_output "updated ruleset"
+assert_body "$dir" '"context": "test"'
 finish_case
 fi
 
