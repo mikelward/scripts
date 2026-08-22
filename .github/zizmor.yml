@@ -1,0 +1,48 @@
+# Policy for zizmor; the workflow beside this file runs it.
+#
+# The defaults demand hash pins everywhere and refuse pull_request_target
+# outright. Both collide with decisions this repository made deliberately,
+# so the exceptions live here, scoped as narrowly as the tool allows — a
+# NEW workflow reaching for pull_request_target is still flagged, because
+# only the named files are excused.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        # `@main` IS the release for these sibling actions: this repo tracks
+        # them deliberately, there is no release step on their side, and a
+        # pin would be a thing to bump here on every one of their merges.
+        # Enumerated by name, not `mikelward/*` — owner-wide would also
+        # excuse a future workflow pulling any sibling at a mutable ref, and
+        # each exemption should be a decision somebody made. Adding one is
+        # one line here.
+        "mikelward/codex-review": ref-pin
+        # Same repository, but the key is matched whole against the `uses:`
+        # value including the workflow path, so the reusable workflow the
+        # consumer-side check calls needs its own entry — the action
+        # reference above does not cover it.
+        "mikelward/codex-review/.github/workflows/check-consumer.yml": ref-pin
+        # `@main` is likewise the release for the docs-lane engine test.yml
+        # invokes — same repo-tracked-deliberately reasoning as
+        # codex-review above.
+        "mikelward/lanes": ref-pin
+        # Official actions may pin to a tag, as every workflow here does.
+        # Hash-pinning them instead is a deliberate open question, tracked
+        # the same way mikelward/codex-review tracks it for itself.
+        "actions/*": ref-pin
+        # Everything else must pin to a hash.
+        "*": hash-pin
+  dangerous-triggers:
+    # Both triggers are load-bearing and reasoned through in
+    # mikelward/codex-review's docs/CONSUMER.md.
+    ignore:
+      # The sweep: never checks out or executes pull request code at all.
+      - codex-review.yml
+      # The consumer-side check: pull_request_target so the JOB DEFINITION
+      # always loads from the default branch (a bare pull_request would let
+      # a PR editing this file replace the call with one that always
+      # succeeds), and it does check out the PR head — but only to hand it
+      # to check_consumer.py, which parses it as text and executes nothing
+      # from it. See check-consumer.yml in mikelward/codex-review for the
+      # full reasoning.
+      - codex-review-check.yml
