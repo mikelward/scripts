@@ -1,0 +1,55 @@
+# Scan of the workflows with zizmor (https://docs.zizmor.sh).
+#
+# Required, not advisory -- reversing the posture this was ported with, by
+# the owner's decision: `zizmor` joins `lanes` and `codex` in the fleet's
+# standard required set (the ruleset half is TODO.md's pending step:
+# until the ruleset itself lists `zizmor`, a red scan does not yet hold
+# merges), piloted in mikelward/lanes and mikelward/ci-commit-artifact
+# and rolled out fleet-wide. That is why
+# there is no `paths:` filter: a workflow filtered out by paths creates NO
+# check run at all (unlike a skipped job, which reports "skipped" and
+# satisfies a ruleset), so a required `zizmor` plus a path filter would
+# leave any pull request not touching `.github/**` waiting forever on a
+# check nothing reports. The scan is a free sub-minute job, so it simply
+# runs on every pull request and every push to main.
+#
+# The version is pinned because a new zizmor release adds audits, so an
+# unpinned run could turn red with no change in this repository. Bump it
+# deliberately and re-read the findings. Policy exceptions live in
+# .github/zizmor.yml, beside this file.
+#
+# Cost and reliability: PyPI is free, keyless, and unmetered, so this is
+# $0/month at any run volume. A cold pipx install-and-scan typically finishes
+# in well under a minute; the 5-minute timeout is headroom for a slow PyPI
+# resolve, not the expected case. The one failure mode is a PyPI outage:
+# fetching zizmor is the only network step (--offline covers the scan
+# itself), and once the check is required, an outage fails it and
+# holds merges until a re-run succeeds -- accepted with the decision above.
+#
+# `pull_request` lists its types explicitly because the default set lacks
+# `edited`: a retarget regenerates the merge ref against the new base while
+# the head -- and the green `zizmor` check already attached to it -- stays
+# put, so without `edited` the old target's scan would satisfy the new one
+# unexamined. Title and body edits re-run the scan too; redundant but
+# cheap, the same trade ci.yml makes for the lane jobs.
+name: zizmor
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+jobs:
+  zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # --offline, so the scan talks to nothing: the audits that need the
+      # GitHub API are skipped, deterministically, and the only fetch is
+      # zizmor itself.
+      - name: Scan the workflows
+        run: pipx run --spec zizmor==1.29.0 zizmor --no-progress --offline .
