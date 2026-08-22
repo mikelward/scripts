@@ -15,7 +15,7 @@
 # repo-rules does not touch (see below).
 #
 # Cost and reliability: free. Every call is GitHub's REST API (5,000
-# authenticated requests an hour); a run costs three or four calls per
+# authenticated requests an hour); a run costs four or five calls per
 # repository plus one per branch ruleset found on it -- a handful, in
 # practice. Expect well under a second. Every failure mode is loud: no gh
 # (refuses, exit 1), not authenticated (the first call fails, exit 1),
@@ -40,6 +40,17 @@
 # flags a default branch not literally named "main" -- this fleet's tooling
 # and docs assume that name, and a repo answering something else is a real
 # inconsistency, invisible from the branch's own rules.
+#
+# When auditing the default branch, it also checks -- same literal-match
+# discipline, same ruleset reads -- whether every ruleset that plainly
+# covers it also targets refs/heads/main and refs/heads/master: a ruleset
+# created before repo-rules widened its targeting only ever covers
+# ~DEFAULT_BRANCH, which leaves a branch literally named master (a leftover
+# from a rename, or one that was simply never renamed) free of every check
+# this fleet requires. Independent of any ruleset, it also warns whenever
+# the repository has an actual branch named "master" at all -- the backdoor
+# repo-rules' wider targeting exists to close, worth flagging on its own
+# since deleting the branch removes it outright.
 #
 # Exit status: 0 if every check and property held, 1 if anything did not (or
 # could not be read), 2 for a usage error. Scriptable: loop this over a
@@ -67,7 +78,10 @@ Usage: $PROGRAM [--branch NAME] OWNER/REPO [CHECK...]
 Report whether OWNER/REPO's branch (default: the repository's default
 branch) requires each CHECK to pass, requires conversation resolution and
 an up-to-date branch before merging, and blocks force pushes and deletion.
-Also reports any bypass actor on a ruleset that plainly covers the branch.
+Also reports any bypass actor on a ruleset that plainly covers the branch,
+and -- when auditing the default branch -- whether every covering ruleset
+also targets refs/heads/main and refs/heads/master. Always warns if the
+repository has an actual branch named "master".
 CHECK defaults to: $DEFAULT_CHECKS
 
   --branch NAME   Check this branch instead of the repository's default.
@@ -311,6 +325,8 @@ if gh api --paginate "repos/$REPO/rulesets?includes_parents=true" \
     --jq '.[] | select(.target == "branch" and .enforcement == "active") | .id' > "$WORK/ruleset_ids"; then
     : > "$WORK/bypassers"
     : > "$WORK/unevaluated"
+    : > "$WORK/undertargeted"
+    : > "$WORK/targeting_unevaluated"
     while read -r id; do
         test -n "$id" || continue
         gh api "repos/$REPO/rulesets/$id" > "$WORK/ruleset.$id" || {
@@ -343,11 +359,103 @@ if gh api --paginate "repos/$REPO/rulesets?includes_parents=true" \
                 jq -r --arg name "$name" \
                     '.bypass_actors[]? | "  \($name): \(.actor_type) \(.actor_id // "-") (\(.bypass_mode))"' \
                     "$WORK/ruleset.$id" >> "$WORK/bypassers" \
-                    || { error "could not read ruleset $id's bypass actors on $REPO"; exit 1; } ;;
+                    || { error "could not read ruleset $id's bypass actors on $REPO"; exit 1; }
+                # Only meaningful when $BRANCH IS the repository's real
+                # default (checked directly, not via ASKED_DEFAULT -- an
+                # explicit `--branch main` naming the actual default must
+                # still get this check; ASKED_DEFAULT is only "no --branch
+                # was given" and the two are not the same question): the
+                # three-ref convention (~DEFAULT_BRANCH, refs/heads/main,
+                # refs/heads/master) is repo-rules' own widened targeting for
+                # the default branch, not something a ruleset scoped to some
+                # other branch (release, say) has any reason to carry.
+                # `~ALL` covers every one of the three unconditionally, by
+                # definition of the token -- UNLESS `exclude` literally
+                # carves one back out, which is checked explicitly below:
+                # an include list is not the whole story, and a ruleset that
+                # includes all three but excludes refs/heads/master protects
+                # main while leaving master exactly as unprotected as if it
+                # had never been listed. `exclude` needs no glob check here:
+                # this whole block only runs for verdict "covers", and the
+                # verdict computation above already routes any glob in
+                # `exclude` to "unevaluated" before it reaches this case --
+                # so `$exc` arriving here is guaranteed to hold only literal
+                # entries.
+                #
+                # Literal coverage is checked FIRST, ahead of any glob in
+                # `include`: a ruleset that already has all three refs
+                # spelled out literally is fully evaluated regardless of
+                # what else `include` also contains, and a glob elsewhere in
+                # the list changes nothing about that. Only once a required
+                # ref is genuinely NOT covered by a literal entry does an
+                # unrelated glob become relevant -- it might reach that ref,
+                # or might not, and this script does not reimplement
+                # GitHub's ref matching to find out (same discipline as the
+                # branch-coverage check above) -- so THAT case, and only
+                # that case, is reported unevaluated rather than guessed at
+                # either way, alongside the other unevaluated rulesets.
+                if default_branch_matches; then
+                    result=$(jq -r '
+                        def is_literal: test("[*?\\[]") | not;
+                        (.conditions.ref_name.include // []) as $inc
+                        | (.conditions.ref_name.exclude // []) as $exc
+                        | ["~DEFAULT_BRANCH", "refs/heads/main", "refs/heads/master"] as $want
+                        # `. as $want | ($inc | index($want))`, not
+                        # `$inc | index(.)` -- piping into $inc first rebinds
+                        # `.` to $inc itself before index() ever sees the
+                        # wanted ref, so every entry came back "found"
+                        # regardless of $inc.
+                        | if ($inc | index("~ALL")) then
+                              ($want | map(select(. as $w | ($exc | index($w)) != null))) as $miss
+                              | if ($miss | length) == 0 then "complete|"
+                                else "missing|" + ($miss | join(", ")) end
+                          else
+                              ($want | map(select(. as $w
+                                            | (($inc | index($w)) == null)
+                                              or (($exc | index($w)) != null)))) as $miss
+                              | if ($miss | length) == 0 then "complete|"
+                                elif ($inc | any(is_literal | not)) then "unevaluated|"
+                                else "missing|" + ($miss | join(", ")) end
+                          end
+                    ' "$WORK/ruleset.$id") \
+                        || { error "could not read ruleset $id's conditions on $REPO"; exit 1; }
+                    status="${result%%|*}"
+                    detail="${result#*|}"
+                    case "$status" in
+                        missing)
+                            printf '  %s: does not target %s\n' "$name" "$detail" >> "$WORK/undertargeted" ;;
+                        unevaluated)
+                            printf '  %s (targeting not evaluated: another ref pattern is present)\n' \
+                                "$name" >> "$WORK/unevaluated"
+                            # Tracked separately from the shared unevaluated
+                            # bucket above: this one gates whether the
+                            # targeting-complete "[ok]" summary below may
+                            # print at all, not just whether this ruleset
+                            # gets a [CHECK] line -- an unresolved ruleset
+                            # must never sit silently under a claim that
+                            # every ruleset's targeting was confirmed.
+                            printf '  %s\n' "$name" >> "$WORK/targeting_unevaluated" ;;
+                        complete) : ;;
+                    esac
+                fi ;;
             unevaluated)
                 pattern=$(jq -r '.conditions.ref_name.include | join(", ")' "$WORK/ruleset.$id") \
                     || { error "could not read ruleset $id's conditions on $REPO"; exit 1; }
-                printf '  %s (matches: %s)\n' "$name" "$pattern" >> "$WORK/unevaluated" ;;
+                printf '  %s (matches: %s)\n' "$name" "$pattern" >> "$WORK/unevaluated"
+                # This is a SEPARATE unevaluated case from the one inside
+                # `covers)` above: here the branch-coverage verdict itself
+                # couldn't be determined (a glob in include, such as
+                # refs/heads/*, or a glob exclusion over an otherwise
+                # complete include) -- not "covers, but a required ref might
+                # be behind a glob". Either way this script cannot tell
+                # whether the ruleset covers $BRANCH at all, so it cannot
+                # tell whether the ruleset's targeting matters, and the
+                # targeting-complete "[ok]" summary below must stay
+                # suppressed on this ruleset too -- same file, same gate,
+                # for the same reason: a claim that every covering ruleset's
+                # targeting was confirmed cannot be made while one ruleset's
+                # coverage of the branch itself remains unknown.
+                printf '  %s\n' "$name" >> "$WORK/targeting_unevaluated" ;;
             excluded|not-covering) : ;;
         esac
     done < "$WORK/ruleset_ids"
@@ -361,8 +469,38 @@ if gh api --paginate "repos/$REPO/rulesets?includes_parents=true" \
         echo "  [CHECK] rulesets with a pattern this script did not evaluate -- check by hand:"
         cat "$WORK/unevaluated"
     fi
+    if default_branch_matches; then
+        if test -s "$WORK/undertargeted"; then
+            gap "a ruleset covering $BRANCH does not target all of the default branch, refs/heads/main and refs/heads/master:"
+            cat "$WORK/undertargeted"
+        elif test -s "$WORK/targeting_unevaluated"; then
+            # Neither ok nor gap: a ruleset's targeting genuinely could not
+            # be confirmed (a glob that might or might not reach a missing
+            # ref), so claiming "every ruleset ... targets ..." here would
+            # be a false all-clear over an audit that was never completed.
+            # The [CHECK] section above already named it for manual review.
+            :
+        else
+            ok "every ruleset covering $BRANCH targets the default branch, refs/heads/main and refs/heads/master"
+        fi
+    fi
 else
     error "could not list $REPO's rulesets to check for bypass actors"
+    exit 1
+fi
+
+# Independent of any ruleset: a branch literally named "master" left over
+# from a rename (or never renamed at all) is the backdoor repo-rules' wider
+# targeting exists to close, and it is worth flagging on its own -- deleting
+# the branch removes the backdoor outright, rather than merely fencing it
+# in with a ruleset that has to remember to keep covering it.
+if gh api "repos/$REPO/branches/master" >/dev/null 2>"$WORK/master_branch.err"; then
+    gap "a branch literally named 'master' exists -- delete it, or confirm every ruleset that protects $BRANCH also targets refs/heads/master"
+elif grep -q 'HTTP 404' "$WORK/master_branch.err"; then
+    ok "no branch literally named 'master'"
+else
+    error "could not check whether $REPO has a branch named 'master':"
+    sed 's/^/  /' "$WORK/master_branch.err" >&2
     exit 1
 fi
 
