@@ -204,10 +204,12 @@ reply, no offer to correct it. It is not a finding.
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
   - Settle the fired trigger first thing in the turn, not last. It may have
-    silently re-armed rather than retired, so update it rather than adding a
-    second chain.
+    silently re-armed rather than retired — update the one that survived,
+    replace the one that didn't, and end the turn with exactly one pending.
   - Check the fire time you got against the one you asked for — a 4-minute
-    request has come back as 64. Re-time it, or say the watch isn't armed.
+    request has come back as 64. Prefer a relative delay: the scheduler's
+    clock is not this container's, so an absolute time computed here can be
+    rejected as already past. Re-time it, or say the watch isn't armed.
   - A few minutes out while CI or the current head's Codex verdict is
     outstanding; longer once only a human is left; short again after a push.
   - A PR reading `dirty` — always — or `behind` where the ruleset requires
