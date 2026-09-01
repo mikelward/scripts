@@ -52,4 +52,4 @@ jobs:
       # GitHub API are skipped, deterministically, and the only fetch is
       # zizmor itself.
       - name: Scan the workflows
-        run: pipx run --spec zizmor==1.29.0 zizmor --no-progress --offline .
+        run: pipx run --spec zizmor==1.30.0 zizmor --no-progress --offline .
