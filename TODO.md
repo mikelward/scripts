@@ -7,7 +7,7 @@
       PR precisely so it can be required (a paths-filtered workflow
       creates no check run at all on a non-matching PR, which a ruleset
       waits on forever) — the posture piloted in mikelward/lanes and
-      mikelward/ci-commit-artifact. `repo-rules mikelward/scripts` with
+      mikelward/ci-commit-artifact. `repo setup mikelward/scripts` with
       no arguments applies the standard `lanes codex zizmor` set.
 
 - [ ] Require the `lanes` check in the ruleset, not `test` — `test` now
