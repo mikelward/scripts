@@ -314,6 +314,11 @@ reply, no offer to correct it. It is not a finding.
   rather than narrowing the code to satisfy it; where the rule really does
   forbid what the product needs, that conflict is the maintainer's call, not
   one to settle either way yourself.
+- **A second verified finding in the same mechanism is evidence about the
+  design, not another bug.** Before fixing it, look for the same shape
+  elsewhere and ask whether a different design would delete the class rather
+  than the instance. Say what you chose on the thread; a design change is the
+  maintainer's call, autopilot included.
 - **Never leave a review comment thread silently dismissed.** Answer on the thread, then
   resolve it once the fix is on the head or the point is rebutted — a disagreement is an
   answer, so say why and resolve; anything still to do stays open. When you think a comment is a false positive,
