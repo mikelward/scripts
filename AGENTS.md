@@ -333,6 +333,17 @@ reply, no offer to correct it. It is not a finding.
   the SHA and comment count, e.g. `Codex reviewed 87d9f02 — 0 comments`. Tie
   it to the *latest* pushed SHA so a stale review of a superseded commit isn't
   conflated with the current state.
+- **Restate every review comment in the reply, not just its count.** When
+  you report a review, a comment, or a verdict in chat, give one bullet per
+  comment, most blocking first: what it claims and where, in a sentence or
+  two, and — where it needs a call from the user rather than a fix — the
+  decision and the options. A SHA, a comment count, and the gate's state say
+  only whether something is blocking; the user decides how to respond from
+  the finding itself, so a report without it just sends them to the thread to
+  read it themselves. All of them in that one reply — this is the exception
+  to *keep replies short*, which holds everywhere else: a bullet each stays
+  short, and asking whether they are ready for the second finding costs a
+  round trip per finding.
 - **Read the Codex verdict, don't infer it.** It reacts to the PR body
   (`issue_read` → `reactions`), not to a review thread, whose `Useful?` bar
   reads true on any PR it has commented on. `eyes` means reading, `+1` means
