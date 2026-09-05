@@ -329,21 +329,13 @@ reply, no offer to correct it. It is not a finding.
   `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
   Order of operations: push the fix commit first, then reply citing the new
   sha, then resolve.
-- **Report when Codex finishes reviewing a fresh push** — a one-liner naming
-  the SHA and comment count, e.g. `Codex reviewed 87d9f02 — 0 comments`. Tie
-  it to the *latest* pushed SHA so a stale review of a superseded commit isn't
-  conflated with the current state.
-- **Restate every review comment in the reply, not just its count.** When
-  you report a review, a comment, or a verdict in chat, give one bullet per
-  comment, most blocking first: what it claims and where, in a sentence or
-  two, and — where it needs a call from the user rather than a fix — the
-  decision and the options. A SHA, a comment count, and the gate's state say
-  only whether something is blocking; the user decides how to respond from
-  the finding itself, so a report without it just sends them to the thread to
-  read it themselves. All of them in that one reply — this is the exception
-  to *keep replies short*, which holds everywhere else: a bullet each stays
-  short, and asking whether they are ready for the second finding costs a
-  round trip per finding.
+- **Report each review in chat, and what it said.** Name the commit it read and
+  the finding count — say so when that commit is no longer the head — then one
+  bullet per finding: review
+  comment, top-level comment or review body alike, most blocking first — what
+  it claims, where, and what you did about it, or the options where it's the
+  maintainer's call. Summarize them all in that one reply, ahead of *keep
+  replies short*; ask only the most blocking question.
 - **Read the Codex verdict, don't infer it.** It reacts to the PR body
   (`issue_read` → `reactions`), not to a review thread, whose `Useful?` bar
   reads true on any PR it has commented on. `eyes` means reading, `+1` means
