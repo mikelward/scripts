@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.lane.outputs.docs_only }}
+      base_sha: ${{ steps.lane.outputs.base_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: mikelward/lanes@main
+        id: lane
+        with:
+          mode: classify
+          pr: ${{ github.event.pull_request.number }}
+
+  # TODO: replace this with the project's real jobs (test, build, lint,
+  # ...), each carrying `needs: classify` and
+  # `if: needs.classify.outputs.docs_only != 'true'`. Add each job's name
+  # to the `lanes` job's own `needs:` and `results:` below, and delete this
+  # placeholder once a real job exists -- see mikelward/lanes's README for
+  # the documented shape.
+  placeholder:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: classify
+    if: needs.classify.outputs.docs_only != 'true'
+    steps:
+      - run: echo "no real jobs yet -- see the TODO in this file"
+
+  lanes:
+    name: lanes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [classify, placeholder]
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: mikelward/lanes@main
+        with:
+          mode: gate
+          pr: ${{ github.event.pull_request.number }}
+          classify-result: ${{ needs.classify.result }}
+          base-sha: ${{ needs.classify.outputs.base_sha }}
+          results: placeholder=${{ needs.placeholder.result }}
