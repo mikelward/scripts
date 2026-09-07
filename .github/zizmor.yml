@@ -22,7 +22,7 @@ rules:
         # consumer-side check calls needs its own entry — the action
         # reference above does not cover it.
         "mikelward/codex-review/.github/workflows/check-consumer.yml": ref-pin
-        # `@main` is likewise the release for the docs-lane engine test.yml
+        # `@main` is likewise the release for the docs-lane engine ci.yml
         # invokes — same repo-tracked-deliberately reasoning as
         # codex-review above.
         "mikelward/lanes": ref-pin
