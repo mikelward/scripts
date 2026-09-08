@@ -1402,15 +1402,12 @@ install_home_tools() {
         warn "shpool is not installed by setup (no prebuilt artifact); sessions fall back to tmux unless it's installed some other way"
     fi
 
-    # Optimistic provisioning. On a FRESH env, prefer a prebuilt bundle (which
-    # installs fully offline); otherwise install the requested set online.
-    # install-bundle needs a fresh env, so the bundle only applies on the first
-    # provision. Look for a bundle at $HOMEPKG_BUNDLE, then homepkg-bundle.tgz
-    # beside the scripts repo or in $HOME. Build one on an online host with
-    # "homepkg bundle -o homepkg-bundle.tgz" (no args = every tool).
-    #
-    # TODO: a pinned/--frozen (+ --no-bundle) flag pair to skip the optimistic
-    #   online reconcile/refresh, for a reproducible bundle-exact install.
+    # Prefer a prebuilt bundle if one is staged (it unpacks its full contents
+    # flat into the prefix -- offline, no network, no env); otherwise install
+    # the requested set online into a managed conda env. Look for a bundle at
+    # $HOMEPKG_BUNDLE, then homepkg-bundle.tgz beside the scripts repo or in
+    # $HOME (build one online with "homepkg bundle -o homepkg-bundle.tgz" -- no
+    # args = every tool).
     env_dir="$HOME/.local/share/homepkg/env"   # mirrors homepkg's <prefix>/share/homepkg/env
     bundle=""
     for cand in "${HOMEPKG_BUNDLE:-}" "$SCRIPTS_DIR/homepkg-bundle.tgz" "$HOME/homepkg-bundle.tgz"; do
@@ -1421,41 +1418,32 @@ install_home_tools() {
     done
 
     provisioned=no
-    if test -n "$bundle" && ! test -d "$env_dir/conda-meta"; then
-        # A bundle installs its FULL contents in one shot (install-bundle can't
-        # cherry-pick), so --minimal/--no-npm don't trim it. Then reconcile the
-        # requested set online with `install $tools`: this ADDS any requested
-        # tool the bundle lacked -- e.g. a partial $HOMEPKG_BUNDLE missing tsc,
-        # which a bare `update` would never add since it only touches packages
-        # already in the env -- and freshens them. Offline it warns and we rely
-        # on whatever the bundle carried.
+    if test -n "$bundle"; then
+        # A bundle unpacks its FULL contents (install-bundle can't cherry-pick),
+        # so --minimal/--no-npm don't trim it.
         info "Installing CLI tools from bundle (offline-capable): $bundle"
-        info "  a bundle installs its full contents; --minimal/--no-npm and an already-installed jj don't trim it"
+        info "  a bundle unpacks its full contents additively; --minimal/--no-npm don't trim it"
         if "$homepkg" install-bundle "$bundle"; then
             provisioned=yes
         else
-            # install-bundle exits non-zero when it couldn't install
-            # everything the manifest listed -- a release asset the bundle
-            # was built without, say -- having installed the rest. So what
-            # follows is a top-up rather than a redo.
-            warn "the bundle didn't provide everything; topping up online"
+            rc=$?
+            # install-bundle exits 2 for a partial install (a tool the bundle
+            # was built without didn't land, the rest did) and 1 when it
+            # installed nothing (wrong platform, unreadable bundle). Keep a
+            # partial -- the PATH block below covers what landed; on a total
+            # failure fall through to the online install, so a connected box
+            # still gets its tools (on an air-gapped box that also fails,
+            # harmlessly).
+            if test "$rc" -eq 2; then
+                warn "the bundle didn't provide everything (offline?); using what it did unpack"
+                provisioned=yes
+            else
+                warn "the staged bundle installed nothing (wrong platform / unreadable?); falling back to the online install"
+            fi
         fi
-        # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
-        if "$homepkg" install $tools; then
-            provisioned=yes
-        elif test "$provisioned" = yes; then
-            warn "installed the bundle; couldn't reconcile the requested tools online (offline?)"
-        elif test -d "$env_dir/conda-meta"; then
-            # A partial install-bundle still built the env out of whatever it
-            # carried, so an offline top-up failure doesn't make this run
-            # unprovisioned: the steps below still have to put ~/.local/bin on
-            # PATH for the tools that did land.
-            warn "couldn't top up the missing tools online (offline?); keeping what the bundle installed"
-            provisioned=yes
-        else
-            warn "the bundle installed nothing and the online top-up failed (offline?)"
-        fi
-    else
+    fi
+
+    if test "$provisioned" = no; then
         test "$MINIMAL_ENABLED" -eq 0 \
             || info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
         info "Installing CLI tools into a home prefix via homepkg: $tools"
@@ -1479,16 +1467,16 @@ install_home_tools() {
         *) PATH="$HOME/.local/bin:$PATH" ;;
     esac
 
-    # This path's helix comes from conda-forge, with its runtime inside the
+    # The online path's helix comes from conda-forge with its runtime inside the
     # homepkg env, so a symlink left in the config directory by another install
     # path has to go -- hx searches there first. Gate on the hx that will
     # actually run being the env's, not merely on some hx existing: homepkg
     # links the env's binaries into ~/.local/bin but deliberately leaves a
     # conflicting regular file alone, so on a box that installed the release hx
     # first, that release binary is still what runs -- and clearing the runtime
-    # symlink would take its grammars away. Gating on the link rather than on
-    # the minimal profile also covers a full bundle, which can install helix
-    # even under --minimal.
+    # symlink would take its grammars away. A bundle-unpacked hx is a regular
+    # file that carries its own runtime under the prefix's share/, so it doesn't
+    # match this gate and needs no clearing.
     if test -L "$HOME/.local/bin/hx" \
             && test "$(readlink "$HOME/.local/bin/hx")" = "$env_dir/bin/hx"; then
         clear_managed_helix_runtime

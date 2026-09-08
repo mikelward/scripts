@@ -1328,18 +1328,6 @@ with tempfile.TemporaryDirectory() as td:
 
 # --- push bundles ------------------------------------------------------------
 
-# The explicit lockfile's remote URLs are rewritten to local file:// paths (in
-# the bundle's pkgs dir) for the offline replay, preserving the hash fragment.
-with tempfile.TemporaryDirectory() as td:
-    exp = os.path.join(td, "explicit.txt")
-    with open(exp, "w") as f:
-        f.write("@EXPLICIT\n"
-                "https://conda.anaconda.org/conda-forge/linux-64/jq-1.8.2-h0.conda#abc\n")
-    res = hp._localize_explicit(exp, "/b/pkgs").splitlines()
-    check("_localize_explicit keeps @EXPLICIT", res[0] == "@EXPLICIT")
-    check("_localize_explicit rewrites url to a local file:// path",
-          res[1] == "file:///b/pkgs/jq-1.8.2-h0.conda#abc")
-
 # A combined bundle carries both payloads. Only the github half is exercised
 # end-to-end here (the mamba half needs micromamba and a solved closure), but
 # install_bundle has to find and replay it from the "github" sub-object rather
@@ -1456,25 +1444,61 @@ with tempfile.TemporaryDirectory() as td:
     hp._write_bundle(bundle, src)
     prefix = os.path.join(td, "prefix")
 
-    def _replay_fails(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["micromamba", "create"])
+    def _unpack_fails(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ["micromamba", "package", "extract"])
 
-    _orig = hp._install_bundle_mamba
-    hp._install_bundle_mamba = _replay_fails
+    _orig = hp._install_bundle_conda
+    hp._install_bundle_conda = _unpack_fails
     _err = None
     try:
         hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
     except hp.HomepkgError as e:
         _err = e
     finally:
-        hp._install_bundle_mamba = _orig
-    check("a failed conda replay still leaves the release assets installed",
+        hp._install_bundle_conda = _orig
+    check("a failed conda unpack still leaves the release assets installed",
           os.access(os.path.join(prefix, "bin", "atuin"), os.X_OK))
-    check("a failed conda replay reports the tools it couldn't install",
+    check("a failed conda unpack reports the tools it couldn't install",
           _err is not None and "jq" in str(_err))
 
-# A combined manifest naming an unknown backend still errors rather than
-# silently installing nothing.
+# A conda closure is solved as a unit, so a package failing mid-unpack fails the
+# WHOLE conda set -- even a tool whose binary happened to land isn't salvaged
+# (its dependencies may be short, and a preexisting binary can't be told from a
+# this-run one). A mamba-only bundle that fails this way is installed-nothing
+# (exit 1, not a BundlePartial); the static halves of a combined bundle are
+# independent and still make it partial (see the release-assets test above).
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "manifest.json"), "w") as f:
+        json.dump({"format": 1, "backend": "mamba", "platform": "linux/x86_64",
+                   "tools": ["jq", "fd"]}, f)
+    bundle = os.path.join(td, "conda-fails.tar.gz")
+    hp._write_bundle(bundle, src)
+    prefix = os.path.join(td, "prefix")
+
+    def _lands_jq_then_fails(td_, manifest, pfx, dry):
+        os.makedirs(os.path.join(pfx, "bin"), exist_ok=True)
+        open(os.path.join(pfx, "bin", "jq"), "w").close()   # jq's binary landed
+        raise RuntimeError("extract failed on a later package")
+
+    _orig = hp._install_bundle_conda
+    hp._install_bundle_conda = _lands_jq_then_fails
+    _err = None
+    try:
+        hp.install_bundle(bundle, prefix, ("linux", "x86_64"), False)
+    except hp.HomepkgError as e:
+        _err = e
+    finally:
+        hp._install_bundle_conda = _orig
+    check("a mid-closure conda failure fails the whole set, not a salvaged partial",
+          _err is not None and not isinstance(_err, hp.BundlePartial))
+    check("a mid-closure conda failure names every conda tool, jq's landed binary included",
+          _err is not None and "jq" in str(_err) and "fd" in str(_err))
+
+# A combined manifest with no payload sections installs nothing -- a hard
+# failure, not silent success, so setup's staged-bundle path falls back to the
+# online install rather than accepting an empty bundle.
 with tempfile.TemporaryDirectory() as td:
     src = os.path.join(td, "src")
     os.makedirs(src)
@@ -1485,9 +1509,10 @@ with tempfile.TemporaryDirectory() as td:
     _err = None
     try:
         hp.install_bundle(bundle, os.path.join(td, "prefix"), ("linux", "x86_64"), False)
-    except Exception as e:  # noqa: BLE001
+    except hp.HomepkgError as e:
         _err = e
-    check("install-bundle tolerates a combined bundle with neither half", _err is None)
+    check("a combined bundle with no payload sections is an installed-nothing failure",
+          _err is not None and not isinstance(_err, hp.BundlePartial))
 
 # The tool split is what makes one bundle enough: everything with a
 # conda-forge package goes through the closure, the rest through releases.
@@ -1877,35 +1902,328 @@ with tempfile.TemporaryDirectory() as td:
         raised = True
     check("_safe_extract_tar rejects special files (FIFO)", raised)
 
-# install-bundle creates a fresh env but adds to an existing one, matching the
-# normal install path. _run_mamba/_link_bins are stubbed to stay offline.
-_bundle_cmds = []
-_saved_rm, _saved_lb = hp._run_mamba, hp._link_bins
-hp._run_mamba = lambda mm, prefix, args, dry: _bundle_cmds.append(args[0])
-hp._link_bins = lambda tools, prefix: None
+# _move_tree moves a tree in, overwrites a colliding file (last writer wins),
+# and leaves unrelated files already there alone -- the additive part of an
+# unpack.
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    open(os.path.join(src, "new"), "w").close()
+    with open(os.path.join(src, "shared"), "w") as f:
+        f.write("new")
+    dest = os.path.join(td, "dest")
+    os.makedirs(dest)
+    open(os.path.join(dest, "old"), "w").close()               # unrelated
+    with open(os.path.join(dest, "shared"), "w") as f:
+        f.write("old")                                          # collision
+    hp._move_tree(src, dest)
+    check("_move_tree adds new files",
+          os.path.exists(os.path.join(dest, "new")))
+    check("_move_tree leaves unrelated files untouched",
+          os.path.exists(os.path.join(dest, "old")))
+    check("_move_tree overwrites a collision (last writer wins)",
+          open(os.path.join(dest, "shared")).read() == "new")
+
+# _assert_tree_within refuses a destination that resolves outside the prefix
+# through a pre-existing directory symlink (e.g. <prefix>/lib -> /elsewhere),
+# so unpacking a bundle into a populated prefix can't write outside --prefix.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(prefix)
+    outside = os.path.join(td, "outside")
+    os.makedirs(outside)
+    os.symlink(outside, os.path.join(prefix, "lib"))
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    open(os.path.join(src, "evil"), "w").close()
+    raised = False
+    try:
+        hp._assert_tree_within(src, os.path.join(prefix, "lib"),
+                               os.path.realpath(prefix))
+    except hp.HomepkgError:
+        raised = True
+    check("_assert_tree_within refuses a destination that escapes the prefix",
+          raised)
+
+# _assert_tree_within also refuses when a required destination directory is
+# blocked by a pre-existing non-directory (e.g. <prefix>/share/cache is a file
+# but the package needs it as a directory) -- caught in the whole-package
+# validation pass so the package refuses before _move_tree's makedirs would
+# raise partway through and leave it half-applied.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "share"))
+    open(os.path.join(prefix, "share", "cache"), "w").close()   # a file where a dir is needed
+    src = os.path.join(td, "src")                                # payload: cache/data
+    os.makedirs(os.path.join(src, "cache"))
+    open(os.path.join(src, "cache", "data"), "w").close()
+    raised = False
+    try:
+        hp._assert_tree_within(src, os.path.join(prefix, "share"),
+                               os.path.realpath(prefix))
+    except hp.HomepkgError:
+        raised = True
+    check("_assert_tree_within refuses a directory blocked by an existing file",
+          raised)
+
+# The mirror case: a payload leaf (a file or a symlink) that would land on a
+# pre-existing real directory is refused too -- _move_tree's _rm_any would
+# rmtree that directory and its unrelated contents. Caught in the preflight, so
+# nothing is deleted.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "share", "tool"))
+    open(os.path.join(prefix, "share", "tool", "keep"), "w").close()  # unrelated content
+    src = os.path.join(td, "src")                                     # payload: a FILE "tool"
+    os.makedirs(src)
+    open(os.path.join(src, "tool"), "w").close()
+    raised = False
+    try:
+        hp._assert_tree_within(src, os.path.join(prefix, "share"),
+                               os.path.realpath(prefix))
+    except hp.HomepkgError:
+        raised = True
+    check("_assert_tree_within refuses a leaf colliding with an existing directory",
+          raised)
+    check("the refusal leaves the existing directory's contents untouched",
+          os.path.exists(os.path.join(prefix, "share", "tool", "keep")))
+
+# _move_tree carries a symlinked directory in the payload across whole: os.walk
+# lists it but doesn't recurse into it, so a naive files-only move would drop it
+# with the temp dir (a conda package can ship a directory symlink).
+with tempfile.TemporaryDirectory() as td:
+    src = os.path.join(td, "src")
+    os.makedirs(os.path.join(src, "real"))
+    open(os.path.join(src, "real", "f"), "w").close()
+    os.symlink("real", os.path.join(src, "linkdir"))       # dir symlink in payload
+    dest = os.path.join(td, "dest")
+    os.makedirs(dest)
+    hp._move_tree(src, dest)
+    check("_move_tree preserves a payload directory symlink",
+          os.path.islink(os.path.join(dest, "linkdir")))
+    check("_move_tree carries the real directory alongside it",
+          os.path.exists(os.path.join(dest, "real", "f")))
+
+# A colliding destination leaf that is itself a symlink pointing OUTSIDE the
+# prefix is replaced, not refused: _move_tree unlinks the link (not its target)
+# before moving the bundled file in, and _assert_tree_within checks only
+# directories -- so the additive last-writer-wins replacement isn't wrongly
+# rejected, and the symlink's former target is left alone.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(os.path.join(prefix, "bin"))
+    outside = os.path.join(td, "outside")
+    with open(outside, "w") as f:
+        f.write("system")
+    os.symlink(outside, os.path.join(prefix, "bin", "rg"))   # <prefix>/bin/rg escapes
+    src = os.path.join(td, "src")
+    os.makedirs(src)
+    with open(os.path.join(src, "rg"), "w") as f:
+        f.write("bundled")
+    ok = True
+    try:
+        hp._assert_tree_within(src, os.path.join(prefix, "bin"),
+                               os.path.realpath(prefix))
+    except hp.HomepkgError:
+        ok = False
+    check("_assert_tree_within allows a colliding leaf symlink (checks dirs only)",
+          ok)
+    hp._move_tree(src, os.path.join(prefix, "bin"))
+    check("a colliding leaf symlink is replaced by the bundled file",
+          not os.path.islink(os.path.join(prefix, "bin", "rg"))
+          and open(os.path.join(prefix, "bin", "rg")).read() == "bundled")
+    check("replacing a leaf symlink leaves its former target untouched",
+          open(outside).read() == "system")
+
+# _unpack_conda_pkg validates the WHOLE package before moving any of it: a later
+# top-level tree that escapes the prefix must not leave an earlier one already
+# moved. Stub the extractor to lay down a bin/ (fine) beside a lib/ whose prefix
+# destination is an escaping symlink; the unpack must raise and touch neither.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(prefix)
+    outside = os.path.join(td, "outside")
+    os.makedirs(outside)
+    os.symlink(outside, os.path.join(prefix, "lib"))     # <prefix>/lib escapes
+    def _fake_extract(cmd, **kw):
+        xd = cmd[-1]
+        os.makedirs(os.path.join(xd, "bin"))
+        open(os.path.join(xd, "bin", "tool"), "w").close()
+        os.makedirs(os.path.join(xd, "lib"))
+        open(os.path.join(xd, "lib", "libx.so"), "w").close()
+        os.makedirs(os.path.join(xd, "info"))
+        class _R:
+            returncode = 0
+        return _R()
+    import subprocess as _sp
+    _saved_run = _sp.run
+    _sp.run = _fake_extract
+    raised = False
+    try:
+        hp._unpack_conda_pkg("mm", "pkg.conda", prefix)
+    except hp.HomepkgError:
+        raised = True
+    finally:
+        _sp.run = _saved_run
+    check("_unpack_conda_pkg refuses a package with an escaping tree", raised)
+    check("_unpack_conda_pkg moved nothing when a later tree escapes",
+          not os.path.exists(os.path.join(prefix, "bin", "tool"))
+          and not os.path.exists(os.path.join(outside, "libx.so")))
+
+# _unpack_conda_pkg warns (rather than silently swallowing) if the staging dir
+# can't be removed, and still completes the install -- the payload is already in
+# the prefix, but a stranded .homepkg-unpack-* dir mustn't pile up unreported.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    os.makedirs(prefix)
+    def _fake_extract_ok(cmd, **kw):
+        xd = cmd[-1]
+        os.makedirs(os.path.join(xd, "bin"))
+        open(os.path.join(xd, "bin", "tool"), "w").close()
+        os.makedirs(os.path.join(xd, "info"))
+        class _R:
+            returncode = 0
+        return _R()
+    def _boom(*a, **k):
+        raise OSError("cleanup boom")
+    import subprocess as _sp
+    _saved_run = _sp.run
+    _saved_rmtree = hp.shutil.rmtree
+    _saved_warn = hp.warn
+    _warned = []
+    _sp.run = _fake_extract_ok
+    hp.shutil.rmtree = _boom
+    hp.warn = lambda msg: _warned.append(msg)
+    try:
+        hp._unpack_conda_pkg("mm", "pkg.conda", prefix)
+    finally:
+        _sp.run = _saved_run
+        hp.shutil.rmtree = _saved_rmtree
+        hp.warn = _saved_warn
+    check("_unpack_conda_pkg still installs the payload when cleanup fails",
+          os.path.exists(os.path.join(prefix, "bin", "tool")))
+    check("_unpack_conda_pkg warns when the staging dir can't be removed",
+          any("staging dir" in m for m in _warned))
+
+# install-bundle unpacks each conda package flat into the prefix, additively --
+# no env, no fresh-prefix requirement. _unpack_conda_pkg's body needs a real
+# micromamba, so it's stubbed to drop a binary named for the package; the
+# orchestration (what lands, what's reported) is what's under test.
+_saved_unpack = hp._unpack_conda_pkg
+def _fake_unpack(mm, pkg, prefix):
+    b = os.path.basename(pkg).split("-")[0]
+    os.makedirs(os.path.join(prefix, "bin"), exist_ok=True)
+    open(os.path.join(prefix, "bin", b), "w").close()
+hp._unpack_conda_pkg = _fake_unpack
 try:
     with tempfile.TemporaryDirectory() as td:
-        bdir = os.path.join(td, "b")
-        os.makedirs(os.path.join(bdir, "pkgs"))
-        with open(os.path.join(bdir, "explicit.txt"), "w") as f:
-            f.write("@EXPLICIT\n")
-        open(os.path.join(bdir, "micromamba"), "w").close()
-        prefix = os.path.join(td, "prefix")  # no micromamba here yet
-        hp._install_bundle_mamba(bdir, {"tools": ["jq"]}, prefix, False)
-        check("install-bundle copies the bundled micromamba into the prefix",
-              os.path.exists(os.path.join(prefix, "bin", "micromamba")))
-        check("install-bundle creates a fresh env", _bundle_cmds[-1] == "create")
-        # A second bundle into the same env is refused -- an explicit lock must
-        # not be replayed additively over an existing env.
-        os.makedirs(os.path.join(hp.mamba_env(prefix), "conda-meta"))
-        raised = False
-        try:
-            hp._install_bundle_mamba(bdir, {"tools": ["jq"]}, prefix, False)
-        except hp.HomepkgError:
-            raised = True
-        check("install-bundle refuses to reuse an existing env", raised)
+        pkgdir = os.path.join(td, "pkgs")
+        os.makedirs(pkgdir)
+        for fn in ("jq-1.8.2-h0.conda", "oniguruma-6-h0.conda"):  # tool + a dep
+            open(os.path.join(pkgdir, fn), "w").close()
+        open(os.path.join(td, "micromamba"), "w").close()
+        prefix = os.path.join(td, "prefix")
+        os.makedirs(os.path.join(prefix, "bin"))
+        open(os.path.join(prefix, "bin", "earlier"), "w").close()  # an earlier bundle
+        missing = hp._install_bundle_conda(td, {"tools": ["jq"]}, prefix, False)
+        check("_install_bundle_conda unpacks the tool's binary onto PATH",
+              os.path.exists(os.path.join(prefix, "bin", "jq")))
+        check("_install_bundle_conda leaves an earlier bundle's tool in place",
+              os.path.exists(os.path.join(prefix, "bin", "earlier")))
+        check("_install_bundle_conda reports nothing missing when the bin lands",
+              missing == [])
+        missing2 = hp._install_bundle_conda(td, {"tools": ["jq"]}, prefix, False)
+        check("_install_bundle_conda re-runs over a populated prefix without error",
+              missing2 == [])
+    # A tool whose binary the bundle didn't carry is reported (a truncated bundle).
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "pkgs"))
+        open(os.path.join(td, "micromamba"), "w").close()
+        prefix = os.path.join(td, "prefix")
+        check("_install_bundle_conda reports a tool whose binary didn't land",
+              hp._install_bundle_conda(td, {"tools": ["jq"]}, prefix, False) == ["jq"])
+    # A tool absent from the registry is skipped, not a KeyError.
+    with tempfile.TemporaryDirectory() as td:
+        pkgdir = os.path.join(td, "pkgs")
+        os.makedirs(pkgdir)
+        open(os.path.join(pkgdir, "nosuchtool-1-h0.conda"), "w").close()
+        open(os.path.join(td, "micromamba"), "w").close()
+        prefix = os.path.join(td, "prefix")
+        check("_install_bundle_conda skips a tool not in the registry",
+              hp._install_bundle_conda(td, {"tools": ["nosuchtool"]}, prefix, False) == [])
 finally:
-    hp._run_mamba, hp._link_bins = _saved_rm, _saved_lb
+    hp._unpack_conda_pkg = _saved_unpack
+
+# _pkg_hashes parses explicit.txt's per-url hash fragments (conda's bare md5, or
+# the modern sha256: form) keyed by package filename.
+with tempfile.TemporaryDirectory() as td:
+    ep = os.path.join(td, "explicit.txt")
+    with open(ep, "w") as f:
+        f.write("@EXPLICIT\n"
+                "https://conda.anaconda.org/conda-forge/linux-64/jq-1.8.2-h0.conda#" + "a" * 32 + "\n"
+                "https://conda.anaconda.org/conda-forge/linux-64/oniguruma-6-h0.conda#sha256:" + "b" * 64 + "\n")
+    h = hp._pkg_hashes(ep)
+    check("_pkg_hashes reads a bare md5 fragment",
+          h.get("jq-1.8.2-h0.conda") == ("md5", "a" * 32))
+    check("_pkg_hashes reads a sha256: fragment",
+          h.get("oniguruma-6-h0.conda") == ("sha256", "b" * 64))
+
+# _install_bundle_conda verifies each package against explicit.txt before
+# extracting ANY of them: a corrupt/substituted closure member fails before the
+# prefix is touched, so nothing is unpacked.
+with tempfile.TemporaryDirectory() as td:
+    pkgdir = os.path.join(td, "pkgs")
+    os.makedirs(pkgdir)
+    with open(os.path.join(pkgdir, "jq-1.8.2-h0.conda"), "wb") as f:
+        f.write(b"corrupt bytes")
+    open(os.path.join(td, "micromamba"), "w").close()
+    with open(os.path.join(td, "explicit.txt"), "w") as f:
+        f.write("@EXPLICIT\nhttps://x/linux-64/jq-1.8.2-h0.conda#" + "0" * 32 + "\n")
+    prefix = os.path.join(td, "prefix")
+    _unpacked = []
+    _saved_unpack2 = hp._unpack_conda_pkg
+    hp._unpack_conda_pkg = lambda mm, p, pre: _unpacked.append(p)
+    raised = False
+    try:
+        hp._install_bundle_conda(td, {"tools": ["jq"]}, prefix, False)
+    except hp.HomepkgError:
+        raised = True
+    finally:
+        hp._unpack_conda_pkg = _saved_unpack2
+    check("_install_bundle_conda rejects a package whose bytes fail the hash", raised)
+    check("_install_bundle_conda unpacks nothing when a hash mismatches",
+          _unpacked == [])
+
+# install-bundle's exit code tells a partial install from one that installed
+# nothing, so setup falls back to the online install only in the latter case:
+# 0 = everything landed, 2 = some landed and some didn't, 1 = nothing landed
+# (or a hard failure). Build github bundles by hand and drive the CLI (main).
+with tempfile.TemporaryDirectory() as td:
+    def _gh_bundle(name, tools, present):
+        src = os.path.join(td, name + "-src")
+        os.makedirs(os.path.join(src, "assets"))
+        for e in tools:
+            if e["tool"] in present:
+                _make_targz(os.path.join(src, "assets", e["asset"]),
+                            {"t-1.0/" + e["bins"][0]: b"#!/bin/sh\n"})
+        with open(os.path.join(src, "manifest.json"), "w") as f:
+            json.dump({"format": 1, "backend": "github",
+                       "platform": "linux/x86_64", "tools": tools}, f)
+        out = os.path.join(td, name + ".tar.gz")
+        hp._write_bundle(out, src)
+        return out
+    two = [{"tool": "ripgrep", "asset": "rg.tar.gz", "bins": ["rg"]},
+           {"tool": "atuin", "asset": "atuin.tar.gz", "bins": ["atuin"]}]
+    one = [{"tool": "ripgrep", "asset": "rg.tar.gz", "bins": ["rg"]}]
+    def _ib(bundle):
+        return hp.main(["--prefix", os.path.join(td, "p-" + os.path.basename(bundle)),
+                        "--arch", "linux/x86_64", "install-bundle", bundle])
+    check("install-bundle exits 0 when every tool lands",
+          _ib(_gh_bundle("full", one, {"ripgrep"})) == 0)
+    check("install-bundle exits 2 on a partial install (some tools landed)",
+          _ib(_gh_bundle("partial", two, {"ripgrep"})) == 2)
+    check("install-bundle exits 1 when nothing landed",
+          _ib(_gh_bundle("none", one, set())) == 1)
 
 # a tampered github-bundle manifest can't escape the prefix: asset/bin names
 # with .. or absolute paths are rejected.
