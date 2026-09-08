@@ -842,6 +842,16 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn apt-get install -y --install-recommends zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # yazi and lf are terminal file managers -- CLI tools, useful on
+            # headless boxes too, so install them regardless of --no-gui. One
+            # transaction each: apt rejects the whole request on one unknown
+            # name, and neither is in every release's repos (lf isn't packaged
+            # for Debian/Ubuntu; yazi is missing from older ones).
+            for fm in yazi lf; do
+                info "Installing $fm"
+                sudo_or_warn apt-get install -y --install-recommends "$fm" \
+                    || warn "$fm unavailable via apt; it also comes from conda-forge (homepkg install $fm) or its release page"
+            done
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -878,10 +888,6 @@ install_packages() {
                 info "Installing gdbus (live shortcut updates)"
                 sudo_or_warn apt-get install -y --install-recommends libglib2.0-bin \
                     || warn "libglib2.0-bin unavailable via apt; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
-                # yazi (terminal file manager) is often not in the default repos;
-                # install it separately so its absence doesn't block the rest.
-                sudo_or_warn apt-get install -y --install-recommends yazi \
-                    || warn "yazi unavailable via apt; install with 'cargo install --locked yazi-fm yazi-cli'"
             fi
             ;;
         redhat)
@@ -918,6 +924,15 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn dnf install -y zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # yazi and lf are terminal file managers -- CLI tools, useful on
+            # headless boxes too, so install them regardless of --no-gui. One
+            # transaction each, matching the Debian branch: dnf aborts the whole
+            # request on one unknown name, and yazi may need a COPR.
+            for fm in yazi lf; do
+                info "Installing $fm"
+                sudo_or_warn dnf install -y "$fm" \
+                    || warn "$fm unavailable via dnf; it also comes from conda-forge (homepkg install $fm) or its release page"
+            done
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -953,10 +968,6 @@ install_packages() {
                 info "Installing gdbus (live shortcut updates)"
                 sudo_or_warn dnf install -y glib2 \
                     || warn "glib2 unavailable via dnf; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
-                # yazi (terminal file manager) may need a COPR; install it
-                # separately so its absence doesn't block the rest.
-                sudo_or_warn dnf install -y yazi \
-                    || warn "yazi unavailable via dnf; install with 'cargo install --locked yazi-fm yazi-cli'"
             fi
             ;;
         macos)
@@ -996,6 +1007,13 @@ install_packages() {
             info "Installing zoxide"
             brew install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # yazi and lf are terminal file managers -- CLI tools, not graphical,
+            # so install them regardless of --no-gui (matching the Linux paths).
+            # One brew install each so a formula rename can't take the other down.
+            for fm in yazi lf; do
+                info "Installing $fm"
+                brew install "$fm" || warn "could not install $fm"
+            done
             # Node.js + tsc from Homebrew on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). brew needs no
@@ -1033,7 +1051,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip yazi zoxide zsh"
             ;;
     esac
 }
@@ -1365,7 +1383,7 @@ install_home_tools() {
     # fnm (Node version manager) is a convenience tool -- installed regardless
     # of --no-npm, mirroring the root path's install_fnm (which is skipped under
     # --no-root, so fnm comes from here instead).
-    tools="ripgrep fd bat fzf jq delta gh fnm zoxide"
+    tools="ripgrep fd bat fzf jq delta gh fnm zoxide yazi lf"
     if test "$NPM" = yes; then
         # node/npm + tsc are the actual build toolchain for setup-kde's
         # Krohnkite source-build fallback (its normal path fetches a

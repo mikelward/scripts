@@ -1145,6 +1145,19 @@ check("registry maps carapace to carapace-bin releases",
       and hp.TOOLS["carapace"]["github"] == "carapace-sh/carapace-bin"
       and hp.TOOLS["carapace"]["bins"] == ["carapace"])
 
+# Terminal file managers. Both have a conda-forge feedstock, so they take the
+# default mamba path and ride the offline bundle; both also have a GitHub
+# release for --backend github. yazi ships two binaries (the file manager and
+# its `ya` CLI helper); lf is a single binary.
+check("registry maps yazi to conda-forge with yazi/ya bins",
+      hp.TOOLS["yazi"]["conda"] == "yazi"
+      and hp.TOOLS["yazi"]["github"] == "sxyazi/yazi"
+      and hp.TOOLS["yazi"]["bins"] == ["yazi", "ya"])
+check("registry maps lf to conda-forge with an lf bin",
+      hp.TOOLS["lf"]["conda"] == "lf"
+      and hp.TOOLS["lf"]["github"] == "gokcehan/lf"
+      and hp.TOOLS["lf"]["bins"] == ["lf"])
+
 # Krohnkite: no conda-forge feedstock, no GitHub repo -- its release lives on
 # Codeberg, pinned to a specific (beta) tag rather than "latest", and it's not
 # a CLI tool so it carries no "bins".

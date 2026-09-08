@@ -241,6 +241,45 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$macos_tmpdir"
 }
 
+# Run install_packages' Linux arm ($1: debian|redhat) against a mock package
+# manager that records every invocation and succeeds, with the GUI off. This
+# exercises the real dispatch -- which install commands are actually issued --
+# rather than grepping the source, so it can prove yazi/lf are installed even
+# under --no-gui (they sit outside the GUI block) and that the GUI-only packages
+# are not. NPM=no keeps the node/tsc steps out of the recorded calls.
+#   Leaves $calls set to the package-manager invocations.
+run_linux_packages() {
+    linux_os="$1"
+    case "$linux_os" in
+        debian) linux_pm=apt-get ;;
+        redhat) linux_pm=dnf ;;
+        *) echo "run_linux_packages: unknown OS $linux_os" >&2; return 2 ;;
+    esac
+    linux_tmpdir="$(mktemp -d)"
+    linux_calls="$linux_tmpdir/calls"
+    cat > "$linux_tmpdir/$linux_pm" <<MOCK
+#!/bin/sh
+printf '%s\n' "$linux_pm \$*" >> "$linux_calls"
+exit 0
+MOCK
+    chmod +x "$linux_tmpdir/$linux_pm"
+
+    set +e
+    output="$(PATH="$linux_tmpdir:$PATH" \
+        sh -c "set -e
+OS=$linux_os
+NPM=no
+GUI_ENABLED=0
+sudo_or_warn() { \"\$@\"; }
+$(extract_functions "info warn install_packages")
+install_packages
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$linux_calls" 2>/dev/null)"
+    rm -rf "$linux_tmpdir"
+}
+
 # Run the two "homepkg is missing" warning paths with SCRIPTS_DIR pointed at a
 # home-shaped path that doesn't exist. Both functions bail right after warning,
 # so this exercises exactly the messages under test -- and the path is what the
@@ -743,7 +782,7 @@ test_sudo_calls_are_guarded() {
 # manual-install hint for unsupported OSes.
 test_unzip_installed() {
     assert_source_contains "unzip" &&
-    assert_source_contains "typescript unzip zoxide zsh"
+    assert_source_contains "typescript unzip yazi zoxide zsh"
 }
 
 # --- fnm ---
@@ -771,8 +810,6 @@ test_fnm_installed() {
 
 # The extras arrive prebuilt now -- Homebrew bottles or release artifacts -- so
 # setup builds nothing from source and installs no Rust toolchain of its own.
-# (The yazi hints still name a cargo command for the user to run by hand; those
-# are messages, not installs.)
 test_no_source_builds() {
     assert_source_not_contains "sh.rustup.rs" &&
     assert_source_not_contains "rustup update" &&
@@ -1121,8 +1158,53 @@ test_zoxide_is_a_core_package() {
     test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 3 &&
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
-    assert_source_contains "unzip zoxide zsh" &&
-    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide"'
+    assert_source_contains "yazi zoxide zsh" &&
+    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide yazi lf"'
+}
+
+# yazi and lf are terminal file managers: CLI tools that are useful headless,
+# not desktop apps, so they install on every path regardless of --no-gui and
+# ride the homepkg core set (and thus the offline mamba bundle) rather than
+# sitting in the GUI-only block. yazi used to live in the GUI block with a
+# cargo-install hint; that hint is gone now that conda-forge (homepkg) provides
+# both. These run the real dispatch and assert the commands issued, rather than
+# grepping the source: a grep can't prove the install stays outside the GUI
+# guard or that homepkg is actually invoked (not just named in a warning).
+
+# Debian: yazi and lf install even with the GUI off, so they reach a headless
+# box -- and the GUI-only packages (kitty, kde-standard) do not, confirming the
+# GUI really is off and the file managers sit outside that block.
+test_file_managers_install_headless_debian() {
+    run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "apt-get install -y --install-recommends yazi" &&
+    assert_calls_contain "apt-get install -y --install-recommends lf" &&
+    assert_calls_lack "kde-standard" &&
+    assert_calls_lack "install -y --install-recommends kitty"
+}
+
+# Fedora: the same, via dnf.
+test_file_managers_install_headless_redhat() {
+    run_linux_packages redhat
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "dnf install -y yazi" &&
+    assert_calls_contain "dnf install -y lf" &&
+    assert_calls_lack "kde-desktop-environment" &&
+    assert_calls_lack "dnf install -y kitty"
+}
+
+# The rootless path actually invokes homepkg with yazi and lf in the tools it
+# installs -- so --no-root and the offline mamba bundle (which carries the whole
+# registry, homepkg install reconciling it) get them too. The old cargo hint is
+# gone now that conda-forge provides both.
+test_file_managers_are_in_the_homepkg_core_set() {
+    run_home_tools_helix absent
+    assert_status 0 &&
+    assert_calls_contain "homepkg install ripgrep" &&
+    assert_calls_contain " zoxide yazi lf" &&
+    assert_source_not_contains "cargo install --locked yazi-fm yazi-cli"
 }
 
 # update-alternatives only covers x-terminal-emulator. What makes Plasma's own
@@ -1179,6 +1261,8 @@ test_macos_brew_failures_are_not_fatal() {
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_output_contains "some core Homebrew packages could not be installed" &&
     assert_output_contains "could not install zoxide" &&
+    assert_output_contains "could not install yazi" &&
+    assert_output_contains "could not install lf" &&
     assert_output_contains "could not install node" &&
     assert_output_contains "could not install tsc" &&
     assert_output_contains "could not install android-platform-tools" &&
@@ -1192,6 +1276,8 @@ test_macos_brew_failure_still_attempts_later_steps() {
     run_macos_packages 0
     assert_status 0 &&
     assert_calls_contain "brew install zoxide" &&
+    assert_calls_contain "brew install yazi" &&
+    assert_calls_contain "brew install lf" &&
     assert_calls_contain "brew install --cask android-platform-tools" &&
     assert_calls_contain "brew install kitty"
 }
@@ -2098,6 +2184,12 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
+run_test "yazi and lf install headlessly on Debian, not just under GUI" \
+    test_file_managers_install_headless_debian
+run_test "yazi and lf install headlessly on Fedora, not just under GUI" \
+    test_file_managers_install_headless_redhat
+run_test "yazi and lf are in the homepkg core set" \
+    test_file_managers_are_in_the_homepkg_core_set
 run_test "kitty is set as the KDE terminal on Debian" \
     test_kde_terminal_set_on_debian
 run_test "kitty is set as the KDE terminal on Fedora" \
