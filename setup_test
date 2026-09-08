@@ -1860,32 +1860,40 @@ test_home_tools_keeps_the_runtime_when_no_hx_landed() {
     assert_eq "$helix_link_target" "$ht_payload"
 }
 
-# On a fresh env, install_home_tools prefers a prebuilt bundle (which installs
-# offline). A bundle installs its full contents, so afterward it reconciles the
-# requested set online with "install $tools" -- adding any requested tool the
-# bundle lacked (a bare "update" wouldn't) and freshening -- rather than only
-# updating what's already present. An existing env or a missing bundle takes the
-# online install. Discovery: $HOMEPKG_BUNDLE, or homepkg-bundle.tgz beside the
-# scripts repo / in $HOME.
+# install_home_tools prefers a staged bundle: if one is present it unpacks it
+# (offline, flat into the prefix) and stops; otherwise it installs the set
+# online into a managed conda env. No online reconcile after the bundle --
+# unpack (flat) and the online install (env) are different mechanisms and
+# mustn't be layered on one run. Discovery: $HOMEPKG_BUNDLE, or
+# homepkg-bundle.tgz beside the scripts repo / in $HOME.
 test_home_tools_uses_bundle_optimistically() {
     assert_source_contains '"$homepkg" install-bundle "$bundle"' &&
     assert_source_contains 'HOMEPKG_BUNDLE' &&
     assert_source_contains 'homepkg-bundle.tgz' &&
-    assert_source_contains 'conda-meta' &&
-    assert_source_contains "a bundle installs its full contents" &&
-    assert_source_contains "couldn't reconcile the requested tools online"
+    assert_source_contains "a bundle unpacks its full contents additively" &&
+    # A staged bundle wins outright -- no env gate, no conda-meta probe.
+    assert_source_contains 'if test -n "$bundle"; then' &&
+    assert_source_not_contains 'conda-meta' &&
+    # No online reconcile after the bundle (that would build a shadowing env).
+    assert_source_not_contains "couldn't reconcile the requested tools online"
 }
 
-# install-bundle exits non-zero when the bundle was short of a tool, having
-# installed the rest. If the online top-up then fails too (offline), the env
-# is still there with whatever the bundle carried, so the run counts as
-# provisioned -- otherwise install_home_tools returns before putting
-# ~/.local/bin on PATH and later steps (setup-kde needs tsc) can't find the
-# tools that did land.
+# install-bundle exits 2 for a partial install (some tools landed, one the
+# bundle was built without didn't) and 1 when it installed nothing. On 2 setup
+# trusts the partial -- ~/.local/bin goes on PATH for what landed (unpack builds
+# no env marker to consult). On a total failure (wrong platform, unreadable
+# bundle) it falls through to the online install, so a connected box still gets
+# its tools. The online block is gated on provisioned, not on there being no
+# bundle, so that fall-through reaches it.
 test_home_tools_provisioned_by_a_partial_bundle() {
-    assert_source_contains 'elif test -d "\$env_dir/conda-meta"; then' &&
-    assert_source_contains "keeping what the bundle installed" &&
-    assert_source_contains "the bundle installed nothing and the online top-up failed"
+    assert_source_contains 'rc=$?' &&
+    assert_source_contains 'if test "$rc" -eq 2; then' &&
+    assert_source_contains "the bundle didn't provide everything (offline?); using what it did unpack" &&
+    assert_source_contains "falling back to the online install" &&
+    assert_source_contains 'if test "$provisioned" = no; then' &&
+    # provisioned=yes on bundle-success, partial (rc 2), and online-success --
+    # the three PATH-carrying outcomes.
+    test "$(grep -c '^ *provisioned=yes$' "$SETUP")" -ge 3
 }
 
 # A failed pull on an EXISTING checkout (e.g. offline) must warn and continue,

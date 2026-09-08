@@ -34,9 +34,12 @@ Push bundles (build on an online host, install on an air-gapped target):
     homepkg install-bundle tools.tgz                  # target: install offline
 
 A bundle carries whatever each tool needs: the solved conda closure for the
-tools with a conda-forge package, release assets for the ones without, and the
-micromamba to replay the closure with. `bundle` with no tool names covers the
-whole registry, so one file provisions a machine with no network at all.
+tools with a conda-forge package, release assets for the ones without, and a
+micromamba to unpack the closure with. install-bundle unpacks each conda
+package straight into the prefix (bin/lib/share), additively -- no env, no
+solver, so it needs no fresh prefix and leaves whatever's already installed in
+place. `bundle` with no tool names covers the whole registry, so one file
+provisions a machine with no network at all.
 
 Tool names are logical (ripgrep, fd, ...); the registry maps each to its conda
 package and its GitHub or Codeberg repo.
@@ -135,6 +138,14 @@ def warn(msg):
 
 
 class HomepkgError(Exception):
+    pass
+
+
+class BundlePartial(HomepkgError):
+    """A bundle installed some of its tools but not all -- distinct from a
+    HomepkgError that installed nothing, so install-bundle can exit with a code
+    that tells a caller (setup) to keep what landed rather than fall back to a
+    full online install."""
     pass
 
 
@@ -1086,9 +1097,10 @@ def remove_mamba(tools, prefix, plat, dry_run):
 #
 # Build a self-contained bundle on an online host, copy it to an air-gapped
 # target, install offline. The mamba bundle carries the solved dependency
-# closure plus micromamba, so the target builds a correct env with no network.
-# The github bundle carries static release assets (smaller; self-contained
-# tools only). A bundle is a .tar.gz of manifest.json + a backend payload.
+# closure plus micromamba, which install-bundle uses to unpack each package
+# flat into the prefix -- no env, no network. The github bundle carries static
+# release assets (smaller; self-contained tools only). A bundle is a .tar.gz of
+# manifest.json + a backend payload.
 
 def _write_bundle(out, srcdir):
     with tarfile.open(out, "w:gz") as tf:
@@ -1316,49 +1328,223 @@ def bundle_codeberg(tools, out, dry_run):
     info(f"wrote {out} ({os.path.getsize(out) // 1024} KiB)")
 
 
-def _localize_explicit(explicit_path, pkgs_dir):
-    """Rewrite the explicit lockfile's URLs to file:// paths in the bundle."""
-    out = []
-    for line in open(explicit_path):
-        line = line.rstrip("\n")
-        if line.startswith("http"):
-            url, _, frag = line.partition("#")
-            local = os.path.join(pkgs_dir, os.path.basename(url))
-            out.append("file://" + local + (("#" + frag) if frag else ""))
-        else:
-            out.append(line)
-    return "\n".join(out) + "\n"
+def _assert_tree_within(srcroot, dest, prefix_real):
+    """Raise unless every destination *directory* for srcroot's real-dir tree
+    resolves inside the prefix. A populated prefix may hold a directory symlink
+    (<prefix>/lib -> /elsewhere) that os.makedirs/shutil.move would follow,
+    writing a package's files outside the prefix -- so each directory we'd
+    create or descend is checked before any file is moved (see
+    _unpack_conda_pkg), and an escaping destination is refused before anything
+    has been replaced.
+
+    Only directories are checked, not leaves: a colliding leaf (a file, or a
+    symlink pointing outside) is unlinked before its replacement is moved in
+    (_move_tree), so its own target is never followed -- realpath-checking it
+    would wrongly refuse the additive last-writer-wins replacement. A symlinked
+    directory in the payload is likewise moved as a leaf and never descended
+    (os.walk with followlinks=False doesn't recurse into it), so it needs no
+    check on its target either.
+
+    A type mismatch between the payload and an existing destination is refused
+    in this whole-package pass rather than resolved by deletion (os.walk yields
+    parents before children, so the shallower destination is always caught
+    first):
+      - a destination directory blocked by a pre-existing non-directory (a file,
+        or a dangling/foreign symlink) -- otherwise _move_tree's makedirs raises
+        FileExistsError partway through the package;
+      - a destination leaf (a file, or a symlink moved whole) landing on a
+        pre-existing real directory -- otherwise its _rm_any would rmtree that
+        directory and its unrelated contents.
+    Only same-type collisions -- leaf over leaf, dir over dir -- are replaced or
+    merged (last writer wins); a package never deletes across types."""
+    for dirpath, dirs, files in os.walk(srcroot):
+        rel = os.path.relpath(dirpath, srcroot)
+        destdir = dest if rel == "." else os.path.join(dest, rel)
+        if not _within(prefix_real, destdir):
+            raise HomepkgError(f"refusing to write outside the prefix: {destdir}")
+        if os.path.lexists(destdir) and not os.path.isdir(destdir):
+            raise HomepkgError(
+                f"refusing to replace a non-directory with a directory: {destdir}")
+        # Leaves: plain files, plus symlinked subdirectories (moved as leaves,
+        # not descended -- os.walk with followlinks=False lists but doesn't
+        # recurse). A leaf over a real directory would rmtree it.
+        leaves = list(files) + [d for d in dirs
+                                if os.path.islink(os.path.join(dirpath, d))]
+        for name in leaves:
+            dst = os.path.join(destdir, name)
+            if os.path.isdir(dst) and not os.path.islink(dst):
+                raise HomepkgError(
+                    f"refusing to replace a directory with a non-directory: {dst}")
 
 
-def _install_bundle_mamba(td, manifest, prefix, dry_run):
-    env = mamba_env(prefix)
-    # A bundle's explicit lock is a complete env solved only for its own tools.
-    # Replaying it into an existing env would replace/downgrade shared deps and
-    # could break tools already there, so require a fresh env: bundle all tools
-    # together, or install into a clean prefix.
-    if os.path.isdir(os.path.join(env, "conda-meta")):
-        raise HomepkgError(
-            f"{env} already has a homepkg env; install-bundle needs a fresh env "
-            "(bundle all tools together, or use a different --prefix)")
-    # Use a prefix-owned micromamba only: an already-installed one here, else
-    # the static binary shipped in the bundle. Never an arbitrary PATH one,
-    # which may be wrong-arch, old, or dynamically linked.
-    mm = os.path.join(prefix, "bin", "micromamba")
-    if not os.path.exists(mm) and not dry_run:
-        os.makedirs(os.path.dirname(mm), exist_ok=True)
-        shutil.copy2(os.path.join(td, "micromamba"), mm)
-        _ensure_executable(mm)
-    offline = os.path.join(td, "offline.txt")
-    with open(offline, "w") as fh:
-        fh.write(_localize_explicit(os.path.join(td, "explicit.txt"),
-                                    os.path.join(td, "pkgs")))
-    info(f"installing {', '.join(manifest['tools'])} offline into {env}")
+def _move_tree(srcroot, dest):
+    """Move everything under srcroot into dest at the same relative path,
+    creating directories and overwriting a colliding leaf -- a file or a symlink
+    (unlinked, not followed), so a shared file two bundles both ship is
+    last-writer-wins. A symlinked directory in the payload is moved whole rather
+    than descended into (os.walk with followlinks=False lists it but doesn't
+    recurse), so that part of the payload isn't dropped with the temp dir.
+    Additive: a leaf already in dest that srcroot doesn't carry is left
+    untouched. Destinations must already have been validated with
+    _assert_tree_within."""
+    for dirpath, dirs, files in os.walk(srcroot):
+        rel = os.path.relpath(dirpath, srcroot)
+        destdir = dest if rel == "." else os.path.join(dest, rel)
+        os.makedirs(destdir, exist_ok=True)
+        leaves = list(files)
+        leaves += [d for d in dirs if os.path.islink(os.path.join(dirpath, d))]
+        for name in leaves:
+            dst = os.path.join(destdir, name)
+            _rm_any(dst)
+            shutil.move(os.path.join(dirpath, name), dst)
+
+
+def _unpack_conda_pkg(mm, pkg_path, prefix):
+    """Unpack one conda package flat into <prefix> using micromamba's own
+    extractor, so the target needs no zstd of its own.
+
+    micromamba writes the package's bin/lib/share plus an info/ metadata dir
+    into a directory. We extract into a temp dir inside the prefix (a sibling of
+    the final files, so the moves are same-filesystem renames), move everything
+    but info/ into place, and drop the temp -- so each package's info/ can't
+    collide and a failed extract never lands a half-written tree in the prefix.
+    There's no conda link step, hence no prefix rewriting: self-contained
+    compiled tools work (the registry's tools are), but a package that hardcodes
+    its build prefix in a script would not -- the same limit as --backend conda.
+    """
+    import subprocess
+    os.makedirs(prefix, exist_ok=True)
+    prefix_real = os.path.realpath(prefix)
+    xd = tempfile.mkdtemp(dir=prefix, prefix=".homepkg-unpack-")
+    try:
+        subprocess.run([mm, "package", "extract", pkg_path, xd],
+                       check=True, stdout=subprocess.DEVNULL)
+        entries = [(os.path.join(xd, n), os.path.join(prefix, n))
+                   for n in os.listdir(xd) if n != "info"]  # info/ is metadata
+        # Validate the WHOLE package before moving any of it, so a later
+        # top-level tree that escapes the prefix (or a type mismatch anywhere)
+        # can't leave an earlier one (bin/) already replaced. A directory tree
+        # goes through _assert_tree_within; a top-level leaf (a file or a
+        # symlink) can't write outside its single-component prefix path, but
+        # must not land on a pre-existing real directory -- _rm_any would rmtree
+        # it (the nested case is covered inside _assert_tree_within).
+        for src, dst in entries:
+            if os.path.isdir(src) and not os.path.islink(src):
+                _assert_tree_within(src, dst, prefix_real)
+            elif os.path.isdir(dst) and not os.path.islink(dst):
+                raise HomepkgError(
+                    f"refusing to replace a directory with a non-directory: {dst}")
+        for src, dst in entries:
+            if os.path.isdir(src) and not os.path.islink(src):
+                _move_tree(src, dst)
+            else:
+                _rm_any(dst)
+                shutil.move(src, dst)
+    finally:
+        # The payload is already in the prefix, so a failed cleanup isn't fatal
+        # -- but don't hide it (ignore_errors=True would): a stranded
+        # .homepkg-unpack-* dir left unreported would pile up across installs.
+        try:
+            shutil.rmtree(xd)
+        except OSError as exc:
+            warn(f"could not remove unpack staging dir {xd}: {exc}")
+
+
+def _pkg_hashes(explicit_path):
+    """Map each package filename in a bundle's explicit.txt to its recorded
+    (algo, hexdigest), so install can verify the shipped bytes before extract --
+    the check the old `micromamba create --file` path did for free. Lines are
+    '<url>#<md5hex>' or '<url>#sha256:<hex>' (see _explicit_frag)."""
+    hashes = {}
+    if not os.path.exists(explicit_path):
+        return hashes
+    with open(explicit_path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("@") or "#" not in line:
+                continue
+            url, frag = line.rsplit("#", 1)
+            fn = os.path.basename(url)
+            if frag.startswith("sha256:"):
+                hashes[fn] = ("sha256", frag[len("sha256:"):])
+            elif frag:
+                hashes[fn] = ("md5", frag)
+    return hashes
+
+
+def _verify_pkg_hash(fn, path, algo_hex):
+    algo, want = algo_hex
+    got = hashlib.new(algo, open(path, "rb").read()).hexdigest()
+    if got != want:
+        raise HomepkgError(f"{fn}: {algo} mismatch ({got} != {want})")
+
+
+def _conda_tools_missing(tools, prefix):
+    """Of `tools`, return those whose registry binaries aren't in <prefix>/bin,
+    making the ones that are present executable. A tool not in this homepkg's
+    registry is skipped with a warning rather than raising (see _link_bins). Used
+    both for the normal post-unpack report and, on a mid-closure unpack failure,
+    to mark only the tools that didn't land -- so a partial conda unpack reports
+    partial rather than installed-nothing."""
+    missing = []
+    for tool in tools:
+        meta = TOOLS.get(tool)
+        if meta is None:
+            warn(f"{tool}: not in this homepkg's registry; unpacked into the "
+                 "prefix but its binaries weren't verified")
+            continue
+        tool_missing = False
+        for b in meta["bins"]:
+            path = os.path.join(prefix, "bin", b)
+            if os.path.exists(path):
+                _ensure_executable(path)
+            else:
+                tool_missing = True
+        if tool_missing:
+            missing.append(tool)
+    return missing
+
+
+def _install_bundle_conda(td, manifest, prefix, dry_run):
+    """Install a bundle's conda closure by unpacking every package straight into
+    <prefix>, additively -- no env, no solver, no fresh-prefix requirement.
+
+    The closure was solved when the bundle was built, so pkgs/ already holds
+    every dependency; conda's $ORIGIN/../lib rpaths make the binaries run from
+    the prefix. Unpacking leaves whatever an earlier bundle put in the prefix in
+    place (a shared file is overwritten, last writer wins) -- so a re-run, or a
+    second bundle, just adds to what's there. Returns the tools whose binaries
+    didn't land, same contract as _install_bundle_github.
+    """
+    tools = manifest["tools"]
+    pkgdir = os.path.join(td, "pkgs")
+    pkgs = sorted(os.listdir(pkgdir)) if os.path.isdir(pkgdir) else []
+    info(f"unpacking {len(pkgs)} packages for {', '.join(tools)} into {prefix}")
     if dry_run:
-        info(f"  would run micromamba create --offline -p {env} --file {offline}")
-        return
-    _run_mamba(mm, prefix, ["create", "-y", "-p", env, "--offline",
-                            "--file", offline], False)
-    _link_bins(manifest["tools"], prefix)
+        info(f"  would unpack {len(pkgs)} packages into {prefix}")
+        return []
+    # The bundle ships a target-arch micromamba; use it to decompress (its own
+    # zstd), never a PATH one that may be wrong-arch or dynamically linked.
+    mm = os.path.join(td, "micromamba")
+    _ensure_executable(mm)
+    # Verify every package against explicit.txt's recorded hash before
+    # extracting any of them, so a corrupt or substituted closure member fails
+    # before the prefix is touched rather than after garbage has been unpacked.
+    hashes = _pkg_hashes(os.path.join(td, "explicit.txt"))
+    for fn in pkgs:
+        _require_basename(fn, "package file")
+        want = hashes.get(fn)
+        if want:
+            _verify_pkg_hash(fn, os.path.join(pkgdir, fn), want)
+        else:
+            warn(f"{fn}: no hash in explicit.txt; skipping verification")
+    for fn in pkgs:
+        _unpack_conda_pkg(mm, os.path.join(pkgdir, fn), prefix)
+    # Report a tool whose binaries didn't land (a truncated bundle).
+    missing = _conda_tools_missing(tools, prefix)
+    if not missing:
+        info(f"  unpacked {', '.join(tools)} into {prefix}/bin")
+    return missing
 
 
 def _install_bundle_github(td, manifest, prefix, dry_run):
@@ -1438,41 +1624,71 @@ def install_bundle(bundle_file, prefix, plat, dry_run):
                 "(pass --arch to override)")
         info(f"bundle: {backend}, platform {got}")
         failed = []
+        attempted = 0
         if backend == "combined":
-            # One bundle, both payloads: conda tools first (the env install
-            # wants a fresh prefix), then the static release assets. The two
-            # are independent, so a closure that can't be replayed -- an env
-            # already present, say -- mustn't cost you the static binaries.
+            # One bundle, several payloads: unpack the conda closure, then the
+            # static release assets. They're independent, so a conda unpack that
+            # fails partway (a truncated package, say) mustn't cost the static
+            # binaries -- catch a hard failure and mark just the conda tools.
             if "mamba" in manifest:
+                mtools = manifest["mamba"].get("tools", [])
+                attempted += len(mtools)
                 try:
-                    _install_bundle_mamba(td, manifest["mamba"], prefix, dry_run)
+                    failed.extend(_install_bundle_conda(
+                        td, manifest["mamba"], prefix, dry_run))
                 except Exception as exc:
-                    # Anything the replay can raise: our own "env already
-                    # exists", micromamba exiting non-zero (CalledProcessError),
-                    # a truncated payload. Narrowing this to HomepkgError would
-                    # let the commonest failure of all -- the create itself --
-                    # skip the static assets below.
                     warn(f"conda tools: {exc}")
-                    failed.extend(manifest["mamba"].get("tools", ["conda tools"]))
+                    # A conda closure is solved as a unit: a package failing
+                    # mid-unpack can leave an earlier tool's dependencies short,
+                    # and bin-presence can't tell a this-run install from one an
+                    # earlier bundle left. So don't salvage "landed" tools from a
+                    # broken closure -- mark the whole conda set failed. The
+                    # static github/codeberg halves are independent and still
+                    # install, so a bundle whose conda half fails while its
+                    # assets land is still partial (exit 2), not nothing.
+                    failed.extend(mtools or ["conda tools"])
             if "github" in manifest:
+                attempted += len(manifest["github"].get("tools", []))
                 failed.extend(_install_bundle_github(
                     td, manifest["github"], prefix, dry_run))
             if "codeberg" in manifest:
+                attempted += len(manifest["codeberg"].get("tools", []))
                 failed.extend(_install_bundle_codeberg(
                     td, manifest["codeberg"], prefix, dry_run))
         elif backend == "mamba":
-            _install_bundle_mamba(td, manifest, prefix, dry_run)
+            mtools = manifest.get("tools", [])
+            attempted = len(mtools)
+            try:
+                failed.extend(_install_bundle_conda(td, manifest, prefix, dry_run))
+            except Exception as exc:
+                # Same as the combined path: a mid-closure failure fails the
+                # whole conda set rather than salvaging unverifiable partials.
+                warn(f"conda tools: {exc}")
+                failed.extend(mtools or ["conda tools"])
         elif backend == "github":
+            attempted = len(manifest.get("tools", []))
             failed.extend(_install_bundle_github(td, manifest, prefix, dry_run))
         elif backend == "codeberg":
+            attempted = len(manifest.get("tools", []))
             failed.extend(_install_bundle_codeberg(td, manifest, prefix, dry_run))
         else:
             raise HomepkgError(f"unknown bundle backend: {backend}")
+        if attempted == 0:
+            # An empty manifest (a combined bundle with no payload sections, or
+            # any backend naming no tools) installs nothing -- a hard failure,
+            # not success, so setup falls back to the online install rather than
+            # accepting an invalid bundle and skipping it.
+            raise HomepkgError("bundle declares no tools to install")
         if failed:
             # Non-zero so the caller can fall back to installing them online
-            # (setup does), while everything the bundle did carry stays put.
-            raise HomepkgError(
-                f"bundle installed without: {', '.join(failed)}")
+            # (setup does), while everything the bundle did carry stays put. A
+            # partial install (some tools landed) is distinct from one that
+            # landed nothing -- BundlePartial lets install-bundle exit 2 vs 1 so
+            # setup only falls back to the online install in the latter case.
+            msg = f"bundle installed without: {', '.join(failed)}"
+            if 0 < len(failed) < attempted:
+                raise BundlePartial(msg)
+            raise HomepkgError(msg)
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -1550,6 +1766,12 @@ def main(argv=None):
         try:
             install_bundle(args.tools[0], args.prefix,
                            _resolve_plat(p, args.arch), args.dry_run)
+        except BundlePartial as e:
+            # Some tools landed, some didn't. Exit 2 (not 1) so a caller keeps
+            # the partial install -- setup adds ~/.local/bin to PATH for what
+            # landed rather than falling back to a full online install.
+            warn(str(e))
+            return 2
         except Exception as e:
             warn(str(e))
             return 1

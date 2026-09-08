@@ -110,9 +110,13 @@ homepkg install-bundle tools.tgz
 `bundle` with no tool names is the one-shot: it covers the whole registry,
 taking each tool from wherever it comes from. Tools with a conda-forge package
 go in as a solved dependency closure alongside the micromamba binary that
-replays it, so the target builds a correct environment with no network at all;
-the few with no feedstock (`atuin`, `carapace`) go in as static release assets.
-`install-bundle` replays whichever payloads the bundle carries.
+unpacks it, so `install-bundle` lays the packages flat into the prefix
+(`bin`/`lib`/`share`) with no network and no environment at all; the few with
+no feedstock (`atuin`, `carapace`) go in as static release assets.
+`install-bundle` unpacks whichever payloads the bundle carries. These are plain
+files in the prefix — `homepkg update` / `remove` manage only the online mamba
+env, not bundle-unpacked tools; to refresh those, install a newer bundle over
+them.
 
 The `github` variant builds a bundle of release assets only. It needs explicit
 tool names, since not every registered tool publishes one (`typescript` is
