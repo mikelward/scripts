@@ -326,24 +326,14 @@ reply, no offer to correct it. It is not a finding.
   answer, so say why and resolve; anything still to do stays open. When you think a comment is a false positive,
   say *why* on the thread (one or two sentences). Acknowledgement noise is
   fine and preferred over silence.
-- **Deferring a finding is your job to close out, not the maintainer's.**
-  When a Codex finding is real but out of scope for this PR (a follow-up,
-  a design call already made), don't stop and ask the maintainer to merge
-  past it: record the deferred work in `TODO.md`, **commit and push that
-  entry first**, then reply on the thread with the plan citing the pushed
-  sha and resolve it. Push before you reply and resolve — Codex reviews the
-  remote head, so an unpushed `TODO.md` note leaves it rediscovering the
-  same finding; and that push already re-triggers Codex on its own, so
-  don't also `@codex review` here — the manual ping is only for the
-  five-minute silence covered above. Resolving a deferred thread is the
-  deliberate exception to "anything still to do stays open" above: the work
-  is recorded and deferred on purpose, not dropped. A finding that arrived
-  as a top-level comment or review body has no thread to resolve — post the
-  same attributable reply as a PR comment and skip the resolve step; the
-  `TODO.md` entry is still the record. The required `codex` status only
-  clears with no findings, so a fresh review of the pushed, documented
-  state is how a deferred finding gets through the gate — escalate only if
-  the re-review re-raises it.
+- **Deferring a real-but-out-of-scope finding.** Don't ask the maintainer
+  to merge past it: note the follow-up in `TODO.md`, commit and push that
+  first, reply on the thread citing the sha, and resolve — resolving a
+  deferred thread is the exception to "anything still to do stays open"
+  above. A finding with no thread (top-level comment or review body) still
+  gets the `TODO.md` record, the push, and the reply — only the resolve is
+  skipped. The push re-triggers Codex; `@codex review` only for the
+  five-minute-silence case. Escalate only if the re-review re-raises it.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
   `pull_request_read` / `get_review_comments` (`review_threads[].id`) as
   `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
