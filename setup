@@ -842,16 +842,10 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn apt-get install -y --install-recommends zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # yazi and lf are terminal file managers -- CLI tools, useful on
-            # headless boxes too, so install them regardless of --no-gui. One
-            # transaction each: apt rejects the whole request on one unknown
-            # name, and neither is in every release's repos (lf isn't packaged
-            # for Debian/Ubuntu; yazi is missing from older ones).
-            for fm in yazi lf; do
-                info "Installing $fm"
-                sudo_or_warn apt-get install -y --install-recommends "$fm" \
-                    || warn "$fm unavailable via apt; it also comes from conda-forge (homepkg install $fm) or its release page"
-            done
+            # yazi and lf (terminal file managers) aren't in the Debian/Ubuntu
+            # repos, so they're not attempted here -- install_file_managers
+            # installs them from conda-forge via homepkg after the clone, on
+            # every profile.
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -924,15 +918,10 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn dnf install -y zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # yazi and lf are terminal file managers -- CLI tools, useful on
-            # headless boxes too, so install them regardless of --no-gui. One
-            # transaction each, matching the Debian branch: dnf aborts the whole
-            # request on one unknown name, and yazi may need a COPR.
-            for fm in yazi lf; do
-                info "Installing $fm"
-                sudo_or_warn dnf install -y "$fm" \
-                    || warn "$fm unavailable via dnf; it also comes from conda-forge (homepkg install $fm) or its release page"
-            done
+            # yazi and lf (terminal file managers) aren't in the base Fedora
+            # repos -- yazi needs a COPR -- so they're not attempted here;
+            # install_file_managers installs them from conda-forge via homepkg
+            # after the clone, on every profile.
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -1483,6 +1472,44 @@ install_home_tools() {
     fi
 }
 
+# --- Install the terminal file managers with no reliable distro package ---
+
+# yazi and lf aren't in the Debian/Ubuntu repos, and yazi needs a COPR on
+# Fedora -- but both are on conda-forge, so install them from there via homepkg
+# rather than attempting apt/dnf and warning about a miss we already expect.
+# Runs after the clone (homepkg lives in the scripts repo) on every profile, but
+# installs only what's missing: the --no-root path already got them from
+# install_home_tools and macOS from Homebrew, so this is a no-op there and does
+# the real work only on a privileged Linux box. homepkg installs into
+# ~/.local/bin, not necessarily on setup's own PATH, so check there too.
+missing_file_managers() {
+    missing=""
+    for tool in yazi lf; do
+        if ! command -v "$tool" >/dev/null 2>&1 \
+                && ! test -x "$HOME/.local/bin/$tool"; then
+            missing="$missing $tool"
+        fi
+    done
+    printf '%s' "$missing"
+}
+
+install_file_managers() {
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found in the scripts repo; skipping yazi and lf"
+        return 0
+    fi
+    file_managers="$(missing_file_managers)"
+    if test -z "$file_managers"; then
+        info "yazi and lf already installed"
+        return 0
+    fi
+    info "Installing$file_managers from conda-forge via homepkg (~/.local, no root)"
+    # shellcheck disable=SC2086  # deliberate word split: one arg per tool
+    "$homepkg" install $file_managers \
+        || warn "could not install$file_managers via homepkg; install manually if you want them"
+}
+
 # --- Install the interactive shell tools with no packaged build ---
 
 # The conf repo's shell config wires up four optional tools. fzf and zoxide
@@ -1914,11 +1941,14 @@ else
     info "Skipping heavyweight extras (helix, jj, nushell); minimal profile"
 fi
 
-# atuin/carapace are small static binaries with no packaged build, so they're
-# installed on every profile (including --minimal) once the scripts repo --
-# and with it homepkg -- is on disk.
+# atuin/carapace are small static binaries with no packaged build, and yazi/lf
+# have no reliable distro package -- both come from homepkg once the scripts
+# repo (and with it homepkg) is on disk, on every profile (including --minimal).
+# install_file_managers is a no-op where they're already installed (--no-root
+# via install_home_tools, macOS via Homebrew).
 if test "$INSTALL" = yes; then
     install_shell_tools
+    install_file_managers
 fi
 
 start_services

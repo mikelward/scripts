@@ -280,6 +280,41 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$linux_tmpdir"
 }
 
+# Run install_file_managers against a sandboxed HOME with a recording homepkg
+# stub in SCRIPTS_DIR. $1 = which file managers already exist in ~/.local/bin
+# before the call: none (default) | both. Leaves $output/$status/$calls set.
+run_install_file_managers() {
+    fm_present="${1:-none}"
+    fm_tmpdir="$(mktemp -d)"
+    fm_home="$fm_tmpdir/home"
+    fm_calls="$fm_tmpdir/calls"
+    fm_scripts="$fm_home/scripts"
+    mkdir -p "$fm_home/.local/bin" "$fm_scripts"
+    cat > "$fm_scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$fm_calls"
+MOCK
+    chmod +x "$fm_scripts/homepkg"
+    if test "$fm_present" = both; then
+        for _t in yazi lf; do
+            printf '#!/bin/sh\n' > "$fm_home/.local/bin/$_t"
+            chmod +x "$fm_home/.local/bin/$_t"
+        done
+    fi
+
+    set +e
+    output="$(sh -c "set -e
+HOME='$fm_home'
+SCRIPTS_DIR='$fm_scripts'
+$(extract_functions "info warn missing_file_managers install_file_managers")
+install_file_managers
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$fm_calls" 2>/dev/null)"
+    rm -rf "$fm_tmpdir"
+}
+
 # Run the two "homepkg is missing" warning paths with SCRIPTS_DIR pointed at a
 # home-shaped path that doesn't exist. Both functions bail right after warning,
 # so this exercises exactly the messages under test -- and the path is what the
@@ -1162,43 +1197,58 @@ test_zoxide_is_a_core_package() {
     assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide yazi lf"'
 }
 
-# yazi and lf are terminal file managers: CLI tools that are useful headless,
-# not desktop apps, so they install on every path regardless of --no-gui and
-# ride the homepkg core set (and thus the offline mamba bundle) rather than
-# sitting in the GUI-only block. yazi used to live in the GUI block with a
-# cargo-install hint; that hint is gone now that conda-forge (homepkg) provides
-# both. These run the real dispatch and assert the commands issued, rather than
-# grepping the source: a grep can't prove the install stays outside the GUI
-# guard or that homepkg is actually invoked (not just named in a warning).
+# yazi and lf are terminal file managers with no reliable distro package (yazi
+# isn't in Debian/Ubuntu; it needs a COPR on Fedora), so they come from
+# conda-forge via homepkg -- not from apt/dnf, where attempting them would only
+# warn about a miss we already expect. These run the real dispatch and assert
+# the commands issued, rather than grepping the source.
 
-# Debian: yazi and lf install even with the GUI off, so they reach a headless
-# box -- and the GUI-only packages (kitty, kde-standard) do not, confirming the
-# GUI really is off and the file managers sit outside that block.
-test_file_managers_install_headless_debian() {
+# The distro transactions must NOT name yazi/lf: a release that lacks them can't
+# abort the core install, and there's no "unavailable" warning. (kitty/kde-*
+# stay out too, confirming the GUI-off run.)
+test_file_managers_not_in_apt_transaction() {
     run_linux_packages debian
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_contain "apt-get install -y --install-recommends yazi" &&
-    assert_calls_contain "apt-get install -y --install-recommends lf" &&
+    assert_calls_lack "yazi" &&
+    assert_calls_lack "recommends lf" &&
     assert_calls_lack "kde-standard" &&
     assert_calls_lack "install -y --install-recommends kitty"
 }
 
-# Fedora: the same, via dnf.
-test_file_managers_install_headless_redhat() {
+test_file_managers_not_in_dnf_transaction() {
     run_linux_packages redhat
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_contain "dnf install -y yazi" &&
-    assert_calls_contain "dnf install -y lf" &&
+    assert_calls_lack "yazi" &&
+    assert_calls_lack "dnf install -y lf" &&
     assert_calls_lack "kde-desktop-environment" &&
     assert_calls_lack "dnf install -y kitty"
 }
 
-# The rootless path actually invokes homepkg with yazi and lf in the tools it
+# install_file_managers installs the missing ones from conda-forge via homepkg,
+# post-clone and on every profile (so a privileged Linux box, where apt/dnf
+# skipped them and install_home_tools didn't run, still gets them).
+test_file_managers_install_via_homepkg() {
+    run_install_file_managers none
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "homepkg install yazi lf"
+}
+
+# ...and it's a no-op where they're already present (macOS via Homebrew, or the
+# --no-root path via install_home_tools) -- no second copy in ~/.local/bin.
+test_file_managers_skipped_when_present() {
+    run_install_file_managers both
+    assert_status 0 &&
+    assert_output_contains "already installed" &&
+    test -z "$calls"
+}
+
+# The rootless path still invokes homepkg with yazi and lf in the tools it
 # installs -- so --no-root and the offline mamba bundle (which carries the whole
-# registry, homepkg install reconciling it) get them too. The old cargo hint is
-# gone now that conda-forge provides both.
+# registry) get them without needing install_file_managers. The old cargo hint
+# is gone now that conda-forge provides both.
 test_file_managers_are_in_the_homepkg_core_set() {
     run_home_tools_helix absent
     assert_status 0 &&
@@ -2192,10 +2242,14 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
-run_test "yazi and lf install headlessly on Debian, not just under GUI" \
-    test_file_managers_install_headless_debian
-run_test "yazi and lf install headlessly on Fedora, not just under GUI" \
-    test_file_managers_install_headless_redhat
+run_test "yazi and lf are not attempted via apt" \
+    test_file_managers_not_in_apt_transaction
+run_test "yazi and lf are not attempted via dnf" \
+    test_file_managers_not_in_dnf_transaction
+run_test "yazi and lf install from conda-forge via homepkg" \
+    test_file_managers_install_via_homepkg
+run_test "yazi and lf install is skipped when already present" \
+    test_file_managers_skipped_when_present
 run_test "yazi and lf are in the homepkg core set" \
     test_file_managers_are_in_the_homepkg_core_set
 run_test "kitty is set as the KDE terminal on Debian" \
