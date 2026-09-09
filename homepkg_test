@@ -1147,12 +1147,11 @@ check("registry maps carapace to carapace-bin releases",
 
 # Terminal file managers. Both have a conda-forge feedstock, so they take the
 # default mamba path and ride the offline bundle; both also have a GitHub
-# release for --backend github. yazi ships two binaries (the file manager and
-# its `ya` CLI helper); lf is a single binary.
-check("registry maps yazi to conda-forge with yazi/ya bins",
-      hp.TOOLS["yazi"]["conda"] == "yazi"
-      and hp.TOOLS["yazi"]["github"] == "sxyazi/yazi"
-      and hp.TOOLS["yazi"]["bins"] == ["yazi", "ya"])
+# release for --backend github. Each ships a single binary.
+check("registry maps joshuto to conda-forge with a joshuto bin",
+      hp.TOOLS["joshuto"]["conda"] == "joshuto"
+      and hp.TOOLS["joshuto"]["github"] == "kamiyaa/joshuto"
+      and hp.TOOLS["joshuto"]["bins"] == ["joshuto"])
 check("registry maps lf to conda-forge with an lf bin",
       hp.TOOLS["lf"]["conda"] == "lf"
       and hp.TOOLS["lf"]["github"] == "gokcehan/lf"
