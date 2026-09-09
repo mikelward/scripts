@@ -30,7 +30,7 @@ repo).
 `setup --no-root` wires this in automatically: it runs unprivileged (implying
 `--no-sudo`, so the `apt`/`dnf` installs and every other privileged step are
 skipped) and installs the CLI tools via `homepkg` instead — the core set
-(`ripgrep fd bat fzf jq delta gh zoxide yazi lf`) plus the extras (`helix jj nu`, unless
+(`ripgrep fd bat fzf jq delta gh zoxide joshuto lf`) plus the extras (`helix jj nu`, unless
 the minimal profile is in effect). `--no-sudo` on its own is just the mechanism
 (skip sudo); it assumes the tools are provided some other way.
 

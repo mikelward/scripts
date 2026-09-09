@@ -244,9 +244,9 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 # Run install_packages' Linux arm ($1: debian|redhat) against a mock package
 # manager that records every invocation and succeeds, with the GUI off. This
 # exercises the real dispatch -- which install commands are actually issued --
-# rather than grepping the source, so it can prove yazi/lf are installed even
-# under --no-gui (they sit outside the GUI block) and that the GUI-only packages
-# are not. NPM=no keeps the node/tsc steps out of the recorded calls.
+# rather than grepping the source, so it can prove the file managers are NOT
+# attempted via apt/dnf and that the GUI-only packages are not installed under
+# --no-gui. NPM=no keeps the node/tsc steps out of the recorded calls.
 #   Leaves $calls set to the package-manager invocations.
 run_linux_packages() {
     linux_os="$1"
@@ -296,7 +296,7 @@ printf '%s\n' "homepkg \$*" >> "$fm_calls"
 MOCK
     chmod +x "$fm_scripts/homepkg"
     if test "$fm_present" = both; then
-        for _t in yazi lf; do
+        for _t in joshuto lf; do
             printf '#!/bin/sh\n' > "$fm_home/.local/bin/$_t"
             chmod +x "$fm_home/.local/bin/$_t"
         done
@@ -817,7 +817,7 @@ test_sudo_calls_are_guarded() {
 # manual-install hint for unsupported OSes.
 test_unzip_installed() {
     assert_source_contains "unzip" &&
-    assert_source_contains "typescript unzip yazi zoxide zsh"
+    assert_source_contains "typescript unzip zoxide zsh"
 }
 
 # --- fnm ---
@@ -1193,24 +1193,24 @@ test_zoxide_is_a_core_package() {
     test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 3 &&
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
-    assert_source_contains "yazi zoxide zsh" &&
-    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide yazi lf"'
+    assert_source_contains "unzip zoxide zsh" &&
+    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide joshuto lf"'
 }
 
-# yazi and lf are terminal file managers with no reliable distro package (yazi
-# isn't in Debian/Ubuntu; it needs a COPR on Fedora), so they come from
+# joshuto and lf are terminal file managers with no reliable distro package
+# (neither is in Debian/Ubuntu or the base Fedora repos), so they come from
 # conda-forge via homepkg -- not from apt/dnf, where attempting them would only
 # warn about a miss we already expect. These run the real dispatch and assert
 # the commands issued, rather than grepping the source.
 
-# The distro transactions must NOT name yazi/lf: a release that lacks them can't
-# abort the core install, and there's no "unavailable" warning. (kitty/kde-*
+# The distro transactions must NOT name joshuto/lf: a release that lacks them
+# can't abort the core install, and there's no "unavailable" warning. (kitty/kde-*
 # stay out too, confirming the GUI-off run.)
 test_file_managers_not_in_apt_transaction() {
     run_linux_packages debian
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_lack "yazi" &&
+    assert_calls_lack "joshuto" &&
     assert_calls_lack "recommends lf" &&
     assert_calls_lack "kde-standard" &&
     assert_calls_lack "install -y --install-recommends kitty"
@@ -1220,7 +1220,7 @@ test_file_managers_not_in_dnf_transaction() {
     run_linux_packages redhat
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_lack "yazi" &&
+    assert_calls_lack "joshuto" &&
     assert_calls_lack "dnf install -y lf" &&
     assert_calls_lack "kde-desktop-environment" &&
     assert_calls_lack "dnf install -y kitty"
@@ -1233,7 +1233,7 @@ test_file_managers_install_via_homepkg() {
     run_install_file_managers none
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_contain "homepkg install yazi lf"
+    assert_calls_contain "homepkg install joshuto lf"
 }
 
 # ...and it's a no-op where they're already present (macOS via Homebrew, or the
@@ -1245,16 +1245,14 @@ test_file_managers_skipped_when_present() {
     test -z "$calls"
 }
 
-# The rootless path still invokes homepkg with yazi and lf in the tools it
+# The rootless path still invokes homepkg with joshuto and lf in the tools it
 # installs -- so --no-root and the offline mamba bundle (which carries the whole
-# registry) get them without needing install_file_managers. The old cargo hint
-# is gone now that conda-forge provides both.
+# registry) get them without needing install_file_managers.
 test_file_managers_are_in_the_homepkg_core_set() {
     run_home_tools_helix absent
     assert_status 0 &&
     assert_calls_contain "homepkg install ripgrep" &&
-    assert_calls_contain " zoxide yazi lf" &&
-    assert_source_not_contains "cargo install --locked yazi-fm yazi-cli"
+    assert_calls_contain " zoxide joshuto lf"
 }
 
 # update-alternatives only covers x-terminal-emulator. What makes Plasma's own
@@ -1311,7 +1309,7 @@ test_macos_brew_failures_are_not_fatal() {
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_output_contains "some core Homebrew packages could not be installed" &&
     assert_output_contains "could not install zoxide" &&
-    assert_output_contains "could not install yazi" &&
+    assert_output_contains "could not install joshuto" &&
     assert_output_contains "could not install lf" &&
     assert_output_contains "could not install node" &&
     assert_output_contains "could not install tsc" &&
@@ -1326,7 +1324,7 @@ test_macos_brew_failure_still_attempts_later_steps() {
     run_macos_packages 0
     assert_status 0 &&
     assert_calls_contain "brew install zoxide" &&
-    assert_calls_contain "brew install yazi" &&
+    assert_calls_contain "brew install joshuto" &&
     assert_calls_contain "brew install lf" &&
     assert_calls_contain "brew install --cask android-platform-tools" &&
     assert_calls_contain "brew install kitty"
@@ -2242,15 +2240,15 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
-run_test "yazi and lf are not attempted via apt" \
+run_test "joshuto and lf are not attempted via apt" \
     test_file_managers_not_in_apt_transaction
-run_test "yazi and lf are not attempted via dnf" \
+run_test "joshuto and lf are not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
-run_test "yazi and lf install from conda-forge via homepkg" \
+run_test "joshuto and lf install from conda-forge via homepkg" \
     test_file_managers_install_via_homepkg
-run_test "yazi and lf install is skipped when already present" \
+run_test "joshuto and lf install is skipped when already present" \
     test_file_managers_skipped_when_present
-run_test "yazi and lf are in the homepkg core set" \
+run_test "joshuto and lf are in the homepkg core set" \
     test_file_managers_are_in_the_homepkg_core_set
 run_test "kitty is set as the KDE terminal on Debian" \
     test_kde_terminal_set_on_debian
