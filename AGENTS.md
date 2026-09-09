@@ -302,7 +302,9 @@ reply, no offer to correct it. It is not a finding.
   picked the push up.
 - **Address Codex comments automatically — don't wait to be asked.** Read
   each one, decide whether it's a real issue or a false positive, and if it's
-  real, fix it in the same PR. Fold the fix into the commit it belongs to
+  real, fix it in the same PR — the one exception being a real finding that's
+  genuinely out of scope for this PR, which you defer instead (see *Deferring
+  a finding* below). Fold the fix into the commit it belongs to
   (rebase / `--fixup`) rather than tacking on an "address review" commit.
   Group several small fixes into one commit when they share a topic.
 - **Judge every review comment on merit, whoever wrote it.** Verify the claim
@@ -324,6 +326,24 @@ reply, no offer to correct it. It is not a finding.
   answer, so say why and resolve; anything still to do stays open. When you think a comment is a false positive,
   say *why* on the thread (one or two sentences). Acknowledgement noise is
   fine and preferred over silence.
+- **Deferring a finding is your job to close out, not the maintainer's.**
+  When a Codex finding is real but out of scope for this PR (a follow-up,
+  a design call already made), don't stop and ask the maintainer to merge
+  past it: record the deferred work in `TODO.md`, **commit and push that
+  entry first**, then reply on the thread with the plan citing the pushed
+  sha and resolve it. Push before you reply and resolve — Codex reviews the
+  remote head, so an unpushed `TODO.md` note leaves it rediscovering the
+  same finding; and that push already re-triggers Codex on its own, so
+  don't also `@codex review` here — the manual ping is only for the
+  five-minute silence covered above. Resolving a deferred thread is the
+  deliberate exception to "anything still to do stays open" above: the work
+  is recorded and deferred on purpose, not dropped. A finding that arrived
+  as a top-level comment or review body has no thread to resolve — post the
+  same attributable reply as a PR comment and skip the resolve step; the
+  `TODO.md` entry is still the record. The required `codex` status only
+  clears with no findings, so a fresh review of the pushed, documented
+  state is how a deferred finding gets through the gate — escalate only if
+  the re-review re-raises it.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
   `pull_request_read` / `get_review_comments` (`review_threads[].id`) as
   `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
