@@ -104,7 +104,6 @@ TOOLS = {
     # Terminal file managers. Both have a conda-forge feedstock -- so they ride
     # the default mamba path and the offline bundle -- and a GitHub release for
     # --backend github. Each ships a single binary.
-    "joshuto":  {"conda": "joshuto",  "github": "kamiyaa/joshuto",    "bins": ["joshuto"]},
     "lf":       {"conda": "lf",       "github": "gokcehan/lf",        "bins": ["lf"]},
     # Node toolchain for the setup --no-root path: node/npm/tsc from conda-forge
     # instead of a distro package, plus fnm (which on root boxes comes from its

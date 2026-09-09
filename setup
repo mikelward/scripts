@@ -863,10 +863,9 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn apt-get install -y --install-recommends zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # joshuto and lf (terminal file managers) aren't in the Debian/Ubuntu
-            # repos, so they're not attempted here -- install_file_managers
-            # installs them from conda-forge via homepkg after the clone, on
-            # every profile.
+            # lf (terminal file manager) isn't in the Debian/Ubuntu repos, so
+            # it's not attempted here -- install_file_managers installs it from
+            # conda-forge via homepkg after the clone, on every profile.
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -939,10 +938,9 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn dnf install -y zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # joshuto and lf (terminal file managers) aren't in the base Fedora
-            # repos, so they're not attempted here; install_file_managers
-            # installs them from conda-forge via homepkg after the clone, on
-            # every profile.
+            # lf (terminal file manager) isn't in the base Fedora repos, so
+            # it's not attempted here; install_file_managers installs it from
+            # conda-forge via homepkg after the clone, on every profile.
             # Node.js + tsc from the distro on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). Under --no-root
@@ -1017,13 +1015,10 @@ install_packages() {
             info "Installing zoxide"
             brew install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # joshuto and lf are terminal file managers -- CLI tools, not graphical,
-            # so install them regardless of --no-gui (matching the Linux paths).
-            # One brew install each so a formula rename can't take the other down.
-            for fm in joshuto lf; do
-                info "Installing $fm"
-                brew install "$fm" || warn "could not install $fm"
-            done
+            # lf (terminal file manager) is a CLI tool, not graphical, so
+            # install it regardless of --no-gui (matching the Linux paths).
+            info "Installing lf"
+            brew install lf || warn "could not install lf"
             # Node.js + tsc from Homebrew on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). brew needs no
@@ -1061,7 +1056,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq joshuto kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
             ;;
     esac
 }
@@ -1526,7 +1521,7 @@ install_home_tools() {
     # fnm (Node version manager) is a convenience tool -- installed regardless
     # of --no-npm, mirroring the root path's install_fnm (which is skipped under
     # --no-root, so fnm comes from here instead).
-    tools="ripgrep fd bat fzf jq delta gh fnm zoxide joshuto lf"
+    tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf"
     if test "$NPM" = yes; then
         # node/npm + tsc are the actual build toolchain for setup-kde's
         # Krohnkite source-build fallback (its normal path fetches a
@@ -1628,40 +1623,31 @@ install_home_tools() {
 
 # --- Install the terminal file managers with no reliable distro package ---
 
-# joshuto and lf aren't in the Debian/Ubuntu or base Fedora repos -- but both
-# are on conda-forge, so install them from there via homepkg rather than
-# attempting apt/dnf and warning about a miss we already expect.
+# lf isn't in the Debian/Ubuntu or base Fedora repos -- but it's on
+# conda-forge, so install it from there via homepkg rather than attempting
+# apt/dnf and warning about a miss we already expect.
 # Runs after the clone (homepkg lives in the scripts repo) on every profile, but
-# installs only what's missing: the --no-root path already got them from
+# installs only what's missing: the --no-root path already got it from
 # install_home_tools and macOS from Homebrew, so this is a no-op there and does
 # the real work only on a privileged Linux box. homepkg installs into
 # ~/.local/bin, not necessarily on setup's own PATH, so check there too.
-missing_file_managers() {
-    missing=""
-    for tool in joshuto lf; do
-        if ! command -v "$tool" >/dev/null 2>&1 \
-                && ! test -x "$HOME/.local/bin/$tool"; then
-            missing="$missing $tool"
-        fi
-    done
-    printf '%s' "$missing"
+lf_missing() {
+    ! command -v lf >/dev/null 2>&1 && ! test -x "$HOME/.local/bin/lf"
 }
 
 install_file_managers() {
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
-        warn "homepkg not found in the scripts repo; skipping joshuto and lf"
+        warn "homepkg not found in the scripts repo; skipping lf"
         return 0
     fi
-    file_managers="$(missing_file_managers)"
-    if test -z "$file_managers"; then
-        info "joshuto and lf already installed"
+    if ! lf_missing; then
+        info "lf already installed"
         return 0
     fi
-    info "Installing$file_managers from conda-forge via homepkg (~/.local, no root)"
-    # shellcheck disable=SC2086  # deliberate word split: one arg per tool
-    "$homepkg" install $file_managers \
-        || warn "could not install$file_managers via homepkg; install manually if you want them"
+    info "Installing lf from conda-forge via homepkg (~/.local, no root)"
+    "$homepkg" install lf \
+        || warn "could not install lf via homepkg; install manually if you want it"
 }
 
 # --- Install the interactive shell tools with no packaged build ---
@@ -2100,10 +2086,10 @@ else
     info "Skipping heavyweight extras (helix, jj, nushell); minimal profile"
 fi
 
-# atuin/carapace are small static binaries with no packaged build, and joshuto/lf
-# have no reliable distro package -- both come from homepkg once the scripts
+# atuin/carapace are small static binaries with no packaged build, and lf
+# has no reliable distro package -- all come from homepkg once the scripts
 # repo (and with it homepkg) is on disk, on every profile (including --minimal).
-# install_file_managers is a no-op where they're already installed (--no-root
+# install_file_managers is a no-op where lf is already installed (--no-root
 # via install_home_tools, macOS via Homebrew).
 if test "$INSTALL" = yes; then
     install_shell_tools
