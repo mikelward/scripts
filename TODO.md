@@ -21,3 +21,15 @@
       gates, and auto-merge. A ruleset on the default branch requiring
       the gates, the `codex` status, conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
+
+## setup / homepkg
+
+- [ ] **Purge setup-managed tools that are retired from the registry.**
+      Dropping a tool from homepkg's `TOOLS` (e.g. `yazi`, replaced by
+      `joshuto` in #235) only stops *installing* it: `install_mamba` /
+      `_link_bins` never remove an already-installed package, so it
+      lingers orphaned in the managed env, and `homepkg remove <tool>`
+      rejects it as unknown once the registry entry is gone. Add a way to
+      remove setup-managed tools (distinguishing them from independently
+      installed copies) so an upgrade that retires one can clean it up.
+      Deferred from #235, where the orphan was accepted.
