@@ -3,8 +3,8 @@
 #
 # Usage:
 #     setup [--gui | --no-gui] [--kde] [--minimal | --full] \
-#           [--no-install] [--ignore-errors] [--ssh | --no-ssh] [--no-npm] \
-#           [--github PREFIX] [-h | --help]
+#           [--no-install] [--purge-obsolete] [--ignore-errors] \
+#           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -134,6 +134,14 @@ MIN_DISK_GB="${MIN_DISK_GB:-15}"
 #   no  - skip every install step and only (re)apply configuration (--no-install)
 INSTALL=yes
 
+# Whether to purge the obsolete Sway/Hyprland desktop packages an earlier setup
+# installed (setup now builds only KDE Plasma + Krohnkite). One of:
+#   no  - leave them in place (the default)
+#   yes - purge the Sway/Hyprland-specific packages (--purge-obsolete)
+# Off by default because setup is also fetched via "curl | sh" onto machines
+# that may run Sway or Hyprland deliberately, where purging them would be hostile.
+PURGE_OBSOLETE=no
+
 # Whether to keep going after a command fails. One of:
 #   no  - abort on the first error, via set -e (the default)
 #   yes - keep going past failures (--ignore-errors)
@@ -199,8 +207,8 @@ EXTRAS=auto
 usage() {
     cat <<'USAGE'
 Usage: setup [--gui | --no-gui] [--kde] [--minimal | --full]
-             [--no-install] [--no-sudo] [--no-root] [--ignore-errors]
-             [--no-live-shortcuts]
+             [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
+             [--ignore-errors] [--no-live-shortcuts]
              [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
@@ -219,6 +227,13 @@ Options:
                    artifacts into ~/.local via homepkg
   --no-install     Skip every install step (packages, fonts, uv, extras, root
                    config) and only (re)apply config. Forwarded to setup-kde/macos
+  --purge-obsolete Purge the Sway/Hyprland desktop packages an earlier setup
+                   installed (setup now builds only KDE Plasma + Krohnkite):
+                   the compositors, their lock/idle/bg helpers, the wlroots
+                   portals, and the shared bar/launcher/notification stack
+                   (waybar, fuzzel, swaync). Off by default; only removes
+                   packages that are installed, so it's safe to re-run. Leaves
+                   the generic Wayland utilities -- run autoremove for orphans
   --no-sudo        Run no sudo at all: every privileged command (package
                    installs included) is skipped up front instead of attempted,
                    so setup never prompts or stalls. For boxes with no sudo. A
@@ -451,6 +466,12 @@ while test $# -gt 0; do
             ;;
         --no-install)
             INSTALL=no
+            ;;
+        --purge-obsolete)
+            PURGE_OBSOLETE=yes
+            ;;
+        --no-purge-obsolete)
+            PURGE_OBSOLETE=no
             ;;
         --sudo)
             SUDO=yes
@@ -1041,6 +1062,139 @@ install_packages() {
         *)
             warn "Unsupported OS, skipping package installation"
             warn "Please install manually: bat curl fd fzf git git-delta golang jq joshuto kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
+            ;;
+    esac
+}
+
+# --- Purge obsolete desktop packages ---
+
+# Packages an earlier setup installed for the Sway and Hyprland desktops, which
+# setup dropped when it settled on KDE Plasma + Krohnkite as its one desktop
+# (July 2026). apt/dnf never uninstall on their own, so a box that once ran the
+# old setup keeps them -- most visibly a sway-notification-center (swaync)
+# systemd user unit that keeps starting. --purge-obsolete removes them.
+#
+# Only the Sway/Hyprland-specific packages are named: the compositors, their
+# lock/idle/bg helpers, the wlroots portals, and the shared bar/launcher/
+# notification stack (waybar, fuzzel, swaync). The generic Wayland utilities the
+# old setup also pulled in (pipewire, network-manager-gnome, ...) are left
+# alone -- they're useful under KDE too, and autoremove is the tool for their
+# orphaned deps, which is why we point at it rather than running it ourselves.
+# Report whether package $1 is installed, telling the expected "not installed"
+# answer apart from a real package-database query failure (a corrupt or
+# unreadable db). A failure must never masquerade as "not installed": that would
+# drop an installed package from the purge and let it report success while
+# leaving the package -- the swaync unit included -- behind. On such a failure
+# this warns with the query's own error and returns 2; otherwise 0 (installed),
+# 1 (not), or 3 (installed but held on Debian -- the caller reports those and
+# leaves them alone). We filter to installed packages because passing an unknown
+# name to apt-get/dnf aborts the whole transaction.
+obsolete_pkg_installed() {
+    _op_pkg="$1"
+    _op_errf=$(mktemp) || {
+        warn "could not create a temp file to query $_op_pkg; leaving it out of the purge"
+        return 2
+    }
+    _op_ret=2
+    case "$OS" in
+        debian)
+            # dpkg-query exits 0 when it knows the package (status on stdout),
+            # 1 when no package matches (the not-installed answer), and >1 on a
+            # real error. The Status is "want eflag state": the state word (the
+            # last) says whether it's installed at all, whatever the desired
+            # action, and the want word (the first) flags a hold. A held package
+            # is installed but must not go into the -y purge -- apt-get -y aborts
+            # the whole transaction on a held change without
+            # --allow-change-held-packages -- so it gets its own return.
+            _op_status=$(dpkg-query -W -f='${Status}' "$_op_pkg" 2>"$_op_errf")
+            case $? in
+                0) case "${_op_status##* }" in
+                       installed)
+                           case "${_op_status%% *}" in
+                               hold) _op_ret=3 ;;
+                               *) _op_ret=0 ;;
+                           esac ;;
+                       *) _op_ret=1 ;;
+                   esac ;;
+                1) _op_ret=1 ;;
+            esac
+            ;;
+        redhat)
+            # rpm -q exits 0 when installed. A not-installed package exits
+            # non-zero with its message on stdout and nothing on stderr; a real
+            # error writes to stderr -- so stderr, not the exit code, separates
+            # the two, since rpm reuses exit 1 for both.
+            if rpm -q "$_op_pkg" >/dev/null 2>"$_op_errf"; then
+                _op_ret=0
+            elif ! test -s "$_op_errf"; then
+                _op_ret=1
+            fi
+            ;;
+    esac
+    if test "$_op_ret" -eq 2; then
+        warn "querying package $_op_pkg failed ($(cat "$_op_errf")); leaving it out of the purge"
+    fi
+    rm -f "$_op_errf"
+    return "$_op_ret"
+}
+
+purge_obsolete_packages() {
+    # The list is reconciled against the July 2026 removal commit's install
+    # paths, not memory: swaync ships as sway-notification-center on
+    # Debian/Ubuntu and SwayNotificationCenter on Fedora, but those paths fell
+    # back to the upstream "swaync" name, so it goes in the shared list too. The
+    # session manager uwsm and the tiler autotiling were installed on both. The
+    # generic Wayland utilities those paths also pulled in (pipewire, blueman,
+    # grim/slurp, the GTK portal, the polkit agent, ...) are deliberately left
+    # out -- they're useful under KDE too. The rest share names across distros.
+    obsolete="sway swaybg swayidle swaylock xdg-desktop-portal-wlr \
+              hyprland hypridle hyprlock swww xdg-desktop-portal-hyprland \
+              uwsm waybar fuzzel kanshi autotiling swaync"
+    case "$OS" in
+        debian) obsolete="$obsolete sway-notification-center" ;;
+        redhat) obsolete="$obsolete SwayNotificationCenter" ;;
+        *) info "No obsolete-package purge for this OS"; return 0 ;;
+    esac
+
+    # obsolete_pkg_installed warns and returns non-zero on a real query failure,
+    # so a package whose status can't be determined is left out of the purge
+    # rather than silently skipped. Held Debian packages (return 3) are split
+    # off: a hold is a deliberate "do not touch", and apt-get -y would abort the
+    # whole purge on one anyway, so report them and leave them rather than force
+    # them out -- but don't drop them silently.
+    installed=""
+    held=""
+    for pkg in $obsolete; do
+        # Capture the status via || so a non-zero "not installed"/"held"/error
+        # return doesn't trip set -e (it isn't in a condition context here).
+        _pkg_state=0
+        obsolete_pkg_installed "$pkg" || _pkg_state=$?
+        case $_pkg_state in
+            0) installed="$installed $pkg" ;;
+            3) held="$held $pkg" ;;
+        esac
+    done
+    if test -n "$held"; then
+        warn "held, not purging (run 'sudo apt-mark unhold PKG' and re-run, or purge manually):$held"
+    fi
+    if test -z "$installed"; then
+        info "No obsolete Sway/Hyprland packages to purge"
+        return 0
+    fi
+
+    info "Purging obsolete Sway/Hyprland packages:$installed"
+    case "$OS" in
+        debian)
+            # shellcheck disable=SC2086  # word-split the collected package list
+            sudo_or_warn apt-get purge -y $installed \
+                || warn "could not purge some obsolete packages; purge them manually"
+            info "Run 'sudo apt-get autoremove --purge' to sweep up any orphaned dependencies"
+            ;;
+        redhat)
+            # shellcheck disable=SC2086  # word-split the collected package list
+            sudo_or_warn dnf remove -y $installed \
+                || warn "could not remove some obsolete packages; remove them manually"
+            info "Run 'sudo dnf autoremove' to sweep up any orphaned dependencies"
             ;;
     esac
 }
@@ -1899,6 +2053,11 @@ if test "$INSTALL" = yes; then
     install_fnm
 else
     info "Skipping software installation (--no-install)"
+fi
+# A removal, not an install, so it's keyed on its own flag rather than $INSTALL:
+# --purge-obsolete --no-install is a valid "clean up, change nothing else" run.
+if test "$PURGE_OBSOLETE" = yes; then
+    purge_obsolete_packages
 fi
 generate_ssh_key
 if test "$GUI_ENABLED" -eq 1; then

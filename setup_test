@@ -280,6 +280,88 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$linux_tmpdir"
 }
 
+# Run purge_obsolete_packages' Linux arm ($1: debian|redhat) against a mock
+# package manager and a mock package-query tool. $2 is a space-separated list of
+# packages the query reports as installed; $3 (optional) a single package whose
+# query the stub makes fail hard (corrupt-db style: stderr + a non-1 exit for
+# dpkg-query, stderr + exit 1 for rpm) to exercise the error path. Every other
+# name reports "not installed". This exercises the real filter -- which packages
+# actually reach apt-get purge / dnf remove -- rather than grepping the source.
+# Leaves $calls set to the package-manager invocation and $output/$status set.
+run_purge_obsolete() {
+    purge_os="$1"
+    purge_installed="$2"
+    purge_query_fail="$3"
+    purge_held="$4"
+    case "$purge_os" in
+        debian) purge_pm=apt-get ;;
+        redhat) purge_pm=dnf ;;
+        *) echo "run_purge_obsolete: unknown OS $purge_os" >&2; return 2 ;;
+    esac
+    purge_tmpdir="$(mktemp -d)"
+    purge_calls="$purge_tmpdir/calls"
+    cat > "$purge_tmpdir/$purge_pm" <<MOCK
+#!/bin/sh
+printf '%s\n' "$purge_pm \$*" >> "$purge_calls"
+exit 0
+MOCK
+    chmod +x "$purge_tmpdir/$purge_pm"
+    # The query stub answers "installed" (exit 0) only for names in
+    # $purge_installed, and fails hard for $purge_query_fail. The package name is
+    # the last argument in both callers (dpkg-query -W -f=... PKG, rpm -q PKG);
+    # walk $@ to get it, POSIXly, since the stub runs under /bin/sh. dpkg-query
+    # prints a three-word "want eflag state" Status to stdout on a match --
+    # "install ok installed" normally, "hold ok installed" for $purge_held (a
+    # held-but-installed package); on a hard failure it writes stderr and exits
+    # 2 (dpkg reserves exit 1 for "not installed"). rpm signals installed via
+    # exit 0 and a real error via stderr + a non-zero exit.
+    if test "$purge_os" = debian; then
+        cat > "$purge_tmpdir/dpkg-query" <<MOCK
+#!/bin/sh
+last=
+for a in "\$@"; do last=\$a; done
+if test -n "$purge_query_fail" && test "\$last" = "$purge_query_fail"; then
+    echo "dpkg-query: error: unable to read database" >&2; exit 2
+fi
+if test -n "$purge_held" && test "\$last" = "$purge_held"; then
+    echo "hold ok installed"; exit 0
+fi
+for _p in $purge_installed; do
+    if test "\$last" = "\$_p"; then echo "install ok installed"; exit 0; fi
+done
+exit 1
+MOCK
+        chmod +x "$purge_tmpdir/dpkg-query"
+    else
+        cat > "$purge_tmpdir/rpm" <<MOCK
+#!/bin/sh
+last=
+for a in "\$@"; do last=\$a; done
+if test -n "$purge_query_fail" && test "\$last" = "$purge_query_fail"; then
+    echo "error: rpmdb: damaged header" >&2; exit 1
+fi
+for _p in $purge_installed; do
+    if test "\$last" = "\$_p"; then exit 0; fi
+done
+exit 1
+MOCK
+        chmod +x "$purge_tmpdir/rpm"
+    fi
+
+    set +e
+    output="$(PATH="$purge_tmpdir:$PATH" \
+        sh -c "set -e
+OS=$purge_os
+sudo_or_warn() { \"\$@\"; }
+$(extract_functions "info warn obsolete_pkg_installed purge_obsolete_packages")
+purge_obsolete_packages
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$purge_calls" 2>/dev/null)"
+    rm -rf "$purge_tmpdir"
+}
+
 # Run install_file_managers against a sandboxed HOME with a recording homepkg
 # stub in SCRIPTS_DIR. $1 = which file managers already exist in ~/.local/bin
 # before the call: none (default) | both. Leaves $output/$status/$calls set.
@@ -1224,6 +1306,111 @@ test_file_managers_not_in_dnf_transaction() {
     assert_calls_lack "dnf install -y lf" &&
     assert_calls_lack "kde-desktop-environment" &&
     assert_calls_lack "dnf install -y kitty"
+}
+
+# --- --purge-obsolete: removing the old Sway/Hyprland desktop packages ---
+
+# The flag is accepted and documented. --help exits 0 (an unknown flag would
+# print "Unknown option" and exit 1), and the help text names the flag.
+test_purge_obsolete_flag_accepted_and_documented() {
+    run_setup --purge-obsolete --help
+    assert_status 0 &&
+    assert_output_contains "--purge-obsolete"
+}
+
+# Off by default, and the Main flow only purges when the flag turned it on --
+# a curl|sh run onto a box that deliberately runs Sway mustn't lose it.
+test_purge_obsolete_off_by_default() {
+    assert_source_contains "PURGE_OBSOLETE=no" &&
+    assert_source_contains 'test "$PURGE_OBSOLETE" = yes'
+}
+
+# Only the packages the query reports installed reach apt-get purge: swaync
+# (Debian's sway-notification-center) and waybar are removed, hyprland -- not
+# installed here -- is not named, and the run continues.
+test_purge_obsolete_purges_installed_debian() {
+    run_purge_obsolete debian "sway sway-notification-center waybar"
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_contain "sway-notification-center" &&
+    assert_calls_contain "waybar" &&
+    assert_calls_lack "hyprland" &&
+    assert_output_contains "autoremove"
+}
+
+# The old setup fell back to the upstream "swaync" package name (and installed
+# autotiling), so a box may carry those rather than the distro-named packages.
+# Both must be in the candidate list, or the purge misses the very swaync unit
+# that motivated the flag.
+test_purge_obsolete_purges_fallback_names_debian() {
+    run_purge_obsolete debian "swaync autotiling"
+    assert_status 0 &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_contain "swaync" &&
+    assert_calls_contain "autotiling"
+}
+
+# uwsm (the Wayland session manager the old paths installed for the Hyprland
+# session) is in the candidate list, so an installed one is purged.
+test_purge_obsolete_purges_uwsm_debian() {
+    run_purge_obsolete debian "uwsm"
+    assert_status 0 &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_contain "uwsm"
+}
+
+# A held package is detected (not silently dropped) but kept out of the -y
+# purge -- apt-get -y aborts the whole transaction on a held change -- so it's
+# reported while the non-held candidates are still purged.
+test_purge_obsolete_reports_held_not_purged() {
+    run_purge_obsolete debian "waybar" "" "fuzzel"
+    assert_status 0 &&
+    assert_output_contains "held, not purging" &&
+    assert_output_contains "fuzzel" &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_contain "waybar" &&
+    assert_calls_lack "fuzzel"
+}
+
+# A real query failure (corrupt db) must not look like "not installed": the
+# package is left out of the purge AND the failure is reported, not swallowed.
+test_purge_obsolete_query_failure_is_reported() {
+    run_purge_obsolete debian "waybar" "sway"
+    assert_status 0 &&
+    assert_output_contains "querying package sway failed" &&
+    assert_calls_contain "waybar" &&
+    assert_calls_lack "sway"
+}
+
+# Nothing installed -> nothing purged: no apt-get invocation, and it says so.
+test_purge_obsolete_nothing_installed_debian() {
+    run_purge_obsolete debian ""
+    assert_status 0 &&
+    assert_output_contains "No obsolete Sway/Hyprland packages to purge" &&
+    assert_calls_lack "apt-get purge"
+}
+
+# Fedora uses dnf remove and the SwayNotificationCenter package name.
+test_purge_obsolete_removes_installed_redhat() {
+    run_purge_obsolete redhat "sway SwayNotificationCenter"
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "dnf remove -y" &&
+    assert_calls_contain "SwayNotificationCenter" &&
+    assert_calls_lack "waybar" &&
+    assert_output_contains "autoremove"
+}
+
+# The generic Wayland utilities the old setup also installed (pipewire and
+# friends) are deliberately out of the candidate list, so even when one is
+# installed it's never queried and never purged -- only the desktop-specific
+# waybar goes.
+test_purge_obsolete_leaves_generic_wayland_alone() {
+    run_purge_obsolete debian "pipewire waybar"
+    assert_status 0 &&
+    assert_calls_contain "waybar" &&
+    assert_calls_lack "pipewire"
 }
 
 # install_file_managers installs the missing ones from conda-forge via homepkg,
@@ -2244,6 +2431,26 @@ run_test "joshuto and lf are not attempted via apt" \
     test_file_managers_not_in_apt_transaction
 run_test "joshuto and lf are not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
+run_test "--purge-obsolete is accepted and documented" \
+    test_purge_obsolete_flag_accepted_and_documented
+run_test "obsolete-package purge is off by default" \
+    test_purge_obsolete_off_by_default
+run_test "purge removes only the installed Sway/Hyprland packages (Debian)" \
+    test_purge_obsolete_purges_installed_debian
+run_test "purge covers the swaync/autotiling fallback names (Debian)" \
+    test_purge_obsolete_purges_fallback_names_debian
+run_test "purge covers the uwsm session manager (Debian)" \
+    test_purge_obsolete_purges_uwsm_debian
+run_test "purge reports held packages and keeps them out of the -y purge (Debian)" \
+    test_purge_obsolete_reports_held_not_purged
+run_test "a package-query failure is reported, not treated as absent" \
+    test_purge_obsolete_query_failure_is_reported
+run_test "purge is a no-op when nothing obsolete is installed" \
+    test_purge_obsolete_nothing_installed_debian
+run_test "purge removes the installed packages via dnf (Fedora)" \
+    test_purge_obsolete_removes_installed_redhat
+run_test "purge leaves the generic Wayland utilities alone" \
+    test_purge_obsolete_leaves_generic_wayland_alone
 run_test "joshuto and lf install from conda-forge via homepkg" \
     test_file_managers_install_via_homepkg
 run_test "joshuto and lf install is skipped when already present" \
