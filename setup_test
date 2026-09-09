@@ -378,17 +378,15 @@ printf '%s\n' "homepkg \$*" >> "$fm_calls"
 MOCK
     chmod +x "$fm_scripts/homepkg"
     if test "$fm_present" = both; then
-        for _t in joshuto lf; do
-            printf '#!/bin/sh\n' > "$fm_home/.local/bin/$_t"
-            chmod +x "$fm_home/.local/bin/$_t"
-        done
+        printf '#!/bin/sh\n' > "$fm_home/.local/bin/lf"
+        chmod +x "$fm_home/.local/bin/lf"
     fi
 
     set +e
     output="$(sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
-$(extract_functions "info warn missing_file_managers install_file_managers")
+$(extract_functions "info warn lf_missing install_file_managers")
 install_file_managers
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1276,23 +1274,22 @@ test_zoxide_is_a_core_package() {
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
-    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide joshuto lf"'
+    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf"'
 }
 
-# joshuto and lf are terminal file managers with no reliable distro package
-# (neither is in Debian/Ubuntu or the base Fedora repos), so they come from
-# conda-forge via homepkg -- not from apt/dnf, where attempting them would only
+# lf is a terminal file manager with no reliable distro package (it's in
+# neither Debian/Ubuntu nor the base Fedora repos), so it comes from
+# conda-forge via homepkg -- not from apt/dnf, where attempting it would only
 # warn about a miss we already expect. These run the real dispatch and assert
 # the commands issued, rather than grepping the source.
 
-# The distro transactions must NOT name joshuto/lf: a release that lacks them
-# can't abort the core install, and there's no "unavailable" warning. (kitty/kde-*
-# stay out too, confirming the GUI-off run.)
+# The distro transactions must NOT name lf: a release that lacks it can't abort
+# the core install, and there's no "unavailable" warning. (kitty/kde-* stay out
+# too, confirming the GUI-off run.)
 test_file_managers_not_in_apt_transaction() {
     run_linux_packages debian
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_lack "joshuto" &&
     assert_calls_lack "recommends lf" &&
     assert_calls_lack "kde-standard" &&
     assert_calls_lack "install -y --install-recommends kitty"
@@ -1302,7 +1299,6 @@ test_file_managers_not_in_dnf_transaction() {
     run_linux_packages redhat
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_lack "joshuto" &&
     assert_calls_lack "dnf install -y lf" &&
     assert_calls_lack "kde-desktop-environment" &&
     assert_calls_lack "dnf install -y kitty"
@@ -1413,17 +1409,17 @@ test_purge_obsolete_leaves_generic_wayland_alone() {
     assert_calls_lack "pipewire"
 }
 
-# install_file_managers installs the missing ones from conda-forge via homepkg,
+# install_file_managers installs lf from conda-forge via homepkg when missing,
 # post-clone and on every profile (so a privileged Linux box, where apt/dnf
-# skipped them and install_home_tools didn't run, still gets them).
+# skipped it and install_home_tools didn't run, still gets it).
 test_file_managers_install_via_homepkg() {
     run_install_file_managers none
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_contain "homepkg install joshuto lf"
+    assert_calls_contain "homepkg install lf"
 }
 
-# ...and it's a no-op where they're already present (macOS via Homebrew, or the
+# ...and it's a no-op where lf is already present (macOS via Homebrew, or the
 # --no-root path via install_home_tools) -- no second copy in ~/.local/bin.
 test_file_managers_skipped_when_present() {
     run_install_file_managers both
@@ -1432,14 +1428,14 @@ test_file_managers_skipped_when_present() {
     test -z "$calls"
 }
 
-# The rootless path still invokes homepkg with joshuto and lf in the tools it
-# installs -- so --no-root and the offline mamba bundle (which carries the whole
-# registry) get them without needing install_file_managers.
+# The rootless path still invokes homepkg with lf in the tools it installs --
+# so --no-root and the offline mamba bundle (which carries the whole registry)
+# get it without needing install_file_managers.
 test_file_managers_are_in_the_homepkg_core_set() {
     run_home_tools_helix absent
     assert_status 0 &&
     assert_calls_contain "homepkg install ripgrep" &&
-    assert_calls_contain " zoxide joshuto lf"
+    assert_calls_contain " zoxide lf"
 }
 
 # update-alternatives only covers x-terminal-emulator. What makes Plasma's own
@@ -1496,7 +1492,6 @@ test_macos_brew_failures_are_not_fatal() {
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_output_contains "some core Homebrew packages could not be installed" &&
     assert_output_contains "could not install zoxide" &&
-    assert_output_contains "could not install joshuto" &&
     assert_output_contains "could not install lf" &&
     assert_output_contains "could not install node" &&
     assert_output_contains "could not install tsc" &&
@@ -1511,7 +1506,6 @@ test_macos_brew_failure_still_attempts_later_steps() {
     run_macos_packages 0
     assert_status 0 &&
     assert_calls_contain "brew install zoxide" &&
-    assert_calls_contain "brew install joshuto" &&
     assert_calls_contain "brew install lf" &&
     assert_calls_contain "brew install --cask android-platform-tools" &&
     assert_calls_contain "brew install kitty"
@@ -2427,9 +2421,9 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
-run_test "joshuto and lf are not attempted via apt" \
+run_test "lf is not attempted via apt" \
     test_file_managers_not_in_apt_transaction
-run_test "joshuto and lf are not attempted via dnf" \
+run_test "lf is not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
 run_test "--purge-obsolete is accepted and documented" \
     test_purge_obsolete_flag_accepted_and_documented
@@ -2451,11 +2445,11 @@ run_test "purge removes the installed packages via dnf (Fedora)" \
     test_purge_obsolete_removes_installed_redhat
 run_test "purge leaves the generic Wayland utilities alone" \
     test_purge_obsolete_leaves_generic_wayland_alone
-run_test "joshuto and lf install from conda-forge via homepkg" \
+run_test "lf installs from conda-forge via homepkg" \
     test_file_managers_install_via_homepkg
-run_test "joshuto and lf install is skipped when already present" \
+run_test "lf install is skipped when already present" \
     test_file_managers_skipped_when_present
-run_test "joshuto and lf are in the homepkg core set" \
+run_test "lf is in the homepkg core set" \
     test_file_managers_are_in_the_homepkg_core_set
 run_test "kitty is set as the KDE terminal on Debian" \
     test_kde_terminal_set_on_debian

@@ -1,5 +1,20 @@
 # TODO
 
+## Prune a previously-installed joshuto on upgrade
+
+Removing joshuto from the install (its `tools` entry, the file-manager step,
+and the `homepkg` `TOOLS` registry) stops *new* setups from installing it, but
+does nothing for a machine where an earlier `setup` already installed joshuto
+through the managed mamba environment: the binary and its `~/.local/bin/joshuto`
+symlink linger, and because the registry entry is gone, `homepkg remove joshuto`
+now fails in `_require_known`, so there's no supported cleanup command either.
+
+Give upgrades a cleanup path: either prune the setup-managed joshuto (package +
+`~/.local/bin` symlink) during `setup`, or keep enough removal metadata that
+`homepkg remove joshuto` still works for a deregistered-but-installed tool.
+Out of scope for the removal PR itself, which only changes what gets installed
+going forward.
+
 ## Review and merge gates
 
 - [ ] **Add `zizmor` to the ruleset's required set** once it has reported
