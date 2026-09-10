@@ -1260,10 +1260,11 @@ test_home_tools_include_node_toolchain() {
 
 # --- Interactive shell tools ---
 
-# The conf repo's shell config wires up fzf, zoxide, atuin and carapace. fzf
-# and zoxide are packaged everywhere setup runs, so they ride along in the
-# distro package lists and the homepkg core set. Package names go on their own
-# distro lines: apt/dnf abort the whole transaction on one unknown name.
+# The conf repo's shell config wires up fzf, zoxide, zsh-autosuggestions, atuin
+# and carapace. fzf, zoxide and zsh-autosuggestions are packaged everywhere
+# setup runs, each in its own best-effort per-platform step. Package names go
+# on their own distro lines: apt/dnf abort the whole transaction on one unknown
+# name.
 test_zoxide_is_a_core_package() {
     # In its own best-effort transaction per platform, never in the core
     # package list: apt/dnf reject the whole request on one unknown name,
@@ -1275,6 +1276,31 @@ test_zoxide_is_a_core_package() {
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
     assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf"'
+}
+
+# zsh-autosuggestions (inline history ghost text) is packaged in the distros
+# too, so it takes the same best-effort per-platform steps as zoxide rather
+# than riding a core list.
+test_zsh_autosuggestions_is_a_best_effort_package() {
+    # Three install steps (apt, dnf, brew), never a bare entry in a core
+    # package list: one unknown name aborts the whole apt/dnf transaction, and
+    # older releases may not carry it. Plus the manual-install hint.
+    test "$(grep -c '^ *info "Installing zsh-autosuggestions"$' "$SETUP")" -eq 3 &&
+    test "$(grep -c '^ *zsh-autosuggestions \\$' "$SETUP")" -eq 0 &&
+    assert_source_contains "could not install zsh-autosuggestions" &&
+    assert_source_contains "zoxide zsh zsh-autosuggestions"
+}
+
+# The grep above proves the steps and messages exist; this runs the real
+# dispatch and asserts each package manager is actually asked for the
+# package, so a step that stops naming it can't pass on its message alone.
+test_zsh_autosuggestions_reaches_each_package_manager() {
+    run_linux_packages debian &&
+    assert_calls_contain "install-recommends zsh-autosuggestions" &&
+    run_linux_packages redhat &&
+    assert_calls_contain "dnf install -y zsh-autosuggestions" &&
+    run_macos_packages 0 &&
+    assert_calls_contain "brew install zsh-autosuggestions"
 }
 
 # lf is a terminal file manager with no reliable distro package (it's in
@@ -2421,6 +2447,10 @@ run_test "legacy root config fallback is logged with the remedy" \
     test_legacy_root_config_is_logged
 run_test "zoxide is installed as a core package" \
     test_zoxide_is_a_core_package
+run_test "zsh-autosuggestions is installed as a best-effort package" \
+    test_zsh_autosuggestions_is_a_best_effort_package
+run_test "zsh-autosuggestions reaches each package manager" \
+    test_zsh_autosuggestions_reaches_each_package_manager
 run_test "lf is not attempted via apt" \
     test_file_managers_not_in_apt_transaction
 run_test "lf is not attempted via dnf" \

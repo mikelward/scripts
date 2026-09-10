@@ -863,6 +863,13 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn apt-get install -y --install-recommends zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # zsh-autosuggestions (inline history ghost text) gets its own
+            # best-effort step for the same reason as zoxide: apt aborts the
+            # whole transaction on one unknown name, and older releases may not
+            # package it. The shell config skips it when it's missing.
+            info "Installing zsh-autosuggestions"
+            sudo_or_warn apt-get install -y --install-recommends zsh-autosuggestions \
+                || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) isn't in the Debian/Ubuntu repos, so
             # it's not attempted here -- install_file_managers installs it from
             # conda-forge via homepkg after the clone, on every profile.
@@ -938,6 +945,11 @@ install_packages() {
             info "Installing zoxide"
             sudo_or_warn dnf install -y zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # Its own step, as with zoxide: dnf aborts the lot on one unknown
+            # name, and the shell config skips it when it's missing.
+            info "Installing zsh-autosuggestions"
+            sudo_or_warn dnf install -y zsh-autosuggestions \
+                || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) isn't in the base Fedora repos, so
             # it's not attempted here; install_file_managers installs it from
             # conda-forge via homepkg after the clone, on every profile.
@@ -1015,6 +1027,11 @@ install_packages() {
             info "Installing zoxide"
             brew install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # Its own step, matching zoxide; the shell config skips it when
+            # it's missing.
+            info "Installing zsh-autosuggestions"
+            brew install zsh-autosuggestions \
+                || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) is a CLI tool, not graphical, so
             # install it regardless of --no-gui (matching the Linux paths).
             info "Installing lf"
@@ -1056,7 +1073,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh"
+            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh zsh-autosuggestions"
             ;;
     esac
 }
@@ -1652,8 +1669,10 @@ install_file_managers() {
 
 # --- Install the interactive shell tools with no packaged build ---
 
-# The conf repo's shell config wires up four optional tools. fzf and zoxide
-# are packaged (the distro sets above, or conda-forge via homepkg), but atuin
+# The conf repo's shell config wires up five optional tools. fzf, zoxide and
+# zsh-autosuggestions are packaged (installed from the distro sets above; fzf
+# and zoxide also come from conda-forge via homepkg on the --no-root path,
+# where zsh-autosuggestions has no equivalent yet -- see TODO.md), but atuin
 # and carapace are in neither the distro repos nor conda-forge, so they come
 # from their GitHub releases through homepkg's stateless github backend. That
 # needs no root, so the same call serves every path -- privileged, --no-root
