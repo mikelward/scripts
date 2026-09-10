@@ -48,3 +48,13 @@ going forward.
       remove setup-managed tools (distinguishing them from independently
       installed copies) so an upgrade that retires one can clean it up.
       Deferred from #235, where the orphan was accepted.
+
+- [ ] **Install zsh-autosuggestions on the `--no-root` path.** The
+      privileged setup installs it from the distro package (apt/dnf/brew,
+      alongside zoxide), but under `--no-root` the distro step is skipped
+      and, unlike fzf/zoxide, it has no conda-forge package for homepkg to
+      fetch. So an unprivileged box gets no inline history ghost text. A
+      git clone of zsh-users/zsh-autosuggestions into
+      `~/.zsh/zsh-autosuggestions` (pinned to a tag) would cover every path
+      uniformly, since the conf shell config already checks that location
+      first; deferred from the setup PR that added the packaged steps.
