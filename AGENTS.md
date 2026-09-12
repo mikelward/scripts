@@ -341,9 +341,8 @@ reply, no offer to correct it. It is not a finding.
   deferred thread is the exception to "anything still to do stays open"
   above. A finding with no thread (top-level comment or review body) still
   gets the `TODO.md` record, the push, and the reply — only the resolve is
-  skipped. The push re-triggers Codex, so don't also poke it unless five
-  minutes pass with nothing back; escalate if the re-review re-raises it, or
-  is still missing five minutes after the poke.
+  skipped. The push re-triggers Codex, so poke only as *Read the Codex
+  verdict* allows; escalate if the re-review re-raises it.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
   `pull_request_read` / `get_review_comments` (`review_threads[].id`) as
   `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
@@ -369,8 +368,8 @@ reply, no offer to correct it. It is not a finding.
   rebutted, or deferred (see *Deferring a finding* above); an acknowledgement
   is not an answer. Nothing from Codex since the push, five minutes on, or a
   clean review that left no reaction, leaves the `codex` status pending —
-  comment `@codex review`, once; if that has not landed five minutes on,
-  escalate rather than poking again.
+  comment `@codex review`, once; escalate rather than poking again if the
+  status is still pending five minutes later.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
