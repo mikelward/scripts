@@ -299,7 +299,7 @@ reply, no offer to correct it. It is not a finding.
 - **Codex is the automated reviewer on this repo** — not Copilot. Its
   reviews are triggered automatically; you don't request them, except when
   nothing has come back five minutes after a push — that means it never
-  picked the push up.
+  picked the push up — or to confirm a rebutted false positive.
 - **Address Codex comments automatically — don't wait to be asked.** Read
   each one, decide whether it's a real issue or a false positive, and if it's
   real, fix it in the same PR — the one exception being a real finding that's
@@ -315,7 +315,9 @@ reply, no offer to correct it. It is not a finding.
   quietly costs capability the product needs. Quote the rule and decline
   rather than narrowing the code to satisfy it; where the rule really does
   forbid what the product needs, that conflict is the maintainer's call, not
-  one to settle either way yourself.
+  one to settle either way yourself. Declining doesn't clear the required
+  `codex` status: post the rebuttal, then `@codex review` once — a push does
+  the same if the rebuttal is up first. Escalate only if it re-raises.
 - **A second verified finding in the same mechanism is evidence about the
   design, not another bug.** Before fixing it, look for the same shape
   elsewhere and ask whether a different design would delete the class rather
@@ -332,8 +334,9 @@ reply, no offer to correct it. It is not a finding.
   deferred thread is the exception to "anything still to do stays open"
   above. A finding with no thread (top-level comment or review body) still
   gets the `TODO.md` record, the push, and the reply — only the resolve is
-  skipped. The push re-triggers Codex; `@codex review` only for the
-  five-minute-silence case. Escalate only if the re-review re-raises it.
+  skipped. The push re-triggers Codex, so don't also poke it unless five
+  minutes pass with nothing back; escalate only if the re-review re-raises
+  it.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
   `pull_request_read` / `get_review_comments` (`review_threads[].id`) as
   `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
