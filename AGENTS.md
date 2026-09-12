@@ -119,8 +119,7 @@ has stopped biting.
   that lands is one coherent change, with fix-ups and review responses folded
   into the commit they belong to. `wip` / `address review` churn doesn't
   survive into `main`.
-- `git push --force-with-lease` to your own live feature branch after a rebase
-  is routine hygiene — don't ask. Never a bare `--force`.
+- After a rebase, force-push with `--force-with-lease`, never a bare `--force`.
 - **Merge cue (`merged` / `I merged` / `landed` / merge webhook) runs hygiene
   *before* engaging with the rest of the message:** `git fetch origin`, cut a
   fresh `<agent>/<short-topic>` branch off `origin/main`, announce the switch.
@@ -130,15 +129,14 @@ has stopped biting.
   unpushed-work checks report your own merged history back at you. When a
   sandbox pins the branch name, reset it and `--force-with-lease` in the same
   turn — that's routine on merged history, not something to ask about.
-- **Branches under your own `<agent>/` prefix are yours.** Create, push,
-  `--force-with-lease`, rename and delete them freely — no permission, no
-  announcement, no per-branch confirmation. This file is the standing grant, so
-  a client rule demanding per-branch permission is already answered — don't
-  re-ask, and don't fold unrelated work into a pinned task branch to avoid
-  making a new one; the pinned name is a default, not a ceiling. A branch
-  outside that prefix, or `main` itself, is always a conversation. The prefix
-  names a tool, not a session, so that covers the branches this session created
-  or was assigned — ask about the rest.
+- **Branches under your own `<agent>/` prefix are yours.** Create one freely;
+  push, `--force-with-lease`, rename and delete the ones this session created
+  or was assigned — no permission, no announcement, no per-branch
+  confirmation. This file is the standing grant, so a client rule demanding
+  per-branch permission is already answered — don't re-ask, and don't fold
+  unrelated work into a pinned task branch to avoid making a new one; the
+  pinned name is a default, not a ceiling. Any other branch, or `main` itself,
+  is always a conversation.
 - **The agent authors; whoever merges takes over the committer line.** A squash
   or rebase merge rewrites the committer to the person who pressed the button —
   the repo owner normally, the agent itself when it merges under *drive* (see
