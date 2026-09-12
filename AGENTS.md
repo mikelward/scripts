@@ -303,9 +303,9 @@ reply, no offer to correct it. It is not a finding.
 ## Reviews
 
 - **Codex is the automated reviewer on this repo** — not Copilot. Its
-  reviews are triggered automatically; you don't request them, except when
-  nothing has come back five minutes after a push — that means it never
-  picked the push up — or to confirm a rebutted false positive.
+  reviews are triggered automatically; you don't request them, except to
+  confirm a rebutted false positive, or where *Read the Codex verdict* below
+  says the `codex` status is still pending.
 - **Address Codex comments automatically — don't wait to be asked.** Read
   each one, decide whether it's a real issue or a false positive, and if it's
   real, fix it in the same PR — the one exception being a real finding that's
@@ -367,9 +367,9 @@ reply, no offer to correct it. It is not a finding.
   `get_review_comments`, `get_comments` and `get_reviews` to the last page,
   since all three page oldest first — and they block the merge until fixed,
   rebutted, or deferred (see *Deferring a finding* above); an acknowledgement
-  is not an answer. Nothing from Codex since
-  the push, five minutes on, means it never picked it up — comment `@codex
-  review`, once.
+  is not an answer. Nothing from Codex since the push, five minutes on, or a
+  clean review that left no reaction, leaves the `codex` status pending —
+  comment `@codex review`, once.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
