@@ -161,6 +161,11 @@ reply, no offer to correct it. It is not a finding.
   back-and-forth.
 - **Don't interrupt.** Never fire off a question while the user is still
   typing. Let them finish; a half-typed message isn't an invitation to jump in.
+- **Answer a mid-turn message first.** A user message that arrives while
+  you're working — the "sent while you were working" interjection — is
+  addressed in your very next output, before any further tool call, even if
+  it's one sentence. A merge cue is the exception — its hygiene runs first,
+  and announcing the switch is that answer.
 - **Don't narrate routine machinery.** A check run flipping, a re-run, a scheduled check
   re-arming, a webhook echo, a resolved thread — act on those silently; the noise buries
   the one line that matters. Reports another rule requires stand (each review and its
