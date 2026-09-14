@@ -323,8 +323,8 @@ reply, no offer to correct it. It is not a finding.
   forbid what the product needs, that conflict is the maintainer's call, not
   one to settle either way yourself. Declining doesn't clear the required
   `codex` status: post the rebuttal, then poke as *Read the Codex verdict*
-  allows — a push does the same if the rebuttal is up first. Escalate if it
-  re-raises.
+  allows — or let the next push do it, if the rebuttal is up first. Escalate
+  if it re-raises.
 - **A second verified finding in the same mechanism is evidence about the
   design, not another bug.** Before fixing it, look for the same shape
   elsewhere and ask whether a different design would delete the class rather
@@ -359,18 +359,19 @@ reply, no offer to correct it. It is not a finding.
   (`issue_read` → `reactions`), not to a review thread, whose `Useful?` bar
   reads true on any PR it has commented on. `eyes` means reading, `+1` means
   clean, and Codex revokes it on push — so a visible one belongs to the
-  visible head, and `+1` with green CI is a merge. The count names no
-  author, so leave PR-body reactions to Codex: nobody else's is revoked, and
-  a review is the attributable form, naming the commit it read. Findings
-  arrive as review comments, as a top-level comment, or as a review — read
+  visible head, and `+1` with green CI is a merge. The count names no author,
+  so leave PR-body reactions to Codex: nobody else's is revoked, and a review
+  is the attributable form, naming the commit it read. Findings arrive as
+  review comments, as a top-level comment, or as a review — read
   `get_review_comments`, `get_comments` and `get_reviews` to the last page,
   since all three page oldest first — and they block the merge until fixed,
   rebutted, or deferred (see *Deferring a finding* above); an acknowledgement
   is not an answer. A pending `codex` status is one of three things. Findings
   to address — address them. A clean review that left no reaction, or a
-  rebuttal it hasn't answered — poke `@codex review` once, now. Nothing back
-  at all — poke once, five minutes after the push. Escalate five minutes
-  after the poke rather than poking a second time.
+  rebuttal it hasn't answered — poke `@codex review` once, five minutes after
+  that review or rebuttal. Nothing back at all — poke once, five minutes
+  after the push. Escalate five minutes after the poke rather than poking a
+  second time.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
