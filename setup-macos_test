@@ -159,6 +159,7 @@ MOCK
     printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
     mkdir -p "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
 
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
@@ -739,6 +740,41 @@ test_configures_nine_desktop_shortcuts() {
     assert_called "524288"
 }
 
+# Physical Win+Left/Right step one Space, as Meta+Left/Right does on KDE, via
+# the Karabiner rule's Control+Option+arrow. Never bare Option+arrow: that's
+# what the rule synthesizes for Ctrl+arrow word movement, and a hotkey there
+# would switch Spaces on Ctrl+arrow too. Arrow keys also carry the fn flag.
+test_configures_adjacent_space_shortcuts() {
+    run_macos
+    assert_status 0 &&
+    assert_called "AppleSymbolicHotKeys -dict-add 79" &&
+    assert_called "AppleSymbolicHotKeys -dict-add 81" &&
+    assert_called "<integer>123</integer>" &&
+    assert_called "<integer>124</integer>" &&
+    assert_called "<integer>9175040</integer>" &&
+    assert_not_called "<integer>8912896</integer>"
+}
+
+# The conf repo ships a second Karabiner rule for the arrow keys; Karabiner
+# never enables an asset on its own, so the run has to name it.
+test_names_arrow_karabiner_rule() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces"
+}
+
+# A conf checkout from before the arrow rule has pc-alt-tab.json and nothing
+# else. The run must say the arrow rule is missing rather than name a rule
+# there is nothing to enable -- while still naming the Alt+Tab one that is.
+test_stale_conf_without_arrow_rule_warns() {
+    rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "pc-arrows.json not found" &&
+    assert_output_contains "Enable \"Alt+Tab switches applications\" in Karabiner" &&
+    assert_output_lacks "Win+Left/Right switches Spaces\" in Karabiner"
+}
+
 test_applies_shortcut_settings() {
     run_macos
     assert_status 0 &&
@@ -977,7 +1013,10 @@ test_missing_brew_does_not_abort_karabiner() {
     remove_karabiner
     run_macos_without brew --ignore-errors
     assert_status 0 &&
-    assert_output_contains "Homebrew not found, so Karabiner-Elements can't be installed"
+    assert_output_contains "Homebrew not found, so Karabiner-Elements can't be installed" &&
+    # The arrow keys depend on Karabiner too, not just Alt+Tab.
+    assert_output_contains "Ctrl+Left/Right will jump to the line ends" &&
+    assert_output_contains "Win+Left/Right will move by word rather than switching Spaces"
 }
 
 # The rule is symlinked out of the conf repo, so a machine that hasn't run
@@ -1630,6 +1669,12 @@ run_test "disables the conflicting Finder search hotkey" \
     test_disables_finder_search_hotkey
 run_test "binds Option+1..9 to the nine desktops" \
     test_configures_nine_desktop_shortcuts
+run_test "binds Control+Option+Left/Right to the adjacent Space" \
+    test_configures_adjacent_space_shortcuts
+run_test "names the arrow-key Karabiner rule to enable" \
+    test_names_arrow_karabiner_rule
+run_test "a conf checkout without the arrow rule is reported" \
+    test_stale_conf_without_arrow_rule_warns
 run_test "applies the shortcut settings to this session" \
     test_applies_shortcut_settings
 run_test "missing activateSettings falls back to the logout advice" \

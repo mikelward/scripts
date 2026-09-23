@@ -4,14 +4,17 @@
 # Sets up:
 # - Dvorak keyboard layout
 # - Rotate Control, Command and Option (for Linux-like Ctrl shortcuts)
-# - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super)
+# - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super), and
+#   Move left/right a space on Control+Option+arrow, which the conf repo's
+#   Karabiner rule puts under physical Win+Left/Right
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
 # - Amethyst tiling window manager: installs it (Homebrew, or a staged bundle
 #   offline). Its layouts, modifiers and margins come from ~/.amethyst.yml,
 #   which confinst symlinks out of the conf repo. Focus follows mouse is turned
 #   off -- see configure_amethyst for why it can't carry over from KDE.
-# - Karabiner-Elements, for the one binding the modifier rotation inverts:
-#   Alt+Tab. Its rule is symlinked out of the conf repo too.
+# - Karabiner-Elements, for the bindings the modifier rotation can't carry:
+#   Alt+Tab, Ctrl+Left/Right word movement and Win+Left/Right Space switching.
+#   Its rules are symlinked out of the conf repo too.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -273,9 +276,11 @@ Then once this run has finished:
      there.
   4. Approve Karabiner-Elements' driver extension and Input Monitoring
      permission when it first launches, then enable "Alt+Tab switches
-     applications" under Complex Modifications > Add rule. Without it Alt+Tab
-     switches tabs rather than applications, because the modifier rotation
-     puts Cmd+Tab on the physical Ctrl key.
+     applications" and "Ctrl+Left/Right moves by word, Win+Left/Right switches
+     Spaces" under Complex Modifications > Add rule. Without them Alt+Tab
+     switches tabs rather than applications, Ctrl+Left/Right jumps to the line
+     ends, and Win+Left/Right moves by word rather than switching Spaces,
+     because the modifier rotation puts Command on the physical Ctrl key.
 
      Karabiner is free and open source, so no cost beyond the disk it takes.
      It is a bigger commitment than an ordinary app, though: it installs a
@@ -283,8 +288,9 @@ Then once this run has finished:
      managed Mac may refuse the extension outright. If it is blocked, fails,
      or is removed, the keyboard keeps working -- the modifier rotation is
      separate and does not depend on it -- and the only effect is that Alt+Tab
-     goes back to switching tabs. A macOS upgrade can also require approving
-     the extension again.
+     goes back to switching tabs, Ctrl+Left/Right to the line ends, and
+     Win+Left/Right to moving by word instead of switching Spaces. A macOS
+     upgrade can also require approving the extension again.
 
 
 
@@ -608,6 +614,33 @@ configure_shortcuts() {
             </dict>'
     done
 
+    # Move left/right a space: Control+Option+Left/Right (IDs 79 and 81),
+    # replacing the stock Ctrl+arrows. Not bare Option+arrow, though physical
+    # Win+arrow sends that: the Karabiner arrow rule synthesizes Option+arrow
+    # for Ctrl+arrow word movement, and a hotkey can't tell the two apart. The
+    # rule maps physical Win+arrow onto this chord instead. Arrow keys carry the
+    # function-key flag (8388608) on top of Control (262144) and Option
+    # (524288), and 65535 is the "no character" ASCII slot.
+    set -- \
+        79 123 \
+        81 124
+    while test $# -ge 2; do
+        hotkey_id=$1 keycode=$2
+        shift 2
+        try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$hotkey_id" '
+            <dict>
+                <key>enabled</key><true/>
+                <key>value</key><dict>
+                    <key>parameters</key><array>
+                        <integer>65535</integer>
+                        <integer>'"$keycode"'</integer>
+                        <integer>9175040</integer>
+                    </array>
+                    <key>type</key><string>standard</string>
+                </dict>
+            </dict>'
+    done
+
     # Apply changes
     if test -x "$ACTIVATE_SETTINGS"; then
         "$ACTIVATE_SETTINGS" -u \
@@ -910,6 +943,12 @@ configure_amethyst() {
 # rather than a file Karabiner owns -- Karabiner rewrites karabiner.json on
 # every UI change but never touches an asset.
 KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+# What a machine without working Karabiner loses, for the install warnings.
+KARABINER_MISSING_EFFECT="Alt+Tab will switch tabs rather than applications, Ctrl+Left/Right will jump to the line ends, and Win+Left/Right will move by word rather than switching Spaces"
+# The second rule, alongside it: Ctrl+arrow word movement and Win+arrow Space
+# switching. Checked separately, since a conf checkout older than the rule has
+# the first without the second.
+KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-arrows.json"
 
 # Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
 # as amethyst_path, and for the same reason: an interrupted install leaves a
@@ -943,23 +982,23 @@ install_karabiner() {
         return 0
     fi
     if test "$INSTALL" = no; then
-        warn "Karabiner-Elements is not installed and --no-install was given; Alt+Tab will switch tabs rather than applications until it is"
+        warn "Karabiner-Elements is not installed and --no-install was given; $KARABINER_MISSING_EFFECT until it is"
         return 0
     fi
     # Not attempted under --no-sudo: the cask is a .pkg, so Homebrew hands it
     # to the system installer and an administrator prompt appears -- exactly
     # what --no-sudo exists to avoid.
     if test "$SUDO" = no; then
-        warn "Karabiner-Elements' installer needs administrator rights and --no-sudo was given; skipping it, so Alt+Tab will switch tabs rather than applications"
+        warn "Karabiner-Elements' installer needs administrator rights and --no-sudo was given; skipping it, so $KARABINER_MISSING_EFFECT"
         return 0
     fi
     if ! is_command brew; then
-        warn "Homebrew not found, so Karabiner-Elements can't be installed; Alt+Tab will switch tabs rather than applications until it is"
+        warn "Homebrew not found, so Karabiner-Elements can't be installed; $KARABINER_MISSING_EFFECT until it is"
         return 0
     fi
     info "Installing Karabiner-Elements"
     brew install --cask karabiner-elements \
-        || warn "could not install Karabiner-Elements; Alt+Tab will switch tabs rather than applications until it is"
+        || warn "could not install Karabiner-Elements; $KARABINER_MISSING_EFFECT until it is"
 }
 
 configure_karabiner() {
@@ -967,15 +1006,23 @@ configure_karabiner() {
 
     install_karabiner
 
-    if ! test -f "$KARABINER_RULE"; then
+    _karabiner_rules=""
+    if test -f "$KARABINER_RULE"; then
+        _karabiner_rules="\"Alt+Tab switches applications\""
+    else
         warn "$KARABINER_RULE not found; run confinst after cloning the conf repo, or Alt+Tab keeps switching tabs"
-        return 0
     fi
+    if test -f "$KARABINER_ARROW_RULE"; then
+        _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }\"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\""
+    else
+        warn "$KARABINER_ARROW_RULE not found; update the conf repo and run confinst, or Win+Left/Right won't switch Spaces and Ctrl+Left/Right keeps jumping to the line ends"
+    fi
+    test -n "$_karabiner_rules" || return 0
 
     # Karabiner lists an asset under "Add rule" but doesn't enable it, and
     # there's no supported way to enable one from a script: karabiner.json is
     # rewritten by the app, so editing it here would be racing the GUI.
-    info "Enable \"Alt+Tab switches applications\" in Karabiner-Elements > Complex Modifications > Add rule"
+    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule"
 }
 
 # --- Configure application launch shortcuts ---
