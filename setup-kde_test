@@ -691,6 +691,22 @@ test_configures_keyboard_layout() {
     assert_called "kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true"
 }
 
+# Meta+Left/Right step one desktop and Meta+Shift+Left/Right carry the window
+# along, which means taking the keys back from KWin's Quick Tile and
+# move-to-screen defaults -- otherwise the actions fight over them.
+test_meta_arrows_switch_adjacent_desktop() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch One Desktop to the Left Meta+Left,none,Switch One Desktop to the Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch One Desktop to the Right Meta+Right,none,Switch One Desktop to the Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Quick Tile Left none,none,Window Quick Tile Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Quick Tile Right none,none,Window Quick Tile Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Desktop to the Left Meta+Shift+Left,none,Window One Desktop to the Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Desktop to the Right Meta+Shift+Right,none,Window One Desktop to the Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Screen to the Left none,none,Window One Screen to the Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Screen to the Right none,none,Window One Screen to the Right"
+}
+
 test_comma_and_backslash_shortcuts_are_escaped() {
     run_kde --no-install
     assert_status 0 &&
@@ -1292,6 +1308,8 @@ run_test "missing git errors clearly once the fallback is reached" \
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
 run_test "configures nine desktops" test_configures_nine_desktops
+run_test "Meta+[Shift+]Left/Right switch or move to the adjacent desktop" \
+    test_meta_arrows_switch_adjacent_desktop
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
 run_test "comma and backslash shortcuts are escaped for kglobalaccel" \

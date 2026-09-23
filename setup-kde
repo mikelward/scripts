@@ -795,6 +795,10 @@ configure_keybindings() {
         set_shortcut "Switch to Desktop $n" "Meta+$n"
         set_shortcut "Window to Desktop $n" "Meta+${shifted[n-1]}"
     done
+    set_shortcut "Switch One Desktop to the Left" "Meta+Left"
+    set_shortcut "Switch One Desktop to the Right" "Meta+Right"
+    set_shortcut "Window One Desktop to the Left" "Meta+Shift+Left"
+    set_shortcut "Window One Desktop to the Right" "Meta+Shift+Right"
 
     # Window management
     set_shortcut "Window Close" "Meta+Backspace"
@@ -804,6 +808,10 @@ configure_keybindings() {
     unbind_shortcut "Grid View"                                 # Meta+G -> Browser 1
     unbind_shortcut "Overview"                                  # Meta+W -> Terminal on Workstation
     unbind_shortcut "Edit Tiles"                                # Meta+T -> Terminal
+    unbind_shortcut "Window Quick Tile Left"                    # Meta+Left -> Switch One Desktop to the Left
+    unbind_shortcut "Window Quick Tile Right"                   # Meta+Right -> Switch One Desktop to the Right
+    unbind_shortcut "Window One Screen to the Left"             # Meta+Shift+Left -> Window One Desktop to the Left
+    unbind_shortcut "Window One Screen to the Right"            # Meta+Shift+Right -> Window One Desktop to the Right
     # "Walk Through Windows of Current Application" used to be unbound here on
     # the grounds that it held Meta+`, which Krohnkite's Monocle layout wants.
     # It doesn't -- KWin's default for it is Alt+`, so the unbind freed nothing
