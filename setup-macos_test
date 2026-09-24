@@ -159,7 +159,10 @@ MOCK
     printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
     mkdir -p "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
-    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+    # The rule's description, which is how the run tells a current rule from
+    # one that predates Win+Shift+arrow.
+    printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
 
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
@@ -760,7 +763,7 @@ test_configures_adjacent_space_shortcuts() {
 test_names_arrow_karabiner_rule() {
     run_macos
     assert_status 0 &&
-    assert_output_contains "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces"
+    assert_output_contains "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"
 }
 
 # A conf checkout from before the arrow rule has pc-alt-tab.json and nothing
@@ -771,8 +774,21 @@ test_stale_conf_without_arrow_rule_warns() {
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "pc-arrows.json not found" &&
+    assert_output_contains "Win+Shift+Left/Right won't move the window a Space" &&
     assert_output_contains "Enable \"Alt+Tab switches applications\" in Karabiner" &&
     assert_output_lacks "Win+Left/Right switches Spaces\" in Karabiner"
+}
+
+# A conf checkout from before Win+Shift+arrow has the arrow rule without it.
+# Re-adding that rule can't bring the binding, so the run says to update the
+# checkout first and names the rule as it is, not as it will be.
+test_stale_arrow_rule_warns() {
+    printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "predates Win+Shift+Left/Right; update the conf repo" &&
+    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\" in Karabiner"
 }
 
 test_applies_shortcut_settings() {
@@ -1016,7 +1032,8 @@ test_missing_brew_does_not_abort_karabiner() {
     assert_output_contains "Homebrew not found, so Karabiner-Elements can't be installed" &&
     # The arrow keys depend on Karabiner too, not just Alt+Tab.
     assert_output_contains "Ctrl+Left/Right will jump to the line ends" &&
-    assert_output_contains "Win+Left/Right will move by word rather than switching Spaces"
+    assert_output_contains "Win+Left/Right will move by word rather than switching Spaces" &&
+    assert_output_contains "Win+Shift+Left/Right will select by word rather than moving the window a Space"
 }
 
 # The rule is symlinked out of the conf repo, so a machine that hasn't run
@@ -1030,11 +1047,13 @@ test_missing_karabiner_rule_warns() {
 
 # Karabiner lists an asset but doesn't enable it, and karabiner.json is
 # rewritten by the app -- so the enabling step is the user's, and saying so is
-# the only thing the script can do about it.
+# the only thing the script can do about it. Enabling copies the rule into
+# karabiner.json, so a rule already enabled has to be re-added to change.
 test_says_how_to_enable_the_karabiner_rule() {
     run_macos
     assert_status 0 &&
-    assert_output_contains "Complex Modifications > Add rule"
+    assert_output_contains "Complex Modifications > Add rule" &&
+    assert_output_contains "remove and add again any already enabled"
 }
 
 # The preflight has to name the driver approval too: Karabiner is inert until
@@ -1043,6 +1062,15 @@ test_preflight_names_karabiner_permissions() {
     run_macos
     assert_status 0 &&
     assert_output_contains "driver extension and Input Monitoring"
+}
+
+# The preflight names the arrow rule the way Karabiner lists it, so it has to
+# follow the rule's rename when Win+Shift+arrow joined it.
+test_preflight_names_the_current_arrow_rule() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "Spaces, Win+Shift+Left/Right moves the window a Space\" under Complex" &&
+    assert_output_contains "selects by word rather than moving the window a Space"
 }
 
 # AGENTS.md wants cost and reliability stated before an external dependency is
@@ -1675,6 +1703,8 @@ run_test "names the arrow-key Karabiner rule to enable" \
     test_names_arrow_karabiner_rule
 run_test "a conf checkout without the arrow rule is reported" \
     test_stale_conf_without_arrow_rule_warns
+run_test "an arrow rule from before Win+Shift+arrow is reported" \
+    test_stale_arrow_rule_warns
 run_test "applies the shortcut settings to this session" \
     test_applies_shortcut_settings
 run_test "missing activateSettings falls back to the logout advice" \
@@ -1705,6 +1735,8 @@ run_test "a Spaces config naming no display is reported as unknown" \
     test_spaces_config_without_a_display_is_reported
 run_test "the preflight names the manual steps" \
     test_preflight_names_the_manual_steps
+run_test "the preflight names the current arrow rule" \
+    test_preflight_names_the_current_arrow_rule
 run_test "the preflight names the focus-cue options" \
     test_preflight_names_the_focus_cue_options
 run_test "the preflight defers Accessibility until after the install" \
