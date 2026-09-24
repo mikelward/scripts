@@ -209,7 +209,7 @@ reply, no offer to correct it. It is not a finding.
   failures. It cannot deliver CI *success*, a push, the merge, Codex's clean
   verdict (a reaction), or Codex never answering at all — so keep exactly one
   check armed for as long as the PR is open (each event and each check costs
-  a model turn). Under drive, arm auto-merge at PR open too — but only where
+  a model turn). Under drive (but never under merge in order), arm auto-merge at PR open too — but only where
   the ruleset makes the Codex verdict a required check AND requires
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
@@ -298,7 +298,7 @@ reply, no offer to correct it. It is not a finding.
   Merge by hand, never auto-merge, rechecking the lower PRs just before. A
   merge can leave the next one `dirty` or `behind` — rebase it per the
   `dirty`/`behind` rule and merge on its new verdict. Active means open, not a
-  draft, and either green with a `+1` and only waiting its turn, or pushed to,
+  draft, and either green with a `+1` and only waiting its turn, or opened, pushed to,
   reviewed or commented on in the last 30 minutes; say which lower PRs you
   skipped as stale.
 - When a feature has multiple open PRs, list **every** open PR by URL, one per
