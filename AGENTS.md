@@ -291,6 +291,16 @@ reply, no offer to correct it. It is not a finding.
   review comment — fix it if you agree, reply on the thread saying why if
   you don't — and merge once CI is green and Codex's verdict for the current
   head is in.
+- **"Merge in order"** (or "drive in order") is *drive to merge* for PRs in
+  flight together, each merged only once every lower-numbered active PR has.
+  Waiting holds only the merge: keep driving a queued PR — review comments,
+  CI, rebases — so it is green with Codex's `+1` the moment it is the lowest.
+  Merge by hand, never auto-merge, rechecking the lower PRs just before. A
+  merge can leave the next one `dirty` or `behind` — rebase it per the
+  `dirty`/`behind` rule and merge on its new verdict. Active means open, not a
+  draft, and either green with a `+1` and only waiting its turn, or pushed to,
+  reviewed or commented on in the last 30 minutes; say which lower PRs you
+  skipped as stale.
 - When a feature has multiple open PRs, list **every** open PR by URL, one per
   line — the "View PR" chip sticks to the first link and hides the rest
   (anthropics/claude-code#46625).
