@@ -195,14 +195,14 @@ below means the two are never the same thing: pressing `Win` sends Option,
 pressing `Ctrl` sends Command.
 
 Reading it this way is also the point of the whole arrangement. The columns
-match on all but three rows, which is the muscle memory being preserved.
+match on all but two rows, which is the muscle memory being preserved.
 
 | Action | Linux (KDE) | macOS | Provided by |
 | --- | --- | --- | --- |
 | Switch to desktop 1–9 | `Win+1`…`9` | `Win+1`…`9` | symbolichotkeys (IDs 118–126) |
 | Move window to desktop 1–9 | `Win+Shift+1`…`9` | **`Win+Alt+1`…`9`** | Amethyst `throw-space-N` |
 | Switch to adjacent desktop | `Win+Left`/`Right` | `Win+Left`/`Right` ‡ | Karabiner rule + symbolichotkeys (IDs 79, 81) |
-| Move window to adjacent desktop | `Win+Shift+Left`/`Right` | — | not configured |
+| Move window to adjacent desktop | `Win+Shift+Left`/`Right` | `Win+Shift+Left`/`Right` ‡ | Karabiner rule + Amethyst `throw-space-left`/`right` |
 | Grow main pane | `Win+\` | `Win+\` | Amethyst `expand-main` |
 | Shrink main pane | `Win+/` | `Win+/` | Amethyst `shrink-main` |
 | Monocle / fullscreen layout | ``Win+` `` | ``Win+` `` | Amethyst `select-fullscreen-layout` |
@@ -220,31 +220,30 @@ match on all but three rows, which is the muscle memory being preserved.
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
 | Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right` ‡ | Karabiner rule |
 
-‡ Both rows come from the conf repo's second Karabiner rule (see
+‡ These rows come from the conf repo's second Karabiner rule (see
 `config/karabiner/README.md` there). Physical `Ctrl+arrow` becomes
 Option+arrow, macOS's move-by-word, and physical `Win+arrow` becomes
 Control+Option+arrow, which `setup-macos` binds to switching Spaces. The Space
 shortcut can't be plain Option+arrow, although that's what `Win+arrow` sends
 after the rotation: the hotkey would also catch the Option+arrow the rule
-makes from `Ctrl+arrow`. Without the rule, `Win+arrow` moves by word and
-`Ctrl+arrow` jumps to the line ends.
+makes from `Ctrl+arrow`. Physical `Win+Shift+arrow` likewise gets a chord of
+its own, Control+Option+Shift+arrow, which `amethyst.yml` binds to
+`throw-space-left`/`right` (as `mod3`); left to the rotation it would be
+Option+Shift+arrow, select-by-word. Without the rule, `Win+arrow` moves by word,
+`Win+Shift+arrow` selects by word, and `Ctrl+arrow` jumps to the line ends.
 
 † Without Karabiner the two Tab rows swap round — `Ctrl+Tab` switches
 applications and `Alt+Tab` goes to the next tab. Its driver extension is the
 one part of this setup a managed Mac can refuse; see
 [the one binding the rotation inverts](#the-one-binding-the-rotation-inverts).
 
-Only three rows differ from the Linux keys:
+Only two rows differ from the Linux keys:
 
 **Move-to-desktop is `Win+Alt+N`, not `Win+Shift+N`.** With `Win` sending
 Option, macOS treats `Option+Shift+1` as its dead-key layer and emits `⁄`
 rather than registering a modifier combination. Krohnkite's `Meta+Shift+N` has
 no clean equivalent, so `amethyst.yml` uses `mod2` (Option+Control) — which is
 `Win+Alt` under the fingers.
-
-**Move window to the adjacent desktop has no binding.** macOS has no symbolic
-hotkey for it; it would be Amethyst's `throw-space-left`/`throw-space-right`
-in `amethyst.yml`, and `Option+Shift+arrow` is also select-by-word.
 
 **Close window is `Ctrl+W`.** `Cmd+W` is the macOS convention and it isn't
 rebound; after the rotation it lands under the physical Ctrl key, which is
@@ -301,8 +300,9 @@ background service, and a macOS upgrade can require re-approving the
 extension. If it's blocked, fails, or is uninstalled, the keyboard keeps
 working — the `hidutil` rotation is independent of it — and the only effect is
 that the two Tab bindings revert to the "rotation alone" column above, and the
-arrow keys to plain macOS: `Ctrl+arrow` jumps to the line ends and `Win+arrow`
-moves by word instead of switching Spaces.
+arrow keys to plain macOS: `Ctrl+arrow` jumps to the line ends, `Win+arrow`
+moves by word instead of switching Spaces, and `Win+Shift+arrow` selects by
+word instead of moving the window a Space.
 
 The rule maps left Alt+Tab to **`left_control`**+Tab, which reads wrong until
 you follow the layering: Karabiner grabs the keyboard and sees the *physical*
@@ -313,8 +313,9 @@ name the key the rotation turns into Command — left Control. Naming
 Karabiner needs three things done by hand, none of them scriptable: its driver
 extension approved, Input Monitoring granted, and the rule enabled under
 Complex Modifications > Add rule. Until then Alt+Tab keeps switching tabs and
-the arrow keys behave as plain macOS. The
-full reasoning, and what to flip if the layering differs on your macOS
+the arrow keys behave as plain macOS. Enabling copies the rule into
+`karabiner.json`, so after a conf update changes one, remove it and add it
+again. The full reasoning, and what to flip if the layering differs on your macOS
 version, is in the conf repo's `config/karabiner/README.md`.
 
 The reciprocal mapping works the same way in reverse: physical Ctrl emits
