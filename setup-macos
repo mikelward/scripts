@@ -13,8 +13,8 @@
 #   which confinst symlinks out of the conf repo. Focus follows mouse is turned
 #   off -- see configure_amethyst for why it can't carry over from KDE.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
-#   Alt+Tab, Ctrl+Left/Right word movement and Win+Left/Right Space switching.
-#   Its rules are symlinked out of the conf repo too.
+#   Alt+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching and
+#   Win+Shift+Left/Right moving the window a Space (with Amethyst). Its rules are symlinked out of the conf repo too.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -277,10 +277,12 @@ Then once this run has finished:
   4. Approve Karabiner-Elements' driver extension and Input Monitoring
      permission when it first launches, then enable "Alt+Tab switches
      applications" and "Ctrl+Left/Right moves by word, Win+Left/Right switches
-     Spaces" under Complex Modifications > Add rule. Without them Alt+Tab
-     switches tabs rather than applications, Ctrl+Left/Right jumps to the line
-     ends, and Win+Left/Right moves by word rather than switching Spaces,
-     because the modifier rotation puts Command on the physical Ctrl key.
+     Spaces, Win+Shift+Left/Right moves the window a Space" under Complex
+     Modifications > Add rule. Without them Alt+Tab switches tabs rather than
+     applications, Ctrl+Left/Right jumps to the line ends, Win+Left/Right
+     moves by word rather than switching Spaces, and Win+Shift+Left/Right
+     selects by word rather than moving the window a Space, because the
+     modifier rotation puts Command on the physical Ctrl key.
 
      Karabiner is free and open source, so no cost beyond the disk it takes.
      It is a bigger commitment than an ordinary app, though: it installs a
@@ -288,9 +290,10 @@ Then once this run has finished:
      managed Mac may refuse the extension outright. If it is blocked, fails,
      or is removed, the keyboard keeps working -- the modifier rotation is
      separate and does not depend on it -- and the only effect is that Alt+Tab
-     goes back to switching tabs, Ctrl+Left/Right to the line ends, and
-     Win+Left/Right to moving by word instead of switching Spaces. A macOS
-     upgrade can also require approving the extension again.
+     goes back to switching tabs, Ctrl+Left/Right to the line ends,
+     Win+Left/Right to moving by word instead of switching Spaces, and
+     Win+Shift+Left/Right to selecting by word. A macOS upgrade can also
+     require approving the extension again.
 
 
 
@@ -944,11 +947,14 @@ configure_amethyst() {
 # every UI change but never touches an asset.
 KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
 # What a machine without working Karabiner loses, for the install warnings.
-KARABINER_MISSING_EFFECT="Alt+Tab will switch tabs rather than applications, Ctrl+Left/Right will jump to the line ends, and Win+Left/Right will move by word rather than switching Spaces"
-# The second rule, alongside it: Ctrl+arrow word movement and Win+arrow Space
-# switching. Checked separately, since a conf checkout older than the rule has
+KARABINER_MISSING_EFFECT="Alt+Tab will switch tabs rather than applications, Ctrl+Left/Right will jump to the line ends, Win+Left/Right will move by word rather than switching Spaces, and Win+Shift+Left/Right will select by word rather than moving the window a Space"
+# The second rule, alongside it: Ctrl+arrow word movement, Win+arrow Space
+# switching and Win+Shift+arrow moving the window a Space. Checked separately, since a conf checkout older than the rule has
 # the first without the second.
 KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+# The part of that rule's name that a checkout from before Win+Shift+arrow
+# lacks, so a stale rule can be told apart from a current one.
+KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
 
 # Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
 # as amethyst_path, and for the same reason: an interrupted install leaves a
@@ -1012,17 +1018,24 @@ configure_karabiner() {
     else
         warn "$KARABINER_RULE not found; run confinst after cloning the conf repo, or Alt+Tab keeps switching tabs"
     fi
-    if test -f "$KARABINER_ARROW_RULE"; then
+    if test -f "$KARABINER_ARROW_RULE" && grep -qF "$KARABINER_THROW" "$KARABINER_ARROW_RULE"; then
+        _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }\"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, $KARABINER_THROW\""
+    elif test -f "$KARABINER_ARROW_RULE"; then
+        # A conf checkout from before the Win+Shift row: re-adding that rule
+        # can't bring the binding, so updating the checkout comes first.
+        warn "$KARABINER_ARROW_RULE predates Win+Shift+Left/Right; update the conf repo, then remove and add the arrow rule again, or Win+Shift+Left/Right won't move the window a Space"
         _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }\"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\""
     else
-        warn "$KARABINER_ARROW_RULE not found; update the conf repo and run confinst, or Win+Left/Right won't switch Spaces and Ctrl+Left/Right keeps jumping to the line ends"
+        warn "$KARABINER_ARROW_RULE not found; update the conf repo and run confinst, or Win+Left/Right won't switch Spaces, Win+Shift+Left/Right won't move the window a Space, and Ctrl+Left/Right keeps jumping to the line ends"
     fi
     test -n "$_karabiner_rules" || return 0
 
     # Karabiner lists an asset under "Add rule" but doesn't enable it, and
     # there's no supported way to enable one from a script: karabiner.json is
     # rewritten by the app, so editing it here would be racing the GUI.
-    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule"
+    # Enabling copies the rule into karabiner.json, and Karabiner runs that
+    # copy, so an updated asset only takes effect once the rule is re-added.
+    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule; remove and add again any already enabled, to pick up changes to it"
 }
 
 # --- Configure application launch shortcuts ---
