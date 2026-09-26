@@ -295,14 +295,17 @@ reply, no offer to correct it. It is not a finding.
   to older PRs close to landing. Merge by hand, never auto-merge (disarm any
   already armed). Just before merging, check every open, non-draft,
   lower-numbered PR against the same base: if one has ever passed Codex — a
-  "didn't find any major issues" comment, or a green `codex` check, on any
-  head — and has had any activity (a push, review, comment or state change) in
-  the last 30 minutes, wait for it. Keep waiting only while it still meets all
-  of that, and at most 30 minutes; if it still does at the cap, merge anyway
-  and name the PR you merged over. Waiting holds only the merge: keep driving
-  this PR meanwhile. Then sync — rebase onto the new base where the ruleset
-  requires branches up to date, or where it is `dirty` — and merge on its new
-  verdict. Say which lower PR you waited on, or passed over as quiet.
+  "didn't find any major issues" comment, or a green `codex` commit status, on
+  any head — and has had any activity (a push, review, comment, reaction or
+  state change) in the last 30 minutes, wait for it. Keep waiting only while
+  it still meets all of that, and at most 30 minutes in total across every
+  recheck; if it still does at the cap, merge anyway and name the PR you
+  merged over. When a wait ends, rerun the check for the other lower PRs.
+  Waiting holds only the merge: keep driving this PR meanwhile. Then sync —
+  rebase onto the new base where the ruleset requires branches up to date, or
+  where it is `dirty` — and merge on the verdict for its current head, a fresh
+  one if that moved it, rerunning this check first. Say which lower PR you
+  waited on, or passed over as quiet.
 - When a feature has multiple open PRs, list **every** open PR by URL, one per
   line — the "View PR" chip sticks to the first link and hides the rest
   (anthropics/claude-code#46625).
