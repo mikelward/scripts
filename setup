@@ -2,7 +2,7 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [--kde] [--minimal | --full] \
+#     setup [--gui | --no-gui] [--kde] [--quickspace] [--minimal | --full] \
 #           [--no-install] [--purge-obsolete] [--ignore-errors] \
 #           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 #
@@ -95,6 +95,7 @@ GITHUB_PREFIX="${GITHUB_PREFIX:-$GITHUB_DEFAULT_PREFIX}"
 SCRIPTS_REPO_PATH="mikelward/scripts.git"
 CONF_REPO_PATH="mikelward/conf.git"
 ROOT_REPO_PATH="mikelward/root.git"
+QUICKSPACE_REPO_PATH="mikelward/quickspace.git"
 
 SCRIPTS_DIR="$HOME/scripts"
 CONF_DIR="$HOME/conf"
@@ -141,6 +142,13 @@ INSTALL=yes
 # Off by default because setup is also fetched via "curl | sh" onto machines
 # that may run Sway or Hyprland deliberately, where purging them would be hostile.
 PURGE_OBSOLETE=no
+
+# Whether to also install the quickspace session (Hyprland + uwsm,
+# github.com/mikelward/quickspace) beside KDE, via setup-quickspace. One of:
+#   no  - KDE Plasma only (the default)
+#   yes - KDE Plasma plus quickspace (--quickspace)
+# The packages it needs are kept out of --purge-obsolete.
+QUICKSPACE=no
 
 # Whether to keep going after a command fails. One of:
 #   no  - abort on the first error, via set -e (the default)
@@ -206,7 +214,7 @@ EXTRAS=auto
 
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--kde] [--minimal | --full]
+Usage: setup [--gui | --no-gui] [--kde] [--quickspace] [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
              [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
@@ -216,8 +224,11 @@ Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 Options:
   --gui            Force installation of graphical packages and desktop config
   --no-gui         Skip all graphical packages and desktop configuration
-  --kde            Accepted for compatibility; KDE Plasma + Krohnkite is the
-                   only desktop setup installs/configures (Linux)
+  --kde            Accepted for compatibility; KDE Plasma + Krohnkite is
+                   always installed on Linux
+  --quickspace     Also install the quickspace session (Hyprland + uwsm)
+                   beside KDE, via setup-quickspace (Linux, GUI only). Its
+                   packages are kept out of --purge-obsolete
   --minimal        Skip heavyweight extras (helix, jj, nushell), installing
                    only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -439,8 +450,14 @@ while test $# -gt 0; do
             GUI=no
             ;;
         --kde)
-            # Accepted for compatibility: KDE Plasma + Krohnkite is the only
-            # desktop setup installs/configures, so there's nothing to select.
+            # Accepted for compatibility: KDE Plasma + Krohnkite is always
+            # installed, so there's nothing to select.
+            ;;
+        --quickspace)
+            QUICKSPACE=yes
+            ;;
+        --no-quickspace)
+            QUICKSPACE=no
             ;;
         --minimal)
             MINIMAL=yes
@@ -535,6 +552,7 @@ GITHUB_PREFIX=$(normalize_github_prefix "$GITHUB_PREFIX")
 SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"
 CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"
 ROOT_REPO="${GITHUB_PREFIX}${ROOT_REPO_PATH}"
+QUICKSPACE_REPO="${GITHUB_PREFIX}${QUICKSPACE_REPO_PATH}"
 
 # Whether the repos come from somewhere other than the default (github.com over
 # SSH), i.e. --github or GITHUB_PREFIX pointed them elsewhere. Compared after
@@ -1167,6 +1185,19 @@ purge_obsolete_packages() {
         redhat) obsolete="$obsolete SwayNotificationCenter" ;;
         *) info "No obsolete-package purge for this OS"; return 0 ;;
     esac
+    # quickspace runs on Hyprland, uwsm and (until its own shell lands) the
+    # waybar/swaync/fuzzel stack, so --quickspace keeps those.
+    if test "$QUICKSPACE" = yes; then
+        quickspace_pkgs=" hyprland hypridle swww xdg-desktop-portal-hyprland uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
+        kept=""
+        for pkg in $obsolete; do
+            case "$quickspace_pkgs" in
+                *" $pkg "*) ;;
+                *) kept="$kept $pkg" ;;
+            esac
+        done
+        obsolete=$kept
+    fi
 
     # obsolete_pkg_installed warns and returns non-zero on a real query failure,
     # so a package whose status can't be determined is left out of the purge
@@ -2126,6 +2157,15 @@ if test "$GUI_ENABLED" -eq 1; then
         info "Configuring KDE desktop environment"
         # shellcheck disable=SC2086  # both expand to zero or more flags
         "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS $KDE_SETUP_FLAGS
+        if test "$QUICKSPACE" = yes; then
+            info "Installing the quickspace session"
+            # Cloned here, not by setup-quickspace, so --github, the origin
+            # check and URL redaction work as for setup's other repos.
+            clone_or_pull "$QUICKSPACE_REPO" "$SRC_DIR/quickspace" yes
+            # shellcheck disable=SC2086  # expands to zero or more flags
+            QUICKSPACE_DIR="$SRC_DIR/quickspace" \
+                "$SCRIPTS_DIR/setup-quickspace" --no-fetch $DESKTOP_SETUP_FLAGS
+        fi
     fi
 else
     info "Skipping desktop environment configuration (no GUI)"

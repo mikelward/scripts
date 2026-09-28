@@ -1,0 +1,282 @@
+#!/bin/sh
+# Install the quickspace session (github.com/mikelward/quickspace) beside KDE.
+#
+# `setup --quickspace` runs this after setup-kde, so KDE Plasma stays the
+# fallback session. It:
+#
+# - installs the session's packages: Hyprland, hypridle, uwsm, the Hyprland
+#   and GTK portals, and, until the Quickshell shell lands, the transitional
+#   owners (waybar, swaync) and the tools conf's Hyprland config calls;
+# - clones or updates the quickspace repo, runs its `make install` (the
+#   layout, the focus guard, the user units, the portal config) and, with
+#   sudo, `make install-session PREFIX=/usr` (the display manager's session
+#   entry, its compositor wrapper, and the quickspace commands);
+# - enables quickspace.service, which hangs it off the quickspace session's
+#   target only;
+# - removes the logind lid drop-ins the retired setup-hypr/setup-sway
+#   installed. They set HandleLidSwitch=ignore, and quickspace leaves suspend
+#   to logind's defaults, so with one left in place an undocked lid close
+#   would never suspend.
+#
+# The dotfiles (conf's config/hypr and friends) come from confinst, which
+# setup runs first.
+#
+# Usage:
+#     setup-quickspace [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
+#                      [-h | --help]
+#
+# --no-install skips the packages and the root `make install-session`.
+# --no-sudo skips every privileged step. --ignore-errors keeps going past
+# failures. setup forwards all three. --no-fetch uses $QUICKSPACE_DIR as it
+# is: setup passes it after cloning or pulling the repo with its own
+# clone_or_pull, which honors --github and redacts the URLs it prints.
+
+INSTALL=yes
+SUDO=yes
+IGNORE_ERRORS=no
+FETCH=yes
+
+# Overridable for tests, which can't touch the real /etc or clone.
+LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}"
+QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
+# Hyprland reads only hyprland.lua from 0.56 on.
+MIN_HYPRLAND=0.56
+
+info() {
+    printf "%s\n" "$*"
+}
+
+warn() {
+    printf "Warning: %s\n" "$*" >&2
+}
+
+error() {
+    printf "Error: %s\n" "$*" >&2
+    exit 1
+}
+
+is_command() {
+    test -x "$(command -v "$1")"
+}
+
+# Run one privileged command without letting a sudo failure abort the helper
+# under set -e. Mirrors setup's sudo_or_warn: on a box where sudo is allowed
+# for package installs but denied for other commands, a denied lid/service
+# step warns and the helper keeps going instead of exiting. The proactive
+# --no-sudo skip is handled by the caller's SUDO guard below, so this wrapper
+# only needs the reactive path -- but it still honours SUDO=no defensively.
+sudo_or_warn() {
+    _sudo_name=${1##*/}
+    if test "$SUDO" = no; then
+        warn "skipping 'sudo $_sudo_name' (--no-sudo)"
+        return 1
+    fi
+    _sudo_stderr=$(mktemp) || {
+        warn "sudo $_sudo_name: could not create a temporary error log"
+        return 1
+    }
+
+    if sudo "$@" 2>"$_sudo_stderr"; then
+        cat "$_sudo_stderr" >&2
+        rm -f "$_sudo_stderr"
+        return 0
+    else
+        _sudo_status=$?
+    fi
+    _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
+    rm -f "$_sudo_stderr"
+
+    case "$_sudo_status" in
+        126) _sudo_detail="permission denied" ;;
+        127) _sudo_detail="command not found" ;;
+        *)
+            case "$_sudo_detail" in
+                "sudo: $_sudo_name: "*) _sudo_detail=${_sudo_detail#"sudo: $_sudo_name: "} ;;
+                "sudo: "*) _sudo_detail=${_sudo_detail#"sudo: "} ;;
+                "$_sudo_name: "*) _sudo_detail=${_sudo_detail#"$_sudo_name: "} ;;
+            esac
+            if test -z "$_sudo_detail"; then
+                _sudo_detail="failed (exit status $_sudo_status)"
+            fi
+            ;;
+    esac
+    warn "sudo $_sudo_name: $_sudo_detail"
+    return "$_sudo_status"
+}
+
+usage() {
+    cat <<'USAGE'
+Usage: setup-quickspace [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+
+Install the quickspace session (Hyprland + uwsm) beside KDE Plasma.
+
+Options:
+  --no-install     Skip the packages and the system-wide session install
+  --no-sudo        Skip every privileged step (packages, the session entry,
+                   removing the old lid drop-ins)
+  --ignore-errors  Keep going past failures instead of aborting on the first
+  -h, --help       Show this help and exit
+USAGE
+}
+
+while test $# -gt 0; do
+    case "$1" in
+        --install) INSTALL=yes ;;
+        --no-install) INSTALL=no ;;
+        --sudo) SUDO=yes ;;
+        --no-sudo) SUDO=no ;;
+        --ignore-errors) IGNORE_ERRORS=yes ;;
+        --fetch) FETCH=yes ;;
+        --no-fetch) FETCH=no ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            warn "Unknown option: $1"
+            usage >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
+
+if test "$IGNORE_ERRORS" = no; then
+    set -e
+fi
+
+detect_os() {
+    if test -f /etc/debian_version; then
+        echo debian
+    elif test -f /etc/redhat-release || test -f /etc/fedora-release; then
+        echo redhat
+    elif test -f /etc/arch-release; then
+        echo arch
+    else
+        echo unknown
+    fi
+}
+
+# --- Packages ---
+
+install_packages() {
+    common="hyprland hypridle uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+            waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
+    case "$(detect_os)" in
+        debian)
+            # shellcheck disable=SC2086  # word-split the package list
+            sudo_or_warn apt-get install -y $common sway-notification-center \
+                || warn "could not install some quickspace packages; install them manually"
+            ;;
+        redhat)
+            # shellcheck disable=SC2086
+            sudo_or_warn dnf install -y $common SwayNotificationCenter \
+                || warn "could not install some quickspace packages (Hyprland may need a COPR); install them manually"
+            ;;
+        arch)
+            # shellcheck disable=SC2086
+            sudo_or_warn pacman -S --needed --noconfirm $common swaync \
+                || warn "could not install some quickspace packages; install them manually"
+            ;;
+        *)
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, hypridle, uwsm, waybar and swaync manually"
+            ;;
+    esac
+}
+
+# Hyprland before 0.56 reads hyprland.conf, which conf no longer ships.
+check_hyprland_version() {
+    if ! is_command Hyprland; then
+        warn "Hyprland isn't installed; the quickspace session won't start"
+        return 0
+    fi
+    version=$(Hyprland --version 2>/dev/null | sed -n 's/^Hyprland \([0-9][0-9.]*\).*/\1/p' | head -n1)
+    if test -z "$version"; then
+        warn "couldn't read Hyprland's version; quickspace needs $MIN_HYPRLAND or later"
+        return 0
+    fi
+    if test "$(printf '%s\n%s\n' "$MIN_HYPRLAND" "$version" | sort -V | head -n1)" != "$MIN_HYPRLAND"; then
+        warn "Hyprland $version is older than $MIN_HYPRLAND, which the Lua config needs; upgrade it"
+    fi
+}
+
+# --- The quickspace repo ---
+
+# $QUICKSPACE_REPO only steers a fresh clone; an existing checkout pulls from
+# its own origin.
+fetch_quickspace() {
+    if test "$FETCH" = no; then
+        test -d "$QUICKSPACE_DIR/.git" \
+            || error "no quickspace checkout at $QUICKSPACE_DIR (--no-fetch)"
+    elif test -d "$QUICKSPACE_DIR/.git"; then
+        info "Updating $QUICKSPACE_DIR"
+        # The existing checkout is enough to install, so a failed pull (no
+        # network, say) warns rather than ending the run.
+        git -C "$QUICKSPACE_DIR" pull --ff-only \
+            || warn "could not update $QUICKSPACE_DIR; installing the existing checkout"
+    else
+        # Not naming the URL: one passed with credentials in it would land in
+        # the terminal and any captured log.
+        info "Cloning quickspace into $QUICKSPACE_DIR"
+        mkdir -p "$(dirname "$QUICKSPACE_DIR")"
+        git clone "$QUICKSPACE_REPO" "$QUICKSPACE_DIR"
+    fi
+}
+
+install_quickspace() {
+    info "Installing quickspace's user files"
+    make -C "$QUICKSPACE_DIR" install
+    if test "$INSTALL" = yes; then
+        info "Installing the quickspace session entry and commands under /usr"
+        sudo_or_warn make -C "$QUICKSPACE_DIR" install-session PREFIX=/usr \
+            || warn "could not install the session entry; run 'sudo make -C $QUICKSPACE_DIR install-session PREFIX=/usr'"
+    fi
+}
+
+enable_unit() {
+    if ! is_command systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
+        warn "no systemd user manager; run 'systemctl --user enable quickspace.service' in your session"
+        return 0
+    fi
+    systemctl --user daemon-reload
+    systemctl --user enable quickspace.service
+}
+
+# --- logind ---
+
+remove_old_lid_dropins() {
+    removed=no
+    for f in "$LOGIND_DIR/10-hypr-lid.conf" "$LOGIND_DIR/10-sway-lid.conf"; do
+        if test -e "$f"; then
+            info "Removing $f (quickspace leaves the lid to logind's defaults)"
+            if sudo_or_warn rm -f "$f"; then
+                removed=yes
+            else
+                warn "could not remove $f; an undocked lid close won't suspend until it's gone"
+            fi
+        fi
+    done
+    if test "$removed" = yes; then
+        sudo_or_warn systemctl kill -s HUP systemd-logind \
+            || warn "could not reload systemd-logind; the change applies after a reboot"
+    fi
+}
+
+# --- Main ---
+
+if test "$INSTALL" = no; then
+    info "Skipping quickspace packages (--no-install)"
+elif test "$SUDO" = no; then
+    info "Skipping quickspace packages (needs sudo; --no-sudo)"
+else
+    install_packages
+fi
+check_hyprland_version
+fetch_quickspace
+install_quickspace
+enable_unit
+if test "$SUDO" = no; then
+    info "Leaving the logind lid drop-ins alone (needs sudo; --no-sudo)"
+else
+    remove_old_lid_dropins
+fi
+
+info "quickspace installed. Log out and pick the \"quickspace\" session; KDE Plasma stays available."

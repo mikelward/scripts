@@ -1,0 +1,158 @@
+#!/bin/bash
+# Tests for setup-quickspace
+#
+# Runs setup-quickspace against a throwaway HOME, logind dir and quickspace
+# checkout, with sudo, the package managers, git, make, systemctl and
+# Hyprland mocked. Each mock logs its argv to $CALLS.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/setup-quickspace"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+setup() {
+    T="$(mktemp -d)"
+    CALLS="$T/calls"
+    mkdir -p "$T/bin" "$T/home" "$T/logind"
+    for cmd in apt-get dnf pacman make; do
+        printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "%s"\n' "$cmd" "$CALLS" > "$T/bin/$cmd"
+    done
+    # sudo runs the command, so rm and the rest really happen (on $T paths).
+    printf '#!/bin/sh\nprintf "%%s\\n" "sudo $*" >> "%s"\n"$@"\n' "$CALLS" > "$T/bin/sudo"
+    # git clone creates the checkout; pull just logs, or fails with
+    # \$FAKE_PULL_FAILS.
+    cat > "$T/bin/git" <<MOCK
+#!/bin/sh
+printf "%s\\n" "git \$*" >> "$CALLS"
+if test "\$1" = clone; then mkdir -p "\$3/.git"; fi
+if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
+MOCK
+    cat > "$T/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+test "\$2" != show-environment || exit \${FAKE_NO_USER_MANAGER:-0}
+MOCK
+    cat > "$T/bin/Hyprland" <<MOCK
+#!/bin/sh
+echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
+MOCK
+    chmod +x "$T"/bin/*
+}
+
+teardown() {
+    rm -rf "$T"
+}
+
+run() {
+    set +e
+    output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
+        QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
+        "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
+    status=$?
+    set -e
+    calls=
+    if test -f "$CALLS"; then
+        calls=$(cat "$CALLS")
+    fi
+}
+
+check() {
+    name=$1
+    shift
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if "$@"; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "FAIL: $name"
+        echo "  output: $output"
+        echo "  calls: $calls"
+    fi
+}
+has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+lacks() { ! has "$1" "$2"; }
+
+set -e
+
+setup; ARGS=(); run
+check "exits 0" test "$status" -eq 0
+check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle uwsm"
+check "installs the transitional owners" has "$calls" "waybar"
+check "clones quickspace when it isn't there" has "$calls" "git clone https://example.com/quickspace.git $T/src/quickspace"
+check "runs quickspace's make install" has "$calls" "make -C $T/src/quickspace install"
+check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/quickspace install-session PREFIX=/usr"
+check "enables quickspace.service" has "$calls" "systemctl --user enable quickspace.service"
+check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
+teardown
+
+setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(); run
+check "updates an existing checkout" has "$calls" "git -C $T/src/quickspace pull --ff-only"
+check "doesn't clone over it" lacks "$calls" "git clone"
+teardown
+
+setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(); run FAKE_PULL_FAILS=1
+check "a failed pull still installs" test "$status" -eq 0
+check "a failed pull is reported" has "$output" "could not update $T/src/quickspace"
+check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/quickspace install"
+teardown
+
+setup; ARGS=(); run QUICKSPACE_REPO="https://user:secret@example.com/quickspace.git"
+check "the clone message doesn't print the URL" lacks "$output" "secret"
+teardown
+
+setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(--no-fetch); run
+check "--no-fetch neither pulls nor clones" lacks "$calls" "git "
+check "--no-fetch installs the checkout" has "$calls" "make -C $T/src/quickspace install"
+teardown
+
+setup; ARGS=(--no-fetch); run
+check "--no-fetch without a checkout fails" test "$status" -ne 0
+check "--no-fetch without a checkout says so" has "$output" "no quickspace checkout"
+teardown
+
+setup; : > "$T/logind/10-hypr-lid.conf"; : > "$T/logind/10-sway-lid.conf"; : > "$T/logind/50-mine.conf"
+ARGS=(); run
+check "removes the old hypr lid drop-in" test ! -e "$T/logind/10-hypr-lid.conf"
+check "removes the old sway lid drop-in" test ! -e "$T/logind/10-sway-lid.conf"
+check "leaves other drop-ins alone" test -e "$T/logind/50-mine.conf"
+check "reloads logind after removing one" has "$calls" "systemctl kill -s HUP systemd-logind"
+teardown
+
+setup; ARGS=(); run
+check "no old drop-in, no logind reload" lacks "$calls" "systemd-logind"
+teardown
+
+setup; ARGS=(--no-install); run
+check "--no-install skips packages" lacks "$calls" "hypridle"
+check "--no-install skips the system-wide session install" lacks "$calls" "install-session"
+check "--no-install still installs the user files" has "$calls" "make -C $T/src/quickspace install"
+teardown
+
+setup; : > "$T/logind/10-hypr-lid.conf"; ARGS=(--no-sudo); run
+check "--no-sudo runs no sudo" lacks "$calls" "sudo "
+check "--no-sudo leaves the drop-in" test -e "$T/logind/10-hypr-lid.conf"
+check "--no-sudo still enables the user unit" has "$calls" "systemctl --user enable quickspace.service"
+teardown
+
+setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.55.1
+check "an old Hyprland is warned about" has "$output" "Hyprland 0.55.1 is older than 0.56"
+teardown
+
+setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.57.0
+check "a newer Hyprland is fine" lacks "$output" "older than"
+teardown
+
+setup; ARGS=(); run FAKE_NO_USER_MANAGER=1
+check "no user manager is a warning, not a failure" test "$status" -eq 0
+check "no user manager says how to enable it" has "$output" "systemctl --user enable quickspace.service"
+check "no user manager enables nothing" lacks "$calls" "--user enable"
+teardown
+
+setup; ARGS=(--bogus); run
+check "an unknown option fails" test "$status" -eq 1
+teardown
+
+echo
+echo "setup-quickspace: $TESTS_PASSED/$TESTS_RUN passed"
+test "$TESTS_FAILED" -eq 0
