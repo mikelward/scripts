@@ -352,6 +352,7 @@ MOCK
     output="$(PATH="$purge_tmpdir:$PATH" \
         sh -c "set -e
 OS=$purge_os
+QUICKSPACE=${PURGE_QUICKSPACE:-no}
 sudo_or_warn() { \"\$@\"; }
 $(extract_functions "info warn obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
@@ -833,6 +834,32 @@ test_kde_flag_is_a_noop() {
     run_setup --kde --help
     assert_status 0 &&
     assert_output_contains "Usage: setup"
+}
+
+# --- --quickspace flag ---
+
+test_quickspace_flag_is_accepted() {
+    run_setup --quickspace --help
+    assert_status 0 &&
+    assert_output_contains "--quickspace"
+}
+
+test_quickspace_off_by_default() {
+    assert_source_contains "^QUICKSPACE=no" &&
+    assert_source_contains '"$SCRIPTS_DIR/setup-quickspace" --no-fetch' &&
+    assert_source_contains 'clone_or_pull "$QUICKSPACE_REPO" "$SRC_DIR/quickspace" yes'
+}
+
+# With --quickspace the purge keeps the Hyprland stack quickspace runs on
+# and still removes what it doesn't use (sway).
+test_purge_obsolete_keeps_quickspace_stack() {
+    PURGE_QUICKSPACE=yes run_purge_obsolete debian "sway hyprland waybar uwsm"
+    assert_status 0 &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_contain "sway" &&
+    assert_calls_lack "hyprland" &&
+    assert_calls_lack "waybar" &&
+    assert_calls_lack "uwsm"
 }
 
 # --- TypeScript compiler ---
@@ -2358,6 +2385,9 @@ run_test "home-prefix path keeps the runtime when no hx landed" \
     test_home_tools_keeps_the_runtime_when_no_hx_landed
 
 run_test "--kde is accepted as a no-op" test_kde_flag_is_a_noop
+run_test "--quickspace is accepted" test_quickspace_flag_is_accepted
+run_test "--quickspace is off by default" test_quickspace_off_by_default
+run_test "--quickspace keeps the quickspace stack in the purge" test_purge_obsolete_keeps_quickspace_stack
 run_test "tsc installs from the distro alongside node" \
     test_typescript_installed_from_distro
 run_test "sudo warning includes a useful stderr reason" \

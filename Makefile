@@ -16,6 +16,7 @@ test:
 	./gitbackup_test
 	./runenv_test
 	./setup_test
+	./setup-quickspace_test
 	./setup-kde_test
 	./setup-macos_test
 	./kdeshortcut_test
