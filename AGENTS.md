@@ -121,7 +121,9 @@ has stopped biting.
   survive into `main`.
 - After a rebase, force-push with `--force-with-lease`, never a bare `--force`.
 - **Merge cue (`merged` / `I merged` / `landed` / merge webhook) runs hygiene
-  *before* engaging with the rest of the message:** `git fetch origin`, cut a
+  *before* engaging with the rest of the message:** `git fetch origin
+  +refs/heads/main:refs/remotes/origin/main` (a bare fetch in a single-branch
+  clone leaves `origin/main` stale), cut a
   fresh `<agent>/<short-topic>` branch off `origin/main`, announce the switch.
 - **After a merge, take a fresh `<agent>/<short-topic>`** — don't reset the
   merged name onto the new base. Its remote ref still points at the pre-merge
