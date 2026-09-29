@@ -835,6 +835,53 @@ install_homebrew() {
     command -v brew >/dev/null 2>&1
 }
 
+# --- Go ---
+
+# vcs (conf) and quickspace-grant (quickspace) are built with Go.
+# install_packages installs it from the distro, brew on macOS, or conda-forge
+# through homepkg under --no-root (install_home_tools). setup builds vcs, which
+# needs 1.21: from there on, Go fetches the newer toolchain vcs's go.mod asks
+# for. setup-quickspace checks quickspace's own minimum. Overridable for tests.
+GO="${GO:-go}"
+MIN_GO=1.21
+
+# go_at_least says whether Go version $1 (1.22.2, 1.24rc1) is at least $2
+# (1.22). Plain arithmetic, since macOS's sort has no -V.
+go_at_least() {
+    have_major=${1%%.*}
+    have_minor=${1#*.}
+    have_minor=${have_minor%%[!0-9]*}
+    want_major=${2%%.*}
+    want_minor=${2#*.}
+    want_minor=${want_minor%%[!0-9]*}
+    test "${have_major:-0}" -gt "$want_major" \
+        || { test "${have_major:-0}" -eq "$want_major" && test "${have_minor:-0}" -ge "$want_minor"; }
+}
+
+# check_go says whether $GO can build vcs, and warns why not.
+check_go() {
+    if ! command -v "$GO" >/dev/null 2>&1; then
+        warn "no Go; vcs needs Go $MIN_GO or newer: install golang (Debian, Ubuntu, Fedora) or go (Homebrew)"
+        return 1
+    fi
+    if ! go_version=$("$GO" env GOVERSION 2>&1); then
+        warn "couldn't ask $GO for its version: $go_version"
+        return 1
+    fi
+    go_version=${go_version#go}
+    case "$go_version" in
+        [0-9]*.[0-9]*) ;;
+        *)
+            warn "couldn't read $GO's version: $go_version"
+            return 1
+            ;;
+    esac
+    if ! go_at_least "$go_version" "$MIN_GO"; then
+        warn "vcs needs Go $MIN_GO or newer, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
+        return 1
+    fi
+}
+
 # --- Install system packages ---
 
 install_packages() {
@@ -1569,7 +1616,9 @@ install_home_tools() {
     # fnm (Node version manager) is a convenience tool -- installed regardless
     # of --no-npm, mirroring the root path's install_fnm (which is skipped under
     # --no-root, so fnm comes from here instead).
-    tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf"
+    # go builds vcs and quickspace-grant, as the distro's does on the
+    # privileged path.
+    tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf go"
     if test "$NPM" = yes; then
         # node/npm + tsc are the actual build toolchain for setup-kde's
         # Krohnkite source-build fallback (its normal path fetches a
@@ -2117,11 +2166,6 @@ clone_or_pull "$CONF_REPO" "$CONF_DIR" yes
 info "Running confinst"
 "$SCRIPTS_DIR/confinst"
 
-if test -f "$CONF_DIR/vcs/Makefile"; then
-    info "Installing vcs"
-    make -C "$CONF_DIR/vcs" install
-fi
-
 if test "$INSTALL" = no; then
     info "Skipping heavyweight extras (helix, jj, nushell); --no-install"
 elif test "$ROOT" = no; then
@@ -2134,6 +2178,17 @@ elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
     info "Skipping heavyweight extras (helix, jj, nushell); minimal profile"
+fi
+
+# After install_home_tools, which is where --no-root gets its Go.
+if test -f "$CONF_DIR/vcs/Makefile"; then
+    if check_go; then
+        info "Installing vcs"
+        make -C "$CONF_DIR/vcs" install
+    else
+        # The prompt shows no VCS status without it, but the shell works.
+        warn "skipping vcs; rerun setup once Go $MIN_GO or newer is installed"
+    fi
 fi
 
 # atuin/carapace are small static binaries with no packaged build, and lf

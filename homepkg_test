@@ -1153,6 +1153,26 @@ check("registry maps lf to conda-forge with an lf bin",
       and hp.TOOLS["lf"]["github"] == "gokcehan/lf"
       and hp.TOOLS["lf"]["bins"] == ["lf"])
 
+# The Go toolchain, for vcs and quickspace-grant under setup --no-root. Go
+# releases live on go.dev, not GitHub, so it's conda-forge only, and asking
+# for it from GitHub is a clean error rather than a KeyError.
+check("registry maps go to conda-forge with go and gofmt",
+      hp.TOOLS["go"]["conda"] == "go"
+      and hp.TOOLS["go"]["bins"] == ["go", "gofmt"]
+      and not hp.TOOLS["go"].get("github"))
+for _name, _call in [
+        ("install_github", lambda: hp.install_github(
+            "go", hp.TOOLS["go"], "/tmp/homepkg-test-go", ("linux", "x86_64"), True)),
+        ("_stage_github", lambda: hp._stage_github(
+            ["go"], ("linux", "x86_64"), "/tmp/homepkg-test-go"))]:
+    _err = None
+    try:
+        _call()
+    except hp.HomepkgError as e:
+        _err = e
+    check(f"{_name} says go has no GitHub release",
+          _err is not None and "no GitHub release" in str(_err))
+
 # Krohnkite: no conda-forge feedstock, no GitHub repo -- its release lives on
 # Codeberg, pinned to a specific (beta) tag rather than "latest", and it's not
 # a CLI tool so it carries no "bins".

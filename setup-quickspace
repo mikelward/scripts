@@ -44,7 +44,9 @@ QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
 # quickspace's make install builds quickspace-grant with this Go, which
-# must be at least MIN_GO (its go.mod). Overridable for tests.
+# must be at least MIN_GO (its go.mod). setup installs Go for everything
+# that needs it, vcs too; this installs it again for a run on its own.
+# Overridable for tests.
 GO="${GO:-go}"
 MIN_GO=1.22
 
@@ -168,7 +170,7 @@ install_packages() {
     case "$(detect_os)" in
         debian)
             # shellcheck disable=SC2086  # word-split the package list
-            sudo_or_warn apt-get install -y $common sway-notification-center golang-go \
+            sudo_or_warn apt-get install -y $common sway-notification-center golang \
                 || warn "could not install some quickspace packages; install them manually"
             ;;
         redhat)
@@ -230,7 +232,7 @@ install_quickspace() {
     # make install builds quickspace-grant first, and without Go it would
     # stop before installing anything.
     is_command "$GO" \
-        || error "quickspace needs Go $MIN_GO or newer to build quickspace-grant; install golang-go (Debian, Ubuntu), golang (Fedora) or go (Arch)"
+        || error "quickspace needs Go $MIN_GO or newer to build quickspace-grant; setup installs it, or install golang (Debian, Ubuntu, Fedora) or go (Arch)"
     if ! go_version=$("$GO" env GOVERSION 2>&1); then
         error "couldn't ask $GO for its version: $go_version"
     fi
