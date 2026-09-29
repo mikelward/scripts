@@ -87,6 +87,11 @@ check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle uws
 check "installs the transitional owners" has "$calls" "waybar"
 check "clones quickspace when it isn't there" has "$calls" "git clone https://example.com/quickspace.git $T/src/quickspace"
 check "runs quickspace's make install" has "$calls" "make -C $T/src/quickspace install"
+# Go too, for a run without setup; detect_os reads /etc, so the other
+# distros' lists are checked in the source.
+check "installs Go itself" has "$calls" "golang"
+check "installs Go itself on Fedora" grep -q 'dnf install -y .* SwayNotificationCenter golang ' "$SCRIPT"
+check "installs Go itself on Arch" grep -q 'pacman -S .* swaync go ' "$SCRIPT"
 check "tells make install which Go to build with" has "$calls" "make -C $T/src/quickspace install GO=go"
 check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/quickspace install-session PREFIX=/usr"
 check "enables quickspace.service" has "$calls" "systemctl --user enable quickspace.service"

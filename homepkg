@@ -105,6 +105,10 @@ TOOLS = {
     # the default mamba path and the offline bundle -- and a GitHub release for
     # --backend github. Each ships a single binary.
     "lf":       {"conda": "lf",       "github": "gokcehan/lf",        "bins": ["lf"]},
+    # The Go toolchain, which builds conf's vcs and quickspace-grant. Go
+    # publishes its releases on go.dev rather than GitHub, so it comes from
+    # conda-forge only; the go binary finds its GOROOT through the link.
+    "go":       {"conda": "go",       "bins": ["go", "gofmt"]},
     # Node toolchain for the setup --no-root path: node/npm/tsc from conda-forge
     # instead of a distro package, plus fnm (which on root boxes comes from its
     # own curl installer -- no conda there yet). npm/npx ride along in the nodejs
@@ -730,7 +734,9 @@ def _find_dir(root, name):
 
 
 def install_github(tool, meta, prefix, plat, dry_run):
-    repo = meta["github"]
+    repo = meta.get("github")
+    if not repo:
+        raise HomepkgError(f"{tool}: no GitHub release; install it with the default backend")
     tokens = github_asset_tokens(*plat)
     tag, assets = github_latest_assets(repo)
     picked = github_pick_asset(assets, tokens)
@@ -1186,6 +1192,8 @@ def _stage_github(tools, plat, td, skip_unavailable=False):
     os.makedirs(adir, exist_ok=True)
     entries = []
     for t in tools:
+        if not TOOLS[t].get("github"):
+            raise HomepkgError(f"{t}: no GitHub release; bundle it with the default backend")
         tag, assets = github_latest_assets(TOOLS[t]["github"])
         picked = github_pick_asset(assets, tokens)
         if not picked:

@@ -792,6 +792,79 @@ assert_calls_lack() {
     esac
 }
 
+# Run check_go against a mock go that reports $1 as its GOVERSION ("missing"
+# for no go at all).
+run_check_go() {
+    go_tmpdir="$(mktemp -d)"
+    if test "$1" != missing; then
+        printf '#!/bin/sh\ntest "$*" = "env GOVERSION" && echo go%s\n' "$1" > "$go_tmpdir/go"
+        chmod +x "$go_tmpdir/go"
+    fi
+    set +e
+    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn go_at_least check_go")
+check_go" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$go_tmpdir"
+}
+
+test_check_go_accepts_a_new_enough_go() {
+    run_check_go 1.21.0 && assert_status 0
+    run_check_go 1.22.2 && assert_status 0
+    run_check_go 1.24.7 && assert_status 0
+}
+
+test_check_go_rejects_an_old_go() {
+    run_check_go 1.19.8
+    assert_status 1
+    assert_output_contains "vcs needs Go 1.21 or newer, and"
+    assert_output_contains "is 1.19.8; on Debian 12, install golang from bookworm-backports"
+}
+
+test_go_at_least_compares_numerically() {
+    for pair in "1.22 1.22" "1.22.2 1.22" "1.24rc1 1.22" "1.100 1.22" "2.0 1.22"; do
+        sh -c "$(extract_functions go_at_least)
+go_at_least $pair" \
+            || { echo "  FAIL: go_at_least $pair was false"; TEST_FAILED=1; }
+    done
+    for pair in "1.21.9 1.22" "1.9 1.22" "0.99 1.22"; do
+        if sh -c "$(extract_functions go_at_least)
+go_at_least $pair"; then
+            echo "  FAIL: go_at_least $pair was true"
+            TEST_FAILED=1
+        fi
+    done
+}
+
+test_check_go_rejects_a_version_it_cannot_read() {
+    run_check_go devel
+    assert_status 1
+    assert_output_contains "couldn't read"
+}
+
+test_check_go_rejects_no_go() {
+    run_check_go missing
+    assert_status 1
+    assert_output_contains "no Go; vcs needs Go 1.21 or newer"
+}
+
+test_go_is_installed_for_everything() {
+    assert_source_contains '^MIN_GO=1.21$'
+    # The distro and brew package lists, not a desktop's own.
+    test "$(grep -c '^ *golang \\$' "$SETUP")" -eq 2 \
+        || { echo "  FAIL: golang isn't in both distro package lists"; TEST_FAILED=1; }
+    assert_source_contains '^ *go \\$'
+    # vcs is built only with a Go that can build it, and after --no-root's
+    # homepkg install, which is where that Go comes from there.
+    assert_source_contains '    if check_go; then'
+    home_tools=$(grep -n '^    install_home_tools$' "$SETUP" | cut -d: -f1)
+    vcs=$(grep -n '^    if check_go; then$' "$SETUP" | cut -d: -f1)
+    if test -z "$home_tools" || test -z "$vcs" || test "$vcs" -le "$home_tools"; then
+        echo "  FAIL: vcs is built before install_home_tools"
+        TEST_FAILED=1
+    fi
+}
+
 run_test() {
     name="$1"
     func="$2"
@@ -1302,7 +1375,7 @@ test_zoxide_is_a_core_package() {
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
-    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf"'
+    assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf go"'
 }
 
 # zsh-autosuggestions (inline history ghost text) is packaged in the distros
@@ -1488,7 +1561,7 @@ test_file_managers_are_in_the_homepkg_core_set() {
     run_home_tools_helix absent
     assert_status 0 &&
     assert_calls_contain "homepkg install ripgrep" &&
-    assert_calls_contain " zoxide lf"
+    assert_calls_contain " zoxide lf go"
 }
 
 # update-alternatives only covers x-terminal-emulator. What makes Plasma's own
@@ -2541,6 +2614,18 @@ run_test "a partial bundle still installs the rest of the shell tools" \
     test_shell_tools_reconcile_after_bundle
 run_test "the shell tools install on every profile, after the clone" \
     test_shell_tools_run_on_every_profile
+run_test "check_go accepts Go 1.21 and newer" \
+    test_check_go_accepts_a_new_enough_go
+run_test "check_go rejects an older Go and says where to get one" \
+    test_check_go_rejects_an_old_go
+run_test "go_at_least compares versions numerically" \
+    test_go_at_least_compares_numerically
+run_test "check_go rejects a version it can't read" \
+    test_check_go_rejects_a_version_it_cannot_read
+run_test "check_go rejects a missing Go" \
+    test_check_go_rejects_no_go
+run_test "Go is installed by setup itself, and vcs waits for it" \
+    test_go_is_installed_for_everything
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
