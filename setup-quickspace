@@ -7,7 +7,11 @@
 # - installs the session's packages: Hyprland, hypridle, uwsm, the Hyprland
 #   and GTK portals, Go (to build quickspace-grant), and, until the
 #   Quickshell shell lands, the transitional owners (waybar, swaync) and the
-#   tools conf's Hyprland config calls;
+#   tools conf's Hyprland config calls. A package the distro doesn't have
+#   (swww on Ubuntu 26.04) is reported and the rest still install;
+# - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
+#   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
+#   source, at pinned tags, into ~/.local/opt/hyprland (see build_hyprland);
 # - clones or updates the quickspace repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
@@ -24,18 +28,20 @@
 #
 # Usage:
 #     setup-quickspace [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
-#                      [-h | --help]
+#                      [--no-build-hyprland] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
 # failures. setup forwards all three. --no-fetch uses $QUICKSPACE_DIR as it
 # is: setup passes it after cloning or pulling the repo with its own
 # clone_or_pull, which honors --github and redacts the URLs it prints.
+# --no-build-hyprland leaves Hyprland to the distro even when it's too old.
 
 INSTALL=yes
 SUDO=yes
 IGNORE_ERRORS=no
 FETCH=yes
+BUILD_HYPRLAND=yes
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
@@ -43,6 +49,43 @@ QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}
 QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
+
+# Where build_hyprland builds and installs Hyprland, and where it links its
+# commands. Its own prefix keeps its libraries out of the system's library
+# path: the distro's hypridle and portal link the distro's older hyprutils
+# and hyprlang, and would break on ours. In $HOME, it needs no sudo; only
+# the links do. Overridable for tests.
+HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-$HOME/.local/opt/hyprland}"
+HYPRLAND_SRC="${HYPRLAND_SRC:-$HOME/src/hyprland-build}"
+HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
+
+# What build_hyprland builds, in order: name, repository, tag, build system.
+# Each tag meets the next one's minimums (Hyprland v0.56.2's CMakeLists.txt
+# names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
+# Hyprland needs 1.49.
+HYPRLAND_PINS="
+wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 meson
+hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 cmake
+hyprutils https://github.com/hyprwm/hyprutils.git v0.14.2 cmake
+hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 cmake
+hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 cmake
+hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 cmake
+hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 cmake
+aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 cmake
+Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 cmake
+"
+
+# What the build needs from apt, named as on Ubuntu 26.04.
+HYPRLAND_BUILD_DEPS="build-essential cmake meson ninja-build pkg-config git python3
+    libwayland-dev libwayland-bin libpugixml-dev libpixman-1-dev libzip-dev
+    libcairo2-dev librsvg2-dev libtomlplusplus-dev libdrm-dev libpango1.0-dev
+    libjpeg-dev libwebp-dev libmagic-dev libpng-dev libjxl-dev libheif-dev
+    libgles-dev libegl-dev libgbm-dev libseat-dev libinput-dev libudev-dev
+    libdisplay-info-dev hwdata libxkbcommon-dev uuid-dev libxcursor-dev libeis-dev
+    libglib2.0-dev libre2-dev libmuparser-dev liblcms2-dev liblua5.5-dev
+    glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
+    libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
+    xwayland"
 # quickspace's make install builds quickspace-grant with this Go, which
 # must be at least MIN_GO (its go.mod). setup installs Go for everything
 # that needs it, vcs too; this installs it again for a run on its own.
@@ -123,6 +166,9 @@ Options:
   --no-sudo        Skip every privileged step (packages, the session entry,
                    removing the old lid drop-ins)
   --ignore-errors  Keep going past failures instead of aborting on the first
+  --no-build-hyprland
+                   On Debian and Ubuntu, don't build Hyprland from source when
+                   apt's is older than 0.56 (the build takes 10-20 minutes)
   -h, --help       Show this help and exit
 USAGE
 }
@@ -136,6 +182,8 @@ while test $# -gt 0; do
         --ignore-errors) IGNORE_ERRORS=yes ;;
         --fetch) FETCH=yes ;;
         --no-fetch) FETCH=no ;;
+        --build-hyprland) BUILD_HYPRLAND=yes ;;
+        --no-build-hyprland) BUILD_HYPRLAND=no ;;
         -h|--help) usage; exit 0 ;;
         *)
             warn "Unknown option: $1"
@@ -150,8 +198,11 @@ if test "$IGNORE_ERRORS" = no; then
     set -e
 fi
 
+# $SETUP_OS overrides it for tests.
 detect_os() {
-    if test -f /etc/debian_version; then
+    if test -n "${SETUP_OS:-}"; then
+        echo "$SETUP_OS"
+    elif test -f /etc/debian_version; then
         echo debian
     elif test -f /etc/redhat-release || test -f /etc/fedora-release; then
         echo redhat
@@ -164,27 +215,324 @@ detect_os() {
 
 # --- Packages ---
 
-install_packages() {
-    common="hyprland hypridle uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-            waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
+# pkg_install installs packages with the distro's package manager.
+pkg_install() {
     case "$(detect_os)" in
-        debian)
-            # shellcheck disable=SC2086  # word-split the package list
-            sudo_or_warn apt-get install -y $common sway-notification-center golang \
-                || warn "could not install some quickspace packages; install them manually"
-            ;;
-        redhat)
-            # shellcheck disable=SC2086
-            sudo_or_warn dnf install -y $common SwayNotificationCenter golang \
-                || warn "could not install some quickspace packages (Hyprland may need a COPR); install them manually"
-            ;;
-        arch)
-            # shellcheck disable=SC2086
-            sudo_or_warn pacman -S --needed --noconfirm $common swaync go \
-                || warn "could not install some quickspace packages; install them manually"
-            ;;
+        debian) sudo_or_warn apt-get install -y "$@" ;;
+        redhat) sudo_or_warn dnf install -y "$@" ;;
+        arch) sudo_or_warn pacman -S --needed --noconfirm "$@" ;;
+        *) return 1 ;;
+    esac
+}
+
+# apt_candidates prints "package version" for each of its arguments apt
+# knows, with "(none)" for a version apt has no candidate for, and fails when
+# apt-cache does. Asked in the C locale, whose labels it parses.
+apt_candidates() {
+    _policy=$(LC_ALL=C apt-cache policy "$@") || return 1
+    printf '%s\n' "$_policy" | awk '
+        /^[^ ].*:$/ { pkg = substr($0, 1, length($0) - 1) }
+        /^  Candidate:/ { print pkg, $2 }'
+}
+
+# The upstream part of a Debian version (4:15.2.0-5ubuntu1 -> 15.2.0), or
+# nothing for "(none)".
+upstream_version() {
+    printf '%s\n' "$1" | sed -n 's/^\([0-9]*:\)\{0,1\}\([0-9][0-9.]*\).*/\2/p'
+}
+
+version_at_least() {
+    test "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2"
+}
+
+# install_all installs the packages it can and prints the ones it couldn't,
+# failing if there are any. apt, dnf and pacman all refuse the lot over one
+# name they don't know (swww isn't in Ubuntu 26.04), so on Debian and Ubuntu
+# it asks apt which exist first, and installs those in one go. The package
+# manager's own output goes to stderr, so stdout carries only the list.
+install_all() {
+    _install="$*"
+    _missing=
+    if test "$(detect_os)" = debian; then
+        if _known=$(apt_candidates "$@"); then
+            _install=
+            for _pkg in "$@"; do
+                if printf '%s\n' "$_known" | awk -v p="$_pkg" '$1 == p && $2 != "(none)" { found = 1 } END { exit !found }'; then
+                    _install="$_install $_pkg"
+                else
+                    _missing="$_missing $_pkg"
+                fi
+            done
+        else
+            warn "couldn't ask apt which packages exist; installing them all"
+        fi
+    fi
+    if test -n "$_install"; then
+        # shellcheck disable=SC2086  # word-split the package list
+        pkg_install $_install >&2 || _missing="$_missing $_install"
+    fi
+    printf '%s\n' "${_missing# }"
+    test -z "$_missing"
+}
+
+# set_install_dir sets install_dir to where HYPRLAND_PINS build, and
+# pins_file to the marker that says the build there is complete.
+set_install_dir() {
+    hyprland_tag=$(printf '%s\n' "$HYPRLAND_PINS" | awk '$1 == "Hyprland" { print $3 }')
+    pins_sum=$(printf '%s\n' "$HYPRLAND_PINS" | cksum | cut -d' ' -f1)
+    install_dir="$HYPRLAND_PREFIX/$hyprland_tag-$pins_sum"
+    pins_file="$install_dir/quickspace-pins"
+}
+
+# decide_hyprland_build sets BUILD_NOW to whether this run builds Hyprland
+# from source: on Debian and Ubuntu, when apt's Hyprland is older than
+# MIN_HYPRLAND or missing, and apt has the toolchain the build needs.
+# Anything else keeps apt's Hyprland, saying why when it's too old.
+decide_hyprland_build() {
+    BUILD_NOW=no
+    test "$BUILD_HYPRLAND" = yes && test "$(detect_os)" = debian || return 0
+    if ! known=$(apt_candidates hyprland g++ libxkbcommon-dev liblua5.5-dev); then
+        warn "couldn't ask apt for its Hyprland version; installing apt's"
+        return 0
+    fi
+    candidate() {
+        upstream_version "$(printf '%s\n' "$known" | awk -v p="$1" '$1 == p { print $2 }')"
+    }
+    apt_hyprland=$(candidate hyprland)
+    if test -n "$apt_hyprland" && version_at_least "$apt_hyprland" "$MIN_HYPRLAND"; then
+        return 0
+    fi
+    # A finished build only needs relinking, not the toolchain.
+    set_install_dir
+    if test -f "$pins_file"; then
+        BUILD_NOW=yes
+        return 0
+    fi
+    # Hyprland 0.56 is C++26 (GCC 15) and needs xkbcommon 1.11 and Lua 5.5,
+    # which Debian 13 doesn't have.
+    gxx=$(candidate g++)
+    xkb=$(candidate libxkbcommon-dev)
+    if test -z "$gxx" || ! version_at_least "$gxx" 15 \
+        || test -z "$xkb" || ! version_at_least "$xkb" 1.11 \
+        || test -z "$(candidate liblua5.5-dev)"; then
+        warn "apt's Hyprland is ${apt_hyprland:-missing}, and building $MIN_HYPRLAND needs GCC 15, libxkbcommon 1.11 and Lua 5.5, which apt doesn't have here (it has GCC ${gxx:-none}, libxkbcommon ${xkb:-none}); installing apt's Hyprland, which can't run quickspace's Lua config"
+        return 0
+    fi
+    BUILD_NOW=yes
+}
+
+# install_packages sets DISTRO_HYPRLAND to yes when it installed the
+# distro's Hyprland.
+install_packages() {
+    DISTRO_HYPRLAND=no
+    common="hypridle uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+            waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
+    # A source build replaces the distro's Hyprland rather than sitting
+    # beside it.
+    if test "$BUILD_NOW" = no; then
+        common="hyprland $common"
+    fi
+    case "$(detect_os)" in
+        debian) extra="sway-notification-center golang" ;;
+        redhat) extra="SwayNotificationCenter golang" ;;
+        arch) extra="swaync go" ;;
         *)
             warn "unknown OS; install Hyprland $MIN_HYPRLAND+, hypridle, uwsm, waybar, swaync and Go $MIN_GO+ manually"
+            return 0
+            ;;
+    esac
+    installed=yes
+    # shellcheck disable=SC2086  # word-split the package list
+    missing=$(install_all $common $extra) || installed=no
+    case " $missing " in
+        *" hyprland "*) ;;
+        *) test "$BUILD_NOW" = yes || DISTRO_HYPRLAND=yes ;;
+    esac
+    if test "$installed" = no; then
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "could not install:$(printf ' %s' $missing); install them manually"
+        case " $missing " in
+            *" swww "*) warn "without swww there's no wallpaper; swaybg can stand in (see conf's config/hypr/README.md)" ;;
+        esac
+    fi
+}
+
+# --- Hyprland from source ---
+
+# build_hyprland builds and installs each of HYPRLAND_PINS in turn, as this
+# user, then links its commands onto PATH. Each set of
+# pins gets its own directory under $HYPRLAND_PREFIX, so a failed rebuild
+# leaves the working one alone; quickspace-pins in it marks it complete, and
+# a rerun with the same pins only relinks.
+build_hyprland() {
+    set_install_dir
+    if test -f "$pins_file"; then
+        info "Hyprland is already built from these pins in $install_dir"
+        link_hyprland || return 1
+        remove_old_builds
+        return
+    fi
+    info "Building Hyprland from source into $install_dir (apt's is older than $MIN_HYPRLAND; this takes a while)"
+    # shellcheck disable=SC2086  # word-split the package list
+    if ! missing=$(install_all $HYPRLAND_BUILD_DEPS); then
+        warn "could not install Hyprland's build dependencies:$(printf ' %s' $missing)"
+        return 1
+    fi
+    # Our own libraries come first, ahead of any the distro has.
+    PKG_CONFIG_PATH="$install_dir/lib/pkgconfig:$install_dir/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    export PKG_CONFIG_PATH
+    # aquamarine and Hyprland run the hyprwayland-scanner we just built by name.
+    PATH="$install_dir/bin:$PATH"
+    mkdir -p "$HYPRLAND_SRC" "$install_dir"
+    # A failed build keeps what it finished, stamped, so a rerun picks up
+    # where it stopped. Nothing uses it until it's complete and current.
+    printf '%s\n' "$HYPRLAND_PINS" | while read -r name url tag kind; do
+        test -n "$name" || continue
+        stamp="$install_dir/.built-$name"
+        if test -f "$stamp"; then
+            info "Already built $name $tag"
+            continue
+        fi
+        build_component "$name" "$url" "$tag" "$kind" && : > "$stamp" || exit 1
+    done || {
+        warn "building Hyprland failed; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
+        return 1
+    }
+    # Marked complete before linking, so a failed link is retried rather
+    # than the build.
+    printf '%s\n' "$HYPRLAND_PINS" > "$pins_file" || {
+        warn "couldn't write $pins_file"
+        return 1
+    }
+    link_hyprland || return 1
+    remove_old_builds
+}
+
+# Once $HYPRLAND_PREFIX/current points at this build, older ones, finished
+# or not, are unused. A running Hyprland from one keeps the files it has open.
+remove_old_builds() {
+    for old in "$HYPRLAND_PREFIX"/*/; do
+        old=${old%/}
+        # current is a link to this build, not a build of its own.
+        if ! test -d "$old" || test -L "$old" || test "$old" = "$install_dir"; then
+            continue
+        fi
+        # Only what build_hyprland made: a <tag>-<checksum> directory with its
+        # marker or a component's stamp. Anything else here is left alone.
+        case "${old##*/}" in
+            v*-[0-9]*) ;;
+            *) continue ;;
+        esac
+        set -- "$old"/.built-*
+        if ! test -f "$old/quickspace-pins" && ! test -e "$1"; then
+            continue
+        fi
+        # Nor one a command link still points into directly.
+        for cmd in Hyprland hyprctl; do
+            case "$(readlink "$HYPRLAND_BIN_DIR/$cmd")" in
+                "$old"/*) continue 2 ;;
+            esac
+        done
+        rm -rf "$old" || warn "couldn't remove the old Hyprland build in $old"
+    done
+}
+
+# link_hyprland points $HYPRLAND_PREFIX/current at this build, which
+# switches every command at once, then makes sure the commands' links go
+# through it.
+link_hyprland() {
+    for cmd in Hyprland hyprctl; do
+        if ! test -x "$install_dir/bin/$cmd"; then
+            warn "$install_dir/bin/$cmd is missing; remove $pins_file to rebuild"
+            return 1
+        fi
+    done
+    # Renamed into place, so current is never missing or half-switched.
+    current="$HYPRLAND_PREFIX/current"
+    if ! ln -sfn "${install_dir##*/}" "$current.new" || ! mv -Tf "$current.new" "$current"; then
+        warn "couldn't point $current at $install_dir"
+        rm -f "$current.new"
+        return 1
+    fi
+    for cmd in Hyprland hyprctl; do
+        link="$HYPRLAND_BIN_DIR/$cmd"
+        test "$(readlink "$link")" != "$current/bin/$cmd" || continue
+        # Only replace a link of ours; anything else there is someone else's.
+        if test -e "$link" || test -L "$link"; then
+            case "$(readlink "$link")" in
+                "$HYPRLAND_PREFIX"/*) ;;
+                *)
+                    warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build, or put $current/bin on the session's PATH"
+                    continue
+                    ;;
+            esac
+        fi
+        # The display manager's PATH may not reach into $HOME, so the links
+        # help, but the build is still usable without them.
+        if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
+            warn "COULDN'T LINK $cmd INTO $HYPRLAND_BIN_DIR: the quickspace session may not find it; link $current/bin/$cmd onto the session's PATH yourself"
+        fi
+    done
+}
+
+# unlink_hyprland removes links that build_hyprland made, so that apt's
+# Hyprland, in /usr/bin, isn't shadowed by an earlier source build.
+unlink_hyprland() {
+    # The links to remove, and where each pointed, one "link target" a line.
+    saved=
+    set --
+    for cmd in Hyprland hyprctl; do
+        link="$HYPRLAND_BIN_DIR/$cmd"
+        test -L "$link" || continue
+        target=$(readlink "$link")
+        case "$target" in
+            "$HYPRLAND_PREFIX"/*)
+                set -- "$@" "$link"
+                saved="$saved$link $target
+"
+                ;;
+        esac
+    done
+    test $# -gt 0 || return 0
+    info "Removing $*, which point to a source build; using apt's Hyprland"
+    # Both go in one command, and anything a failure half-removed is put
+    # back, so Hyprland and hyprctl never come from different builds.
+    sudo_or_warn rm -f "$@" && return 0
+    printf '%s' "$saved" | while read -r link target; do
+        test -L "$link" && continue
+        sudo_or_warn ln -s "$target" "$link" || warn "couldn't restore $link; point it at $target"
+    done
+    return 1
+}
+
+build_component() {
+    dir="$HYPRLAND_SRC/$1"
+    info "Building $1 $3"
+    rm -rf "$dir"
+    git clone --quiet --depth 1 --branch "$3" --recurse-submodules --shallow-submodules "$2" "$dir" || return 1
+    case "$1" in
+        wayland-protocols)
+            # 1.49's XML fails the strict DTD check of Ubuntu 26.04's
+            # wayland-scanner (1.24) when generating its optional C enum
+            # headers, which Hyprland doesn't use; it only needs the XML.
+            find "$dir" -name meson.build -exec sed -i "s/'--strict', *//g" {} + || return 1
+            ;;
+    esac
+    case "$4" in
+        meson)
+            meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
+                && meson compile -C "$dir/build" \
+                && meson install -C "$dir/build"
+            ;;
+        cmake)
+            # The run path is how Hyprland finds these libraries, since
+            # $install_dir/lib isn't in the system's library path.
+            cmake -S "$dir" -B "$dir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_INSTALL_PREFIX="$install_dir" -DCMAKE_INSTALL_LIBDIR=lib \
+                -DCMAKE_PREFIX_PATH="$install_dir" -DCMAKE_INSTALL_RPATH="$install_dir/lib" \
+                -DBUILD_TESTING=OFF \
+                && cmake --build "$dir/build" \
+                && cmake --install "$dir/build"
             ;;
     esac
 }
@@ -285,7 +633,22 @@ if test "$INSTALL" = no; then
 elif test "$SUDO" = no; then
     info "Skipping quickspace packages (needs sudo; --no-sudo)"
 else
+    decide_hyprland_build
     install_packages
+    # Only once the distro's is there to replace them.
+    if test "$DISTRO_HYPRLAND" = yes; then
+        unlink_hyprland || warn "couldn't remove the links to a source-built Hyprland in $HYPRLAND_BIN_DIR"
+    fi
+    if test "$BUILD_NOW" = yes; then
+        # apt's Hyprland wasn't installed, so without this build there's no
+        # compositor: that's fatal unless errors are being ignored.
+        if ! build_hyprland; then
+            if test "$IGNORE_ERRORS" = no; then
+                error "the quickspace session needs Hyprland $MIN_HYPRLAND or later; rerun setup-quickspace to retry the build"
+            fi
+            warn "the quickspace session needs Hyprland $MIN_HYPRLAND or later; rerun setup-quickspace to retry the build"
+        fi
+    fi
 fi
 check_hyprland_version
 fetch_quickspace
