@@ -37,6 +37,19 @@ going forward.
       the gates, the `codex` status, conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
 
+## Hyprland from source in setup-quickspace
+
+`setup-quickspace` builds Hyprland 0.56 from source where apt's is older
+(Ubuntu 26.04 ships 0.53). Two follow-ups:
+
+- **Debian 13.** The build needs GCC 15 (C++26), libxkbcommon 1.11 and Lua
+  5.5; trixie has GCC 14 and older xkbcommon, so setup keeps apt's Hyprland
+  there and says why. A newer toolchain from backports, or a container
+  build, would cover it.
+- **Retire it.** Once Debian and Ubuntu ship Hyprland 0.56 or later, the
+  build no longer runs; delete it then, with `~/.local/opt/hyprland` and the links
+  in `/usr/local/bin` on machines that built it.
+
 ## setup / homepkg
 
 - [ ] **Purge setup-managed tools that are retired from the registry.**

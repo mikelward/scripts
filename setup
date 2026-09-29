@@ -149,6 +149,8 @@ PURGE_OBSOLETE=no
 #   yes - KDE Plasma plus quickspace (--quickspace)
 # The packages it needs are kept out of --purge-obsolete.
 QUICKSPACE=no
+# Flags for setup-quickspace only.
+QUICKSPACE_SETUP_FLAGS=""
 
 # Whether to keep going after a command fails. One of:
 #   no  - abort on the first error, via set -e (the default)
@@ -229,6 +231,9 @@ Options:
   --quickspace     Also install the quickspace session (Hyprland + uwsm)
                    beside KDE, via setup-quickspace (Linux, GUI only). Its
                    packages are kept out of --purge-obsolete
+  --no-build-hyprland
+                   With --quickspace, use the distro's Hyprland even where
+                   it's older than quickspace needs, instead of building it
   --minimal        Skip heavyweight extras (helix, jj, nushell), installing
                    only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -458,6 +463,9 @@ while test $# -gt 0; do
             ;;
         --no-quickspace)
             QUICKSPACE=no
+            ;;
+        --no-build-hyprland)
+            QUICKSPACE_SETUP_FLAGS="$QUICKSPACE_SETUP_FLAGS --no-build-hyprland"
             ;;
         --minimal)
             MINIMAL=yes
@@ -2219,7 +2227,7 @@ if test "$GUI_ENABLED" -eq 1; then
             clone_or_pull "$QUICKSPACE_REPO" "$SRC_DIR/quickspace" yes
             # shellcheck disable=SC2086  # expands to zero or more flags
             QUICKSPACE_DIR="$SRC_DIR/quickspace" \
-                "$SCRIPTS_DIR/setup-quickspace" --no-fetch $DESKTOP_SETUP_FLAGS
+                "$SCRIPTS_DIR/setup-quickspace" --no-fetch $DESKTOP_SETUP_FLAGS $QUICKSPACE_SETUP_FLAGS
         fi
     fi
 else
