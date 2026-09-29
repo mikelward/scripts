@@ -33,6 +33,12 @@ MOCK
 printf "%s\\n" "systemctl \$*" >> "$CALLS"
 test "\$2" != show-environment || exit \${FAKE_NO_USER_MANAGER:-0}
 MOCK
+    # go answers GOVERSION with \$FAKE_GO_VERSION, or a new enough one.
+    cat > "$T/bin/go" <<MOCK
+#!/bin/sh
+printf "%s\\n" "go \$*" >> "$CALLS"
+test "\$*" != "env GOVERSION" || echo "\${FAKE_GO_VERSION:-go1.22.2}"
+MOCK
     cat > "$T/bin/Hyprland" <<MOCK
 #!/bin/sh
 echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
@@ -81,9 +87,27 @@ check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle uws
 check "installs the transitional owners" has "$calls" "waybar"
 check "clones quickspace when it isn't there" has "$calls" "git clone https://example.com/quickspace.git $T/src/quickspace"
 check "runs quickspace's make install" has "$calls" "make -C $T/src/quickspace install"
+check "tells make install which Go to build with" has "$calls" "make -C $T/src/quickspace install GO=go"
 check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/quickspace install-session PREFIX=/usr"
 check "enables quickspace.service" has "$calls" "systemctl --user enable quickspace.service"
 check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
+teardown
+
+setup; ARGS=(); run GO="$T/no-such-go"
+check "no Go is an error" test "$status" -ne 0
+check "no Go names the packages to install" has "$output" "quickspace needs Go 1.22 or newer to build quickspace-grant"
+check "no Go stops before make install" lacks "$calls" "make -C $T/src/quickspace install"
+teardown
+
+setup; ARGS=(); run FAKE_GO_VERSION=go1.19.8
+check "a Go older than 1.22 is an error" test "$status" -ne 0
+check "an old Go says which it found and where to get a newer one" \
+    has "$output" "and go is 1.19.8; on Debian 12, install golang from bookworm-backports"
+check "an old Go stops before make install" lacks "$calls" "make -C $T/src/quickspace install"
+teardown
+
+setup; ARGS=(); run FAKE_GO_VERSION=go1.24.7
+check "a newer Go is fine" test "$status" -eq 0
 teardown
 
 setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(); run

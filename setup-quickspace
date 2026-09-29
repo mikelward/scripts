@@ -5,8 +5,9 @@
 # fallback session. It:
 #
 # - installs the session's packages: Hyprland, hypridle, uwsm, the Hyprland
-#   and GTK portals, and, until the Quickshell shell lands, the transitional
-#   owners (waybar, swaync) and the tools conf's Hyprland config calls;
+#   and GTK portals, Go (to build quickspace-grant), and, until the
+#   Quickshell shell lands, the transitional owners (waybar, swaync) and the
+#   tools conf's Hyprland config calls;
 # - clones or updates the quickspace repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
@@ -42,6 +43,10 @@ QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}
 QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
+# quickspace's make install builds quickspace-grant with this Go, which
+# must be at least MIN_GO (its go.mod). Overridable for tests.
+GO="${GO:-go}"
+MIN_GO=1.22
 
 info() {
     printf "%s\n" "$*"
@@ -163,21 +168,21 @@ install_packages() {
     case "$(detect_os)" in
         debian)
             # shellcheck disable=SC2086  # word-split the package list
-            sudo_or_warn apt-get install -y $common sway-notification-center \
+            sudo_or_warn apt-get install -y $common sway-notification-center golang-go \
                 || warn "could not install some quickspace packages; install them manually"
             ;;
         redhat)
             # shellcheck disable=SC2086
-            sudo_or_warn dnf install -y $common SwayNotificationCenter \
+            sudo_or_warn dnf install -y $common SwayNotificationCenter golang \
                 || warn "could not install some quickspace packages (Hyprland may need a COPR); install them manually"
             ;;
         arch)
             # shellcheck disable=SC2086
-            sudo_or_warn pacman -S --needed --noconfirm $common swaync \
+            sudo_or_warn pacman -S --needed --noconfirm $common swaync go \
                 || warn "could not install some quickspace packages; install them manually"
             ;;
         *)
-            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, hypridle, uwsm, waybar and swaync manually"
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, hypridle, uwsm, waybar, swaync and Go $MIN_GO+ manually"
             ;;
     esac
 }
@@ -222,8 +227,19 @@ fetch_quickspace() {
 }
 
 install_quickspace() {
+    # make install builds quickspace-grant first, and without Go it would
+    # stop before installing anything.
+    is_command "$GO" \
+        || error "quickspace needs Go $MIN_GO or newer to build quickspace-grant; install golang-go (Debian, Ubuntu), golang (Fedora) or go (Arch)"
+    if ! go_version=$("$GO" env GOVERSION 2>&1); then
+        error "couldn't ask $GO for its version: $go_version"
+    fi
+    go_version=${go_version#go}
+    if test "$(printf '%s\n%s\n' "$MIN_GO" "$go_version" | sort -V | head -n1)" != "$MIN_GO"; then
+        error "quickspace needs Go $MIN_GO or newer to build quickspace-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
+    fi
     info "Installing quickspace's user files"
-    make -C "$QUICKSPACE_DIR" install
+    make -C "$QUICKSPACE_DIR" install GO="$GO"
     if test "$INSTALL" = yes; then
         info "Installing the quickspace session entry and commands under /usr"
         sudo_or_warn make -C "$QUICKSPACE_DIR" install-session PREFIX=/usr \
