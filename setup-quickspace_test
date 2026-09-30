@@ -178,6 +178,10 @@ check "tells make install which Go to build with" has "$calls" "make -C $T/src/q
 check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/quickspace install-session PREFIX=/usr"
 check "enables quickspace.service" has "$calls" "systemctl --user enable quickspace.service"
 check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
+check "masks the distro's waybar and swaync units, stopping them now" \
+    has "$calls" "systemctl --user mask --now waybar.service swaync.service"
+check "leaves hypridle's unit to quickspace's session-only drop-in" lacks "$calls" "hypridle.service"
+check "touches no other user's units" lacks "$calls" "--global"
 teardown
 
 setup; ARGS=(); run GO="$T/no-such-go"
@@ -522,6 +526,10 @@ setup; ARGS=(); run FAKE_NO_USER_MANAGER=1
 check "no user manager is a warning, not a failure" test "$status" -eq 0
 check "no user manager says how to enable it" has "$output" "systemctl --user enable quickspace.service"
 check "no user manager enables nothing" lacks "$calls" "--user enable"
+check "no user manager still masks, just not --now" \
+    has "$calls" "systemctl --user mask waybar.service swaync.service"
+check "no user manager says a running bar isn't stopped" \
+    has "$output" "masking waybar and swaync without stopping them"
 teardown
 
 setup; ARGS=(--bogus); run

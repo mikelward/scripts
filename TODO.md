@@ -71,3 +71,18 @@ going forward.
       `~/.zsh/zsh-autosuggestions` (pinned to a tag) would cover every path
       uniformly, since the conf shell config already checks that location
       first; deferred from the setup PR that added the packaged steps.
+
+## Decisions needing review
+
+- **setup-quickspace masks waybar and swaync per user, instead of disabling
+  every enablement.** Distro packages enable their user units, and
+  hypridle's, for every session, so they started under Plasma. Setup first
+  hunted each enablement (global, per-user, runtime) and undid it, but review
+  kept finding more places a link can live. Now setup masks waybar's and
+  swaync's units for the user running it, and quickspace's hypridle drop-in
+  skips hypridle outside the quickspace session (quickspace PR "Run
+  hypridle.service only in the quickspace session"). The alternative was the
+  enablement hunt, which also covered other user accounts on the machine;
+  the masks cover only the user who ran setup. It's reversible with
+  `systemctl --user unmask waybar.service swaync.service`, or by bringing back
+  a `sudo systemctl --global disable`.
