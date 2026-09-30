@@ -1243,7 +1243,7 @@ purge_obsolete_packages() {
     # quickspace runs on Hyprland, uwsm and (until its own shell lands) the
     # waybar/swaync/fuzzel stack, so --quickspace keeps those.
     if test "$QUICKSPACE" = yes; then
-        quickspace_pkgs=" hyprland hypridle swww xdg-desktop-portal-hyprland uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
+        quickspace_pkgs=" hyprland hypridle hyprlock swww xdg-desktop-portal-hyprland uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
         kept=""
         for pkg in $obsolete; do
             case "$quickspace_pkgs" in
