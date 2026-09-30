@@ -1,62 +1,107 @@
-#!/bin/bash
-# shellcheck source=/dev/null
-. "$HOME"/.shrc
+#!/bin/sh
+#
+# Takes a screenshot on Wayland (grim, slurp, wl-copy) and copies it to the
+# clipboard as PNG. quickspace's Print bindings run it. Wayland and GNU
+# mktemp only; the X11 scrot version is gone.
+#
+# A notification says when the shot is there: a full ultrawide shot takes a
+# moment, and the clipboard is otherwise silent. Light PNG compression
+# (grim -l 1) keeps that moment short. Canceling a region with Esc takes no
+# shot and says nothing; slurp says "selection cancelled" then, so any other
+# slurp failure is reported. Every other failure is a critical notification
+# naming the step and its error, since a key binding has no terminal.
+
+scriptname=${0##*/}
+
 usage() {
-  cat <<EOF 1>&2
-Usage: $scriptname [-d <delay>] [-h] [-w]
-       $scriptname [--delay <delay>] [--help] [--window]
+    cat <<EOF >&2
+Usage: $scriptname [-d <delay>] [-h] [-r | -w | -g <geometry>]
+       $scriptname [--delay <delay>] [--help] [--region | --window | --geometry <geometry>]
+
+Copies the whole screen, a region picked with slurp, the focused window, or
+the rectangle 'X,Y WxH' to the clipboard as PNG.
 EOF
 }
 
-scriptname=${0##*/}
-delay=0
-typeset -a args=()
-window=false
+fail() {
+    notify-send -a Screenshot -u critical 'Screenshot failed' "$1"
+    exit 1
+}
 
+mode=screen
+geometry=
+delay=0
 while test $# -gt 0; do
-  case "$1" in
-  -d|--delay)
-    if test $# -lt 2; then
-      echo "Option $1 requires an argument" 1>&2
-      usage
-      exit 2
-    fi
-    delay=$2
+    case "$1" in
+        -d|--delay|-g|--geometry)
+            if test $# -lt 2; then
+                echo "Option $1 requires an argument" >&2
+                usage
+                exit 2
+            fi
+            case "$1" in
+                -d|--delay) delay=$2 ;;
+                *) mode=geometry; geometry=$2 ;;
+            esac
+            shift
+            ;;
+        --delay=*) delay=${1#*=} ;;
+        --geometry=*) mode=geometry; geometry=${1#*=} ;;
+        -r|--region) mode=region ;;
+        -w|--window) mode=window ;;
+        -h|--help) usage; exit 0 ;;
+        *)
+            echo "Invalid option $1" >&2
+            usage
+            exit 2
+            ;;
+    esac
     shift
-    ;;
-  --delay=*)
-    delay=${1#*=}
-    ;;
-  -w|--window)
-    window=true
-    ;;
-  -h|--help)
-    usage
-    exit 0
-    ;;
-  --)
-    shift
-    break
-    ;;
-  -*)
-    echo "Invalid option $1" 1>&2
+done
+if test "$mode" = geometry && test -z "$geometry"; then
+    echo "--geometry needs a rectangle, like '0,0 800x600'" >&2
     usage
     exit 2
-    ;;
-  *)
-    break
-    ;;
-  esac
-  shift
-done
-
-cd "$HOME/Pictures" || exit 1
-
-sleep "$delay"
-
-if $window; then
-  wid=$(xdotool selectwindow)
-  args+=("-w" "$wid")
 fi
 
-exec scrot "${args[@]}"
+# The temporary files go on exit, even an interrupted one.
+f=
+e=
+trap 'rm -f "$f" "$e"' EXIT
+trap 'exit 1' HUP INT TERM
+e=$(mktemp 2>&1) || { m=$e; e=; fail "mktemp: $m"; }
+
+sleep "$delay" 2>"$e" || fail "sleep: $(cat "$e")"
+
+case "$mode" in
+    region)
+        if ! geometry=$(slurp 2>"$e"); then
+            case $(cat "$e") in
+                *cancelled*) exit 0 ;;
+            esac
+            fail "slurp: $(cat "$e")"
+        fi
+        ;;
+    window)
+        # An empty workspace has no active window: hyprctl prints {} then.
+        window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+        geometry=$(printf '%s\n' "$window" \
+            | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else "" end' 2>"$e") \
+            || fail "jq: $(cat "$e")"
+        if test -z "$geometry"; then
+            notify-send -a Screenshot -t 2000 'No window to screenshot'
+            exit 0
+        fi
+        ;;
+esac
+
+f=$(mktemp --suffix=.png 2>&1) || { m=$f; f=; fail "mktemp: $m"; }
+if test "$mode" = screen; then
+    grim -l 1 "$f" 2>"$e" || fail "grim: $(cat "$e")"
+else
+    grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
+fi
+# stderr goes to a file, not $(...): wl-copy stays running in the background
+# to serve the paste, and would hold a pipe open.
+wl-copy --type image/png < "$f" 2>"$e" || fail "wl-copy: $(cat "$e")"
+notify-send -a Screenshot -t 2000 'Screenshot copied'
