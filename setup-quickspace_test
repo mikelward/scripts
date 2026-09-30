@@ -65,7 +65,7 @@ for arg; do
         -DCMAKE_INSTALL_PREFIX=*)
             prefix=\${arg#*=}
             mkdir -p "\$prefix/bin"
-            for cmd in Hyprland hyprctl hyprwayland-scanner; do
+            for cmd in Hyprland hyprctl start-hyprland hyprwayland-scanner; do
                 printf "#!/bin/sh\\n" > "\$prefix/bin/\$cmd"
                 chmod +x "\$prefix/bin/\$cmd"
             done
@@ -260,6 +260,7 @@ check "the build builds hyprutils before Hyprland" \
 check "the build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
 check "the build links Hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
 check "the build links hyprctl onto PATH, through current" test "$(readlink "$T/usr-local-bin/hyprctl")" = "$T/opt/hyprland/current/bin/hyprctl"
+check "the build links start-hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
 check "the build records its pins" grep -q "Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 cmake" "$(inst)/quickspace-pins"
 # A second run with the same pins doesn't rebuild.
 : > "$CALLS"
@@ -299,7 +300,7 @@ teardown
 old_build() {
     old="$T/opt/hyprland/v0.55.0-1"
     mkdir -p "$old/bin"
-    for cmd in Hyprland hyprctl; do
+    for cmd in Hyprland hyprctl start-hyprland; do
         printf '#!/bin/sh\n' > "$old/bin/$cmd"
         chmod +x "$old/bin/$cmd"
         ln -s "$T/opt/hyprland/current/bin/$cmd" "$T/usr-local-bin/$cmd"
@@ -321,6 +322,17 @@ check "an upgrade switches Hyprland and hyprctl together" \
 check "an upgrade needs no new links" lacks "$calls" "sudo ln"
 check "an upgrade removes the older build" test ! -e "$old"
 check "an upgrade removes an unfinished older build" test ! -e "$T/opt/hyprland/v0.55.0-2"
+teardown
+
+# A build from before start-hyprland was linked gets that link on the next
+# run, with nothing rebuilt.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+rm "$T/usr-local-bin/start-hyprland"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a rerun links start-hyprland onto an existing build" \
+    test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
+check "a rerun that only links rebuilds nothing" lacks "$calls" "cmake"
 teardown
 
 # A rerun after a failure resumes from the step that failed.
@@ -361,7 +373,7 @@ setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_RM_KEEPS=hyprctl
 check "a half-failed unlink restores the other link" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
 check "a half-failed unlink keeps the one it couldn't remove" test -L "$T/usr-local-bin/hyprctl"
-check "a half-failed unlink removes both in one command" has "$calls" "sudo rm -f $T/usr-local-bin/Hyprland $T/usr-local-bin/hyprctl"
+check "a half-failed unlink removes them all in one command" has "$calls" "sudo rm -f $T/usr-local-bin/Hyprland $T/usr-local-bin/hyprctl $T/usr-local-bin/start-hyprland"
 teardown
 
 # If apt's Hyprland doesn't install, the build's links are all there is.

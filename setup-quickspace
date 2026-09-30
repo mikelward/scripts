@@ -438,7 +438,7 @@ remove_old_builds() {
             continue
         fi
         # Nor one a command link still points into directly.
-        for cmd in Hyprland hyprctl; do
+        for cmd in $HYPRLAND_COMMANDS; do
             case "$(readlink "$HYPRLAND_BIN_DIR/$cmd")" in
                 "$old"/*) continue 2 ;;
             esac
@@ -447,11 +447,15 @@ remove_old_builds() {
     done
 }
 
+# The build's commands that go on PATH. The quickspace session starts
+# Hyprland through start-hyprland, its crash watchdog, when it can find it.
+HYPRLAND_COMMANDS="Hyprland hyprctl start-hyprland"
+
 # link_hyprland points $HYPRLAND_PREFIX/current at this build, which
 # switches every command at once, then makes sure the commands' links go
 # through it.
 link_hyprland() {
-    for cmd in Hyprland hyprctl; do
+    for cmd in $HYPRLAND_COMMANDS; do
         if ! test -x "$install_dir/bin/$cmd"; then
             warn "$install_dir/bin/$cmd is missing; remove $pins_file to rebuild"
             return 1
@@ -464,7 +468,7 @@ link_hyprland() {
         rm -f "$current.new"
         return 1
     fi
-    for cmd in Hyprland hyprctl; do
+    for cmd in $HYPRLAND_COMMANDS; do
         link="$HYPRLAND_BIN_DIR/$cmd"
         test "$(readlink "$link")" != "$current/bin/$cmd" || continue
         # Only replace a link of ours; anything else there is someone else's.
@@ -491,7 +495,7 @@ unlink_hyprland() {
     # The links to remove, and where each pointed, one "link target" a line.
     saved=
     set --
-    for cmd in Hyprland hyprctl; do
+    for cmd in $HYPRLAND_COMMANDS; do
         link="$HYPRLAND_BIN_DIR/$cmd"
         test -L "$link" || continue
         target=$(readlink "$link")
@@ -506,7 +510,7 @@ unlink_hyprland() {
     test $# -gt 0 || return 0
     info "Removing $*, which point to a source build; using apt's Hyprland"
     # Both go in one command, and anything a failure half-removed is put
-    # back, so Hyprland and hyprctl never come from different builds.
+    # back, so the commands never come from different builds.
     sudo_or_warn rm -f "$@" && return 0
     printf '%s' "$saved" | while read -r link target; do
         test -L "$link" && continue
