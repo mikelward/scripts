@@ -16,9 +16,15 @@ setup() {
     CALLS="$T/calls"
     # What the installs would create.
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
-    for cmd in dnf pacman make meson; do
+    for cmd in dnf pacman make; do
         printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "%s"\n' "$cmd" "$CALLS" > "$T/bin/$cmd"
     done
+    # meson setup also logs the compilers it was given.
+    cat > "$T/bin/meson" <<MOCK
+#!/bin/sh
+printf "%s\\n" "meson \$*" >> "$CALLS"
+test "\$1" != setup || printf "%s\\n" "meson compilers CC=\$CC CXX=\$CXX" >> "$CALLS"
+MOCK
     # apt-get refuses the whole command when it names a package in
     # \$FAKE_MISSING, as apt does.
     cat > "$T/bin/apt-get" <<MOCK
@@ -30,7 +36,7 @@ for arg; do
 done
 MOCK
     # apt-cache policy knows every package but those in \$FAKE_MISSING,
-    # offering Hyprland \$FAKE_APT_HYPRLAND (or a new enough one), g++
+    # offering Hyprland \$FAKE_APT_HYPRLAND (or a new enough one), g++-16
     # \$FAKE_APT_GXX and libxkbcommon-dev \$FAKE_APT_XKB (or Ubuntu 26.04's),
     # and 1.0 of the rest. \$FAKE_APT_CACHE_FAILS makes it fail.
     cat > "$T/bin/apt-cache" <<MOCK
@@ -41,7 +47,7 @@ for pkg; do
     case " \$FAKE_MISSING " in *" \$pkg "*) continue ;; esac
     case "\$pkg" in
         hyprland) version="\${FAKE_APT_HYPRLAND:-0.56.2-1}" ;;
-        g++) version="\${FAKE_APT_GXX:-4:15.2.0-5ubuntu1}" ;;
+        g++-16) version="\${FAKE_APT_GXX:-16-20260322-1ubuntu1}" ;;
         libxkbcommon-dev) version="\${FAKE_APT_XKB:-1.13.1-1}" ;;
         *) version=1.0-1 ;;
     esac
@@ -230,7 +236,7 @@ teardown
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "an old apt Hyprland builds from source" test "$status" -eq 0
 check "the build doesn't install apt's Hyprland" lacks "$calls" "apt-get install -y hyprland"
-check "the build installs its dependencies" has "$calls" "apt-get install -y build-essential cmake meson"
+check "the build installs its dependencies, with GCC 16" has "$calls" "apt-get install -y build-essential gcc-16 g++-16 cmake meson"
 check "the build needs Lua 5.5" has "$calls" "liblua5.5-dev"
 check "the build clones pinned tags" has "$calls" "git clone --quiet --depth 1 --branch v0.56.2 --recurse-submodules --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
 check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
@@ -238,6 +244,9 @@ check "wayland-protocols' headers skip the strict check" \
     test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
 check "the build installs under its prefix, by version" has "$calls" "-DCMAKE_INSTALL_PREFIX=$T/opt/hyprland/v0.56.2-"
 check "the build sets the run path" has "$calls" "-DCMAKE_INSTALL_RPATH=$(inst)/lib"
+check "the build uses GCC 16" has "$calls" "-DCMAKE_C_COMPILER=gcc-16 -DCMAKE_CXX_COMPILER=g++-16"
+check "meson builds use GCC 16" has "$calls" "meson compilers CC=gcc-16 CXX=g++-16"
+check "the pins record the compiler" has "$(cat "$(inst)/quickspace-pins")" "gcc 16"
 check "the build puts its own tools on PATH" has "$calls" "cmake finds $(inst)/bin/hyprwayland-scanner"
 check "the build installs without sudo" has "$calls" "cmake --install $T/src/hyprland-build/Hyprland/build"
 check "the build never uses sudo to install" lacks "$calls" "sudo cmake"
@@ -253,6 +262,19 @@ check "the build records its pins" grep -q "Hyprland https://github.com/hyprwm/H
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "the same pins don't rebuild" lacks "$calls" "cmake"
 check "the same pins say so" has "$output" "already built from these pins"
+teardown
+
+# A new compiler checksums differently, so what an older one built, such as
+# a GCC 15 build that stopped partway, isn't resumed or reused.
+setup; ARGS=()
+# The checksum before the compiler was part of it: the pins alone.
+eval "$(sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT")"
+old_sum=$(printf '%s\n' "$HYPRLAND_PINS" | cksum | cut -d' ' -f1)
+mkdir -p "$T/opt/hyprland/v0.56.2-$old_sum"
+: > "$T/opt/hyprland/v0.56.2-$old_sum/.built-hyprutils"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build from another compiler isn't resumed" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a build from another compiler is cleaned up" test ! -e "$T/opt/hyprland/v0.56.2-$old_sum"
 teardown
 
 # The links are made again on a rerun, in case something removed them.
@@ -386,11 +408,11 @@ ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "--no-build-hyprland keeps someone else's link" test -L "$T/usr-local-bin/Hyprland"
 teardown
 
-# Debian 13 has neither GCC 15 nor xkbcommon 1.11: keep apt's Hyprland.
-setup; ARGS=(); run FAKE_APT_HYPRLAND=0.49.0+ds-1 FAKE_APT_GXX=4:14.2.0-1 FAKE_APT_XKB=1.7.0-2
-check "without GCC 15 there's no build" lacks "$calls" "cmake"
-check "without GCC 15 apt's Hyprland installs" has "$calls" "apt-get install -y hyprland hypridle"
-check "without GCC 15 says what's missing" has "$output" "it has GCC 14.2.0, libxkbcommon 1.7.0"
+# Debian 13 has neither g++-16 nor xkbcommon 1.11: keep apt's Hyprland.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.49.0+ds-1 FAKE_MISSING=g++-16 FAKE_APT_XKB=1.7.0-2
+check "without g++-16 there's no build" lacks "$calls" "cmake"
+check "without g++-16 apt's Hyprland installs" has "$calls" "apt-get install -y hyprland hypridle"
+check "without g++-16 says what's missing" has "$output" "it has g++-16 none, libxkbcommon 1.7.0"
 teardown
 
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MISSING=liblua5.5-dev

@@ -42,8 +42,8 @@ going forward.
 `setup-quickspace` builds Hyprland 0.56 from source where apt's is older
 (Ubuntu 26.04 ships 0.53). Two follow-ups:
 
-- **Debian 13.** The build needs GCC 15 (C++26), libxkbcommon 1.11 and Lua
-  5.5; trixie has GCC 14 and older xkbcommon, so setup keeps apt's Hyprland
+- **Debian 13.** The build needs GCC 16's libstdc++, libxkbcommon 1.11 and
+  Lua 5.5; trixie has GCC 14 and older xkbcommon, so setup keeps apt's Hyprland
   there and says why. A newer toolchain from backports, or a container
   build, would cover it.
 - **Retire it.** Once Debian and Ubuntu ship Hyprland 0.56 or later, the

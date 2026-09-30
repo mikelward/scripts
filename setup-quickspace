@@ -74,9 +74,13 @@ hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 cmake
 aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 cmake
 Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 cmake
 "
+# The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
+# which libstdc++ first has in GCC 16; Ubuntu 26.04's default g++ is 15, but
+# it packages g++-16, and its libstdc++6 runtime is already 16's.
+HYPRLAND_GCC=16
 
 # What the build needs from apt, named as on Ubuntu 26.04.
-HYPRLAND_BUILD_DEPS="build-essential cmake meson ninja-build pkg-config git python3
+HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake meson ninja-build pkg-config git python3
     libwayland-dev libwayland-bin libpugixml-dev libpixman-1-dev libzip-dev
     libcairo2-dev librsvg2-dev libtomlplusplus-dev libdrm-dev libpango1.0-dev
     libjpeg-dev libwebp-dev libmagic-dev libpng-dev libjxl-dev libheif-dev
@@ -277,9 +281,14 @@ install_all() {
 
 # set_install_dir sets install_dir to where HYPRLAND_PINS build, and
 # pins_file to the marker that says the build there is complete.
+hyprland_pins_record() {
+    printf '%s\ngcc %s\n' "$HYPRLAND_PINS" "$HYPRLAND_GCC"
+}
+
 set_install_dir() {
     hyprland_tag=$(printf '%s\n' "$HYPRLAND_PINS" | awk '$1 == "Hyprland" { print $3 }')
-    pins_sum=$(printf '%s\n' "$HYPRLAND_PINS" | cksum | cut -d' ' -f1)
+    # A new compiler is a new build, as a new pin is.
+    pins_sum=$(hyprland_pins_record | cksum | cut -d' ' -f1)
     install_dir="$HYPRLAND_PREFIX/$hyprland_tag-$pins_sum"
     pins_file="$install_dir/quickspace-pins"
 }
@@ -291,7 +300,7 @@ set_install_dir() {
 decide_hyprland_build() {
     BUILD_NOW=no
     test "$BUILD_HYPRLAND" = yes && test "$(detect_os)" = debian || return 0
-    if ! known=$(apt_candidates hyprland g++ libxkbcommon-dev liblua5.5-dev); then
+    if ! known=$(apt_candidates hyprland "g++-$HYPRLAND_GCC" libxkbcommon-dev liblua5.5-dev); then
         warn "couldn't ask apt for its Hyprland version; installing apt's"
         return 0
     fi
@@ -308,14 +317,14 @@ decide_hyprland_build() {
         BUILD_NOW=yes
         return 0
     fi
-    # Hyprland 0.56 is C++26 (GCC 15) and needs xkbcommon 1.11 and Lua 5.5,
+    # Hyprland 0.56 needs GCC 16's libstdc++, xkbcommon 1.11 and Lua 5.5,
     # which Debian 13 doesn't have.
-    gxx=$(candidate g++)
+    gxx=$(candidate "g++-$HYPRLAND_GCC")
     xkb=$(candidate libxkbcommon-dev)
-    if test -z "$gxx" || ! version_at_least "$gxx" 15 \
+    if test -z "$gxx" \
         || test -z "$xkb" || ! version_at_least "$xkb" 1.11 \
         || test -z "$(candidate liblua5.5-dev)"; then
-        warn "apt's Hyprland is ${apt_hyprland:-missing}, and building $MIN_HYPRLAND needs GCC 15, libxkbcommon 1.11 and Lua 5.5, which apt doesn't have here (it has GCC ${gxx:-none}, libxkbcommon ${xkb:-none}); installing apt's Hyprland, which can't run quickspace's Lua config"
+        warn "apt's Hyprland is ${apt_hyprland:-missing}, and building $MIN_HYPRLAND needs g++-$HYPRLAND_GCC, libxkbcommon 1.11 and Lua 5.5, which apt doesn't have here (it has g++-$HYPRLAND_GCC ${gxx:-none}, libxkbcommon ${xkb:-none}); installing apt's Hyprland, which can't run quickspace's Lua config"
         return 0
     fi
     BUILD_NOW=yes
@@ -400,7 +409,7 @@ build_hyprland() {
     }
     # Marked complete before linking, so a failed link is retried rather
     # than the build.
-    printf '%s\n' "$HYPRLAND_PINS" > "$pins_file" || {
+    hyprland_pins_record > "$pins_file" || {
         warn "couldn't write $pins_file"
         return 1
     }
@@ -520,7 +529,7 @@ build_component() {
     esac
     case "$4" in
         meson)
-            meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
+            CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
                 && meson compile -C "$dir/build" \
                 && meson install -C "$dir/build"
             ;;
@@ -530,6 +539,7 @@ build_component() {
             cmake -S "$dir" -B "$dir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX="$install_dir" -DCMAKE_INSTALL_LIBDIR=lib \
                 -DCMAKE_PREFIX_PATH="$install_dir" -DCMAKE_INSTALL_RPATH="$install_dir/lib" \
+                -DCMAKE_C_COMPILER="gcc-$HYPRLAND_GCC" -DCMAKE_CXX_COMPILER="g++-$HYPRLAND_GCC" \
                 -DBUILD_TESTING=OFF \
                 && cmake --build "$dir/build" \
                 && cmake --install "$dir/build"
