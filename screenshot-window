@@ -1,2 +1,2 @@
-#!/bin/bash
-screenshot -w
+#!/bin/sh
+exec screenshot --window "$@"

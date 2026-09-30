@@ -204,12 +204,12 @@ teardown
 
 setup; ARGS=(); run SETUP_OS=redhat
 check "Fedora installs Hyprland and Go with dnf" has "$calls" "dnf install -y hyprland hypridle"
-check "Fedora installs its swaync and Go" has "$calls" "SwayNotificationCenter golang"
+check "Fedora installs its swaync, notify-send and Go" has "$calls" "SwayNotificationCenter libnotify golang"
 teardown
 
 setup; ARGS=(); run SETUP_OS=arch
 check "Arch installs Hyprland and Go with pacman" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
-check "Arch installs its swaync and Go" has "$calls" "swaync go"
+check "Arch installs its swaync, notify-send and Go" has "$calls" "swaync libnotify go"
 check "Arch never builds Hyprland" lacks "$calls" "cmake"
 teardown
 
@@ -227,7 +227,7 @@ check "a missing package isn't fatal" test "$status" -eq 0
 check "a missing package is named" has "$output" "could not install: swww"
 check "a missing swww names the stand-in" has "$output" "swaybg can stand in"
 check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar fuzzel"
-check "the rest install in one go, Go too" has "$calls" "playerctl jq sway-notification-center golang"
+check "the rest install in one go, notify-send and Go too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang"
 check "a missing package is never asked for" lacks "$calls" "swww"
 teardown
 

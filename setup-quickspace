@@ -337,7 +337,8 @@ install_packages() {
     DISTRO_HYPRLAND=no
     # hyprlock is the lock screen until quickspace-lock lands (M5): conf's
     # Super+L and hypridle's lock_cmd both run it. It's a separate program,
-    # so the distro's works beside a source-built Hyprland.
+    # so the distro's works beside a source-built Hyprland. notify-send (the
+    # libnotify package below) is how screenshot reports from a key binding.
     common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
             waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
     # A source build replaces the distro's Hyprland rather than sitting
@@ -346,12 +347,12 @@ install_packages() {
         common="hyprland $common"
     fi
     case "$(detect_os)" in
-        debian) extra="sway-notification-center golang" ;;
-        redhat) extra="SwayNotificationCenter golang" ;;
-        arch) extra="swaync go" ;;
+        debian) extra="sway-notification-center libnotify-bin golang" ;;
+        redhat) extra="SwayNotificationCenter libnotify golang" ;;
+        arch) extra="swaync libnotify go" ;;
         *)
             # shellcheck disable=SC2086  # word-split the package list
-            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, swaync, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, swaync, notify-send, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
             return 0
             ;;
     esac

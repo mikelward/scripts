@@ -1,0 +1,254 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for screenshot: each mode shoots the right geometry and copies it as
+# PNG with a notification, Esc on a region is silent, every other failure is
+# a critical notification naming the step with a nonzero exit, and no
+# temporary file survives, even an interrupted run. Runs the real script
+# against fake grim, slurp, wl-copy, notify-send and hyprctl that log their
+# calls, following the runenv_test conventions.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  SHOTTMP="$TEST_TMPDIR/tmp"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN" "$SHOTTMP"
+  : > "$CALLS"
+  cp "$SCRIPT_DIR/screenshot" "$SCRIPT_DIR/screenshot-window" "$BIN/"
+  fake grim 'echo "grim $*" >> "$CALLS"
+test -z "$GRIM_FAILS" || { echo "no outputs" >&2; exit 1; }
+test -z "$GRIM_KILLED" || { kill -TERM $PPID; exit 1; }
+for a; do out=$a; done; echo png > "$out"'
+  fake slurp 'test -z "$SLURP_CANCELS" || { echo "selection cancelled" >&2; exit 1; }
+test -z "$SLURP_FAILS" || { echo "no layer shell" >&2; exit 1; }
+echo "1,2 3x4"'
+  fake wl-copy 'echo "wl-copy $* $(cat)" >> "$CALLS"
+test -z "$WLCOPY_FAILS" || { echo "no seat" >&2; exit 1; }'
+  fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  fake hyprctl 'test -z "$HYPRCTL_FAILS" || { echo "no socket" >&2; exit 1; }
+printf "%s\n" "${ACTIVE_WINDOW:-{\"at\": [10, 20], \"size\": [300, 400]\}}"'
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+run() {
+  set +e
+  output="$(env PATH="$BIN:$PATH" CALLS="$CALLS" TMPDIR="$SHOTTMP" "${ENV[@]}" "$BIN/screenshot" "$@" 2>&1)"
+  status=$?
+  set -e
+  calls=$(cat "$CALLS")
+  leftovers=$(ls -A "$SHOTTMP")
+}
+
+fail_test() { echo "  FAIL: $1"; echo "  calls: $calls"; TEST_FAILED=1; }
+assert_status() { test "$status" -eq "$1" || fail_test "expected exit $1, got $status ($output)"; }
+assert_called() { case "$calls" in *"$1"*) ;; *) fail_test "expected a call with '$1'" ;; esac; }
+assert_not_called() { case "$calls" in *"$1"*) fail_test "unexpected call with '$1'" ;; esac; }
+assert_clean() { test -z "$leftovers" || fail_test "temporary files left behind: $leftovers"; }
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  ENV=()
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+test_screen() {
+  run
+  assert_status 0
+  assert_called "grim -l 1 $SHOTTMP/"
+  assert_not_called "grim -l 1 -g"
+  assert_called "wl-copy --type image/png png"
+  assert_called "notify-send -a Screenshot -t 2000 Screenshot copied"
+  assert_clean
+}
+
+test_region() {
+  run --region
+  assert_status 0
+  assert_called "grim -l 1 -g 1,2 3x4 "
+  assert_called "Screenshot copied"
+  assert_clean
+}
+
+test_region_cancel() {
+  ENV=(SLURP_CANCELS=1)
+  run -r
+  assert_status 0
+  test -z "$calls" || fail_test "a canceled region should do nothing"
+  assert_clean
+}
+
+test_region_failure() {
+  ENV=(SLURP_FAILS=1)
+  run --region
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed slurp: no layer shell"
+  assert_clean
+}
+
+test_window() {
+  run --window
+  assert_status 0
+  assert_called "grim -l 1 -g 10,20 300x400 "
+  assert_called "Screenshot copied"
+  assert_clean
+}
+
+test_window_wrapper() {
+  set +e
+  output="$(env PATH="$BIN:$PATH" CALLS="$CALLS" TMPDIR="$SHOTTMP" "$BIN/screenshot-window" 2>&1)"
+  status=$?
+  set -e
+  calls=$(cat "$CALLS")
+  assert_status 0
+  assert_called "grim -l 1 -g 10,20 300x400 "
+}
+
+test_no_window() {
+  ENV=(ACTIVE_WINDOW='{}')
+  run -w
+  assert_status 0
+  assert_not_called "grim"
+  assert_called "No window to screenshot"
+  assert_clean
+}
+
+test_window_lookup_failure() {
+  ENV=(HYPRCTL_FAILS=1)
+  run --window
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed hyprctl: no socket"
+  assert_clean
+}
+
+test_window_parse_failure() {
+  ENV=(ACTIVE_WINDOW='not json')
+  run --window
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed jq: "
+  assert_clean
+}
+
+test_empty_geometry() {
+  run --geometry=
+  assert_status 2
+  test -z "$calls" || fail_test "an empty geometry should take no shot"
+  run --geometry ''
+  assert_status 2
+  test -z "$calls" || fail_test "an empty geometry should take no shot"
+}
+
+test_delay() {
+  run --delay 0
+  assert_status 0
+  assert_called "Screenshot copied"
+  : > "$CALLS"
+  run -d bogus
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed sleep: "
+  assert_clean
+  : > "$CALLS"
+  run --delay=
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed sleep: "
+  assert_clean
+}
+
+test_geometry() {
+  run --geometry '5,6 7x8'
+  assert_called "grim -l 1 -g 5,6 7x8 "
+  : > "$CALLS"
+  run --geometry='9,10 11x12'
+  assert_status 0
+  assert_called "grim -l 1 -g 9,10 11x12 "
+  assert_clean
+}
+
+test_grim_failure() {
+  ENV=(GRIM_FAILS=1)
+  run
+  assert_status 1
+  assert_not_called "wl-copy"
+  assert_called "Screenshot failed grim: no outputs"
+  assert_clean
+}
+
+test_wlcopy_failure() {
+  ENV=(WLCOPY_FAILS=1)
+  run
+  assert_status 1
+  assert_called "Screenshot failed wl-copy: no seat"
+  assert_not_called "Screenshot copied"
+  assert_clean
+}
+
+test_mktemp_failure() {
+  ENV=(TMPDIR="$TEST_TMPDIR/missing")
+  run
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed mktemp: "
+}
+
+test_interrupted() {
+  ENV=(GRIM_KILLED=1)
+  run
+  test "$status" -ne 0 || fail_test "an interrupted run should fail"
+  assert_not_called "Screenshot copied"
+  assert_clean
+}
+
+test_bad_option() {
+  run --bogus
+  assert_status 2
+  case "$output" in *"Usage: screenshot"*) ;; *) fail_test "no usage in: $output" ;; esac
+  run --geometry
+  assert_status 2
+  test -z "$calls" || fail_test "a usage error should take no shot"
+}
+
+run_test "copies the whole screen as PNG and says so" test_screen
+run_test "--region shoots the slurp selection" test_region
+run_test "canceling a region is silent" test_region_cancel
+run_test "any other slurp failure is reported" test_region_failure
+run_test "--window shoots the focused window" test_window
+run_test "screenshot-window shoots the focused window" test_window_wrapper
+run_test "no focused window says so and takes no shot" test_no_window
+run_test "a failed window lookup is reported" test_window_lookup_failure
+run_test "unparsable window JSON is reported" test_window_parse_failure
+run_test "--delay waits, and a bad delay is reported" test_delay
+run_test "--geometry takes both argument forms" test_geometry
+run_test "an empty --geometry is a usage error" test_empty_geometry
+run_test "a grim failure is reported and copies nothing" test_grim_failure
+run_test "a wl-copy failure is reported" test_wlcopy_failure
+run_test "a mktemp failure is reported" test_mktemp_failure
+run_test "an interrupted run leaves no files behind" test_interrupted
+run_test "a bad option is a usage error" test_bad_option
+
+echo "$TESTS_PASSED/$TESTS_RUN tests passed"
+test "$TESTS_FAILED" -eq 0
