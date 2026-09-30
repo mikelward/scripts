@@ -17,7 +17,8 @@
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
 #   entry, its compositor wrapper, and the quickspace commands);
 # - enables quickspace.service, which hangs it off the quickspace session's
-#   target only;
+#   target only, and masks the distro's waybar and swaync user units, which
+#   would otherwise start in every session, Plasma's included;
 # - removes the logind lid drop-ins the retired setup-hypr/setup-sway
 #   installed. They set HandleLidSwitch=ignore, and quickspace leaves suspend
 #   to logind's defaults, so with one left in place an undocked lid close
@@ -607,6 +608,28 @@ install_quickspace() {
     fi
 }
 
+# Distro packages enable waybar's and swaync's user units for every session,
+# and D-Bus activates swaync's on the first notification sent while nothing
+# owns the name. Under Plasma, swaync fights plasmashell for that name and
+# waybar draws a second bar; in quickspace, an activated swaync takes the name
+# the shell's own swaync needs. quickspace-shell (or conf's plain-Hyprland
+# config) runs both programs itself, so the units are never wanted, and a
+# user mask overrides every enablement, global or runtime. mask edits unit
+# files only; just --now needs a running user manager. hypridle's unit stays:
+# quickspace's drop-in runs it only in the quickspace session.
+mask_distro_units() {
+    # Without a manager to reach, whatever the reason, the mask still takes,
+    # but anything already running keeps going until the next login.
+    now=
+    if probe=$(systemctl --user show-environment 2>&1 >/dev/null); then
+        now=--now
+    else
+        warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking waybar and swaync without stopping them, so a running one lasts until the next login"
+    fi
+    systemctl --user mask $now waybar.service swaync.service \
+        || warn "couldn't mask waybar.service and swaync.service; they can start under Plasma, and a second swaync can take quickspace's notifications"
+}
+
 enable_unit() {
     if ! is_command systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
         warn "no systemd user manager; run 'systemctl --user enable quickspace.service' in your session"
@@ -664,6 +687,9 @@ check_hyprland_version
 fetch_quickspace
 install_quickspace
 enable_unit
+if is_command systemctl; then
+    mask_distro_units
+fi
 if test "$SUDO" = no; then
     info "Leaving the logind lid drop-ins alone (needs sudo; --no-sudo)"
 else
