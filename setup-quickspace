@@ -335,7 +335,10 @@ decide_hyprland_build() {
 # distro's Hyprland.
 install_packages() {
     DISTRO_HYPRLAND=no
-    common="hypridle uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+    # hyprlock is the lock screen until quickspace-lock lands (M5): conf's
+    # Super+L and hypridle's lock_cmd both run it. It's a separate program,
+    # so the distro's works beside a source-built Hyprland.
+    common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
             waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
     # A source build replaces the distro's Hyprland rather than sitting
     # beside it.
@@ -347,7 +350,8 @@ install_packages() {
         redhat) extra="SwayNotificationCenter golang" ;;
         arch) extra="swaync go" ;;
         *)
-            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, hypridle, uwsm, waybar, swaync and Go $MIN_GO+ manually"
+            # shellcheck disable=SC2086  # word-split the package list
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, swaync, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
             return 0
             ;;
     esac

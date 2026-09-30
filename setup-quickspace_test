@@ -167,7 +167,8 @@ set -e
 
 setup; ARGS=(); run
 check "exits 0" test "$status" -eq 0
-check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle uwsm"
+check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle hyprlock uwsm"
+check "installs hyprlock, the lock screen Super+L and hypridle run" has "$calls" " hyprlock "
 check "installs the transitional owners" has "$calls" "waybar"
 check "clones quickspace when it isn't there" has "$calls" "git clone https://example.com/quickspace.git $T/src/quickspace"
 check "runs quickspace's make install" has "$calls" "make -C $T/src/quickspace install"
@@ -212,13 +213,20 @@ check "Arch installs its swaync and Go" has "$calls" "swaync go"
 check "Arch never builds Hyprland" lacks "$calls" "cmake"
 teardown
 
+setup; ARGS=(); run SETUP_OS=unknown
+check "an unknown OS names what to install" has "$output" "unknown OS; install Hyprland"
+check "an unknown OS names hyprlock among the packages" has "$output" " hypridle hyprlock uwsm "
+check "an unknown OS names the portal and clipboard tools" has "$output" "xdg-desktop-portal-hyprland"
+check "an unknown OS installs nothing" lacks "$calls" "install -y"
+teardown
+
 # A package the distro lacks (swww on Ubuntu 26.04) would make apt refuse
 # the lot, so apt is asked first and the rest install together.
 setup; ARGS=(); run FAKE_MISSING=swww
 check "a missing package isn't fatal" test "$status" -eq 0
 check "a missing package is named" has "$output" "could not install: swww"
 check "a missing swww names the stand-in" has "$output" "swaybg can stand in"
-check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar fuzzel"
+check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar fuzzel"
 check "the rest install in one go, Go too" has "$calls" "playerctl jq sway-notification-center golang"
 check "a missing package is never asked for" lacks "$calls" "swww"
 teardown

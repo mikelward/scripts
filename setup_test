@@ -935,11 +935,12 @@ test_no_build_hyprland_is_forwarded() {
 # With --quickspace the purge keeps the Hyprland stack quickspace runs on
 # and still removes what it doesn't use (sway).
 test_purge_obsolete_keeps_quickspace_stack() {
-    PURGE_QUICKSPACE=yes run_purge_obsolete debian "sway hyprland waybar uwsm"
+    PURGE_QUICKSPACE=yes run_purge_obsolete debian "sway hyprland hyprlock waybar uwsm"
     assert_status 0 &&
     assert_calls_contain "apt-get purge -y" &&
     assert_calls_contain "sway" &&
     assert_calls_lack "hyprland" &&
+    assert_calls_lack "hyprlock" &&
     assert_calls_lack "waybar" &&
     assert_calls_lack "uwsm"
 }
