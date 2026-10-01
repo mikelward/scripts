@@ -46,6 +46,9 @@ BUILD_HYPRLAND=yes
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+# Where packages install D-Bus activation files and systemd user units.
+DBUS_SERVICE_DIRS="${SETUP_DBUS_SERVICE_DIRS:-/usr/share/dbus-1/services /usr/local/share/dbus-1/services}"
+USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user /usr/local/lib/systemd/user}"
 QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}"
 QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 # Hyprland reads only hyprland.lua from 0.56 on.
@@ -626,17 +629,55 @@ install_quickspace() {
 # user mask overrides every enablement, global or runtime. mask edits unit
 # files only; just --now needs a running user manager. hypridle's unit stays:
 # quickspace's drop-in runs it only in the quickspace session.
+#
+# swaync is one of many daemons D-Bus can activate for the notification name:
+# Xfce's xfce4-notifyd took it in the first sessions, and dunst, mako or
+# MATE's could next. So rather than a list, every activation file claiming
+# the name is read, and the unit it activates through is masked. One with no
+# unit can't be masked; it's named, so it can be removed. KDE's is left alone:
+# it only waits for plasmashell, which owns the name itself.
+notification_units() {
+    for dir in $DBUS_SERVICE_DIRS; do
+        for f in "$dir"/*.service; do
+            test -f "$f" || continue
+            grep -qx 'Name=org.freedesktop.Notifications' "$f" || continue
+            unit=$(sed -n 's/^SystemdService=//p' "$f")
+            if test -n "$unit"; then
+                printf '%s\n' "$unit"
+            elif ! grep -q '^Exec=.*plasma_waitforname' "$f"; then
+                warn "$f can start a notification daemon that would take quickspace's notifications, and it has no unit to mask; remove its package if that happens"
+            fi
+        done
+    done
+}
+
+# Stopping a unit that isn't installed would fail the whole mask call.
+installed_unit() {
+    for d in $USER_UNIT_DIRS; do
+        test -e "$d/$1" && return 0
+    done
+    return 1
+}
+
 mask_distro_units() {
+    units="waybar.service swaync.service"
+    for u in $(notification_units | sort -u); do
+        case " $units " in
+            *" $u "*) ;;
+            *) installed_unit "$u" && units="$units $u" ;;
+        esac
+    done
     # Without a manager to reach, whatever the reason, the mask still takes,
     # but anything already running keeps going until the next login.
     now=
     if probe=$(systemctl --user show-environment 2>&1 >/dev/null); then
         now=--now
     else
-        warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking waybar and swaync without stopping them, so a running one lasts until the next login"
+        warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking $units without stopping them, so a running one lasts until the next login"
     fi
-    systemctl --user mask $now waybar.service swaync.service \
-        || warn "couldn't mask waybar.service and swaync.service; they can start under Plasma, and a second swaync can take quickspace's notifications"
+    # shellcheck disable=SC2086  # word-split the unit list
+    systemctl --user mask $now $units \
+        || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take quickspace's notifications"
 }
 
 enable_unit() {

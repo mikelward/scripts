@@ -134,6 +134,7 @@ teardown() {
 run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
+        SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
@@ -549,7 +550,34 @@ check "no user manager enables nothing" lacks "$calls" "--user enable"
 check "no user manager still masks, just not --now" \
     has "$calls" "systemctl --user mask waybar.service swaync.service"
 check "no user manager says a running bar isn't stopped" \
-    has "$output" "masking waybar and swaync without stopping them"
+    has "$output" "masking waybar.service swaync.service without stopping them"
+teardown
+
+# Any installed daemon that D-Bus can activate for the notification name is
+# masked through its unit; one without a unit is named; KDE's is left alone.
+setup; ARGS=()
+mkdir -p "$T/dbus" "$T/units"
+printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/lib/xfce4/notifyd/xfce4-notifyd\nSystemdService=xfce4-notifyd.service\n' \
+    > "$T/dbus/org.xfce.xfce4-notifyd.Notifications.service"
+printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/dunst\nSystemdService=dunst.service\n' \
+    > "$T/dbus/org.knopwob.dunst.service"
+printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/swaync\nSystemdService=swaync.service\n' \
+    > "$T/dbus/org.erikreider.swaync.service"
+printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/libexec/mate-notification-daemon/mate-notification-daemon\n' \
+    > "$T/dbus/org.freedesktop.mate.Notifications.service"
+printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/plasma_waitforname org.freedesktop.Notifications\n' \
+    > "$T/dbus/org.kde.plasma.Notifications.service"
+printf '[D-BUS Service]\nName=org.xfce.Notifyd\nExec=/usr/lib/xfce4/notifyd/xfce4-notifyd\nSystemdService=other.service\n' \
+    > "$T/dbus/org.xfce.Notifyd.service"
+touch "$T/units/xfce4-notifyd.service" "$T/units/swaync.service" "$T/units/other.service"
+run SETUP_DBUS_SERVICE_DIRS="$T/no-such-dir $T/dbus" SETUP_USER_UNIT_DIRS="$T/units"
+check "masks every installed notification daemon's unit, stopping it now" \
+    has "$calls" "systemctl --user mask --now waybar.service swaync.service xfce4-notifyd.service"
+check "skips a daemon whose unit isn't installed" lacks "$calls" "dunst.service"
+check "masks only units for the notification name" lacks "$calls" "other.service"
+check "names a daemon that has no unit to mask" \
+    has "$output" "$T/dbus/org.freedesktop.mate.Notifications.service can start a notification daemon"
+check "leaves KDE's, which only waits for plasmashell" lacks "$output" "org.kde.plasma.Notifications.service"
 teardown
 
 setup; ARGS=(--bogus); run
