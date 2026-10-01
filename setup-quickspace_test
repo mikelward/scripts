@@ -120,6 +120,10 @@ MOCK
 printf "%s\\n" "go \$*" >> "$CALLS"
 test "\$*" != "env GOVERSION" || echo "\${FAKE_GO_VERSION:-go1.22.2}"
 MOCK
+    cat > "$T/bin/dconf" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dconf \$*" >> "$CALLS"
+MOCK
     cat > "$T/bin/Hyprland" <<MOCK
 #!/bin/sh
 echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
@@ -135,6 +139,7 @@ run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
+        SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
@@ -578,6 +583,61 @@ check "masks only units for the notification name" lacks "$calls" "other.service
 check "names a daemon that has no unit to mask" \
     has "$output" "$T/dbus/org.freedesktop.mate.Notifications.service can start a notification daemon"
 check "leaves KDE's, which only waits for plasmashell" lacks "$output" "org.kde.plasma.Notifications.service"
+teardown
+
+# GDM shows the short hostname, through the gdm dconf database.
+host=$(uname -n | cut -d. -f1)
+setup; ARGS=(); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+check "GDM: writes the hostname banner" \
+    test "$(cat "$T/dconf/db/gdm.d/50-quickspace-hostname")" = "$(printf "[org/gnome/login-screen]\nbanner-message-enable=true\nbanner-message-text='%s'" "$host")"
+check "GDM: writes a profile that reads the gdm database" \
+    test "$(cat "$T/dconf/profile/gdm")" = "$(printf 'user-db:user\nsystem-db:gdm\nfile-db:%s' "$T/gdm-defaults")"
+check "GDM: compiles the database" has "$calls" "sudo dconf update"
+: > "$CALLS"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+check "GDM: an unchanged banner isn't rewritten" lacks "$calls" "dconf"
+teardown
+
+setup; ARGS=(); : > "$T/gdm-defaults"; printf 'user-db:user\nsystem-db:gdm\n' > "$T/share-profile"
+run SETUP_GDM_DEFAULTS="$T/gdm-defaults" SETUP_DCONF_SHARE_PROFILE="$T/share-profile"
+check "GDM: a shipped profile that reads the gdm database is used" test ! -e "$T/dconf/profile/gdm"
+check "GDM: the banner is still written" test -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+teardown
+
+setup; ARGS=(); : > "$T/gdm-defaults"; mkdir -p "$T/dconf/profile"; printf 'user-db:user\n' > "$T/dconf/profile/gdm"
+run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+check "GDM: a profile without the gdm database is left alone" test "$(cat "$T/dconf/profile/gdm")" = "user-db:user"
+check "GDM: and named" has "$output" "doesn't read the gdm dconf database"
+check "GDM: and no banner is written" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+teardown
+
+# The /etc profile overrides a shipped one that reads the gdm database.
+setup; ARGS=(); : > "$T/gdm-defaults"; mkdir -p "$T/dconf/profile"; printf 'user-db:user\n' > "$T/dconf/profile/gdm"
+printf 'user-db:user\nsystem-db:gdm\n' > "$T/share-profile"
+run SETUP_GDM_DEFAULTS="$T/gdm-defaults" SETUP_DCONF_SHARE_PROFILE="$T/share-profile"
+check "GDM: an overriding /etc profile without the gdm database is named" has "$output" "doesn't read the gdm dconf database"
+check "GDM: even when the shipped profile reads it" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+teardown
+
+# A failed temporary write installs nothing. mktemp hands back a directory,
+# which even root can't write as a file; --no-install keeps every earlier
+# step off mktemp.
+setup; ARGS=(--no-install); : > "$T/gdm-defaults"; mkdir "$T/not-a-file"
+cat > "$T/bin/mktemp" <<MOCK
+#!/bin/sh
+echo "$T/not-a-file"
+MOCK
+chmod +x "$T/bin/mktemp"
+run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+check "GDM: a failed temporary write installs no profile" test ! -e "$T/dconf/profile/gdm"
+check "GDM: and says so" has "$output" "couldn't write a temporary copy of $T/dconf/profile/gdm"
+teardown
+
+setup; ARGS=(); run
+check "no GDM, no banner" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+teardown
+
+setup; ARGS=(--no-sudo); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+check "--no-sudo leaves GDM alone" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
 teardown
 
 setup; ARGS=(--bogus); run
