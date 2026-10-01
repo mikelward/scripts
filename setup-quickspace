@@ -19,6 +19,9 @@
 # - enables quickspace.service, which hangs it off the quickspace session's
 #   target only, and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
+# - on a GDM machine, puts the short hostname on GDM's login screen, as
+#   hyprlock shows it on the lock screen, until quickspace's own greeter
+#   replaces GDM;
 # - removes the logind lid drop-ins the retired setup-hypr/setup-sway
 #   installed. They set HandleLidSwitch=ignore, and quickspace leaves suspend
 #   to logind's defaults, so with one left in place an undocked lid close
@@ -46,6 +49,11 @@ BUILD_HYPRLAND=yes
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+# GDM's greeter defaults (present when GDM is installed), the dconf system
+# config, and the gdm dconf profile Debian ships outside /etc.
+GDM_DEFAULTS="${SETUP_GDM_DEFAULTS:-/usr/share/gdm/greeter-dconf-defaults}"
+DCONF_DIR="${SETUP_DCONF_DIR:-/etc/dconf}"
+DCONF_SHARE_PROFILE="${SETUP_DCONF_SHARE_PROFILE:-/usr/share/dconf/profile/gdm}"
 # Where packages install D-Bus activation files and systemd user units.
 DBUS_SERVICE_DIRS="${SETUP_DBUS_SERVICE_DIRS:-/usr/share/dbus-1/services /usr/local/share/dbus-1/services}"
 USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user /usr/local/lib/systemd/user}"
@@ -709,6 +717,75 @@ remove_old_lid_dropins() {
     fi
 }
 
+# --- GDM ---
+
+# Installs $2 as the root-owned file $1, unless it already says that.
+# Returns 1 if it couldn't, and sets $changed when it wrote.
+install_text() {
+    _tmp=$(mktemp) || {
+        warn "couldn't create a temporary file for $1"
+        return 1
+    }
+    if ! printf '%s\n' "$2" > "$_tmp"; then
+        warn "couldn't write a temporary copy of $1"
+        rm -f "$_tmp"
+        return 1
+    fi
+    if cmp -s "$_tmp" "$1"; then
+        rm -f "$_tmp"
+        return 0
+    fi
+    if sudo_or_warn install -D -m 644 "$_tmp" "$1"; then
+        rm -f "$_tmp"
+        changed=yes
+        return 0
+    fi
+    rm -f "$_tmp"
+    return 1
+}
+
+# GDM's login screen shows a banner set in dconf: a keyfile in the gdm
+# system database, which the gdm profile reads. Debian ships that profile in
+# /usr/share; elsewhere it goes in /etc, as GNOME's admin guide does it. The
+# name is read at each run, so rerun setup after renaming the machine.
+gdm_hostname_banner() {
+    test -e "$GDM_DEFAULTS" || return 0
+    if ! is_command dconf; then
+        warn "GDM is installed but dconf isn't, so the login screen can't show the hostname; install dconf-cli (Debian) or dconf"
+        return 0
+    fi
+    host=$(uname -n | cut -d. -f1)
+    changed=no
+    profile="$DCONF_DIR/profile/gdm"
+    # The /etc profile, when there is one, overrides the shipped one.
+    if test -e "$profile"; then
+        if ! grep -qx 'system-db:gdm' "$profile"; then
+            warn "$profile doesn't read the gdm dconf database (system-db:gdm), so the login screen won't show the hostname; add that line"
+            return 0
+        fi
+    elif test -e "$DCONF_SHARE_PROFILE" && grep -qx 'system-db:gdm' "$DCONF_SHARE_PROFILE"; then
+        : # the shipped profile reads the gdm database
+    else
+        install_text "$profile" "user-db:user
+system-db:gdm
+file-db:$GDM_DEFAULTS" || {
+            warn "couldn't install $profile; the login screen won't show the hostname"
+            return 0
+        }
+    fi
+    install_text "$DCONF_DIR/db/gdm.d/50-quickspace-hostname" "[org/gnome/login-screen]
+banner-message-enable=true
+banner-message-text='$host'" || {
+        warn "couldn't install GDM's hostname banner; the login screen won't show the hostname"
+        return 0
+    }
+    if test "$changed" = yes; then
+        info "GDM's login screen now shows $host"
+        sudo_or_warn dconf update \
+            || warn "dconf update failed, so GDM won't show the hostname until it succeeds; run 'sudo dconf update'"
+    fi
+}
+
 # --- Main ---
 
 if test "$INSTALL" = no; then
@@ -741,9 +818,10 @@ if is_command systemctl; then
     mask_distro_units
 fi
 if test "$SUDO" = no; then
-    info "Leaving the logind lid drop-ins alone (needs sudo; --no-sudo)"
+    info "Leaving the logind lid drop-ins and GDM alone (needs sudo; --no-sudo)"
 else
     remove_old_lid_dropins
+    gdm_hostname_banner
 fi
 
 info "quickspace installed. Log out and pick the \"quickspace\" session; KDE Plasma stays available."
