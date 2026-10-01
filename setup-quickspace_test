@@ -133,7 +133,7 @@ teardown() {
 
 run() {
     set +e
-    output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
+    output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" SETUP_USER_UNIT_DIRS="$T/no-units" \
         QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
@@ -182,6 +182,7 @@ check "reloads units before enabling" has "$calls" "systemctl --user daemon-relo
 check "masks the distro's waybar and swaync units, stopping them now" \
     has "$calls" "systemctl --user mask --now waybar.service swaync.service"
 check "leaves hypridle's unit to quickspace's session-only drop-in" lacks "$calls" "hypridle.service"
+check "leaves xfce4-notifyd alone when it isn't installed" lacks "$calls" "xfce4-notifyd"
 check "touches no other user's units" lacks "$calls" "--global"
 teardown
 
@@ -549,7 +550,15 @@ check "no user manager enables nothing" lacks "$calls" "--user enable"
 check "no user manager still masks, just not --now" \
     has "$calls" "systemctl --user mask waybar.service swaync.service"
 check "no user manager says a running bar isn't stopped" \
-    has "$output" "masking waybar and swaync without stopping them"
+    has "$output" "masking waybar.service swaync.service without stopping them"
+teardown
+
+# Xfce's notification daemon, D-Bus activated through its unit, takes the
+# name quickspace's swaync needs.
+setup; ARGS=(); mkdir -p "$T/units" && touch "$T/units/xfce4-notifyd.service"
+run SETUP_USER_UNIT_DIRS="$T/no-such-dir $T/units"
+check "masks xfce4-notifyd when it's installed, stopping it now" \
+    has "$calls" "systemctl --user mask --now waybar.service swaync.service xfce4-notifyd.service"
 teardown
 
 setup; ARGS=(--bogus); run

@@ -46,6 +46,8 @@ BUILD_HYPRLAND=yes
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
+# Where packages install systemd user units; tests point it elsewhere.
+USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user}"
 QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}"
 QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 # Hyprland reads only hyprland.lua from 0.56 on.
@@ -626,17 +628,31 @@ install_quickspace() {
 # user mask overrides every enablement, global or runtime. mask edits unit
 # files only; just --now needs a running user manager. hypridle's unit stays:
 # quickspace's drop-in runs it only in the quickspace session.
+#
+# Xfce's notification daemon is D-Bus activated the same way, through
+# xfce4-notifyd.service, and takes the name just as a stray swaync would, so
+# it's masked too when it's installed; stopping a unit that doesn't exist
+# would fail the whole call. (MATE's daemon activates without a unit, so
+# only removing mate-notification-daemon keeps it out.)
 mask_distro_units() {
+    units="waybar.service swaync.service"
+    for d in $USER_UNIT_DIRS; do
+        if test -e "$d/xfce4-notifyd.service"; then
+            units="$units xfce4-notifyd.service"
+            break
+        fi
+    done
     # Without a manager to reach, whatever the reason, the mask still takes,
     # but anything already running keeps going until the next login.
     now=
     if probe=$(systemctl --user show-environment 2>&1 >/dev/null); then
         now=--now
     else
-        warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking waybar and swaync without stopping them, so a running one lasts until the next login"
+        warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking $units without stopping them, so a running one lasts until the next login"
     fi
-    systemctl --user mask $now waybar.service swaync.service \
-        || warn "couldn't mask waybar.service and swaync.service; they can start under Plasma, and a second swaync can take quickspace's notifications"
+    # shellcheck disable=SC2086  # word-split the unit list
+    systemctl --user mask $now $units \
+        || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take quickspace's notifications"
 }
 
 enable_unit() {
