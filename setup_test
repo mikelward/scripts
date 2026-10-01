@@ -1010,6 +1010,16 @@ test_unzip_installed() {
     assert_source_contains "typescript unzip zoxide zsh"
 }
 
+# --- atool ---
+
+# atool (aunpack/apack/als) fronts the archivers the core list installs, so it
+# rides the same core list on all three platforms (apt, dnf, brew) and leads
+# the manual-install hint for unsupported OSes.
+test_atool_installed() {
+    test "$(grep -c '^ *atool \\$' "$SETUP")" -eq 3 &&
+    assert_source_contains "Please install manually: atool bat curl"
+}
+
 # --- fnm ---
 
 # fnm (Fast Node Manager) is installed as a standalone convenience for
@@ -2493,6 +2503,7 @@ run_test "fnm installs as a tool, not the node provisioner" \
 run_test "--no-root node toolchain comes from homepkg" \
     test_home_tools_include_node_toolchain
 run_test "unzip installs on every platform" test_unzip_installed
+run_test "atool installs on every platform" test_atool_installed
 run_test "SSH key prompt points at GitHub and Codeberg" \
     test_ssh_key_prompt_covers_github_and_codeberg
 run_test "--ssh overrides the existing-key skip" \

@@ -55,7 +55,7 @@ On macOS this installs Homebrew if it's missing, then, by category:
 
 | Category | Examples |
 | --- | --- |
-| Core CLI packages | git, python3, ripgrep, vim, zsh, shellcheck, unzip, p7zip |
+| Core CLI packages | git, python3, ripgrep, vim, zsh, shellcheck, unzip, p7zip, atool |
 | Directory jumping | zoxide |
 | Node toolchain | node, typescript (skip with `--no-npm`) |
 | Android CLI tools | android-platform-tools (adb, fastboot) |
