@@ -903,6 +903,7 @@ install_packages() {
             info "Installing system packages"
             if ! sudo_or_warn apt-get install -y --install-recommends \
                     adb \
+                    atool \
                     bat \
                     build-essential \
                     curl \
@@ -989,6 +990,7 @@ install_packages() {
             if ! sudo_or_warn dnf install -y \
                     '@development-tools' \
                     android-tools \
+                    atool \
                     bat \
                     curl \
                     fd-find \
@@ -1073,6 +1075,7 @@ install_packages() {
             fi
             info "Installing system packages"
             if ! brew install \
+                atool \
                 autoconf \
                 automake \
                 bat \
@@ -1146,7 +1149,7 @@ install_packages() {
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
-            warn "Please install manually: bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh zsh-autosuggestions"
+            warn "Please install manually: atool bat curl fd fzf git git-delta golang jq kitty lf make mercurial npm p7zip python3 ripgrep shellcheck typescript unzip zoxide zsh zsh-autosuggestions"
             ;;
     esac
 }
