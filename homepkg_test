@@ -17,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import warnings
 
 # Load the extensionless homepkg script as a module without running main().
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -1106,6 +1107,30 @@ with tempfile.TemporaryDirectory() as td:
     check("conda_extract skips info/", "info/index.json" not in installed
           and not os.path.exists(os.path.join(prefix, "info")))
 
+# A prefix whose bin/ is a symlink elsewhere (a dotfiles layout) still takes
+# the package, and extraction names its tar filter rather than leaving Python
+# to warn about (and, from 3.14, change) the default.
+with tempfile.TemporaryDirectory() as td:
+    prefix = os.path.join(td, "prefix")
+    elsewhere = os.path.join(td, "elsewhere-bin")
+    os.makedirs(prefix)
+    os.makedirs(elsewhere)
+    os.symlink(elsewhere, os.path.join(prefix, "bin"))
+    pkg = os.path.join(td, "foo-1.0-0.tar.bz2")
+    with tarfile.open(pkg, "w:bz2") as tf:
+        data = b"#!/bin/sh\necho foo\n"
+        ti = tarfile.TarInfo("bin/foo")
+        ti.size = len(data)
+        ti.mode = 0o755
+        tf.addfile(ti, io.BytesIO(data))
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        hp.conda_extract(pkg, prefix)
+    check("conda_extract unpacks through a symlinked prefix directory",
+          os.path.exists(os.path.join(elsewhere, "foo")))
+    check("conda_extract raises no tar filter DeprecationWarning",
+          not [w for w in caught if issubclass(w.category, DeprecationWarning)])
+
 # --- CLI argument parsing ----------------------------------------------------
 
 def _run(*args):
@@ -1916,6 +1941,27 @@ with tempfile.TemporaryDirectory() as td:
     except hp.HomepkgError:
         raised = True
     check("_safe_extract_tar rejects special files (FIFO)", raised)
+
+# Members go through tarfile's "data" filter where Python has one: no
+# DeprecationWarning about the default, and group/other write bits dropped.
+with tempfile.TemporaryDirectory() as td:
+    t = os.path.join(td, "m.tar")
+    with tarfile.open(t, "w") as tf:
+        data = b"#!/bin/sh\n"
+        ti = tarfile.TarInfo("tool")
+        ti.size = len(data)
+        ti.mode = 0o777
+        tf.addfile(ti, io.BytesIO(data))
+    out = os.path.join(td, "out")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with tarfile.open(t) as tf:
+            hp._safe_extract_tar(tf, out)
+    check("_safe_extract_tar raises no tar filter DeprecationWarning",
+          not [w for w in caught if issubclass(w.category, DeprecationWarning)])
+    mode = os.stat(os.path.join(out, "tool")).st_mode & 0o7777
+    check("_safe_extract_tar applies the data filter's permissions",
+          mode == (0o755 if hasattr(tarfile, "data_filter") else 0o777))
 
 # _move_tree moves a tree in, overwrites a colliding file (last writer wins),
 # and leaves unrelated files already there alone -- the additive part of an
