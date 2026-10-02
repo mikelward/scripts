@@ -301,7 +301,10 @@ def conda_extract(pkg_path, prefix):
         for m in tf.getmembers():
             if m.name.startswith("info/") or not (m.isfile() or m.issym()):
                 continue
-            tf.extract(m, path=prefix)
+            # Not the "data" filter: it resolves paths through symlinks
+            # already in the prefix, so a symlinked ~/.local/bin would be
+            # rejected as outside it.
+            _tar_extract(tf, m, prefix, "fully_trusted")
             installed.append(m.name)
     return installed
 
@@ -604,6 +607,19 @@ def _replace_dir(src, dest):
         os.rename(new, dest)
 
 
+# Python 3.12 (and security releases back to 3.8) added tar extraction
+# filters, warning from 3.12 when extract() names none since 3.14 changes the
+# default. Older Pythons reject the keyword.
+_TAR_FILTERS = hasattr(tarfile, "data_filter")
+
+
+def _tar_extract(tf, member, dest, how):
+    if _TAR_FILTERS:
+        tf.extract(member, dest, filter=how)
+    else:
+        tf.extract(member, dest)
+
+
 def _safe_extract_tar(tf, dest):
     """Extract a tar treating members as untrusted. Only directories and
     regular files are created, each validated to stay within dest; special
@@ -622,7 +638,7 @@ def _safe_extract_tar(tf, dest):
         if (os.path.isabs(m.name) or ".." in m.name.split("/")
                 or not _within(dest_real, os.path.join(dest, m.name))):
             raise HomepkgError(f"unsafe path in archive: {m.name}")
-        tf.extract(m, dest)
+        _tar_extract(tf, m, dest, "data")
 
 
 def _safe_extract_zip(zf, dest):
