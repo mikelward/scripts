@@ -225,6 +225,8 @@ setup; ARGS=(); run SETUP_OS=redhat
 check "Fedora installs dnf's copr plugin, whichever dnf it has" has "$calls" "sudo dnf install -y dnf-command(copr)"
 check "Fedora enables Quickshell's COPR" has "$calls" "sudo dnf copr enable -y errornointernet/quickshell"
 check "then installs Quickshell on its own" has "$calls" "dnf install -y quickshell"
+check "Fedora's Qt has the effects module already" lacks "$calls" "qml6-module-qtquick-effects"
+check "so Fedora warns of nothing missing" lacks "$output" "won't load"
 teardown
 
 # Without the copr plugin there's no COPR, and that costs only the bar.
@@ -242,8 +244,14 @@ check "a failed COPR doesn't try to install Quickshell" lacks "$calls" "dnf inst
 teardown
 
 setup; ARGS=(); run
-check "Debian and Ubuntu install Quickshell from apt" has "$calls" "apt-get install -y quickshell"
+check "Debian and Ubuntu install Quickshell and its effects module from apt" has "$calls" "apt-get install -y quickshell qml6-module-qtquick-effects"
 check "Quickshell isn't in the main install, so its absence can't block it" lacks "$calls" "golang quickshell"
+teardown
+
+setup; ARGS=(); run FAKE_MISSING=qml6-module-qtquick-effects
+check "a missing effects module isn't fatal" test "$status" -eq 0
+check "a missing effects module says the bar won't load" has "$output" "couldn't install qml6-module-qtquick-effects, so quickspace's bar won't load"
+check "Quickshell still installs without it" has "$calls" "apt-get install -y quickshell"
 teardown
 
 setup; ARGS=(); run FAKE_MISSING=quickshell
@@ -254,6 +262,7 @@ teardown
 
 setup; ARGS=(); run SETUP_OS=arch
 check "Arch installs Quickshell with pacman" has "$calls" "pacman -S --needed --noconfirm quickshell"
+check "Arch's Qt has the effects module already, so nothing is missing" lacks "$output" "won't load"
 teardown
 
 setup; ARGS=(); run SETUP_OS=arch

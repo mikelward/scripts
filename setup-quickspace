@@ -398,8 +398,12 @@ install_packages() {
 # install_quickshell installs Quickshell in a step of its own, so a distro
 # that doesn't package it costs only quickspace's bar, not the rest.
 install_quickshell() {
+    # The bar tints its icons with QtQuick.Effects, part of Qt Declarative,
+    # which Debian and Ubuntu package on their own.
+    effects=
     case "$(detect_os)" in
-        debian|arch) ;;
+        debian) effects=qml6-module-qtquick-effects ;;
+        arch) ;;
         redhat)
             # dnf's copr command is a plugin: dnf-plugins-core for dnf 4,
             # dnf5-plugins for dnf 5. Both provide dnf-command(copr).
@@ -414,9 +418,26 @@ install_quickshell() {
             ;;
         *) return 0 ;;
     esac
-    if ! install_all quickshell > /dev/null; then
-        warn "couldn't install Quickshell (the distro may not package it), so quickspace's bar won't run yet; waybar stays the bar"
+    # shellcheck disable=SC2086  # $effects is one name or none
+    if missing=$(install_all quickshell $effects); then
+        return 0
     fi
+    # Missing packages cost only the bar, so they're warnings, not errors.
+    case " $missing " in
+        *" quickshell "*)
+            warn "couldn't install Quickshell (the distro may not package it), so quickspace's bar won't run yet; waybar stays the bar"
+            return 0
+            ;;
+    esac
+    if test -n "$effects"; then
+        case " $missing " in
+            *" $effects "*)
+                warn "couldn't install $effects, so quickspace's bar won't load; waybar stays the bar"
+                return 0
+                ;;
+        esac
+    fi
+    warn "installing Quickshell failed without naming a package, so quickspace's bar may not run; waybar stays the bar"
 }
 
 # --- Hyprland from source ---
