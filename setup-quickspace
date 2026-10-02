@@ -9,6 +9,10 @@
 #   Quickshell shell lands, the transitional owners (waybar, swaync) and the
 #   tools conf's Hyprland config calls. A package the distro doesn't have
 #   (swww on Ubuntu 26.04) is reported and the rest still install;
+# - installs Quickshell, which draws quickspace's own shell (the bar so far),
+#   where the distro packages it: apt and pacman, and on Fedora the
+#   errornointernet/quickshell COPR. Without it the bar can't run, and
+#   waybar stays the bar;
 # - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
 #   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
 #   source, at pinned tags, into ~/.local/opt/hyprland (see build_hyprland);
@@ -59,6 +63,9 @@ DBUS_SERVICE_DIRS="${SETUP_DBUS_SERVICE_DIRS:-/usr/share/dbus-1/services /usr/lo
 USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user /usr/local/lib/systemd/user}"
 QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}"
 QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
+# Fedora packages Quickshell only in this COPR, which Quickshell's own
+# BUILD.md names as a packager.
+QUICKSHELL_COPR=errornointernet/quickshell
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
 
@@ -365,7 +372,7 @@ install_packages() {
         arch) extra="swaync libnotify go" ;;
         *)
             # shellcheck disable=SC2086  # word-split the package list
-            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, swaync, notify-send, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, Quickshell, swaync, notify-send, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
             return 0
             ;;
     esac
@@ -385,6 +392,30 @@ install_packages() {
             esac ;;
             *" swww "*) info "swww isn't packaged here; swaybg shows the wallpaper instead" ;;
         esac
+    fi
+}
+
+# install_quickshell installs Quickshell in a step of its own, so a distro
+# that doesn't package it costs only quickspace's bar, not the rest.
+install_quickshell() {
+    case "$(detect_os)" in
+        debian|arch) ;;
+        redhat)
+            # dnf's copr command is a plugin: dnf-plugins-core for dnf 4,
+            # dnf5-plugins for dnf 5. Both provide dnf-command(copr).
+            if ! pkg_install 'dnf-command(copr)'; then
+                warn "couldn't install dnf's copr plugin, so Quickshell isn't installed; quickspace's bar won't run, and waybar stays the bar"
+                return 0
+            fi
+            if ! sudo_or_warn dnf copr enable -y "$QUICKSHELL_COPR"; then
+                warn "couldn't enable the $QUICKSHELL_COPR COPR, so Quickshell isn't installed; quickspace's bar won't run, and waybar stays the bar"
+                return 0
+            fi
+            ;;
+        *) return 0 ;;
+    esac
+    if ! install_all quickshell > /dev/null; then
+        warn "couldn't install Quickshell (the distro may not package it), so quickspace's bar won't run yet; waybar stays the bar"
     fi
 }
 
@@ -800,6 +831,7 @@ elif test "$SUDO" = no; then
 else
     decide_hyprland_build
     install_packages
+    install_quickshell
     # Only once the distro's is there to replace them.
     if test "$DISTRO_HYPRLAND" = yes; then
         unlink_hyprland || warn "couldn't remove the links to a source-built Hyprland in $HYPRLAND_BIN_DIR"
