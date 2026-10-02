@@ -350,8 +350,10 @@ install_packages() {
     # Super+L and hypridle's lock_cmd both run it. It's a separate program,
     # so the distro's works beside a source-built Hyprland. notify-send (the
     # libnotify package below) is how screenshot reports from a key binding.
+    # quickspace-shell shows the wallpaper with swww, or with swaybg where
+    # the distro has no swww (Ubuntu 26.04), so both are asked for.
     common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-            waybar swww fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
+            waybar swww swaybg fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
     # A source build replaces the distro's Hyprland rather than sitting
     # beside it.
     if test "$BUILD_NOW" = no; then
@@ -378,7 +380,10 @@ install_packages() {
         # shellcheck disable=SC2086  # word-split the package list
         warn "could not install:$(printf ' %s' $missing); install them manually"
         case " $missing " in
-            *" swww "*) warn "without swww there's no wallpaper; swaybg can stand in (see conf's config/hypr/README.md)" ;;
+            *" swaybg "*) case " $missing " in
+                *" swww "*) warn "without swww or swaybg there's no wallpaper" ;;
+            esac ;;
+            *" swww "*) info "swww isn't packaged here; swaybg shows the wallpaper instead" ;;
         esac
     fi
 }
