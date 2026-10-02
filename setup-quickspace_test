@@ -231,10 +231,15 @@ teardown
 setup; ARGS=(); run FAKE_MISSING=swww
 check "a missing package isn't fatal" test "$status" -eq 0
 check "a missing package is named" has "$output" "could not install: swww"
-check "a missing swww names the stand-in" has "$output" "swaybg can stand in"
-check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar fuzzel"
+check "a missing swww names the stand-in" has "$output" "swaybg shows the wallpaper instead"
+check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
 check "the rest install in one go, notify-send and Go too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang"
 check "a missing package is never asked for" lacks "$calls" "swww"
+teardown
+
+setup; ARGS=(); run FAKE_MISSING="swww swaybg"
+check "without swww or swaybg, no wallpaper is warned about" has "$output" "without swww or swaybg there's no wallpaper"
+check "and no stand-in is promised" lacks "$output" "swaybg shows the wallpaper instead"
 teardown
 
 # When apt itself fails (offline, say), that's one failure, not one per
