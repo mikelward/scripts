@@ -16,9 +16,17 @@ setup() {
     CALLS="$T/calls"
     # What the installs would create.
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
-    for cmd in dnf pacman make; do
+    for cmd in pacman make; do
         printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "%s"\n' "$cmd" "$CALLS" > "$T/bin/$cmd"
     done
+    # dnf copr enable fails with \$FAKE_DNF_COPR_FAILS, and installing the
+    # copr plugin with \$FAKE_DNF_PLUGIN_FAILS.
+    cat > "$T/bin/dnf" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dnf \$*" >> "$CALLS"
+test "\$1" != copr || test -z "\$FAKE_DNF_COPR_FAILS" || exit 1
+test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
+MOCK
     # meson setup also logs the compilers it was given.
     cat > "$T/bin/meson" <<MOCK
 #!/bin/sh
@@ -213,6 +221,41 @@ check "Fedora installs Hyprland and Go with dnf" has "$calls" "dnf install -y hy
 check "Fedora installs its swaync, notify-send and Go" has "$calls" "SwayNotificationCenter libnotify golang"
 teardown
 
+setup; ARGS=(); run SETUP_OS=redhat
+check "Fedora installs dnf's copr plugin, whichever dnf it has" has "$calls" "sudo dnf install -y dnf-command(copr)"
+check "Fedora enables Quickshell's COPR" has "$calls" "sudo dnf copr enable -y errornointernet/quickshell"
+check "then installs Quickshell on its own" has "$calls" "dnf install -y quickshell"
+teardown
+
+# Without the copr plugin there's no COPR, and that costs only the bar.
+setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_PLUGIN_FAILS=1
+check "a missing copr plugin isn't fatal" test "$status" -eq 0
+check "a missing copr plugin says the bar won't run" has "$output" "couldn't install dnf's copr plugin"
+check "a missing copr plugin doesn't try the COPR" lacks "$calls" "dnf copr enable"
+teardown
+
+# A COPR that won't enable costs only the bar.
+setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_COPR_FAILS=1
+check "a failed COPR isn't fatal" test "$status" -eq 0
+check "a failed COPR says the bar won't run" has "$output" "couldn't enable the errornointernet/quickshell COPR"
+check "a failed COPR doesn't try to install Quickshell" lacks "$calls" "dnf install -y quickshell"
+teardown
+
+setup; ARGS=(); run
+check "Debian and Ubuntu install Quickshell from apt" has "$calls" "apt-get install -y quickshell"
+check "Quickshell isn't in the main install, so its absence can't block it" lacks "$calls" "golang quickshell"
+teardown
+
+setup; ARGS=(); run FAKE_MISSING=quickshell
+check "a distro without Quickshell isn't fatal" test "$status" -eq 0
+check "a distro without Quickshell says the bar won't run" has "$output" "couldn't install Quickshell (the distro may not package it)"
+check "and that waybar stays" has "$output" "waybar stays the bar"
+teardown
+
+setup; ARGS=(); run SETUP_OS=arch
+check "Arch installs Quickshell with pacman" has "$calls" "pacman -S --needed --noconfirm quickshell"
+teardown
+
 setup; ARGS=(); run SETUP_OS=arch
 check "Arch installs Hyprland and Go with pacman" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
 check "Arch installs its swaync, notify-send and Go" has "$calls" "swaync libnotify go"
@@ -245,7 +288,7 @@ teardown
 # When apt itself fails (offline, say), that's one failure, not one per
 # package.
 setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1
-check "a failed apt is reported once" test "$(printf '%s\n' "$calls" | grep -c '^apt-get install')" -eq 1
+check "a failed apt is reported once" test "$(printf '%s\n' "$calls" | grep -c '^apt-get install -y hyprland')" -eq 1
 check "a failed apt names what didn't install" has "$output" "could not install: hyprland hypridle"
 teardown
 

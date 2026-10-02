@@ -86,3 +86,12 @@ going forward.
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
+- **setup-quickspace installs Quickshell only where the distro packages it.**
+  apt and pacman install `quickshell` directly, and Fedora gets it from the
+  `errornointernet/quickshell` COPR, which Quickshell's own BUILD.md lists.
+  Where none of those has it (Ubuntu 26.04 and older, which have no package
+  and, through 24.04, a Qt older than the 6.6 it needs), setup warns that the
+  bar won't run and waybar stays. The alternative was building Quickshell
+  from source at a pinned tag, as setup already does for Hyprland. That's
+  the next step if a machine needs the bar without a package, and adding it
+  changes nothing for the distros that have one.
