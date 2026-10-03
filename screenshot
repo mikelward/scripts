@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Takes a screenshot on Wayland (grim, slurp, wl-copy) and copies it to the
-# clipboard as PNG. quickspace's Print bindings run it. Wayland and GNU
+# clipboard as PNG. tide's Print bindings run it. Wayland and GNU
 # mktemp only; the X11 scrot version is gone.
 #
 # A notification says when the shot is there: a full ultrawide shot takes a

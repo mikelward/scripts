@@ -105,7 +105,7 @@ TOOLS = {
     # the default mamba path and the offline bundle -- and a GitHub release for
     # --backend github. Each ships a single binary.
     "lf":       {"conda": "lf",       "github": "gokcehan/lf",        "bins": ["lf"]},
-    # The Go toolchain, which builds conf's vcs and quickspace-grant. Go
+    # The Go toolchain, which builds conf's vcs and tide-grant. Go
     # publishes its releases on go.dev rather than GitHub, so it comes from
     # conda-forge only; the go binary finds its GOROOT through the link.
     "go":       {"conda": "go",       "bins": ["go", "gofmt"]},

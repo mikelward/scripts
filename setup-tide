@@ -1,15 +1,15 @@
 #!/bin/sh
-# Install the quickspace session (github.com/mikelward/quickspace) beside KDE.
+# Install the tide session (github.com/mikelward/quickspace) beside KDE.
 #
-# `setup --quickspace` runs this after setup-kde, so KDE Plasma stays the
+# `setup --tide` runs this after setup-kde, so KDE Plasma stays the
 # fallback session. It:
 #
 # - installs the session's packages: Hyprland, hypridle, uwsm, the Hyprland
-#   and GTK portals, Go (to build quickspace-grant), and, until the
+#   and GTK portals, Go (to build tide-grant), and, until the
 #   Quickshell shell lands, the transitional owners (waybar, swaync) and the
 #   tools conf's Hyprland config calls. A package the distro doesn't have
 #   (swww on Ubuntu 26.04) is reported and the rest still install;
-# - installs Quickshell, which draws quickspace's own shell (the bar so far),
+# - installs Quickshell, which draws tide's own shell (the bar so far),
 #   where the distro packages it: apt and pacman, and on Fedora the
 #   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), it
 #   builds a pinned release from source into ~/.local/opt/quickshell (see
@@ -18,18 +18,18 @@
 # - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
 #   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
 #   source, at pinned tags, into ~/.local/opt/hyprland (see build_hyprland);
-# - clones or updates the quickspace repo, runs its `make install` (the
+# - clones or updates the tide repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
-#   entry, its compositor wrapper, and the quickspace commands);
-# - enables quickspace.service, which hangs it off the quickspace session's
+#   entry, its compositor wrapper, and the tide commands);
+# - enables tide.service, which hangs it off the tide session's
 #   target only, and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
 # - on a GDM machine, puts the short hostname on GDM's login screen, as
-#   hyprlock shows it on the lock screen, until quickspace's own greeter
+#   hyprlock shows it on the lock screen, until tide's own greeter
 #   replaces GDM;
 # - removes the logind lid drop-ins the retired setup-hypr/setup-sway
-#   installed. They set HandleLidSwitch=ignore, and quickspace leaves suspend
+#   installed. They set HandleLidSwitch=ignore, and tide leaves suspend
 #   to logind's defaults, so with one left in place an undocked lid close
 #   would never suspend.
 #
@@ -37,12 +37,12 @@
 # setup runs first.
 #
 # Usage:
-#     setup-quickspace [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
+#     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
 #                      [--no-build-hyprland] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
-# failures. setup forwards all three. --no-fetch uses $QUICKSPACE_DIR as it
+# failures. setup forwards all three. --no-fetch uses $TIDE_DIR as it
 # is: setup passes it after cloning or pulling the repo with its own
 # clone_or_pull, which honors --github and redacts the URLs it prints.
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
@@ -63,8 +63,8 @@ DCONF_SHARE_PROFILE="${SETUP_DCONF_SHARE_PROFILE:-/usr/share/dconf/profile/gdm}"
 # Where packages install D-Bus activation files and systemd user units.
 DBUS_SERVICE_DIRS="${SETUP_DBUS_SERVICE_DIRS:-/usr/share/dbus-1/services /usr/local/share/dbus-1/services}"
 USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user /usr/local/lib/systemd/user}"
-QUICKSPACE_REPO="${QUICKSPACE_REPO:-https://github.com/mikelward/quickspace.git}"
-QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
+TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/quickspace.git}"
+TIDE_DIR="${TIDE_DIR:-$HOME/src/tide}"
 # Fedora packages Quickshell only in this COPR, which Quickshell's own
 # BUILD.md names as a packager.
 QUICKSHELL_COPR=errornointernet/quickshell
@@ -72,7 +72,7 @@ QUICKSHELL_COPR=errornointernet/quickshell
 MIN_HYPRLAND=0.56
 
 # The Quickshell release build_quickshell builds where apt has none, from
-# the GitHub mirror quickspace's SPEC.md cites. Its own prefix, like
+# the GitHub mirror tide's SPEC.md cites. Its own prefix, like
 # Hyprland's, with qs linked onto PATH. Overridable for tests.
 QUICKSHELL_REPO=https://github.com/quickshell-mirror/quickshell.git
 QUICKSHELL_TAG=v0.3.1
@@ -93,7 +93,7 @@ MIN_QUICKSHELL_QT=6.6
 # rebuild.
 QUICKSHELL_QT_PRIVATE="qt6-base-private-dev qt6-declarative-private-dev qt6-wayland-private-dev"
 # What the build needs from apt, named as on Ubuntu 26.04, from Quickshell's
-# BUILD.md, plus the QML modules quickspace's shell imports at run time.
+# BUILD.md, plus the QML modules tide's shell imports at run time.
 # Ubuntu has no cpptrace, so the build leaves out Quickshell's crash
 # handler; systemd restarts the shell instead.
 QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
@@ -144,7 +144,7 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
     glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
     libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
     xwayland"
-# quickspace's make install builds quickspace-grant with this Go, which
+# tide's make install builds tide-grant with this Go, which
 # must be at least MIN_GO (its go.mod). setup installs Go for everything
 # that needs it, vcs too; this installs it again for a run on its own.
 # Overridable for tests.
@@ -215,9 +215,9 @@ sudo_or_warn() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-quickspace [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
 
-Install the quickspace session (Hyprland + uwsm) beside KDE Plasma.
+Install the tide session (Hyprland + uwsm) beside KDE Plasma.
 
 Options:
   --no-install     Skip the packages and the system-wide session install
@@ -344,6 +344,8 @@ set_install_dir() {
     # A new compiler is a new build, as a new pin is.
     pins_sum=$(hyprland_pins_record | cksum | cut -d' ' -f1)
     install_dir="$HYPRLAND_PREFIX/$hyprland_tag-$pins_sum"
+    # Named for tide's old name, which existing builds carry: renaming the
+    # marker would rebuild them all.
     pins_file="$install_dir/quickspace-pins"
 }
 
@@ -378,7 +380,7 @@ decide_hyprland_build() {
     if test -z "$gxx" \
         || test -z "$xkb" || ! version_at_least "$xkb" 1.11 \
         || test -z "$(candidate liblua5.5-dev)"; then
-        warn "apt's Hyprland is ${apt_hyprland:-missing}, and building $MIN_HYPRLAND needs g++-$HYPRLAND_GCC, libxkbcommon 1.11 and Lua 5.5, which apt doesn't have here (it has g++-$HYPRLAND_GCC ${gxx:-none}, libxkbcommon ${xkb:-none}); installing apt's Hyprland, which can't run quickspace's Lua config"
+        warn "apt's Hyprland is ${apt_hyprland:-missing}, and building $MIN_HYPRLAND needs g++-$HYPRLAND_GCC, libxkbcommon 1.11 and Lua 5.5, which apt doesn't have here (it has g++-$HYPRLAND_GCC ${gxx:-none}, libxkbcommon ${xkb:-none}); installing apt's Hyprland, which can't run tide's Lua config"
         return 0
     fi
     BUILD_NOW=yes
@@ -388,11 +390,11 @@ decide_hyprland_build() {
 # distro's Hyprland.
 install_packages() {
     DISTRO_HYPRLAND=no
-    # hyprlock is the lock screen until quickspace-lock lands (M5): conf's
+    # hyprlock is the lock screen until tide-lock lands (M5): conf's
     # Super+L and hypridle's lock_cmd both run it. It's a separate program,
     # so the distro's works beside a source-built Hyprland. notify-send (the
     # libnotify package below) is how screenshot reports from a key binding.
-    # quickspace-shell shows the wallpaper with swww, or with swaybg where
+    # tide-shell shows the wallpaper with swww, or with swaybg where
     # the distro has no swww (Ubuntu 26.04), so both are asked for.
     common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
             waybar swww swaybg fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
@@ -431,7 +433,7 @@ install_packages() {
 }
 
 # install_quickshell installs Quickshell in a step of its own, so a distro
-# that doesn't package it costs only quickspace's bar, not the rest.
+# that doesn't package it costs only tide's bar, not the rest.
 install_quickshell() {
     install_or_build_quickshell
     # Whichever way that ended, a source build made for a Qt that's since
@@ -456,11 +458,11 @@ install_or_build_quickshell() {
             # dnf's copr command is a plugin: dnf-plugins-core for dnf 4,
             # dnf5-plugins for dnf 5. Both provide dnf-command(copr).
             if ! pkg_install 'dnf-command(copr)'; then
-                warn "couldn't install dnf's copr plugin, so Quickshell isn't installed; quickspace's bar won't run, and waybar stays the bar"
+                warn "couldn't install dnf's copr plugin, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
                 return 0
             fi
             if ! sudo_or_warn dnf copr enable -y "$QUICKSHELL_COPR"; then
-                warn "couldn't enable the $QUICKSHELL_COPR COPR, so Quickshell isn't installed; quickspace's bar won't run, and waybar stays the bar"
+                warn "couldn't enable the $QUICKSHELL_COPR COPR, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
                 return 0
             fi
             ;;
@@ -473,10 +475,10 @@ install_or_build_quickshell() {
         && ! printf '%s\n' "$known" | awk '$1 == "quickshell" && $2 != "(none)" { found = 1 } END { exit !found }'; then
         qt=$(upstream_version "$(printf '%s\n' "$known" | awk '$1 == "qt6-base-dev" { print $2 }')")
         if test -z "$qt" || ! version_at_least "$qt" "$MIN_QUICKSHELL_QT"; then
-            warn "apt has no Quickshell, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; quickspace's bar won't run, and waybar stays the bar"
+            warn "apt has no Quickshell, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; tide's bar won't run, and waybar stays the bar"
             return 0
         fi
-        build_quickshell || warn "building Quickshell failed, so quickspace's bar won't run yet; waybar stays the bar. Rerun setup-quickspace to retry"
+        build_quickshell || warn "building Quickshell failed, so tide's bar won't run yet; waybar stays the bar. Rerun setup-tide to retry"
         return 0
     fi
     # shellcheck disable=SC2086  # $effects is one name or none
@@ -492,19 +494,19 @@ install_or_build_quickshell() {
     # Missing packages cost only the bar, so they're warnings, not errors.
     case " $missing " in
         *" quickshell "*)
-            warn "couldn't install Quickshell (the distro may not package it), so quickspace's bar won't run yet; waybar stays the bar"
+            warn "couldn't install Quickshell (the distro may not package it), so tide's bar won't run yet; waybar stays the bar"
             return 0
             ;;
     esac
     if test -n "$effects"; then
         case " $missing " in
             *" $effects "*)
-                warn "couldn't install $effects, so quickspace's bar won't load; waybar stays the bar"
+                warn "couldn't install $effects, so tide's bar won't load; waybar stays the bar"
                 return 0
                 ;;
         esac
     fi
-    warn "installing Quickshell failed without naming a package, so quickspace's bar may not run; waybar stays the bar"
+    warn "installing Quickshell failed without naming a package, so tide's bar may not run; waybar stays the bar"
 }
 
 # --- Quickshell from source ---
@@ -535,6 +537,7 @@ build_quickshell() {
         "cmake $QUICKSHELL_CMAKE_FLAGS" "$qt_versions")
     qs_sum=$(printf '%s\n' "$qs_record" | cksum | cut -d' ' -f1)
     qs_dir="$QUICKSHELL_PREFIX/$QUICKSHELL_TAG-$qs_sum"
+    # Named for tide's old name, like Hyprland's quickspace-pins.
     qs_marker="$qs_dir/quickspace-build"
     if test -f "$qs_marker"; then
         info "Quickshell $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
@@ -556,7 +559,7 @@ build_quickshell() {
         fi
         # shellcheck disable=SC2086  # word-split the flags
         cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_INSTALL_PREFIX="$qs_dir" \
-            $QUICKSHELL_CMAKE_FLAGS -DDISTRIBUTOR="setup-quickspace (source build)" \
+            $QUICKSHELL_CMAKE_FLAGS -DDISTRIBUTOR="setup-tide (source build)" \
             && cmake --build "$src/build" \
             && cmake --install "$src/build" || return 1
         printf '%s\n' "$qs_record" > "$qs_marker" || {
@@ -596,10 +599,10 @@ link_quickshell() {
                     ;;
             esac
         fi
-        # quickspace.service finds qs on the user manager's PATH, which may
+        # tide.service finds qs on the user manager's PATH, which may
         # not reach into $HOME.
         if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
-            warn "COULDN'T LINK $cmd INTO $QUICKSHELL_BIN_DIR: the quickspace session won't find Quickshell; link $current/bin/$cmd onto its PATH yourself"
+            warn "COULDN'T LINK $cmd INTO $QUICKSHELL_BIN_DIR: the tide session won't find Quickshell; link $current/bin/$cmd onto its PATH yourself"
         fi
     done
 }
@@ -737,7 +740,7 @@ remove_old_builds() {
     done
 }
 
-# The build's commands that go on PATH. The quickspace session starts
+# The build's commands that go on PATH. The tide session starts
 # Hyprland through start-hyprland, its crash watchdog, when it can find it.
 HYPRLAND_COMMANDS="Hyprland hyprctl start-hyprland"
 
@@ -774,7 +777,7 @@ link_hyprland() {
         # The display manager's PATH may not reach into $HOME, so the links
         # help, but the build is still usable without them.
         if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
-            warn "COULDN'T LINK $cmd INTO $HYPRLAND_BIN_DIR: the quickspace session may not find it; link $current/bin/$cmd onto the session's PATH yourself"
+            warn "COULDN'T LINK $cmd INTO $HYPRLAND_BIN_DIR: the tide session may not find it; link $current/bin/$cmd onto the session's PATH yourself"
         fi
     done
 }
@@ -845,12 +848,12 @@ build_component() {
 # Hyprland before 0.56 reads hyprland.conf, which conf no longer ships.
 check_hyprland_version() {
     if ! is_command Hyprland; then
-        warn "Hyprland isn't installed; the quickspace session won't start"
+        warn "Hyprland isn't installed; the tide session won't start"
         return 0
     fi
     version=$(Hyprland --version 2>/dev/null | sed -n 's/^Hyprland \([0-9][0-9.]*\).*/\1/p' | head -n1)
     if test -z "$version"; then
-        warn "couldn't read Hyprland's version; quickspace needs $MIN_HYPRLAND or later"
+        warn "couldn't read Hyprland's version; tide needs $MIN_HYPRLAND or later"
         return 0
     fi
     if test "$(printf '%s\n%s\n' "$MIN_HYPRLAND" "$version" | sort -V | head -n1)" != "$MIN_HYPRLAND"; then
@@ -858,59 +861,59 @@ check_hyprland_version() {
     fi
 }
 
-# --- The quickspace repo ---
+# --- The tide repo ---
 
-# $QUICKSPACE_REPO only steers a fresh clone; an existing checkout pulls from
+# $TIDE_REPO only steers a fresh clone; an existing checkout pulls from
 # its own origin.
-fetch_quickspace() {
+fetch_tide() {
     if test "$FETCH" = no; then
-        test -d "$QUICKSPACE_DIR/.git" \
-            || error "no quickspace checkout at $QUICKSPACE_DIR (--no-fetch)"
-    elif test -d "$QUICKSPACE_DIR/.git"; then
-        info "Updating $QUICKSPACE_DIR"
+        test -d "$TIDE_DIR/.git" \
+            || error "no tide checkout at $TIDE_DIR (--no-fetch)"
+    elif test -d "$TIDE_DIR/.git"; then
+        info "Updating $TIDE_DIR"
         # The existing checkout is enough to install, so a failed pull (no
         # network, say) warns rather than ending the run.
-        git -C "$QUICKSPACE_DIR" pull --ff-only \
-            || warn "could not update $QUICKSPACE_DIR; installing the existing checkout"
+        git -C "$TIDE_DIR" pull --ff-only \
+            || warn "could not update $TIDE_DIR; installing the existing checkout"
     else
         # Not naming the URL: one passed with credentials in it would land in
         # the terminal and any captured log.
-        info "Cloning quickspace into $QUICKSPACE_DIR"
-        mkdir -p "$(dirname "$QUICKSPACE_DIR")"
-        git clone "$QUICKSPACE_REPO" "$QUICKSPACE_DIR"
+        info "Cloning tide into $TIDE_DIR"
+        mkdir -p "$(dirname "$TIDE_DIR")"
+        git clone "$TIDE_REPO" "$TIDE_DIR"
     fi
 }
 
-install_quickspace() {
-    # make install builds quickspace-grant first, and without Go it would
+install_tide() {
+    # make install builds tide-grant first, and without Go it would
     # stop before installing anything.
     is_command "$GO" \
-        || error "quickspace needs Go $MIN_GO or newer to build quickspace-grant; setup installs it, or install golang (Debian, Ubuntu, Fedora) or go (Arch)"
+        || error "tide needs Go $MIN_GO or newer to build tide-grant; setup installs it, or install golang (Debian, Ubuntu, Fedora) or go (Arch)"
     if ! go_version=$("$GO" env GOVERSION 2>&1); then
         error "couldn't ask $GO for its version: $go_version"
     fi
     go_version=${go_version#go}
     if test "$(printf '%s\n%s\n' "$MIN_GO" "$go_version" | sort -V | head -n1)" != "$MIN_GO"; then
-        error "quickspace needs Go $MIN_GO or newer to build quickspace-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
+        error "tide needs Go $MIN_GO or newer to build tide-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
     fi
-    info "Installing quickspace's user files"
-    make -C "$QUICKSPACE_DIR" install GO="$GO"
+    info "Installing tide's user files"
+    make -C "$TIDE_DIR" install GO="$GO"
     if test "$INSTALL" = yes; then
-        info "Installing the quickspace session entry and commands under /usr"
-        sudo_or_warn make -C "$QUICKSPACE_DIR" install-session PREFIX=/usr \
-            || warn "could not install the session entry; run 'sudo make -C $QUICKSPACE_DIR install-session PREFIX=/usr'"
+        info "Installing the tide session entry and commands under /usr"
+        sudo_or_warn make -C "$TIDE_DIR" install-session PREFIX=/usr \
+            || warn "could not install the session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
     fi
 }
 
 # Distro packages enable waybar's and swaync's user units for every session,
 # and D-Bus activates swaync's on the first notification sent while nothing
 # owns the name. Under Plasma, swaync fights plasmashell for that name and
-# waybar draws a second bar; in quickspace, an activated swaync takes the name
-# the shell's own swaync needs. quickspace-shell (or conf's plain-Hyprland
+# waybar draws a second bar; in tide, an activated swaync takes the name
+# the shell's own swaync needs. tide-shell (or conf's plain-Hyprland
 # config) runs both programs itself, so the units are never wanted, and a
 # user mask overrides every enablement, global or runtime. mask edits unit
 # files only; just --now needs a running user manager. hypridle's unit stays:
-# quickspace's drop-in runs it only in the quickspace session.
+# tide's drop-in runs it only in the tide session.
 #
 # swaync is one of many daemons D-Bus can activate for the notification name:
 # Xfce's xfce4-notifyd took it in the first sessions, and dunst, mako or
@@ -927,7 +930,7 @@ notification_units() {
             if test -n "$unit"; then
                 printf '%s\n' "$unit"
             elif ! grep -q '^Exec=.*plasma_waitforname' "$f"; then
-                warn "$f can start a notification daemon that would take quickspace's notifications, and it has no unit to mask; remove its package if that happens"
+                warn "$f can start a notification daemon that would take tide's notifications, and it has no unit to mask; remove its package if that happens"
             fi
         done
     done
@@ -959,16 +962,16 @@ mask_distro_units() {
     fi
     # shellcheck disable=SC2086  # word-split the unit list
     systemctl --user mask $now $units \
-        || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take quickspace's notifications"
+        || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take tide's notifications"
 }
 
 enable_unit() {
     if ! is_command systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
-        warn "no systemd user manager; run 'systemctl --user enable quickspace.service' in your session"
+        warn "no systemd user manager; run 'systemctl --user enable tide.service' in your session"
         return 0
     fi
     systemctl --user daemon-reload
-    systemctl --user enable quickspace.service
+    systemctl --user enable tide.service
 }
 
 # --- logind ---
@@ -977,7 +980,7 @@ remove_old_lid_dropins() {
     removed=no
     for f in "$LOGIND_DIR/10-hypr-lid.conf" "$LOGIND_DIR/10-sway-lid.conf"; do
         if test -e "$f"; then
-            info "Removing $f (quickspace leaves the lid to logind's defaults)"
+            info "Removing $f (tide leaves the lid to logind's defaults)"
             if sudo_or_warn rm -f "$f"; then
                 removed=yes
             else
@@ -1047,7 +1050,7 @@ file-db:$GDM_DEFAULTS" || {
             return 0
         }
     fi
-    install_text "$DCONF_DIR/db/gdm.d/50-quickspace-hostname" "[org/gnome/login-screen]
+    install_text "$DCONF_DIR/db/gdm.d/50-tide-hostname" "[org/gnome/login-screen]
 banner-message-enable=true
 banner-message-text='$host'" || {
         warn "couldn't install GDM's hostname banner; the login screen won't show the hostname"
@@ -1063,9 +1066,9 @@ banner-message-text='$host'" || {
 # --- Main ---
 
 if test "$INSTALL" = no; then
-    info "Skipping quickspace packages (--no-install)"
+    info "Skipping tide packages (--no-install)"
 elif test "$SUDO" = no; then
-    info "Skipping quickspace packages (needs sudo; --no-sudo)"
+    info "Skipping tide packages (needs sudo; --no-sudo)"
 else
     decide_hyprland_build
     install_packages
@@ -1079,15 +1082,15 @@ else
         # compositor: that's fatal unless errors are being ignored.
         if ! build_hyprland; then
             if test "$IGNORE_ERRORS" = no; then
-                error "the quickspace session needs Hyprland $MIN_HYPRLAND or later; rerun setup-quickspace to retry the build"
+                error "the tide session needs Hyprland $MIN_HYPRLAND or later; rerun setup-tide to retry the build"
             fi
-            warn "the quickspace session needs Hyprland $MIN_HYPRLAND or later; rerun setup-quickspace to retry the build"
+            warn "the tide session needs Hyprland $MIN_HYPRLAND or later; rerun setup-tide to retry the build"
         fi
     fi
 fi
 check_hyprland_version
-fetch_quickspace
-install_quickspace
+fetch_tide
+install_tide
 enable_unit
 if is_command systemctl; then
     mask_distro_units
@@ -1099,4 +1102,4 @@ else
     gdm_hostname_banner
 fi
 
-info "quickspace installed. Log out and pick the \"quickspace\" session; KDE Plasma stays available."
+info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
