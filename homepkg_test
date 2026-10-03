@@ -1178,7 +1178,7 @@ check("registry maps lf to conda-forge with an lf bin",
       and hp.TOOLS["lf"]["github"] == "gokcehan/lf"
       and hp.TOOLS["lf"]["bins"] == ["lf"])
 
-# The Go toolchain, for vcs and quickspace-grant under setup --no-root. Go
+# The Go toolchain, for vcs and tide-grant under setup --no-root. Go
 # releases live on go.dev, not GitHub, so it's conda-forge only, and asking
 # for it from GitHub is a clean error rather than a KeyError.
 check("registry maps go to conda-forge with go and gofmt",

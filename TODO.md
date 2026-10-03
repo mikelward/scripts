@@ -37,9 +37,9 @@ going forward.
       the gates, the `codex` status, conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
 
-## Hyprland from source in setup-quickspace
+## Hyprland from source in setup-tide
 
-`setup-quickspace` builds Hyprland 0.56 from source where apt's is older
+`setup-tide` builds Hyprland 0.56 from source where apt's is older
 (Ubuntu 26.04 ships 0.53). Two follow-ups:
 
 - **Debian 13.** The build needs GCC 16's libstdc++, libxkbcommon 1.11 and
@@ -78,14 +78,14 @@ going forward.
 
 ## Decisions needing review
 
-- **setup-quickspace masks waybar and swaync per user, instead of disabling
+- **setup-tide masks waybar and swaync per user, instead of disabling
   every enablement.** Distro packages enable their user units, and
   hypridle's, for every session, so they started under Plasma. Setup first
   hunted each enablement (global, per-user, runtime) and undid it, but review
   kept finding more places a link can live. Now setup masks waybar's and
-  swaync's units for the user running it, and quickspace's hypridle drop-in
-  skips hypridle outside the quickspace session (quickspace PR "Run
-  hypridle.service only in the quickspace session"). The alternative was the
+  swaync's units for the user running it, and tide's hypridle drop-in
+  skips hypridle outside the tide session (tide PR "Run
+  hypridle.service only in the tide session"). The alternative was the
   enablement hunt, which also covered other user accounts on the machine;
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back

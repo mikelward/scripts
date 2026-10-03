@@ -352,7 +352,7 @@ MOCK
     output="$(PATH="$purge_tmpdir:$PATH" \
         sh -c "set -e
 OS=$purge_os
-QUICKSPACE=${PURGE_QUICKSPACE:-no}
+TIDE=${PURGE_TIDE:-no}
 sudo_or_warn() { \"\$@\"; }
 $(extract_functions "info warn obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
@@ -909,33 +909,33 @@ test_kde_flag_is_a_noop() {
     assert_output_contains "Usage: setup"
 }
 
-# --- --quickspace flag ---
+# --- --tide flag ---
 
-test_quickspace_flag_is_accepted() {
-    run_setup --quickspace --help
+test_tide_flag_is_accepted() {
+    run_setup --tide --help
     assert_status 0 &&
-    assert_output_contains "--quickspace"
+    assert_output_contains "--tide"
 }
 
-test_quickspace_off_by_default() {
-    assert_source_contains "^QUICKSPACE=no" &&
-    assert_source_contains '"$SCRIPTS_DIR/setup-quickspace" --no-fetch' &&
-    assert_source_contains 'clone_or_pull "$QUICKSPACE_REPO" "$SRC_DIR/quickspace" yes'
+test_tide_off_by_default() {
+    assert_source_contains "^TIDE=no" &&
+    assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch' &&
+    assert_source_contains 'clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes'
 }
 
-# setup takes --no-build-hyprland and hands it to setup-quickspace.
+# setup takes --no-build-hyprland and hands it to setup-tide.
 test_no_build_hyprland_is_forwarded() {
     run_setup --no-build-hyprland --help
     assert_status 0 &&
     assert_output_contains "--no-build-hyprland" &&
-    assert_source_contains 'QUICKSPACE_SETUP_FLAGS="$QUICKSPACE_SETUP_FLAGS --no-build-hyprland"' &&
-    assert_source_contains '"$SCRIPTS_DIR/setup-quickspace" --no-fetch $DESKTOP_SETUP_FLAGS $QUICKSPACE_SETUP_FLAGS'
+    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"' &&
+    assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS'
 }
 
-# With --quickspace the purge keeps the Hyprland stack quickspace runs on
+# With --tide the purge keeps the Hyprland stack tide runs on
 # and still removes what it doesn't use (sway).
-test_purge_obsolete_keeps_quickspace_stack() {
-    PURGE_QUICKSPACE=yes run_purge_obsolete debian "sway swaybg hyprland hyprlock waybar uwsm"
+test_purge_obsolete_keeps_tide_stack() {
+    PURGE_TIDE=yes run_purge_obsolete debian "sway swaybg hyprland hyprlock waybar uwsm"
     assert_status 0 &&
     assert_calls_contain "apt-get purge -y" &&
     assert_calls_contain "sway" &&
@@ -2479,10 +2479,10 @@ run_test "home-prefix path keeps the runtime when no hx landed" \
     test_home_tools_keeps_the_runtime_when_no_hx_landed
 
 run_test "--kde is accepted as a no-op" test_kde_flag_is_a_noop
-run_test "--quickspace is accepted" test_quickspace_flag_is_accepted
-run_test "--quickspace is off by default" test_quickspace_off_by_default
-run_test "--no-build-hyprland is forwarded to setup-quickspace" test_no_build_hyprland_is_forwarded
-run_test "--quickspace keeps the quickspace stack in the purge" test_purge_obsolete_keeps_quickspace_stack
+run_test "--tide is accepted" test_tide_flag_is_accepted
+run_test "--tide is off by default" test_tide_off_by_default
+run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
+run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack
 run_test "tsc installs from the distro alongside node" \
     test_typescript_installed_from_distro
 run_test "sudo warning includes a useful stderr reason" \

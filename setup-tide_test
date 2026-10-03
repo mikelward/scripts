@@ -1,12 +1,12 @@
 #!/bin/bash
-# Tests for setup-quickspace
+# Tests for setup-tide
 #
-# Runs setup-quickspace against a throwaway HOME, logind dir and quickspace
+# Runs setup-tide against a throwaway HOME, logind dir and tide
 # checkout, with sudo, the package managers, git, make, systemctl and
 # Hyprland mocked. Each mock logs its argv to $CALLS.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT="$SCRIPT_DIR/setup-quickspace"
+SCRIPT="$SCRIPT_DIR/setup-tide"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
@@ -172,7 +172,7 @@ run() {
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
-        QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
+        TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
@@ -209,32 +209,32 @@ check "exits 0" test "$status" -eq 0
 check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle hyprlock uwsm"
 check "installs hyprlock, the lock screen Super+L and hypridle run" has "$calls" " hyprlock "
 check "installs the transitional owners" has "$calls" "waybar"
-check "clones quickspace when it isn't there" has "$calls" "git clone https://example.com/quickspace.git $T/src/quickspace"
-check "runs quickspace's make install" has "$calls" "make -C $T/src/quickspace install"
+check "clones tide when it isn't there" has "$calls" "git clone https://example.com/tide.git $T/src/tide"
+check "runs tide's make install" has "$calls" "make -C $T/src/tide install"
 # Go too, for a run without setup.
 check "installs Go itself" has "$calls" "golang"
 
-check "tells make install which Go to build with" has "$calls" "make -C $T/src/quickspace install GO=go"
-check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/quickspace install-session PREFIX=/usr"
-check "enables quickspace.service" has "$calls" "systemctl --user enable quickspace.service"
+check "tells make install which Go to build with" has "$calls" "make -C $T/src/tide install GO=go"
+check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/tide install-session PREFIX=/usr"
+check "enables tide.service" has "$calls" "systemctl --user enable tide.service"
 check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
 check "masks the distro's waybar and swaync units, stopping them now" \
     has "$calls" "systemctl --user mask --now waybar.service swaync.service"
-check "leaves hypridle's unit to quickspace's session-only drop-in" lacks "$calls" "hypridle.service"
+check "leaves hypridle's unit to tide's session-only drop-in" lacks "$calls" "hypridle.service"
 check "touches no other user's units" lacks "$calls" "--global"
 teardown
 
 setup; ARGS=(); run GO="$T/no-such-go"
 check "no Go is an error" test "$status" -ne 0
-check "no Go names the packages to install" has "$output" "quickspace needs Go 1.22 or newer to build quickspace-grant"
-check "no Go stops before make install" lacks "$calls" "make -C $T/src/quickspace install"
+check "no Go names the packages to install" has "$output" "tide needs Go 1.22 or newer to build tide-grant"
+check "no Go stops before make install" lacks "$calls" "make -C $T/src/tide install"
 teardown
 
 setup; ARGS=(); run FAKE_GO_VERSION=go1.19.8
 check "a Go older than 1.22 is an error" test "$status" -ne 0
 check "an old Go says which it found and where to get a newer one" \
     has "$output" "and go is 1.19.8; on Debian 12, install golang from bookworm-backports"
-check "an old Go stops before make install" lacks "$calls" "make -C $T/src/quickspace install"
+check "an old Go stops before make install" lacks "$calls" "make -C $T/src/tide install"
 teardown
 
 setup; ARGS=(); run FAKE_GO_VERSION=go1.24.7
@@ -275,7 +275,7 @@ teardown
 
 setup; ARGS=(); run FAKE_MISSING=qml6-module-qtquick-effects
 check "a missing effects module isn't fatal" test "$status" -eq 0
-check "a missing effects module says the bar won't load" has "$output" "couldn't install qml6-module-qtquick-effects, so quickspace's bar won't load"
+check "a missing effects module says the bar won't load" has "$output" "couldn't install qml6-module-qtquick-effects, so tide's bar won't load"
 check "Quickshell still installs without it" has "$calls" "apt-get install -y quickshell"
 teardown
 
@@ -727,38 +727,38 @@ teardown
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
 check "a failed build step is reported" has "$output" "building Hyprland failed; the sources are in $T/src/hyprland-build"
 check "a failed build is fatal" test "$status" -ne 0
-check "a failed build doesn't claim success" lacks "$output" "quickspace installed"
+check "a failed build doesn't claim success" lacks "$output" "tide installed"
 check "a failed build stops before Hyprland" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland"
 check "a failed build isn't marked complete" test ! -e "$(inst)/quickspace-pins"
 check "a failed build says a rerun resumes" has "$output" "a rerun resumes from the step that failed"
 check "a failed build links nothing" test ! -e "$T/usr-local-bin/Hyprland"
 ARGS=(--ignore-errors); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
-check "--ignore-errors carries on past a failed build" has "$output" "quickspace installed"
+check "--ignore-errors carries on past a failed build" has "$output" "tide installed"
 teardown
 
-setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(); run
-check "updates an existing checkout" has "$calls" "git -C $T/src/quickspace pull --ff-only"
+setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run
+check "updates an existing checkout" has "$calls" "git -C $T/src/tide pull --ff-only"
 check "doesn't clone over it" lacks "$calls" "git clone"
 teardown
 
-setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(); run FAKE_PULL_FAILS=1
+setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run FAKE_PULL_FAILS=1
 check "a failed pull still installs" test "$status" -eq 0
-check "a failed pull is reported" has "$output" "could not update $T/src/quickspace"
-check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/quickspace install"
+check "a failed pull is reported" has "$output" "could not update $T/src/tide"
+check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/tide install"
 teardown
 
-setup; ARGS=(); run QUICKSPACE_REPO="https://user:secret@example.com/quickspace.git"
+setup; ARGS=(); run TIDE_REPO="https://user:secret@example.com/tide.git"
 check "the clone message doesn't print the URL" lacks "$output" "secret"
 teardown
 
-setup; mkdir -p "$T/src/quickspace/.git"; ARGS=(--no-fetch); run
+setup; mkdir -p "$T/src/tide/.git"; ARGS=(--no-fetch); run
 check "--no-fetch neither pulls nor clones" lacks "$calls" "git "
-check "--no-fetch installs the checkout" has "$calls" "make -C $T/src/quickspace install"
+check "--no-fetch installs the checkout" has "$calls" "make -C $T/src/tide install"
 teardown
 
 setup; ARGS=(--no-fetch); run
 check "--no-fetch without a checkout fails" test "$status" -ne 0
-check "--no-fetch without a checkout says so" has "$output" "no quickspace checkout"
+check "--no-fetch without a checkout says so" has "$output" "no tide checkout"
 teardown
 
 setup; : > "$T/logind/10-hypr-lid.conf"; : > "$T/logind/10-sway-lid.conf"; : > "$T/logind/50-mine.conf"
@@ -776,13 +776,13 @@ teardown
 setup; ARGS=(--no-install); run
 check "--no-install skips packages" lacks "$calls" "hypridle"
 check "--no-install skips the system-wide session install" lacks "$calls" "install-session"
-check "--no-install still installs the user files" has "$calls" "make -C $T/src/quickspace install"
+check "--no-install still installs the user files" has "$calls" "make -C $T/src/tide install"
 teardown
 
 setup; : > "$T/logind/10-hypr-lid.conf"; ARGS=(--no-sudo); run
 check "--no-sudo runs no sudo" lacks "$calls" "sudo "
 check "--no-sudo leaves the drop-in" test -e "$T/logind/10-hypr-lid.conf"
-check "--no-sudo still enables the user unit" has "$calls" "systemctl --user enable quickspace.service"
+check "--no-sudo still enables the user unit" has "$calls" "systemctl --user enable tide.service"
 teardown
 
 setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.55.1
@@ -795,7 +795,7 @@ teardown
 
 setup; ARGS=(); run FAKE_NO_USER_MANAGER=1
 check "no user manager is a warning, not a failure" test "$status" -eq 0
-check "no user manager says how to enable it" has "$output" "systemctl --user enable quickspace.service"
+check "no user manager says how to enable it" has "$output" "systemctl --user enable tide.service"
 check "no user manager enables nothing" lacks "$calls" "--user enable"
 check "no user manager still masks, just not --now" \
     has "$calls" "systemctl --user mask waybar.service swaync.service"
@@ -834,7 +834,7 @@ teardown
 host=$(uname -n | cut -d. -f1)
 setup; ARGS=(); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
 check "GDM: writes the hostname banner" \
-    test "$(cat "$T/dconf/db/gdm.d/50-quickspace-hostname")" = "$(printf "[org/gnome/login-screen]\nbanner-message-enable=true\nbanner-message-text='%s'" "$host")"
+    test "$(cat "$T/dconf/db/gdm.d/50-tide-hostname")" = "$(printf "[org/gnome/login-screen]\nbanner-message-enable=true\nbanner-message-text='%s'" "$host")"
 check "GDM: writes a profile that reads the gdm database" \
     test "$(cat "$T/dconf/profile/gdm")" = "$(printf 'user-db:user\nsystem-db:gdm\nfile-db:%s' "$T/gdm-defaults")"
 check "GDM: compiles the database" has "$calls" "sudo dconf update"
@@ -845,14 +845,14 @@ teardown
 setup; ARGS=(); : > "$T/gdm-defaults"; printf 'user-db:user\nsystem-db:gdm\n' > "$T/share-profile"
 run SETUP_GDM_DEFAULTS="$T/gdm-defaults" SETUP_DCONF_SHARE_PROFILE="$T/share-profile"
 check "GDM: a shipped profile that reads the gdm database is used" test ! -e "$T/dconf/profile/gdm"
-check "GDM: the banner is still written" test -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+check "GDM: the banner is still written" test -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
 setup; ARGS=(); : > "$T/gdm-defaults"; mkdir -p "$T/dconf/profile"; printf 'user-db:user\n' > "$T/dconf/profile/gdm"
 run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
 check "GDM: a profile without the gdm database is left alone" test "$(cat "$T/dconf/profile/gdm")" = "user-db:user"
 check "GDM: and named" has "$output" "doesn't read the gdm dconf database"
-check "GDM: and no banner is written" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+check "GDM: and no banner is written" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
 # The /etc profile overrides a shipped one that reads the gdm database.
@@ -860,7 +860,7 @@ setup; ARGS=(); : > "$T/gdm-defaults"; mkdir -p "$T/dconf/profile"; printf 'user
 printf 'user-db:user\nsystem-db:gdm\n' > "$T/share-profile"
 run SETUP_GDM_DEFAULTS="$T/gdm-defaults" SETUP_DCONF_SHARE_PROFILE="$T/share-profile"
 check "GDM: an overriding /etc profile without the gdm database is named" has "$output" "doesn't read the gdm dconf database"
-check "GDM: even when the shipped profile reads it" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+check "GDM: even when the shipped profile reads it" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
 # A failed temporary write installs nothing. mktemp hands back a directory,
@@ -878,11 +878,11 @@ check "GDM: and says so" has "$output" "couldn't write a temporary copy of $T/dc
 teardown
 
 setup; ARGS=(); run
-check "no GDM, no banner" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+check "no GDM, no banner" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
 setup; ARGS=(--no-sudo); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
-check "--no-sudo leaves GDM alone" test ! -e "$T/dconf/db/gdm.d/50-quickspace-hostname"
+check "--no-sudo leaves GDM alone" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
 setup; ARGS=(--bogus); run
@@ -890,5 +890,5 @@ check "an unknown option fails" test "$status" -eq 1
 teardown
 
 echo
-echo "setup-quickspace: $TESTS_PASSED/$TESTS_RUN passed"
+echo "setup-tide: $TESTS_PASSED/$TESTS_RUN passed"
 test "$TESTS_FAILED" -eq 0
