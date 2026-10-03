@@ -7,6 +7,7 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
+# - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
 # The KDE config files this writes are only what the *next* login loads, so
 # most steps are paired with the reload that makes the current session pick
@@ -552,6 +553,29 @@ configure_keyboard_layout() {
     kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true
 }
 
+# --- Turn off DrKonqi ---
+
+# DrKonqi's launcher is socket-activated for every crash systemd-coredump
+# records, in any session. Where it crashes itself, each of its crashes
+# activates it again: one crash became hundreds of dumps a minute, and the
+# pickup service then worked through the backlog at the next login, slowing
+# Plasma's start. Masked rather than disabled, since the socket is enabled by
+# the package. systemd-coredump still records every crash for coredumpctl.
+DRKONQI_UNITS="drkonqi-coredump-launcher.socket drkonqi-coredump-pickup.service"
+
+disable_drkonqi() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "systemctl not found; DrKonqi's crash handler is left as it is"
+        return 0
+    fi
+    info "Masking DrKonqi's crash handler"
+    # Not fatal: the rest of the desktop config doesn't depend on it.
+    # shellcheck disable=SC2086 # the list is meant to split
+    if ! systemctl --user mask --now $DRKONQI_UNITS; then
+        warn "couldn't mask $DRKONQI_UNITS; run 'systemctl --user mask --now $DRKONQI_UNITS' from the desktop session"
+    fi
+}
+
 # --- Configure keybindings ---
 
 # Third arg is the human-readable label written into the value's third
@@ -1013,6 +1037,7 @@ configure_focus_follows_mouse
 configure_dim_inactive
 configure_desktops
 configure_keyboard_layout
+disable_drkonqi
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
 configure_keybindings

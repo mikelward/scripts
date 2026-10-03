@@ -21,8 +21,8 @@ setup() {
     mkdir -p "$TEST_TMPDIR/bin" "$TEST_TMPDIR/home"
     KDE_SCRIPT="$SCRIPT_DIR/setup-kde"
 
-    # KDE CLI tools: record argv, touch nothing real.
-    for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6; do
+    # KDE CLI tools and systemctl: record argv, touch nothing real.
+    for cmd in kwriteconfig6 qdbus6 qdbus kbuildsycoca6 systemctl; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
@@ -691,6 +691,28 @@ test_configures_keyboard_layout() {
     assert_called "kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true"
 }
 
+# DrKonqi's launcher is masked with its pickup service, stopped now as well as
+# at every later login.
+test_masks_drkonqi() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "systemctl --user mask --now drkonqi-coredump-launcher.socket drkonqi-coredump-pickup.service"
+}
+
+# A user manager that can't be reached (no session bus over ssh, say) warns
+# with the command to run, and the rest of the config still lands.
+test_failed_drkonqi_mask_warns_and_continues() {
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+exit 1
+MOCK
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "couldn't mask drkonqi-coredump-launcher.socket" &&
+    assert_output_contains "KDE configured successfully"
+}
+
 # Meta+Left/Right step one desktop and Meta+Shift+Left/Right carry the window
 # along, which means taking the keys back from KWin's Quick Tile and
 # move-to-screen defaults -- otherwise the actions fight over them.
@@ -1312,6 +1334,9 @@ run_test "Meta+[Shift+]Left/Right switch or move to the adjacent desktop" \
     test_meta_arrows_switch_adjacent_desktop
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
+run_test "masks DrKonqi's crash handler" test_masks_drkonqi
+run_test "a failed DrKonqi mask warns and the run continues" \
+    test_failed_drkonqi_mask_warns_and_continues
 run_test "comma and backslash shortcuts are escaped for kglobalaccel" \
     test_comma_and_backslash_shortcuts_are_escaped
 run_test "leaves Alt+\` app-window cycling alone" \
