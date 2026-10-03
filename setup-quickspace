@@ -11,8 +11,10 @@
 #   (swww on Ubuntu 26.04) is reported and the rest still install;
 # - installs Quickshell, which draws quickspace's own shell (the bar so far),
 #   where the distro packages it: apt and pacman, and on Fedora the
-#   errornointernet/quickshell COPR. Without it the bar can't run, and
-#   waybar stays the bar;
+#   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), it
+#   builds a pinned release from source into ~/.local/opt/quickshell (see
+#   build_quickshell). Without it the bar can't run, and waybar stays the
+#   bar;
 # - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
 #   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
 #   source, at pinned tags, into ~/.local/opt/hyprland (see build_hyprland);
@@ -68,6 +70,39 @@ QUICKSPACE_DIR="${QUICKSPACE_DIR:-$HOME/src/quickspace}"
 QUICKSHELL_COPR=errornointernet/quickshell
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
+
+# The Quickshell release build_quickshell builds where apt has none, from
+# the GitHub mirror quickspace's SPEC.md cites. Its own prefix, like
+# Hyprland's, with qs linked onto PATH. Overridable for tests.
+QUICKSHELL_REPO=https://github.com/quickshell-mirror/quickshell.git
+QUICKSHELL_TAG=v0.3.1
+# The commit that tag named when it was pinned. A tag can be moved, so the
+# clone must check out exactly this before its build files are run.
+QUICKSHELL_COMMIT=1a4716cde794a59928d9d9fc15f2afc7a95de360
+QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-$HOME/.local/opt/quickshell}"
+QUICKSHELL_SRC="${QUICKSHELL_SRC:-$HOME/src/quickshell-build}"
+QUICKSHELL_BIN_DIR="${QUICKSHELL_BIN_DIR:-/usr/local/bin}"
+QUICKSHELL_COMMANDS="qs quickshell"
+# Ubuntu has no cpptrace, so the crash handler is left out; systemd
+# restarts the shell instead.
+QUICKSHELL_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCRASH_HANDLER=OFF"
+# Quickshell's CMakeLists.txt requires at least this Qt.
+MIN_QUICKSHELL_QT=6.6
+# The Qt packages whose private API Quickshell builds against. Each is
+# packaged and upgraded on its own, so a new version of any of them means a
+# rebuild.
+QUICKSHELL_QT_PRIVATE="qt6-base-private-dev qt6-declarative-private-dev qt6-wayland-private-dev"
+# What the build needs from apt, named as on Ubuntu 26.04, from Quickshell's
+# BUILD.md, plus the QML modules quickspace's shell imports at run time.
+# Ubuntu has no cpptrace, so the build leaves out Quickshell's crash
+# handler; systemd restarts the shell instead.
+QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
+    qt6-base-dev qt6-base-private-dev qt6-declarative-dev qt6-declarative-private-dev
+    qt6-wayland-dev qt6-wayland-private-dev qt6-shadertools-dev spirv-tools
+    libcli11-dev libjemalloc-dev libdrm-dev libgbm-dev libegl-dev libgles-dev libvulkan-dev
+    libwayland-dev libwayland-bin wayland-protocols libxcb1-dev
+    libpipewire-0.3-dev libpam0g-dev libpolkit-agent-1-dev libpolkit-gobject-1-dev libglib2.0-dev
+    qt6-svg-plugins qml6-module-qtquick qml6-module-qtquick-layouts qml6-module-qtquick-effects"
 
 # Where build_hyprland builds and installs Hyprland, and where it links its
 # commands. Its own prefix keeps its libraries out of the system's library
@@ -398,6 +433,19 @@ install_packages() {
 # install_quickshell installs Quickshell in a step of its own, so a distro
 # that doesn't package it costs only quickspace's bar, not the rest.
 install_quickshell() {
+    install_or_build_quickshell
+    # Whichever way that ended, a source build made for a Qt that's since
+    # changed would crash rather than let waybar take over.
+    if test "$(detect_os)" = debian && ! current_quickshell_matches_qt; then
+        # current goes only once nothing links through it, or a link left
+        # behind would dangle.
+        if unlink_quickshell "it was built for a Qt that's no longer installed"; then
+            rm -f "$QUICKSHELL_PREFIX/current" || warn "couldn't remove $QUICKSHELL_PREFIX/current"
+        fi
+    fi
+}
+
+install_or_build_quickshell() {
     # The bar tints its icons with QtQuick.Effects, part of Qt Declarative,
     # which Debian and Ubuntu package on their own.
     effects=
@@ -418,10 +466,29 @@ install_quickshell() {
             ;;
         *) return 0 ;;
     esac
-    # shellcheck disable=SC2086  # $effects is one name or none
-    if missing=$(install_all quickshell $effects); then
+    # apt refuses to install a package it doesn't know, so it's asked first:
+    # where it has no Quickshell, it's built instead, given a Qt it builds
+    # with.
+    if test "$(detect_os)" = debian && known=$(apt_candidates quickshell qt6-base-dev) \
+        && ! printf '%s\n' "$known" | awk '$1 == "quickshell" && $2 != "(none)" { found = 1 } END { exit !found }'; then
+        qt=$(upstream_version "$(printf '%s\n' "$known" | awk '$1 == "qt6-base-dev" { print $2 }')")
+        if test -z "$qt" || ! version_at_least "$qt" "$MIN_QUICKSHELL_QT"; then
+            warn "apt has no Quickshell, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; quickspace's bar won't run, and waybar stays the bar"
+            return 0
+        fi
+        build_quickshell || warn "building Quickshell failed, so quickspace's bar won't run yet; waybar stays the bar. Rerun setup-quickspace to retry"
         return 0
     fi
+    # shellcheck disable=SC2086  # $effects is one name or none
+    missing=$(install_all quickshell $effects) && return_ok=yes || return_ok=no
+    # The packaged qs, in /usr/bin, would lose to links from a build, even
+    # when an optional module didn't install beside it.
+    case " $missing " in
+        *" quickshell "*) ;;
+        # It warns about each link it couldn't remove, and the step goes on.
+        *) unlink_quickshell || : ;;
+    esac
+    test "$return_ok" = no || return 0
     # Missing packages cost only the bar, so they're warnings, not errors.
     case " $missing " in
         *" quickshell "*)
@@ -438,6 +505,156 @@ install_quickshell() {
         esac
     fi
     warn "installing Quickshell failed without naming a package, so quickspace's bar may not run; waybar stays the bar"
+}
+
+# --- Quickshell from source ---
+
+# build_quickshell builds QUICKSHELL_TAG into its own directory under
+# $QUICKSHELL_PREFIX, as this user, and links its commands onto PATH.
+# Quickshell uses Qt's private API, so it must be rebuilt for each Qt
+# release: the directory is named for the tag and the versions of the Qt
+# packages it uses privately, a new one builds afresh, and a rerun with
+# none changed only relinks.
+build_quickshell() {
+    info "apt has no Quickshell; building $QUICKSHELL_TAG from source"
+    # shellcheck disable=SC2086  # word-split the package list
+    if ! missing=$(install_all $QUICKSHELL_BUILD_DEPS); then
+        warn "could not install Quickshell's build dependencies:$(printf ' %s' $missing)"
+        return 1
+    fi
+    # shellcheck disable=SC2086  # word-split the package list
+    if ! qt_versions=$(dpkg-query -W -f='${Package} ${Version}\n' $QUICKSHELL_QT_PRIVATE) \
+        || test "$(printf '%s\n' "$qt_versions" | grep -c .)" -ne "$(set -- $QUICKSHELL_QT_PRIVATE; echo $#)"; then
+        warn "couldn't read the installed versions of$(printf ' %s' $QUICKSHELL_QT_PRIVATE), which Quickshell has to be built for"
+        return 1
+    fi
+    qt_version=$(printf '%s\n' "$qt_versions" | awk '$1 == "qt6-base-private-dev" { print $2 }')
+    # Every input the build depends on, so a change to any one of them is a
+    # new build rather than a relink of an old one.
+    qs_record=$(printf '%s\n' "$QUICKSHELL_REPO $QUICKSHELL_TAG $QUICKSHELL_COMMIT" \
+        "cmake $QUICKSHELL_CMAKE_FLAGS" "$qt_versions")
+    qs_sum=$(printf '%s\n' "$qs_record" | cksum | cut -d' ' -f1)
+    qs_dir="$QUICKSHELL_PREFIX/$QUICKSHELL_TAG-$qs_sum"
+    qs_marker="$qs_dir/quickspace-build"
+    if test -f "$qs_marker"; then
+        info "Quickshell $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
+    else
+        src="$QUICKSHELL_SRC/quickshell"
+        # A stale clone or partial install left in place would be built into
+        # and then marked complete.
+        if ! rm -rf "$src" "$qs_dir"; then
+            warn "couldn't remove the old Quickshell sources or partial build in $src and $qs_dir; not building"
+            return 1
+        fi
+        mkdir -p "$QUICKSHELL_SRC" || return 1
+        git clone --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
+        commit=$(git -C "$src" rev-parse HEAD) || return 1
+        if test "$commit" != "$QUICKSHELL_COMMIT"; then
+            warn "Quickshell's $QUICKSHELL_TAG tag is commit $commit, not the pinned $QUICKSHELL_COMMIT; not building it"
+            rm -rf "$src" || warn "couldn't remove the rejected clone in $src"
+            return 1
+        fi
+        # shellcheck disable=SC2086  # word-split the flags
+        cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_INSTALL_PREFIX="$qs_dir" \
+            $QUICKSHELL_CMAKE_FLAGS -DDISTRIBUTOR="setup-quickspace (source build)" \
+            && cmake --build "$src/build" \
+            && cmake --install "$src/build" || return 1
+        printf '%s\n' "$qs_record" > "$qs_marker" || {
+            warn "couldn't write $qs_marker"
+            return 1
+        }
+    fi
+    link_quickshell || return 1
+    remove_old_quickshell_builds
+}
+
+# link_quickshell points $QUICKSHELL_PREFIX/current at $qs_dir, then makes
+# sure the commands' links go through it.
+link_quickshell() {
+    for cmd in $QUICKSHELL_COMMANDS; do
+        if ! test -x "$qs_dir/bin/$cmd"; then
+            warn "$qs_dir/bin/$cmd is missing; remove $qs_marker to rebuild"
+            return 1
+        fi
+    done
+    current="$QUICKSHELL_PREFIX/current"
+    if ! ln -sfn "${qs_dir##*/}" "$current.new" || ! mv -Tf "$current.new" "$current"; then
+        warn "couldn't point $current at $qs_dir"
+        rm -f "$current.new" || warn "couldn't remove $current.new"
+        return 1
+    fi
+    for cmd in $QUICKSHELL_COMMANDS; do
+        link="$QUICKSHELL_BIN_DIR/$cmd"
+        test "$(readlink "$link")" != "$current/bin/$cmd" || continue
+        # Only replace a link of ours; anything else there is someone else's.
+        if test -e "$link" || test -L "$link"; then
+            case "$(readlink "$link")" in
+                "$QUICKSHELL_PREFIX"/*) ;;
+                *)
+                    warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build"
+                    continue
+                    ;;
+            esac
+        fi
+        # quickspace.service finds qs on the user manager's PATH, which may
+        # not reach into $HOME.
+        if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
+            warn "COULDN'T LINK $cmd INTO $QUICKSHELL_BIN_DIR: the quickspace session won't find Quickshell; link $current/bin/$cmd onto its PATH yourself"
+        fi
+    done
+}
+
+# Builds for an older tag or Qt, now that current points elsewhere. A
+# running qs keeps the files it has open. Only finished builds of setup's,
+# by their marker, and none a command link still points into directly.
+remove_old_quickshell_builds() {
+    for old in "$QUICKSHELL_PREFIX"/v*-[0-9]*/; do
+        old=${old%/}
+        if ! test -d "$old" || test -L "$old" || test "$old" = "$qs_dir" \
+            || ! test -f "$old/quickspace-build"; then
+            continue
+        fi
+        for cmd in $QUICKSHELL_COMMANDS; do
+            case "$(readlink "$QUICKSHELL_BIN_DIR/$cmd")" in
+                "$old"/*) continue 2 ;;
+            esac
+        done
+        rm -rf "$old" || warn "couldn't remove the old Quickshell build in $old"
+    done
+}
+
+# True when the current build, if any, was made for the Qt installed now.
+# No current build matches trivially: there's nothing stale to run.
+current_quickshell_matches_qt() {
+    marker="$QUICKSHELL_PREFIX/current/quickspace-build"
+    test -e "$QUICKSHELL_PREFIX/current" || return 0
+    test -f "$marker" || return 1
+    # shellcheck disable=SC2086  # word-split the package list
+    installed=$(dpkg-query -W -f='${Package} ${Version}\n' $QUICKSHELL_QT_PRIVATE) || return 1
+    printf '%s\n' "$installed" | while read -r line; do
+        grep -qxF "$line" "$marker" || exit 1
+    done
+}
+
+# unlink_quickshell removes the links build_quickshell made, saying why: the
+# distro packages Quickshell, or the build no longer matches Qt.
+unlink_quickshell() {
+    _why=${1:-the distro packages Quickshell now}
+    _unlinked=yes
+    for cmd in $QUICKSHELL_COMMANDS; do
+        link="$QUICKSHELL_BIN_DIR/$cmd"
+        test -L "$link" || continue
+        case "$(readlink "$link")" in
+            "$QUICKSHELL_PREFIX"/*)
+                info "Removing $link, which points to a source build: $_why"
+                if ! sudo_or_warn rm -f "$link"; then
+                    warn "couldn't remove $link; it still points to the source-built Quickshell"
+                    _unlinked=no
+                fi
+                ;;
+        esac
+    done
+    test "$_unlinked" = yes
 }
 
 # --- Hyprland from source ---

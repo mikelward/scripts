@@ -16,9 +16,7 @@ setup() {
     CALLS="$T/calls"
     # What the installs would create.
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
-    for cmd in pacman make; do
-        printf '#!/bin/sh\nprintf "%%s\\n" "%s $*" >> "%s"\n' "$cmd" "$CALLS" > "$T/bin/$cmd"
-    done
+    printf '#!/bin/sh\nprintf "%%s\\n" "make $*" >> "%s"\n' "$CALLS" > "$T/bin/make"
     # dnf copr enable fails with \$FAKE_DNF_COPR_FAILS, and installing the
     # copr plugin with \$FAKE_DNF_PLUGIN_FAILS.
     cat > "$T/bin/dnf" <<MOCK
@@ -26,6 +24,29 @@ setup() {
 printf "%s\\n" "dnf \$*" >> "$CALLS"
 test "\$1" != copr || test -z "\$FAKE_DNF_COPR_FAILS" || exit 1
 test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
+MOCK
+    # pacman refuses the whole command when it names a package in
+    # \$FAKE_MISSING.
+    cat > "$T/bin/pacman" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pacman \$*" >> "$CALLS"
+for arg; do
+    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+done
+MOCK
+    # dpkg-query reports Qt base's private headers as \$FAKE_QT_VERSION and
+    # Qt Declarative's as \$FAKE_QTDECL_VERSION, or Ubuntu 26.04's.
+    cat > "$T/bin/dpkg-query" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dpkg-query \$*" >> "$CALLS"
+shift 2
+for pkg; do
+    case "\$pkg" in
+        qt6-base-private-dev) echo "\$pkg \${FAKE_QT_VERSION:-6.10.2+dfsg-7}" ;;
+        qt6-declarative-private-dev) echo "\$pkg \${FAKE_QTDECL_VERSION:-6.10.2+dfsg-3}" ;;
+        *) echo "\$pkg 6.10.2-4" ;;
+    esac
+done
 MOCK
     # meson setup also logs the compilers it was given.
     cat > "$T/bin/meson" <<MOCK
@@ -57,6 +78,7 @@ for pkg; do
         hyprland) version="\${FAKE_APT_HYPRLAND:-0.56.2-1}" ;;
         g++-16) version="\${FAKE_APT_GXX:-16-20260322-1ubuntu1}" ;;
         libxkbcommon-dev) version="\${FAKE_APT_XKB:-1.13.1-1}" ;;
+        qt6-base-dev) version="\${FAKE_APT_QT:-6.10.2+dfsg-7}" ;;
         *) version=1.0-1 ;;
     esac
     printf "%s:\\n  Installed: (none)\\n  Candidate: %s\\n  Version table:\\n" "\$pkg" "\$version"
@@ -73,7 +95,7 @@ for arg; do
         -DCMAKE_INSTALL_PREFIX=*)
             prefix=\${arg#*=}
             mkdir -p "\$prefix/bin"
-            for cmd in Hyprland hyprctl start-hyprland hyprwayland-scanner; do
+            for cmd in Hyprland hyprctl start-hyprland hyprwayland-scanner qs quickshell; do
                 printf "#!/bin/sh\\n" > "\$prefix/bin/\$cmd"
                 chmod +x "\$prefix/bin/\$cmd"
             done
@@ -116,6 +138,8 @@ if test "\$1" = clone; then
     esac
 fi
 if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
+# rev-parse names Quickshell's pinned commit, or \$FAKE_QS_COMMIT.
+if test "\$3" = rev-parse; then echo "\${FAKE_QS_COMMIT:-1a4716cde794a59928d9d9fc15f2afc7a95de360}"; fi
 MOCK
     cat > "$T/bin/systemctl" <<MOCK
 #!/bin/sh
@@ -150,6 +174,7 @@ run() {
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         QUICKSPACE_DIR="$T/src/quickspace" QUICKSPACE_REPO="https://example.com/quickspace.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
+        QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
     status=$?
     set -e
@@ -254,10 +279,173 @@ check "a missing effects module says the bar won't load" has "$output" "couldn't
 check "Quickshell still installs without it" has "$calls" "apt-get install -y quickshell"
 teardown
 
-setup; ARGS=(); run FAKE_MISSING=quickshell
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=quickshell
 check "a distro without Quickshell isn't fatal" test "$status" -eq 0
 check "a distro without Quickshell says the bar won't run" has "$output" "couldn't install Quickshell (the distro may not package it)"
 check "and that waybar stays" has "$output" "waybar stays the bar"
+teardown
+
+# The directory this run's Quickshell build installs into.
+qs_inst() { printf '%s\n' "$T"/opt/quickshell/v0.3.1-*; }
+
+# apt without Quickshell (Ubuntu 26.04): build the pinned release.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+check "apt without Quickshell builds it" test "$status" -eq 0
+check "the Quickshell build never asks apt for quickshell" lacks "$calls" "apt-get install -y quickshell"
+check "the Quickshell build installs Qt's private headers" has "$calls" "qt6-declarative-private-dev"
+check "the Quickshell build installs the effects module the bar needs" has "$calls" "qml6-module-qtquick-effects"
+check "the Quickshell build installs the GLES headers Qt's GUI module needs" has "$calls" " libgles-dev "
+check "the Quickshell build clones the pinned tag" \
+    has "$calls" "git clone --quiet --depth 1 --branch v0.3.1 https://github.com/quickshell-mirror/quickshell.git $T/src/quickshell-build/quickshell"
+check "the Quickshell build installs under its prefix" has "$calls" "-DCMAKE_INSTALL_PREFIX=$(qs_inst)"
+check "the Quickshell build leaves out the crash handler Ubuntu can't build" has "$calls" "-DCRASH_HANDLER=OFF"
+check "the Quickshell build installs without sudo" lacks "$calls" "sudo cmake"
+check "the Quickshell build records the Qt it was built for" has "$(cat "$(qs_inst)/quickspace-build")" "qt6-base-private-dev 6.10.2+dfsg-7"
+check "the Quickshell build is current" test "$(readlink -f "$T/opt/quickshell/current")" = "$(qs_inst)"
+check "the Quickshell build links qs onto PATH, through current" \
+    test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
+check "the Quickshell build doesn't warn" lacks "$output" "waybar stays the bar"
+: > "$CALLS"
+run FAKE_MISSING=quickshell
+check "the same Quickshell and Qt don't rebuild" lacks "$calls" "cmake -S"
+check "the same Quickshell and Qt say so" has "$output" "already built for Qt 6.10.2+dfsg-7"
+first=$(qs_inst)
+: > "$CALLS"
+run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1
+check "a new Qt rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
+check "a new Qt's build is current" test "$(readlink -f "$T/opt/quickshell/current")" = "$(qs_inst)"
+check "a new Qt's build replaces the old one" test ! -e "$first"
+: > "$CALLS"
+run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_QTDECL_VERSION=6.10.3-1
+check "a new Qt Declarative alone rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
+# A new pin for the same tag is a new build too.
+sed 's/^QUICKSHELL_COMMIT=.*/QUICKSHELL_COMMIT=2222222222222222222222222222222222222222/' "$SCRIPT" > "$T/setup-repinned"
+chmod +x "$T/setup-repinned"
+: > "$CALLS"
+SCRIPT="$T/setup-repinned" run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_QTDECL_VERSION=6.10.3-1 \
+    FAKE_QS_COMMIT=2222222222222222222222222222222222222222
+check "a new pinned commit alone rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
+teardown
+
+# apt's Quickshell without its effects module still takes over from a
+# source build's links.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run FAKE_MISSING=qml6-module-qtquick-effects
+check "apt's Quickshell without the effects module removes the build's qs link" test ! -L "$T/usr-local-bin/qs"
+teardown
+
+# A Qt older than Quickshell needs (Ubuntu 24.04's 6.4) can't build it, so
+# nothing is installed or cloned for it.
+setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_APT_QT=6.4.2+dfsg-21.1build5
+check "an old Qt isn't fatal" test "$status" -eq 0
+check "an old Qt says why there's no Quickshell" has "$output" "building it needs Qt 6.6, but apt's Qt is 6.4.2"
+check "an old Qt installs no build dependencies" lacks "$calls" "qt6-declarative-private-dev"
+check "an old Qt clones nothing" lacks "$calls" "quickshell-mirror"
+teardown
+
+# A tag moved to another commit isn't built: its build files never run.
+setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_QS_COMMIT=0000000000000000000000000000000000000000
+check "a moved Quickshell tag isn't fatal" test "$status" -eq 0
+check "a moved Quickshell tag is named" has "$output" "not the pinned 1a4716cde794a59928d9d9fc15f2afc7a95de360; not building it"
+check "a moved Quickshell tag runs no cmake" lacks "$calls" "cmake -S $T/src/quickshell-build/quickshell"
+check "a moved Quickshell tag's clone is removed" test ! -e "$T/src/quickshell-build/quickshell"
+teardown
+
+# A rejected clone that can't be removed is named, not left silently.
+setup; ARGS=()
+cat > "$T/bin/rm" <<MOCK
+#!/bin/sh
+case "\$*" in *"$T/src/quickshell-build/quickshell") test -d "$T/src/quickshell-build/quickshell/.git" && exit 1 ;; esac
+exec /bin/rm "\$@"
+MOCK
+chmod +x "$T/bin/rm"
+run FAKE_MISSING=quickshell FAKE_QS_COMMIT=0000000000000000000000000000000000000000
+check "an unremovable rejected clone is named" has "$output" "couldn't remove the rejected clone"
+rm -f "$T/bin/rm"
+teardown
+
+# Only setup's own finished builds are cleaned up: not a directory without
+# its marker, nor one a command still links into directly, as one does when
+# relinking it failed.
+setup; ARGS=()
+mkdir -p "$T/opt/quickshell/v0.2.0-1" "$T/opt/quickshell/v0.2.0-2/bin"
+: > "$T/opt/quickshell/v0.2.0-2/quickspace-build"
+ln -s "$T/opt/quickshell/v0.2.0-2/bin/quickshell" "$T/usr-local-bin/quickshell"
+mkdir -p "$T/opt/quickshell/v0.2.0-3"
+: > "$T/opt/quickshell/v0.2.0-3/quickspace-build"
+run FAKE_MISSING=quickshell FAKE_LN_FAILS=1
+check "an unmarked directory isn't removed" test -d "$T/opt/quickshell/v0.2.0-1"
+check "a build a command links into isn't removed" test -d "$T/opt/quickshell/v0.2.0-2"
+check "an unused old build is removed" test ! -e "$T/opt/quickshell/v0.2.0-3"
+teardown
+
+# A partial build that can't be removed isn't built into and marked complete.
+setup; ARGS=()
+cat > "$T/bin/rm" <<MOCK
+#!/bin/sh
+case "\$*" in *"$T/opt/quickshell/"*) exit 1 ;; esac
+exec /bin/rm "\$@"
+MOCK
+chmod +x "$T/bin/rm"
+run FAKE_MISSING=quickshell
+check "an unremovable partial build isn't fatal" test "$status" -eq 0
+check "an unremovable partial build is named" has "$output" "couldn't remove the old Quickshell sources or partial build"
+check "an unremovable partial build isn't built into" lacks "$calls" "cmake -S $T/src/quickshell-build/quickshell"
+rm -f "$T/bin/rm"
+teardown
+
+# A rebuild for a new Qt that fails leaves no build made for the old Qt on
+# PATH, so waybar takes over rather than a qs that would crash.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_CMAKE_FAILS=quickshell
+check "a failed rebuild for a new Qt removes the old qs link" test ! -L "$T/usr-local-bin/qs"
+check "a failed rebuild for a new Qt leaves nothing current" test ! -e "$T/opt/quickshell/current"
+teardown
+
+# A failed rebuild for an unchanged Qt (a new pin, say) keeps the build that
+# still works.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+sed 's/^QUICKSHELL_COMMIT=.*/QUICKSHELL_COMMIT=3333333333333333333333333333333333333333/' "$SCRIPT" > "$T/setup-repinned"
+chmod +x "$T/setup-repinned"
+SCRIPT="$T/setup-repinned" run FAKE_MISSING=quickshell FAKE_QS_COMMIT=3333333333333333333333333333333333333333 FAKE_CMAKE_FAILS=quickshell
+check "a failed rebuild for the same Qt keeps the qs link" test -L "$T/usr-local-bin/qs"
+teardown
+
+# apt's Quickshell failing to install, after Qt changed, also leaves no
+# build made for the old Qt on PATH.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run FAKE_APT_GET_FAILS=1 FAKE_QT_VERSION=6.10.3-1
+check "a failed apt Quickshell after a Qt change removes the old qs link" test ! -L "$T/usr-local-bin/qs"
+teardown
+
+# A link that can't be removed keeps current, so it doesn't dangle.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_CMAKE_FAILS=quickshell FAKE_RM_KEEPS=qs
+check "an unremovable qs link keeps current" test -L "$T/opt/quickshell/current"
+check "an unremovable qs link still resolves" test -e "$T/usr-local-bin/qs"
+teardown
+
+# On the way to apt's Quickshell, a link that can't be removed is warned
+# about and setup carries on.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run FAKE_RM_KEEPS=qs
+check "an unremovable qs link doesn't stop setup" test "$status" -eq 0
+check "an unremovable qs link is named" has "$output" "couldn't remove $T/usr-local-bin/qs"
+teardown
+
+# A failed build costs only the bar.
+setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
+check "a failed Quickshell build isn't fatal" test "$status" -eq 0
+check "a failed Quickshell build says waybar stays" has "$output" "building Quickshell failed"
+check "a failed Quickshell build links nothing" test ! -e "$T/usr-local-bin/qs"
+check "a failed Quickshell build isn't marked built" test ! -e "$T/opt/quickshell/current"
+teardown
+
+# Once apt has Quickshell, the build's links go, so /usr/bin/qs wins.
+setup; ARGS=(); run FAKE_MISSING=quickshell
+run
+check "apt's Quickshell removes the build's qs link" test ! -L "$T/usr-local-bin/qs"
+check "apt's Quickshell removes the build's quickshell link" test ! -L "$T/usr-local-bin/quickshell"
 teardown
 
 setup; ARGS=(); run SETUP_OS=arch
