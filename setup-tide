@@ -420,6 +420,12 @@ install_packages() {
         *" hyprland "*) ;;
         *) test "$BUILD_NOW" = yes || DISTRO_HYPRLAND=yes ;;
     esac
+    # satty is screenshot's Annotate action, offered only where it's
+    # installed. It's asked for on its own: not every distro packages it,
+    # and dnf and pacman refuse a whole transaction over one unknown name.
+    if ! install_all satty >/dev/null; then
+        info "couldn't install satty; screenshots offer Annotate once it's installed"
+    fi
     if test "$installed" = no; then
         # shellcheck disable=SC2086  # word-split the package list
         warn "could not install:$(printf ' %s' $missing); install them manually"
