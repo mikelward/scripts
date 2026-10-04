@@ -210,6 +210,7 @@ check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle hyp
 check "installs hyprlock, the lock screen Super+L and hypridle run" has "$calls" " hyprlock "
 check "installs the transitional owners" has "$calls" "waybar"
 check "clones tide when it isn't there" has "$calls" "git clone https://example.com/tide.git $T/src/tide"
+check "clones from mikelward/tide by default" grep -q '^TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/tide.git}"$' "$SCRIPT"
 check "runs tide's make install" has "$calls" "make -C $T/src/tide install"
 # Go too, for a run without setup.
 check "installs Go itself" has "$calls" "golang"

@@ -95,7 +95,7 @@ GITHUB_PREFIX="${GITHUB_PREFIX:-$GITHUB_DEFAULT_PREFIX}"
 SCRIPTS_REPO_PATH="mikelward/scripts.git"
 CONF_REPO_PATH="mikelward/conf.git"
 ROOT_REPO_PATH="mikelward/root.git"
-TIDE_REPO_PATH="mikelward/quickspace.git"
+TIDE_REPO_PATH="mikelward/tide.git"
 
 SCRIPTS_DIR="$HOME/scripts"
 CONF_DIR="$HOME/conf"
@@ -144,7 +144,7 @@ INSTALL=yes
 PURGE_OBSOLETE=no
 
 # Whether to also install the tide session (Hyprland + uwsm,
-# github.com/mikelward/quickspace) beside KDE, via setup-tide. One of:
+# github.com/mikelward/tide) beside KDE, via setup-tide. One of:
 #   no  - KDE Plasma only (the default)
 #   yes - KDE Plasma plus tide (--tide)
 # The packages it needs are kept out of --purge-obsolete.
