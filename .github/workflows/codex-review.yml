@@ -4,8 +4,8 @@
 # arrive with nothing to announce it.
 #
 # The event triggers below carry almost all of it: Codex edits its review
-# summary comment in place as a review starts and finishes, and an edit is an
-# `issue_comment` this workflow already wakes on. The schedule is the backstop
+# summary comment in place as a review starts and finishes, and an edit is a
+# comment event the listener relays here. The schedule is the backstop
 # for what no event reports -- a verdict Codex never delivers, a run that
 # never picked a push up -- so it runs every four hours rather than hourly.
 # On a private repository each firing is billed by the minute, and a backstop
@@ -30,10 +30,6 @@ on:
     - cron: '23 */4 * * *'
   pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize, edited, closed]
-  issue_comment:
-    types: [created, edited]
-  pull_request_review_comment:
-    types: [created, edited]
   workflow_run:
     workflows: [codex-review-listener]
     types: [completed]

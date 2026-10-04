@@ -1,12 +1,24 @@
-# Hears the one verdict delivery the sweep's own triggers cannot safely hear:
-# a review with no inline comments, which emits neither comment event and no
-# reaction. `pull_request_review` is a merge-ref event, so it must never
-# appear on a workflow that can write commit statuses; this one holds nothing
-# and relays through `workflow_run`. See docs/CONSUMER.md.
+# Hears the verdict deliveries the sweep's own triggers cannot safely hear,
+# and relays them to it: a review with no inline comments (which emits neither
+# comment event and no reaction), and every comment on a pull request.
+#
+# All three events resolve their workflow definition against a ref a pull
+# request branch can control, so none of them may appear on a file that holds
+# a credential or `statuses: write`. This one holds neither -- no permissions
+# and one no-op step -- so a branch substituting its own steps here gets a
+# runner and nothing else. The sweep starts from this file's completion
+# through `workflow_run`, whose definition GitHub always takes from the
+# default branch. See docs/CONSUMER.md.
+#
+# The relay is a NAME match, so renaming either end severs it in silence.
 name: codex-review-listener
 on:
   pull_request_review:
     types: [submitted, edited, dismissed]
+  issue_comment:
+    types: [created, edited]
+  pull_request_review_comment:
+    types: [created, edited]
 permissions: {}
 jobs:
   heard:
