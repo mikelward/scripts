@@ -1,11 +1,13 @@
 #!/bin/sh
 #
-# Takes a screenshot on Wayland (grim, slurp, wl-copy) and copies it to the
-# clipboard as PNG. tide's Print bindings run it. Wayland and GNU
-# mktemp only; the X11 scrot version is gone.
+# Takes a screenshot on Wayland (grim, slurp, wl-copy), copies it to the
+# clipboard as PNG and saves it to ~/Pictures/Screenshots. tide's Print
+# bindings run it. Wayland and GNU mktemp only; the X11 scrot version is gone.
 #
 # A notification says when the shot is there: a full ultrawide shot takes a
-# moment, and the clipboard is otherwise silent. Light PNG compression
+# moment, and the clipboard is otherwise silent. It shows the shot and offers
+# Open, Annotate (satty, where installed) and Delete; the script returns at
+# once, and a background child waits for the choice. Light PNG compression
 # (grim -l 1) keeps that moment short. Canceling a region with Esc takes no
 # shot and says nothing; slurp says "selection cancelled" then, so any other
 # slurp failure is reported. Every other failure is a critical notification
@@ -19,7 +21,9 @@ Usage: $scriptname [-d <delay>] [-h] [-r | -w | -g <geometry>]
        $scriptname [--delay <delay>] [--help] [--region | --window | --geometry <geometry>]
 
 Copies the whole screen, a region picked with slurp, the focused window, or
-the rectangle 'X,Y WxH' to the clipboard as PNG.
+the rectangle 'X,Y WxH' to the clipboard as PNG, and saves it as
+~/Pictures/Screenshots/YYYY-MM-DD_HH-MM-SS.png (-2, -3 and so on for a
+second shot in the same second).
 EOF
 }
 
@@ -68,8 +72,14 @@ fi
 f=
 e=
 trap 'rm -f "$f" "$e"' EXIT
-trap 'exit 1' HUP INT TERM
+# A temporary file's path reaches the shell through a command substitution,
+# and a signal to the process group in that window kills both ends with the
+# file made and its name never recorded. dash can't block a signal, only
+# ignore it, so each mktemp runs with them ignored; one landing there is
+# dropped, and the run finishes as if it had come a moment later.
+trap '' HUP INT TERM
 e=$(mktemp 2>&1) || { m=$e; e=; fail "mktemp: $m"; }
+trap 'exit 1' HUP INT TERM
 
 sleep "$delay" 2>"$e" || fail "sleep: $(cat "$e")"
 
@@ -95,13 +105,92 @@ case "$mode" in
         ;;
 esac
 
-f=$(mktemp --suffix=.png 2>&1) || { m=$f; f=; fail "mktemp: $m"; }
+# The name is the moment of the shot, not of the save.
+stamp=$(date +%Y-%m-%d_%H-%M-%S 2>"$e") || fail "date: $(cat "$e")"
+# The shot is taken into a hidden file beside where it's saved, so naming it
+# is a hard link: atomic, refused for a name anything at all already has (a
+# file, a symlink, dangling or not, a FIFO), and the name only ever appears
+# on a complete shot. noclobber is not that: it refuses only regular files,
+# and an open of a FIFO under it succeeds. -T (GNU) because without it a
+# directory, or a symlink to one, at the name takes the link inside it.
+dir=$HOME/Pictures/Screenshots
+mkdir -p "$dir" 2>"$e" || fail "mkdir: $(cat "$e")"
+trap '' HUP INT TERM
+f=$(mktemp -p "$dir" .screenshot-XXXXXX.png 2>&1) || { m=$f; f=; fail "mktemp: $m"; }
+trap 'exit 1' HUP INT TERM
 if test "$mode" = screen; then
     grim -l 1 "$f" 2>"$e" || fail "grim: $(cat "$e")"
 else
     grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
 fi
+
+# Saved before it's copied, so a clipboard failure loses no shot. A second
+# shot in the same second takes -2, then -3, and nothing is overwritten.
+out=$dir/$stamp.png
+n=1
+while ! ln -T "$f" "$out" 2>"$e"; do
+    # Taken is the one failure that means "try the next name": by anything,
+    # a dangling symlink included, which test -e alone would call free.
+    # Nothing there now can mean it was taken and has since gone (a Delete
+    # racing this shot), so the name gets one more try. A second failure
+    # with nothing there is a real error, and ends the loop.
+    if ! test -e "$out" && ! test -L "$out"; then
+        ln -T "$f" "$out" 2>"$e" && break
+        test -e "$out" || test -L "$out" || fail "saving $out: $(cat "$e")"
+    fi
+    n=$((n + 1))
+    out=$dir/$stamp-$n.png
+done
+
 # stderr goes to a file, not $(...): wl-copy stays running in the background
 # to serve the paste, and would hold a pipe open.
 wl-copy --type image/png < "$f" 2>"$e" || fail "wl-copy: $(cat "$e")"
-notify-send -a Screenshot -t 2000 'Screenshot copied'
+
+# The notification waits for a choice, so it runs in the background and the
+# key binding returns now. Its stdout is the chosen action's name; stderr
+# stays the caller's, which also keeps a caller reading it waiting until the
+# choice is made, as the tests do.
+# The thumbnail is a file: URI, so every byte of the path but the unreserved
+# ones and / is percent-encoded: a # or ? in $HOME would otherwise end the
+# path early.
+uri=file://$(printf '%s' "$out" | od -An -v -tx1 | LC_ALL=C awk '
+    BEGIN { for (i = 0; i < 16; i++) hex[substr("0123456789abcdef", i + 1, 1)] = i }
+    {
+        for (i = 1; i <= NF; i++) {
+            c = sprintf("%c", hex[substr($i, 1, 1)] * 16 + hex[substr($i, 2, 1)])
+            if (c ~ /[A-Za-z0-9._~\/-]/) printf "%s", c
+            else printf "%%%s", toupper($i)
+        }
+    }')
+# Annotate only where satty is installed: not every distro packages it, and
+# an action that can only fail is worse than none.
+annotate=
+if command -v satty >/dev/null 2>&1; then
+    annotate=annotate=Annotate
+fi
+(
+    action=$(notify-send -a Screenshot -h "string:image-path:$uri" \
+        -A open=Open ${annotate:+-A "$annotate"} -A delete=Delete \
+        'Screenshot copied' "Saved as ${out##*/}")
+    case "$action" in
+        open) what='xdg-open' ;;
+        annotate) what='satty' ;;
+        delete) what='rm' ;;
+        # Dismissed, timed out, or notify-send itself failed: there's no
+        # channel left to report the last on.
+        *) exit 0 ;;
+    esac
+    # The action's error is kept in a variable, not a file: a satty left open
+    # can be interrupted long after the script has gone, and a file would
+    # need a trap, and a window where its path isn't recorded yet.
+    case "$action" in
+        open) err=$(xdg-open "$out" 2>&1 >/dev/null) ;;
+        annotate) err=$(satty --filename "$out" 2>&1 >/dev/null) ;;
+        delete) err=$(rm "$out" 2>&1 >/dev/null) ;;
+    esac
+    status=$?
+    if test "$status" -ne 0; then
+        notify-send -a Screenshot -u critical 'Screenshot failed' "$what: $err"
+    fi
+    exit "$status"
+) >/dev/null &

@@ -1,12 +1,13 @@
 #!/bin/bash
 # The fakes' bodies are single-quoted on purpose: they expand when they run.
 # shellcheck disable=SC2016
-# Tests for screenshot: each mode shoots the right geometry and copies it as
-# PNG with a notification, Esc on a region is silent, every other failure is
-# a critical notification naming the step with a nonzero exit, and no
+# Tests for screenshot: each mode shoots the right geometry, copies it as PNG
+# and saves it under ~/Pictures/Screenshots with a notification whose actions
+# open, annotate or delete it, Esc on a region is silent, every other failure
+# is a critical notification naming the step with a nonzero exit, and no
 # temporary file survives, even an interrupted run. Runs the real script
-# against fake grim, slurp, wl-copy, notify-send and hyprctl that log their
-# calls, following the runenv_test conventions.
+# against fake grim, slurp, wl-copy, notify-send, hyprctl, date, xdg-open and
+# satty that log their calls, following the runenv_test conventions.
 
 set -e
 
@@ -25,7 +26,9 @@ setup() {
   BIN="$TEST_TMPDIR/bin"
   SHOTTMP="$TEST_TMPDIR/tmp"
   CALLS="$TEST_TMPDIR/calls"
-  mkdir -p "$BIN" "$SHOTTMP"
+  SHOTHOME="$TEST_TMPDIR/home"
+  SHOTS="$SHOTHOME/Pictures/Screenshots"
+  mkdir -p "$BIN" "$SHOTTMP" "$SHOTHOME"
   : > "$CALLS"
   cp "$SCRIPT_DIR/screenshot" "$SCRIPT_DIR/screenshot-window" "$BIN/"
   fake grim 'echo "grim $*" >> "$CALLS"
@@ -37,7 +40,24 @@ test -z "$SLURP_FAILS" || { echo "no layer shell" >&2; exit 1; }
 echo "1,2 3x4"'
   fake wl-copy 'echo "wl-copy $* $(cat)" >> "$CALLS"
 test -z "$WLCOPY_FAILS" || { echo "no seat" >&2; exit 1; }'
-  fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  # With actions, it answers with $NOTIFY_ACTION, as a click would.
+  fake notify-send 'echo "notify-send $*" >> "$CALLS"
+case " $* " in *" -A "*) test -z "$NOTIFY_ACTION" || echo "$NOTIFY_ACTION" ;; esac'
+  fake date 'echo "${SHOT_TIME:-2026-10-04_12-00-00}"'
+  fake xdg-open 'echo "xdg-open $*" >> "$CALLS"
+test -z "$OPEN_FAILS" || { echo "no handler" >&2; exit 4; }'
+  fake satty 'echo "satty $*" >> "$CALLS"
+test -z "$SATTY_KILLED" || { kill -TERM $PPID; exit 1; }'
+  # With $LN_VANISHED, the first link fails as if the name were taken and
+  # then deleted; with $LN_FAILS, every link fails as on vfat.
+  fake ln "if test -n \"\$LN_FAILS\"; then echo 'Operation not permitted' >&2; exit 1; fi
+if test -n \"\$LN_VANISHED\" && ! test -e \"\$LN_VANISHED\"; then : > \"\$LN_VANISHED\"; echo 'File exists' >&2; exit 1; fi
+exec $(command -v ln) \"\$@\""
+  # With $MKTEMP_KILLED, a TERM reaches the script once the file exists but
+  # before its name is back, as a signal to the process group would.
+  fake mktemp "path=\$($(command -v mktemp) \"\$@\") || exit
+echo \"\$path\"
+test -z \"\$MKTEMP_KILLED\" || kill -TERM \$PPID"
   fake hyprctl 'test -z "$HYPRCTL_FAILS" || { echo "no socket" >&2; exit 1; }
 printf "%s\n" "${ACTIVE_WINDOW:-{\"at\": [10, 20], \"size\": [300, 400]\}}"'
 }
@@ -46,17 +66,22 @@ teardown() { rm -rf "$TEST_TMPDIR"; }
 
 run() {
   set +e
-  output="$(env PATH="$BIN:$PATH" CALLS="$CALLS" TMPDIR="$SHOTTMP" "${ENV[@]}" "$BIN/screenshot" "$@" 2>&1)"
+  # $(...) also waits for the notification's background child, which keeps
+  # stderr, so its action has run by the time this returns.
+  output="$(env PATH="$BIN:$PATH" HOME="$SHOTHOME" CALLS="$CALLS" TMPDIR="$SHOTTMP" "${ENV[@]}" "$BIN/screenshot" "$@" 2>&1)"
   status=$?
   set -e
   calls=$(cat "$CALLS")
-  leftovers=$(ls -A "$SHOTTMP")
+  # The shot is taken into a hidden file beside the saved ones, so that
+  # counts as a temporary file too.
+  leftovers=$(ls -A "$SHOTTMP"; if test -d "$SHOTS"; then find "$SHOTS" -maxdepth 1 -name '.screenshot-*'; fi)
 }
 
 fail_test() { echo "  FAIL: $1"; echo "  calls: $calls"; TEST_FAILED=1; }
 assert_status() { test "$status" -eq "$1" || fail_test "expected exit $1, got $status ($output)"; }
 assert_called() { case "$calls" in *"$1"*) ;; *) fail_test "expected a call with '$1'" ;; esac; }
 assert_not_called() { case "$calls" in *"$1"*) fail_test "unexpected call with '$1'" ;; esac; }
+assert_saved() { test "$(cat "$SHOTS/$1" 2>/dev/null)" = png || fail_test "$1 wasn't saved with the shot"; }
 assert_clean() { test -z "$leftovers" || fail_test "temporary files left behind: $leftovers"; }
 
 run_test() {
@@ -75,11 +100,167 @@ run_test() {
 test_screen() {
   run
   assert_status 0
-  assert_called "grim -l 1 $SHOTTMP/"
+  assert_called "grim -l 1 $SHOTS/.screenshot-"
   assert_not_called "grim -l 1 -g"
   assert_called "wl-copy --type image/png png"
-  assert_called "notify-send -a Screenshot -t 2000 Screenshot copied"
+  assert_called "notify-send -a Screenshot -h string:image-path:file://$SHOTS/2026-10-04_12-00-00.png -A open=Open -A annotate=Annotate -A delete=Delete Screenshot copied Saved as 2026-10-04_12-00-00.png"
+  assert_saved 2026-10-04_12-00-00.png
   assert_clean
+}
+
+test_same_second() {
+  run
+  run --region
+  # A name taken by something else is skipped, never overwritten.
+  echo mine > "$SHOTS/2026-10-04_12-00-00-3.png"
+  run --window
+  assert_status 0
+  assert_saved 2026-10-04_12-00-00.png
+  assert_saved 2026-10-04_12-00-00-2.png
+  assert_saved 2026-10-04_12-00-00-4.png
+  test "$(cat "$SHOTS/2026-10-04_12-00-00-3.png")" = mine || fail_test "an existing file was overwritten"
+  assert_called "Saved as 2026-10-04_12-00-00-4.png"
+}
+
+test_dangling_symlink() {
+  mkdir -p "$SHOTS"
+  ln -s missing "$SHOTS/2026-10-04_12-00-00.png"
+  run
+  assert_status 0
+  assert_saved 2026-10-04_12-00-00-2.png
+  test -L "$SHOTS/2026-10-04_12-00-00.png" || fail_test "the symlink was replaced"
+}
+
+test_directory_name() {
+  # Without ln -T, the link would go inside these rather than skip them.
+  mkdir -p "$SHOTS/2026-10-04_12-00-00.png" "$TEST_TMPDIR/elsewhere"
+  ln -s "$TEST_TMPDIR/elsewhere" "$SHOTS/2026-10-04_12-00-00-2.png"
+  run
+  assert_status 0
+  assert_saved 2026-10-04_12-00-00-3.png
+  test -z "$(find "$SHOTS/2026-10-04_12-00-00.png" "$TEST_TMPDIR/elsewhere" -mindepth 1)" || fail_test "a shot went inside a directory"
+  assert_clean
+}
+
+test_name_vanished() {
+  # The first try at the name fails as taken, but the name is gone by the
+  # time the script looks: it takes that name, not the next.
+  ENV=(LN_VANISHED="$TEST_TMPDIR/ln-seen")
+  run
+  assert_status 0
+  assert_saved 2026-10-04_12-00-00.png
+  test ! -e "$SHOTS/2026-10-04_12-00-00-2.png" || fail_test "the shot skipped a free name"
+  assert_clean
+}
+
+test_no_hard_links() {
+  # A filesystem without hard links fails every try; the script says so
+  # rather than trying names forever.
+  ENV=(LN_FAILS=1)
+  run
+  assert_status 1
+  assert_called "Screenshot failed saving $SHOTS/2026-10-04_12-00-00.png: Operation not permitted"
+  assert_not_called "wl-copy"
+  assert_clean
+}
+
+test_unsavable() {
+  # A file where the directory should be: mkdir -p can't make it.
+  mkdir -p "$SHOTHOME/Pictures"
+  : > "$SHOTS"
+  run
+  assert_status 1
+  assert_called "Screenshot failed mkdir: "
+  assert_not_called "wl-copy"
+  assert_clean
+}
+
+test_unwritable() {
+  mkdir -p "$SHOTS"
+  chmod a-w "$SHOTS"
+  run
+  chmod u+w "$SHOTS"
+  if test "$(id -u)" -eq 0; then
+    # root writes anyway; nothing to test.
+    return 0
+  fi
+  assert_status 1
+  assert_called "Screenshot failed mktemp: "
+  assert_not_called "wl-copy"
+  assert_clean
+}
+
+test_fifo() {
+  # noclobber would open this and write the shot into the pipe, or block.
+  mkdir -p "$SHOTS"
+  mkfifo "$SHOTS/2026-10-04_12-00-00.png"
+  run
+  assert_status 0
+  test -p "$SHOTS/2026-10-04_12-00-00.png" || fail_test "the FIFO was replaced"
+  assert_saved 2026-10-04_12-00-00-2.png
+  assert_clean
+}
+
+test_uri_encoding() {
+  # Reserved characters in the path, and a byte outside ASCII.
+  local home="$TEST_TMPDIR/a #b?c%d é"
+  mkdir -p "$home"
+  ENV=(HOME="$home")
+  run
+  assert_status 0
+  assert_called "string:image-path:file://$TEST_TMPDIR/a%20%23b%3Fc%25d%20%C3%A9/Pictures/Screenshots/2026-10-04_12-00-00.png "
+}
+
+test_no_satty() {
+  rm "$BIN/satty"
+  run
+  assert_status 0
+  assert_called "-A open=Open -A delete=Delete Screenshot copied"
+  assert_not_called "annotate"
+}
+
+test_open() {
+  ENV=(NOTIFY_ACTION=open)
+  run
+  assert_status 0
+  assert_called "xdg-open $SHOTS/2026-10-04_12-00-00.png"
+  assert_saved 2026-10-04_12-00-00.png
+}
+
+test_open_failure() {
+  ENV=(NOTIFY_ACTION=open OPEN_FAILS=1)
+  run
+  assert_status 0
+  assert_called "Screenshot failed xdg-open: no handler"
+}
+
+test_annotate() {
+  ENV=(NOTIFY_ACTION=annotate)
+  run
+  assert_called "satty --filename $SHOTS/2026-10-04_12-00-00.png"
+}
+
+test_delete() {
+  ENV=(NOTIFY_ACTION=delete)
+  run
+  assert_status 0
+  test ! -e "$SHOTS/2026-10-04_12-00-00.png" || fail_test "Delete left the file"
+  assert_not_called "Screenshot failed"
+}
+
+test_annotate_interrupted() {
+  ENV=(NOTIFY_ACTION=annotate SATTY_KILLED=1)
+  run
+  assert_called "satty --filename"
+  assert_saved 2026-10-04_12-00-00.png
+  assert_clean
+}
+
+test_dismissed() {
+  run
+  assert_not_called "xdg-open"
+  assert_not_called "satty"
+  assert_saved 2026-10-04_12-00-00.png
 }
 
 test_region() {
@@ -117,7 +298,7 @@ test_window() {
 
 test_window_wrapper() {
   set +e
-  output="$(env PATH="$BIN:$PATH" CALLS="$CALLS" TMPDIR="$SHOTTMP" "$BIN/screenshot-window" 2>&1)"
+  output="$(env PATH="$BIN:$PATH" HOME="$SHOTHOME" CALLS="$CALLS" TMPDIR="$SHOTTMP" "$BIN/screenshot-window" 2>&1)"
   status=$?
   set -e
   calls=$(cat "$CALLS")
@@ -195,6 +376,7 @@ test_grim_failure() {
   assert_status 1
   assert_not_called "wl-copy"
   assert_called "Screenshot failed grim: no outputs"
+  test -z "$(ls -A "$SHOTS" 2>/dev/null)" || fail_test "a failed shot was saved"
   assert_clean
 }
 
@@ -204,6 +386,8 @@ test_wlcopy_failure() {
   assert_status 1
   assert_called "Screenshot failed wl-copy: no seat"
   assert_not_called "Screenshot copied"
+  # The shot itself isn't lost.
+  assert_saved 2026-10-04_12-00-00.png
   assert_clean
 }
 
@@ -223,6 +407,14 @@ test_interrupted() {
   assert_clean
 }
 
+test_interrupted_mktemp() {
+  ENV=(MKTEMP_KILLED=1)
+  run
+  assert_status 0
+  assert_saved 2026-10-04_12-00-00.png
+  assert_clean
+}
+
 test_bad_option() {
   run --bogus
   assert_status 2
@@ -233,6 +425,22 @@ test_bad_option() {
 }
 
 run_test "copies the whole screen as PNG and says so" test_screen
+run_test "a second shot in the same second gets the next free name" test_same_second
+run_test "a dangling symlink takes its name" test_dangling_symlink
+run_test "a directory that can't be made is reported" test_unsavable
+run_test "a directory that can't be written is reported" test_unwritable
+run_test "a FIFO takes its name" test_fifo
+run_test "a directory or a symlink to one takes its name" test_directory_name
+run_test "a name that frees up before it's checked is taken" test_name_vanished
+run_test "a filesystem without hard links is reported" test_no_hard_links
+run_test "the thumbnail URI percent-encodes the path" test_uri_encoding
+run_test "Annotate isn't offered without satty" test_no_satty
+run_test "Open opens the saved shot" test_open
+run_test "a failed Open is reported" test_open_failure
+run_test "Annotate opens it in satty" test_annotate
+run_test "an interrupted Annotate leaves no files behind" test_annotate_interrupted
+run_test "Delete removes the saved shot" test_delete
+run_test "dismissing the notification keeps the shot" test_dismissed
 run_test "--region shoots the slurp selection" test_region
 run_test "canceling a region is silent" test_region_cancel
 run_test "any other slurp failure is reported" test_region_failure
@@ -248,6 +456,7 @@ run_test "a grim failure is reported and copies nothing" test_grim_failure
 run_test "a wl-copy failure is reported" test_wlcopy_failure
 run_test "a mktemp failure is reported" test_mktemp_failure
 run_test "an interrupted run leaves no files behind" test_interrupted
+run_test "a signal while a temporary file is made leaves none behind" test_interrupted_mktemp
 run_test "a bad option is a usage error" test_bad_option
 
 echo "$TESTS_PASSED/$TESTS_RUN tests passed"
