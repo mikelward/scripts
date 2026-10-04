@@ -920,7 +920,8 @@ test_tide_flag_is_accepted() {
 test_tide_off_by_default() {
     assert_source_contains "^TIDE=no" &&
     assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch' &&
-    assert_source_contains 'clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes'
+    assert_source_contains 'clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes' &&
+    assert_source_contains 'TIDE_REPO_PATH="mikelward/tide.git"'
 }
 
 # setup takes --no-build-hyprland and hands it to setup-tide.

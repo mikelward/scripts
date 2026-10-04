@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install the tide session (github.com/mikelward/quickspace) beside KDE.
+# Install the tide session (github.com/mikelward/tide) beside KDE.
 #
 # `setup --tide` runs this after setup-kde, so KDE Plasma stays the
 # fallback session. It:
@@ -63,7 +63,7 @@ DCONF_SHARE_PROFILE="${SETUP_DCONF_SHARE_PROFILE:-/usr/share/dconf/profile/gdm}"
 # Where packages install D-Bus activation files and systemd user units.
 DBUS_SERVICE_DIRS="${SETUP_DBUS_SERVICE_DIRS:-/usr/share/dbus-1/services /usr/local/share/dbus-1/services}"
 USER_UNIT_DIRS="${SETUP_USER_UNIT_DIRS:-/usr/lib/systemd/user /lib/systemd/user /usr/local/lib/systemd/user}"
-TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/quickspace.git}"
+TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/tide.git}"
 TIDE_DIR="${TIDE_DIR:-$HOME/src/tide}"
 # Fedora packages Quickshell only in this COPR, which Quickshell's own
 # BUILD.md names as a packager.
