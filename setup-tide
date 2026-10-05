@@ -558,7 +558,7 @@ build_quickshell() {
             return 1
         fi
         mkdir -p "$QUICKSHELL_SRC" || return 1
-        git clone --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
+        git clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
         commit=$(git -C "$src" rev-parse HEAD) || return 1
         if test "$commit" != "$QUICKSHELL_COMMIT"; then
             warn "Quickshell's $QUICKSHELL_TAG tag is commit $commit, not the pinned $QUICKSHELL_COMMIT; not building it"
@@ -826,7 +826,7 @@ build_component() {
     rm -rf "$dir"
     # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
     # profiling, so it isn't fetched; a mirror without it can't fail the clone.
-    git clone --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    git clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
     head=$(git -C "$dir" rev-parse HEAD) || return 1
     if test "$head" != "$4"; then
         warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
