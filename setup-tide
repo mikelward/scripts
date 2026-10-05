@@ -822,7 +822,9 @@ build_component() {
     dir="$HYPRLAND_SRC/$1"
     info "Building $1 $3"
     rm -rf "$dir"
-    git clone --quiet --depth 1 --branch "$3" --recurse-submodules --shallow-submodules "$2" "$dir" || return 1
+    # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
+    # profiling, so it isn't fetched; a mirror without it can't fail the clone.
+    git clone --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
     case "$1" in
         wayland-protocols)
             # 1.49's XML fails the strict DTD check of Ubuntu 26.04's
