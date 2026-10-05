@@ -215,8 +215,29 @@ check() {
 inst() { printf '%s\n' "$T"/opt/hyprland/v0.56.2-*; }
 has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 lacks() { ! has "$1" "$2"; }
-# Real git, for replaying the options setup-tide gave a clone.
-g() { git -c protocol.file.allow=always -c user.name=t -c user.email=t@example.com "$@"; }
+# Real git, for the fixtures and for replaying the options setup-tide gave a
+# clone, with a config of its own: the caller's global and system config never
+# reach it, so a signing setup or a silenced advice can't fail a fixture or
+# pass a check that should fail. The advice is on, as in git's default.
+G_HOME="$(mktemp -d)"
+trap 'rm -rf "$G_HOME"' EXIT
+cat > "$G_HOME/.gitconfig" <<'CONFIG'
+[user]
+	name = t
+	email = t@example.com
+[commit]
+	gpgSign = false
+[tag]
+	gpgSign = false
+[advice]
+	detachedHead = true
+[protocol "file"]
+	allow = always
+CONFIG
+g() {
+    HOME="$G_HOME" XDG_CONFIG_HOME="$G_HOME/.config" GIT_CONFIG_GLOBAL="$G_HOME/.gitconfig" \
+        GIT_CONFIG_NOSYSTEM=1 git "$@"
+}
 # replay_clone NAME TAG: clone a local repo tagged TAG with the options the
 # logged clone of NAME.git used, setting clone_output and clone_status.
 replay_clone() {
@@ -327,6 +348,21 @@ check "the Quickshell build clones the pinned tag" \
 # without a word about detached HEADs.
 g init -q "$T/git/quickshell" && g -C "$T/git/quickshell" commit -q --allow-empty -m quickshell
 replay_clone quickshell v0.3.1
+# Without its own option the same clone shows the advice, even for a caller
+# whose config turns it off, so the quiet check above can fail.
+printf '[advice]\n\tdetachedHead = false\n' > "$T/quiet.gitconfig"
+# shellcheck disable=SC2086  # word-split the logged options
+noisy_output=$(GIT_CONFIG_GLOBAL="$T/quiet.gitconfig" g clone ${opts#-c advice.detachedHead=false } \
+    "file://$T/git/quickshell" "$T/git/quickshell-noisy" 2>&1)
+check "without its option the clone shows the advice, whatever the caller's config" has "$noisy_output" "detached HEAD"
+# Nor does a caller's config that signs every commit and tag with no working
+# key.
+printf '[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[gpg]\n\tprogram = false\n' > "$T/signing.gitconfig"
+commit_and_tag_signing() {
+    GIT_CONFIG_GLOBAL="$T/signing.gitconfig" g -C "$T/git/quickshell" commit -q --allow-empty -m signed &&
+        GIT_CONFIG_GLOBAL="$T/signing.gitconfig" g -C "$T/git/quickshell" tag signed
+}
+check "the fixtures commit and tag whatever the caller's signing config" commit_and_tag_signing
 check "the Quickshell clone's options work with real git" test "$clone_status" -eq 0
 check "the Quickshell clone is quiet" test -z "$clone_output"
 check "the Quickshell build installs under its prefix" has "$calls" "-DCMAKE_INSTALL_PREFIX=$(qs_inst)"
