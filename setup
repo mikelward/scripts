@@ -1840,6 +1840,65 @@ install_shell_tools() {
         || warn "could not install$shell_tools (offline? stage a bundle with 'homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace'); the shell config skips whichever is missing"
 }
 
+# --- zsh-autosuggestions in $HOME (--no-root) ---
+
+# Under --no-root the distro package is skipped, and conda-forge has no
+# zsh-autosuggestions for homepkg to fetch, so it's cloned into
+# ~/.zsh/zsh-autosuggestions, the first place conf's shrc looks. The shell
+# sources it, so the clone must be exactly the commit its tag named when it
+# was pinned: a tag can be moved.
+ZSH_AUTOSUGGESTIONS_REPO=https://github.com/zsh-users/zsh-autosuggestions.git
+ZSH_AUTOSUGGESTIONS_TAG=v0.7.1
+ZSH_AUTOSUGGESTIONS_COMMIT=e52ee8ca55bcc56a17c828767a3f98f22a68d4eb
+# The other places shrc finds it: a copy in any of them needs no clone.
+ZSH_AUTOSUGGESTIONS_DIRS="/usr/share/zsh-autosuggestions /usr/share/zsh/plugins/zsh-autosuggestions
+    /opt/homebrew/share/zsh-autosuggestions /usr/local/share/zsh-autosuggestions
+    /home/linuxbrew/.linuxbrew/share/zsh-autosuggestions"
+
+install_home_zsh_autosuggestions() {
+    dir="$HOME/.zsh/zsh-autosuggestions"
+    for found in "$dir" $ZSH_AUTOSUGGESTIONS_DIRS; do
+        if test -f "$found/zsh-autosuggestions.zsh"; then
+            info "zsh-autosuggestions is already installed in $found"
+            return 0
+        fi
+    done
+    # Something there that isn't the plugin is the user's; don't clone over it.
+    if test -e "$dir"; then
+        warn "$dir exists but has no zsh-autosuggestions.zsh; leaving it alone, so inline history ghost text will be unavailable"
+        return 0
+    fi
+    info "Installing zsh-autosuggestions $ZSH_AUTOSUGGESTIONS_TAG into $dir"
+    # Cloned into a new directory of its own beside $dir and moved in only
+    # once checked, so a rejected clone that can't be removed is never where
+    # the shell sources it, and nothing already there is touched.
+    if ! mkdir -p "${dir%/*}" || ! new=$(mktemp -d "$dir.XXXXXX"); then
+        warn "couldn't make a directory beside $dir for the clone; inline history ghost text will be unavailable"
+        return 0
+    fi
+    if ! git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$ZSH_AUTOSUGGESTIONS_TAG" "$ZSH_AUTOSUGGESTIONS_REPO" "$new"; then
+        warn "could not clone zsh-autosuggestions (offline?); inline history ghost text will be unavailable"
+        rm -rf "$new" || warn "couldn't remove $new"
+        return 0
+    fi
+    if ! commit=$(git -C "$new" rev-parse HEAD) || test "$commit" != "$ZSH_AUTOSUGGESTIONS_COMMIT"; then
+        warn "zsh-autosuggestions' $ZSH_AUTOSUGGESTIONS_TAG tag is commit ${commit:-unknown}, not the pinned $ZSH_AUTOSUGGESTIONS_COMMIT; not installing it"
+        rm -rf "$new" || warn "couldn't remove the rejected clone in $new"
+        return 0
+    fi
+    # mkdir claims the path, failing if something got there since the check
+    # above: mv would move the clone inside whatever it found.
+    if ! mkdir "$dir"; then
+        warn "$dir appeared during the clone; leaving it alone, so inline history ghost text will be unavailable"
+        rm -rf "$new" || warn "couldn't remove the clone in $new"
+        return 0
+    fi
+    # rmdir fails on anything that didn't move.
+    if ! find "$new" -mindepth 1 -maxdepth 1 -exec mv {} "$dir"/ \; || ! rmdir "$new"; then
+        warn "couldn't move all of the clone from $new to $dir; inline history ghost text may be unavailable"
+    fi
+}
+
 # --- Install uv (Python package manager) ---
 
 install_uv() {
@@ -2186,6 +2245,7 @@ elif test "$ROOT" = no; then
     # homepkg instead. --no-sudo alone (ROOT=yes) leaves this to install_extras
     # below, whose brew and release installs are themselves rootless.
     install_home_tools
+    install_home_zsh_autosuggestions
 elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
