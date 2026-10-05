@@ -138,9 +138,23 @@ if test "\$1" = clone; then
     esac
 fi
 if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
-# rev-parse names Quickshell's pinned commit, or \$FAKE_QS_COMMIT.
-if test "\$3" = rev-parse; then echo "\${FAKE_QS_COMMIT:-1a4716cde794a59928d9d9fc15f2afc7a95de360}"; fi
+# rev-parse names the commit a Hyprland pin's checkout was pinned at, or
+# another for the one named in \$FAKE_MOVED_PIN; Quickshell's is its pinned
+# commit, or \$FAKE_QS_COMMIT.
+if test "\$3" = rev-parse; then
+    name=\${2##*/}
+    pinned=\$(awk -v name="\$name" '\$1 == name { print \$2 }' "$T/pins")
+    if test "\$name" = "\$FAKE_MOVED_PIN"; then
+        echo 0000000000000000000000000000000000000000
+    elif test -n "\$pinned"; then
+        echo "\$pinned"
+    else
+        echo "\${FAKE_QS_COMMIT:-1a4716cde794a59928d9d9fc15f2afc7a95de360}"
+    fi
+fi
 MOCK
+    # Each Hyprland pin's name and commit, for git rev-parse.
+    sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
     cat > "$T/bin/systemctl" <<MOCK
 #!/bin/sh
 printf "%s\\n" "systemctl \$*" >> "$CALLS"
@@ -548,12 +562,21 @@ check "the build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "
 check "the build links Hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
 check "the build links hyprctl onto PATH, through current" test "$(readlink "$T/usr-local-bin/hyprctl")" = "$T/opt/hyprland/current/bin/hyprctl"
 check "the build links start-hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
-check "the build records its pins" grep -q "Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 cmake" "$(inst)/quickspace-pins"
+check "the pins record Hyprland's commit" grep -q "Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 efb50993780079460b0cbed1363e2166a2de1d9f cmake" "$(inst)/quickspace-pins"
+check "the build checks Hyprland's commit" has "$calls" "git -C $T/src/hyprland-build/Hyprland rev-parse HEAD"
 # A second run with the same pins doesn't rebuild.
 : > "$CALLS"
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "the same pins don't rebuild" lacks "$calls" "cmake"
 check "the same pins say so" has "$output" "already built from these pins"
+# A new commit for the same tag is a new build, checked and built afresh.
+sed 's/ a21e87b878e72ee5dfd375899e8b2ad0d0c4c0e1 / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
+chmod +x "$T/setup-repinned"
+sed -n '/^HYPRLAND_PINS="/,/^"/p' "$T/setup-repinned" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+: > "$CALLS"
+SCRIPT="$T/setup-repinned" run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a new pinned commit alone rebuilds Hyprland" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a new pinned commit's build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
 teardown
 
 # A new compiler checksums differently, so what an older one built, such as
@@ -749,6 +772,18 @@ teardown
 
 setup; ARGS=(--no-install); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "--no-install doesn't build" lacks "$calls" "cmake"
+teardown
+
+# A pin whose tag was moved to another commit isn't built: its build files
+# never run, and nothing after it is built either.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MOVED_PIN=hyprutils
+check "a moved pin is named" has "$output" "hyprutils's v0.14.2 tag is commit 0000000000000000000000000000000000000000, not the pinned "
+check "a moved pin is fatal" test "$status" -ne 0
+check "a moved pin runs no build" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a moved pin stops the build" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
+check "a moved pin's clone is removed" test ! -e "$T/src/hyprland-build/hyprutils"
+check "a moved pin isn't stamped built" test ! -e "$(inst)/.built-hyprutils"
+check "a moved pin isn't marked complete" test ! -e "$(inst)/quickspace-pins"
 teardown
 
 # A failed step stops the build before anything is linked or recorded.

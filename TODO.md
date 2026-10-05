@@ -46,10 +46,6 @@ going forward.
   Lua 5.5; trixie has GCC 14 and older xkbcommon, so setup keeps apt's Hyprland
   there and says why. A newer toolchain from backports, or a container
   build, would cover it.
-- **Pin commits, not just tags.** `HYPRLAND_PINS` clones each component by
-  tag, and a tag can be moved. The Quickshell build checks the clone against
-  the commit its tag was pinned at before running any of its build files; the
-  Hyprland pins should do the same.
 - **Retire it.** Once Debian and Ubuntu ship Hyprland 0.56 or later, the
   build no longer runs; delete it then, with `~/.local/opt/hyprland` and the links
   in `/usr/local/bin` on machines that built it.
