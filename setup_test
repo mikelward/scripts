@@ -2201,6 +2201,209 @@ test_home_tools_install_degrades() {
     assert_source_contains "some CLI tools could not be installed via homepkg"
 }
 
+# Run install_home_zsh_autosuggestions against a local upstream repo with real
+# git, so the clone and its commit check are exercised, not mocked. CASE:
+# fresh (the tag names the pinned commit), moved (it names another),
+# stuck (moved, and rm fails), staged (the user has something at the
+# path plus .new), raced (the plugin's path appears during the clone),
+# unreachable (the clone fails), system (shrc
+# already finds a copy) or occupied (~/.zsh/zsh-autosuggestions is something
+# else).
+run_home_zsh_autosuggestions() {
+    za_case="$1"
+    za_tmpdir="$(mktemp -d)"
+    za_home="$za_tmpdir/home"
+    za_upstream="$za_tmpdir/upstream"
+    mkdir -p "$za_home" "$za_upstream"
+    # Git here, the fixture's and the function's, has a config of its own: the
+    # caller's global and system config never reach it, so a signing setup or
+    # a silenced advice can't fail the fixture or pass a check that should
+    # fail. The advice is on, as in git's default.
+    cat > "$za_home/.gitconfig" <<'CONFIG'
+[user]
+	name = t
+	email = t@example.com
+[commit]
+	gpgSign = false
+[tag]
+	gpgSign = false
+[advice]
+	detachedHead = true
+CONFIG
+    za_env() {
+        env HOME="$za_home" XDG_CONFIG_HOME="$za_home/.config" \
+            GIT_CONFIG_GLOBAL="$za_home/.gitconfig" GIT_CONFIG_NOSYSTEM=1 "$@"
+    }
+    za_env git -C "$za_upstream" init -q
+    echo '# plugin' > "$za_upstream/zsh-autosuggestions.zsh"
+    za_env git -C "$za_upstream" add zsh-autosuggestions.zsh
+    za_env git -C "$za_upstream" commit -q -m plugin
+    za_env git -C "$za_upstream" tag v9.9
+    za_commit=$(za_env git -C "$za_upstream" rev-parse HEAD)
+    za_repo="file://$za_upstream"
+    za_path="$PATH"
+    case "$za_case" in
+        moved) za_commit=0000000000000000000000000000000000000000 ;;
+        stuck)
+            za_commit=0000000000000000000000000000000000000000
+            mkdir -p "$za_tmpdir/bin"
+            printf '#!/bin/sh\nexit 1\n' > "$za_tmpdir/bin/rm"
+            chmod +x "$za_tmpdir/bin/rm"
+            za_path="$za_tmpdir/bin:$PATH"
+            ;;
+        unreachable) za_repo="file://$za_tmpdir/missing" ;;
+        system)
+            mkdir -p "$za_tmpdir/system"
+            : > "$za_tmpdir/system/zsh-autosuggestions.zsh"
+            ;;
+        occupied) mkdir -p "$za_home/.zsh/zsh-autosuggestions/notes" ;;
+        raced)
+            # A git that, once it has cloned, has something else create the
+            # plugin's path, as another process might.
+            mkdir -p "$za_tmpdir/bin"
+            printf '#!/bin/sh\n"%s" "$@" || exit\ncase "$*" in *" clone "*) mkdir -p "%s/theirs" ;; esac\n' \
+                "$(command -v git)" "$za_home/.zsh/zsh-autosuggestions" > "$za_tmpdir/bin/git"
+            chmod +x "$za_tmpdir/bin/git"
+            za_path="$za_tmpdir/bin:$PATH"
+            ;;
+        staged)
+            mkdir -p "$za_home/.zsh/zsh-autosuggestions.new"
+            echo mine > "$za_home/.zsh/zsh-autosuggestions.new/notes"
+            ;;
+    esac
+
+    set +e
+    output="$(za_env PATH="$za_path" sh -c "set -e
+HOME='$za_home'
+ZSH_AUTOSUGGESTIONS_REPO='$za_repo'
+ZSH_AUTOSUGGESTIONS_TAG=v9.9
+ZSH_AUTOSUGGESTIONS_COMMIT='$za_commit'
+ZSH_AUTOSUGGESTIONS_DIRS='$za_tmpdir/missing-dir $za_tmpdir/system'
+$(extract_functions "info warn install_home_zsh_autosuggestions")
+install_home_zsh_autosuggestions
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    # The same clone without the function's option, which shows the advice
+    # here, so the check that the function's clone doesn't can fail.
+    za_noisy="$(za_env git clone --quiet --depth 1 --branch v9.9 "file://$za_upstream" "$za_tmpdir/noisy" 2>&1)"
+    set -e
+    za_plugin="$za_home/.zsh/zsh-autosuggestions/zsh-autosuggestions.zsh"
+    za_installed=no
+    if test -f "$za_plugin"; then
+        za_installed=yes
+    fi
+    za_left=no
+    if test -e "$za_home/.zsh/zsh-autosuggestions"; then
+        za_left=yes
+    fi
+    # The clone's own directory beside the path, from mktemp.
+    za_new_left=no
+    set -- "$za_home"/.zsh/zsh-autosuggestions.??????
+    if test -e "$1"; then
+        za_new_left=yes
+    fi
+    za_staged=$(cat "$za_home/.zsh/zsh-autosuggestions.new/notes" 2>&1)
+    za_contents=$(ls -A "$za_home/.zsh/zsh-autosuggestions" 2>&1)
+    rm -rf "$za_tmpdir"
+}
+
+# Under --no-root the distro package is skipped and conda-forge has none, so
+# setup clones the plugin into ~/.zsh/zsh-autosuggestions, where conf's shrc
+# looks first, at the commit its tag was pinned to.
+test_no_root_clones_zsh_autosuggestions() {
+    run_home_zsh_autosuggestions fresh
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "Installing zsh-autosuggestions v9.9" &&
+    assert_output_lacks "detached HEAD" &&
+    assert_eq "$za_installed" yes &&
+    assert_source_contains 'install_home_tools
+    install_home_zsh_autosuggestions'
+}
+
+# The fixture doesn't depend on the caller's git config: one that signs every
+# commit and tag with no working key, and silences the detached-HEAD advice,
+# changes nothing.
+test_zsh_autosuggestions_fixture_ignores_caller_git_config() {
+    za_gitconfig="$(mktemp)"
+    printf '[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[gpg]\n\tprogram = false\n[advice]\n\tdetachedHead = false\n' > "$za_gitconfig"
+    GIT_CONFIG_GLOBAL="$za_gitconfig" run_home_zsh_autosuggestions fresh
+    rm -f "$za_gitconfig"
+    assert_status 0 &&
+    assert_eq "$za_installed" yes &&
+    assert_output_lacks "detached HEAD" &&
+    case "$za_noisy" in
+        *"detached HEAD"*) ;;
+        *) echo "  FAIL: a clone without the option didn't show the advice: $za_noisy"; return 1 ;;
+    esac
+}
+
+# The shell sources the plugin, so a tag moved to another commit isn't
+# installed, and its clone doesn't stay behind for shrc to find.
+test_zsh_autosuggestions_moved_tag_is_rejected() {
+    run_home_zsh_autosuggestions moved
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "not the pinned 0000000000000000000000000000000000000000; not installing it" &&
+    assert_eq "$za_left" no &&
+    assert_eq "$za_new_left" no
+}
+
+# A rejected clone that can't be removed is named, and stays beside the path
+# shrc sources rather than at it, so the next run checks again.
+test_zsh_autosuggestions_stuck_clone_is_never_sourced() {
+    run_home_zsh_autosuggestions stuck
+    assert_status 0 &&
+    assert_output_contains "couldn't remove the rejected clone" &&
+    assert_eq "$za_left" no
+}
+
+# The clone gets a directory of its own, so whatever the user keeps beside
+# the path, such as an upgrade they're staging at .new, is left as it was.
+test_zsh_autosuggestions_leaves_a_staged_directory_alone() {
+    run_home_zsh_autosuggestions staged
+    assert_status 0 &&
+    assert_eq "$za_installed" yes &&
+    assert_eq "$za_staged" mine &&
+    assert_eq "$za_new_left" no
+}
+
+# A plugin path that appears during the clone isn't ours: the clone isn't
+# moved into it, and is cleaned up.
+test_zsh_autosuggestions_leaves_a_path_that_appeared_alone() {
+    run_home_zsh_autosuggestions raced
+    assert_status 0 &&
+    assert_output_contains "appeared during the clone; leaving it alone" &&
+    assert_eq "$za_contents" theirs &&
+    assert_eq "$za_new_left" no
+}
+
+# An offline box warns and carries on; the shell config skips the plugin.
+test_zsh_autosuggestions_failed_clone_warns() {
+    run_home_zsh_autosuggestions unreachable
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "could not clone zsh-autosuggestions (offline?)" &&
+    assert_eq "$za_left" no &&
+    assert_eq "$za_new_left" no
+}
+
+# A copy shrc already finds (a distro or Homebrew one) needs no second one.
+test_zsh_autosuggestions_skips_an_installed_copy() {
+    run_home_zsh_autosuggestions system
+    assert_status 0 &&
+    assert_output_contains "zsh-autosuggestions is already installed in" &&
+    assert_eq "$za_left" no
+}
+
+# Something else at the clone's path is the user's, and isn't cloned over.
+test_zsh_autosuggestions_leaves_an_occupied_path_alone() {
+    run_home_zsh_autosuggestions occupied
+    assert_status 0 &&
+    assert_output_contains "exists but has no zsh-autosuggestions.zsh; leaving it alone" &&
+    assert_eq "$za_installed" no
+}
+
 # shpool has no prebuilt artifact, so the homepkg path can't provide it either.
 # The full --no-root run must say so explicitly rather than silently dropping a
 # tool the shell config expects to prefer.
@@ -2281,7 +2484,8 @@ test_home_tools_provisioned_by_a_partial_bundle() {
 test_clone_or_pull_degrades_offline() {
     assert_source_contains "could not pull" &&
     assert_source_contains "using the existing checkout" &&
-    assert_source_not_contains "could not clone"
+    # A fresh clone has nothing to fall back to, so it stays fatal.
+    ! extract_functions clone_or_pull | grep -q "could not clone"
 }
 
 # --- --github internal-mirror flag ---
@@ -2650,6 +2854,25 @@ run_test "check_go rejects a missing Go" \
     test_check_go_rejects_no_go
 run_test "Go is installed by setup itself, and vcs waits for it" \
     test_go_is_installed_for_everything
+
+run_test "--no-root clones zsh-autosuggestions at its pinned commit" \
+    test_no_root_clones_zsh_autosuggestions
+run_test "the zsh-autosuggestions fixture ignores the caller's git config" \
+    test_zsh_autosuggestions_fixture_ignores_caller_git_config
+run_test "a moved zsh-autosuggestions tag isn't installed" \
+    test_zsh_autosuggestions_moved_tag_is_rejected
+run_test "a rejected clone that can't be removed is never sourced" \
+    test_zsh_autosuggestions_stuck_clone_is_never_sourced
+run_test "a directory staged beside the plugin is left alone" \
+    test_zsh_autosuggestions_leaves_a_staged_directory_alone
+run_test "a plugin path that appears during the clone is left alone" \
+    test_zsh_autosuggestions_leaves_a_path_that_appeared_alone
+run_test "a failed zsh-autosuggestions clone warns and continues" \
+    test_zsh_autosuggestions_failed_clone_warns
+run_test "an installed zsh-autosuggestions isn't cloned again" \
+    test_zsh_autosuggestions_skips_an_installed_copy
+run_test "zsh-autosuggestions isn't cloned over something else" \
+    test_zsh_autosuggestions_leaves_an_occupied_path_alone
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
