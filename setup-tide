@@ -113,20 +113,22 @@ HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-$HOME/.local/opt/hyprland}"
 HYPRLAND_SRC="${HYPRLAND_SRC:-$HOME/src/hyprland-build}"
 HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 
-# What build_hyprland builds, in order: name, repository, tag, build system.
+# What build_hyprland builds, in order: name, repository, tag, the commit
+# that tag named when it was pinned, build system. A tag can be moved, so
+# each clone must check out exactly that commit before its build files run.
 # Each tag meets the next one's minimums (Hyprland v0.56.2's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
 # Hyprland needs 1.49.
 HYPRLAND_PINS="
-wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 meson
-hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 cmake
-hyprutils https://github.com/hyprwm/hyprutils.git v0.14.2 cmake
-hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 cmake
-hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 cmake
-hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 cmake
-hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 cmake
-aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 cmake
-Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 cmake
+wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
+hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
+hyprutils https://github.com/hyprwm/hyprutils.git v0.14.2 a21e87b878e72ee5dfd375899e8b2ad0d0c4c0e1 cmake
+hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 3e6865ce5fd9237b58f5b2ce5de18814df3baff5 cmake
+hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc46991562ba1158d125c cmake
+hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 44e91d467bdad8dcf8bbd2ac7cf49972540980a5 cmake
+hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 482d4b7ec36ffdaf3573086aa586b178fd5404be cmake
+aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 f31c47a1b9d300847d8fc3108ad959448103dfc1 cmake
+Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 efb50993780079460b0cbed1363e2166a2de1d9f cmake
 "
 # The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
 # which libstdc++ first has in GCC 16; Ubuntu 26.04's default g++ is 15, but
@@ -695,14 +697,14 @@ build_hyprland() {
     mkdir -p "$HYPRLAND_SRC" "$install_dir"
     # A failed build keeps what it finished, stamped, so a rerun picks up
     # where it stopped. Nothing uses it until it's complete and current.
-    printf '%s\n' "$HYPRLAND_PINS" | while read -r name url tag kind; do
+    printf '%s\n' "$HYPRLAND_PINS" | while read -r name url tag commit kind; do
         test -n "$name" || continue
         stamp="$install_dir/.built-$name"
         if test -f "$stamp"; then
             info "Already built $name $tag"
             continue
         fi
-        build_component "$name" "$url" "$tag" "$kind" && : > "$stamp" || exit 1
+        build_component "$name" "$url" "$tag" "$commit" "$kind" && : > "$stamp" || exit 1
     done || {
         warn "building Hyprland failed; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
         return 1
@@ -825,6 +827,12 @@ build_component() {
     # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
     # profiling, so it isn't fetched; a mirror without it can't fail the clone.
     git clone --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    head=$(git -C "$dir" rev-parse HEAD) || return 1
+    if test "$head" != "$4"; then
+        warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
+        rm -rf "$dir" || warn "couldn't remove the rejected clone in $dir"
+        return 1
+    fi
     case "$1" in
         wayland-protocols)
             # 1.49's XML fails the strict DTD check of Ubuntu 26.04's
@@ -833,7 +841,7 @@ build_component() {
             find "$dir" -name meson.build -exec sed -i "s/'--strict', *//g" {} + || return 1
             ;;
     esac
-    case "$4" in
+    case "$5" in
         meson)
             CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
                 && meson compile -C "$dir/build" \
