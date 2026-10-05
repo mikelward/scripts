@@ -215,6 +215,17 @@ check() {
 inst() { printf '%s\n' "$T"/opt/hyprland/v0.56.2-*; }
 has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 lacks() { ! has "$1" "$2"; }
+# Real git, for replaying the options setup-tide gave a clone.
+g() { git -c protocol.file.allow=always -c user.name=t -c user.email=t@example.com "$@"; }
+# replay_clone NAME TAG: clone a local repo tagged TAG with the options the
+# logged clone of NAME.git used, setting clone_output and clone_status.
+replay_clone() {
+    opts=$(printf '%s\n' "$calls" | sed -n "s/^git clone \(.*\) https:[^ ]*\/$1\.git .*/\1/p")
+    g -C "$T/git/$1" tag "$2"
+    clone_status=0
+    # shellcheck disable=SC2086  # word-split the logged options
+    clone_output=$(g clone $opts "file://$T/git/$1" "$T/git/$1-clone" 2>&1) || clone_status=$?
+}
 
 set -e
 
@@ -311,7 +322,13 @@ check "the Quickshell build installs Qt's private headers" has "$calls" "qt6-dec
 check "the Quickshell build installs the effects module the bar needs" has "$calls" "qml6-module-qtquick-effects"
 check "the Quickshell build installs the GLES headers Qt's GUI module needs" has "$calls" " libgles-dev "
 check "the Quickshell build clones the pinned tag" \
-    has "$calls" "git clone --quiet --depth 1 --branch v0.3.1 https://github.com/quickshell-mirror/quickshell.git $T/src/quickshell-build/quickshell"
+    has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v0.3.1 https://github.com/quickshell-mirror/quickshell.git $T/src/quickshell-build/quickshell"
+# Real git, given the Quickshell clone's own options, checks out the tag
+# without a word about detached HEADs.
+g init -q "$T/git/quickshell" && g -C "$T/git/quickshell" commit -q --allow-empty -m quickshell
+replay_clone quickshell v0.3.1
+check "the Quickshell clone's options work with real git" test "$clone_status" -eq 0
+check "the Quickshell clone is quiet" test -z "$clone_output"
 check "the Quickshell build installs under its prefix" has "$calls" "-DCMAKE_INSTALL_PREFIX=$(qs_inst)"
 check "the Quickshell build leaves out the crash handler Ubuntu can't build" has "$calls" "-DCRASH_HANDLER=OFF"
 check "the Quickshell build installs without sudo" lacks "$calls" "sudo cmake"
@@ -528,22 +545,23 @@ check "an old apt Hyprland builds from source" test "$status" -eq 0
 check "the build doesn't install apt's Hyprland" lacks "$calls" "apt-get install -y hyprland"
 check "the build installs its dependencies, with GCC 16" has "$calls" "apt-get install -y build-essential gcc-16 g++-16 cmake meson"
 check "the build needs Lua 5.5" has "$calls" "liblua5.5-dev"
-check "the build clones pinned tags" has "$calls" "git clone --quiet --depth 1 --branch v0.56.2 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
-# Real git, given the Hyprland clone's own submodule flag, skips Tracy but
-# still fetches udis86, a fallback Hyprland builds when pkg-config lacks it.
-flag=$(printf '%s\n' "$calls" | sed -n 's/^git clone .*\(--recurse-submodules[^ ]*\) .*\/Hyprland\.git .*/\1/p')
-g() { git -c protocol.file.allow=always -c user.name=t -c user.email=t@example.com "$@"; }
+check "the build clones pinned tags" has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v0.56.2 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
+# Real git, given the Hyprland clone's own options, skips Tracy but still
+# fetches udis86, a fallback Hyprland builds when pkg-config lacks it, and
+# checks out the tag without a word about detached HEADs.
 for sub in udis86 tracy; do
     g init -q "$T/git/$sub" && g -C "$T/git/$sub" commit -q --allow-empty -m "$sub"
 done
 g init -q "$T/git/Hyprland"
 for sub in udis86 tracy; do
-    g -C "$T/git/Hyprland" submodule add -q "$T/git/$sub" "subprojects/$sub"
+    g -C "$T/git/Hyprland" submodule add -q "file://$T/git/$sub" "subprojects/$sub"
 done
 g -C "$T/git/Hyprland" commit -q -m Hyprland
-check "the Hyprland clone's flag works with real git" g clone -q "$flag" "file://$T/git/Hyprland" "$T/git/clone"
-check "the Hyprland clone fetches udis86" test -e "$T/git/clone/subprojects/udis86/.git"
-check "the Hyprland clone skips Tracy" test ! -e "$T/git/clone/subprojects/tracy/.git"
+replay_clone Hyprland v0.56.2
+check "the Hyprland clone's options work with real git" test "$clone_status" -eq 0
+check "the Hyprland clone is quiet" test -z "$clone_output"
+check "the Hyprland clone fetches udis86" test -e "$T/git/Hyprland-clone/subprojects/udis86/.git"
+check "the Hyprland clone skips Tracy" test ! -e "$T/git/Hyprland-clone/subprojects/tracy/.git"
 check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
 check "wayland-protocols' headers skip the strict check" \
     test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
