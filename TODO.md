@@ -90,13 +90,3 @@ going forward.
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
-- **screenshot drops a signal that lands while it makes a temporary file.**
-  The path comes back through a command substitution, so a signal in that
-  window used to kill the script with the file made and its name never
-  recorded. dash can't block a signal, only ignore it, so both foreground
-  `mktemp`s run with HUP, INT and TERM ignored, and one landing there is lost
-  rather than deferred: the run finishes as if it had come a moment later.
-  The background action child keeps its error in a variable instead, so it
-  has no temporary file at all. The alternative was capturing every step's
-  stderr in a variable, which removes `$e` too but not the shot's own file.
-  Reversible by restoring the traps around each `mktemp`.
