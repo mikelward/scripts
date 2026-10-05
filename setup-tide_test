@@ -514,7 +514,22 @@ check "an old apt Hyprland builds from source" test "$status" -eq 0
 check "the build doesn't install apt's Hyprland" lacks "$calls" "apt-get install -y hyprland"
 check "the build installs its dependencies, with GCC 16" has "$calls" "apt-get install -y build-essential gcc-16 g++-16 cmake meson"
 check "the build needs Lua 5.5" has "$calls" "liblua5.5-dev"
-check "the build clones pinned tags" has "$calls" "git clone --quiet --depth 1 --branch v0.56.2 --recurse-submodules --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
+check "the build clones pinned tags" has "$calls" "git clone --quiet --depth 1 --branch v0.56.2 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
+# Real git, given the Hyprland clone's own submodule flag, skips Tracy but
+# still fetches udis86, a fallback Hyprland builds when pkg-config lacks it.
+flag=$(printf '%s\n' "$calls" | sed -n 's/^git clone .*\(--recurse-submodules[^ ]*\) .*\/Hyprland\.git .*/\1/p')
+g() { git -c protocol.file.allow=always -c user.name=t -c user.email=t@example.com "$@"; }
+for sub in udis86 tracy; do
+    g init -q "$T/git/$sub" && g -C "$T/git/$sub" commit -q --allow-empty -m "$sub"
+done
+g init -q "$T/git/Hyprland"
+for sub in udis86 tracy; do
+    g -C "$T/git/Hyprland" submodule add -q "$T/git/$sub" "subprojects/$sub"
+done
+g -C "$T/git/Hyprland" commit -q -m Hyprland
+check "the Hyprland clone's flag works with real git" g clone -q "$flag" "file://$T/git/Hyprland" "$T/git/clone"
+check "the Hyprland clone fetches udis86" test -e "$T/git/clone/subprojects/udis86/.git"
+check "the Hyprland clone skips Tracy" test ! -e "$T/git/clone/subprojects/tracy/.git"
 check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
 check "wayland-protocols' headers skip the strict check" \
     test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
