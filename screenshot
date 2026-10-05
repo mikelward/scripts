@@ -17,11 +17,13 @@ scriptname=${0##*/}
 
 usage() {
     cat <<EOF >&2
-Usage: $scriptname [-d <delay>] [-h] [-r | -w | -g <geometry>]
-       $scriptname [--delay <delay>] [--help] [--region | --window | --geometry <geometry>]
+Usage: $scriptname [-d <delay>] [-h] [-s | -o <output> | -r | -w | -g <geometry>]
+       $scriptname [--delay <delay>] [--help]
+                  [--screen | --output <output> | --region | --window | --geometry <geometry>]
 
-Copies the whole screen, a region picked with slurp, the focused window, or
-the rectangle 'X,Y WxH' to the clipboard as PNG, and saves it as
+Copies the focused monitor (the default), a named one, a region picked with
+slurp, the focused window, or the rectangle 'X,Y WxH' to the clipboard as
+PNG, and saves it as
 ~/Pictures/Screenshots/YYYY-MM-DD_HH-MM-SS.png (-2, -3 and so on for a
 second shot in the same second).
 EOF
@@ -33,11 +35,14 @@ fail() {
 }
 
 mode=screen
+output=
+named=
+toplevel=
 geometry=
 delay=0
 while test $# -gt 0; do
     case "$1" in
-        -d|--delay|-g|--geometry)
+        -d|--delay|-g|--geometry|-o|--output)
             if test $# -lt 2; then
                 echo "Option $1 requires an argument" >&2
                 usage
@@ -45,12 +50,15 @@ while test $# -gt 0; do
             fi
             case "$1" in
                 -d|--delay) delay=$2 ;;
+                -o|--output) mode=screen; output=$2; named=1 ;;
                 *) mode=geometry; geometry=$2 ;;
             esac
             shift
             ;;
         --delay=*) delay=${1#*=} ;;
         --geometry=*) mode=geometry; geometry=${1#*=} ;;
+        --output=*) mode=screen; output=${1#*=}; named=1 ;;
+        -s|--screen) mode=screen; output=; named= ;;
         -r|--region) mode=region ;;
         -w|--window) mode=window ;;
         -h|--help) usage; exit 0 ;;
@@ -64,6 +72,11 @@ while test $# -gt 0; do
 done
 if test "$mode" = geometry && test -z "$geometry"; then
     echo "--geometry needs a rectangle, like '0,0 800x600'" >&2
+    usage
+    exit 2
+fi
+if test -n "$named" && test -z "$output"; then
+    echo "--output needs a monitor name, like DP-1" >&2
     usage
     exit 2
 fi
@@ -84,6 +97,17 @@ trap 'exit 1' HUP INT TERM
 sleep "$delay" 2>"$e" || fail "sleep: $(cat "$e")"
 
 case "$mode" in
+    screen)
+        # The monitor the focus is on, unless one was named (tide's launcher
+        # names the one it opened on, so closing it can't move the shot).
+        if test -z "$output"; then
+            monitors=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+            output=$(printf '%s\n' "$monitors" \
+                | jq -r 'first(.[] | select(.focused) | .name) // ""' 2>"$e") \
+                || fail "jq: $(cat "$e")"
+            test -n "$output" || fail "no focused monitor"
+        fi
+        ;;
     region)
         if ! geometry=$(slurp 2>"$e"); then
             case $(cat "$e") in
@@ -97,6 +121,8 @@ case "$mode" in
         window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
         geometry=$(printf '%s\n' "$window" \
             | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else "" end' 2>"$e") \
+            || fail "jq: $(cat "$e")"
+        toplevel=$(printf '%s\n' "$window" | jq -r '.stableId // "" | tostring' 2>"$e") \
             || fail "jq: $(cat "$e")"
         if test -z "$geometry"; then
             notify-send -a Screenshot -t 2000 'No window to screenshot'
@@ -118,11 +144,30 @@ mkdir -p "$dir" 2>"$e" || fail "mkdir: $(cat "$e")"
 trap '' HUP INT TERM
 f=$(mktemp -p "$dir" .screenshot-XXXXXX.png 2>&1) || { m=$f; f=; fail "mktemp: $m"; }
 trap 'exit 1' HUP INT TERM
-if test "$mode" = screen; then
-    grim -l 1 "$f" 2>"$e" || fail "grim: $(cat "$e")"
-else
-    grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
-fi
+case "$mode" in
+    screen)
+        grim -l 1 -o "$output" "$f" 2>"$e" || fail "grim: $(cat "$e")"
+        ;;
+    window)
+        # -T captures the window's own contents, even under a popup. It
+        # needs grim 1.5 and a compositor with toplevel capture; failing
+        # that, the window's rectangle is the next best thing, and stderr
+        # (which tide's launcher logs) says why it was used.
+        if test -z "$toplevel"; then
+            echo "$scriptname: the window has no stableId; taking its rectangle" >&2
+        elif ! grim -l 1 -T "$toplevel" "$f" 2>"$e"; then
+            echo "$scriptname: grim -T: $(cat "$e"); taking the window's rectangle" >&2
+        else
+            geometry=
+        fi
+        if test -n "$geometry"; then
+            grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
+        fi
+        ;;
+    *)
+        grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
+        ;;
+esac
 
 # Saved before it's copied, so a clipboard failure loses no shot. A second
 # shot in the same second takes -2, then -3, and nothing is overwritten.
