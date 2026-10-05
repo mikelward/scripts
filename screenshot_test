@@ -59,10 +59,17 @@ exec $(command -v ln) \"\$@\""
   fake mktemp "path=\$($(command -v mktemp) \"\$@\") || exit
 echo \"\$path\"
 test -z \"\$MKTEMP_KILLED\" || kill -TERM \$PPID"
+  # With $GRIM_T_HANGS, a -T capture runs out its time, as one waiting on a
+  # window nobody draws would, reported at once rather than waited for.
+  fake timeout 'echo "timeout $*" >> "$CALLS"
+shift
+case " $* " in *" -T "*) test -z "$GRIM_T_HANGS" || exit 124 ;; esac
+exec "$@"'
   fake hyprctl 'echo "hyprctl $*" >> "$CALLS"
 test -z "$HYPRCTL_FAILS" || { echo "no socket" >&2; exit 1; }
 case "$1" in
-  monitors) printf "%s\n" "${MONITORS:-[{\"name\": \"DP-1\", \"focused\": false\}, {\"name\": \"DP-2\", \"focused\": true\}]}" ;;
+  clients) printf "%s\n" "${CLIENTS:-[{\"at\": [50, 60], \"size\": [70, 80], \"stableId\": \"aa11bb22\", \"workspace\": {\"id\": 2\}\}, {\"at\": [1, 2], \"size\": [3, 4], \"workspace\": {\"id\": 1\}\}]}" ;;
+  monitors) printf "%s\n" "${MONITORS:-[{\"name\": \"DP-1\", \"focused\": false, \"activeWorkspace\": {\"id\": 1\}, \"specialWorkspace\": {\"id\": 0\}\}, {\"name\": \"DP-2\", \"focused\": true, \"activeWorkspace\": {\"id\": 2\}, \"specialWorkspace\": {\"id\": 0\}\}]}" ;;
   *) printf "%s\n" "${ACTIVE_WINDOW:-{\"at\": [10, 20], \"size\": [300, 400], \"stableId\": \"18a2b3c4\"\}}" ;;
 esac'
 }
@@ -375,6 +382,122 @@ test_window_wrapper() {
   assert_called "grim -l 1 -T 18a2b3c4 "
 }
 
+test_window_id() {
+  run --window-id aa11bb22
+  assert_status 0
+  assert_called "hyprctl clients -j"
+  assert_not_called "hyprctl activewindow"
+  assert_called "grim -l 1 -T aa11bb22 "
+  assert_clean
+  : > "$CALLS"
+  run --window-id=aa11bb22
+  assert_status 0
+  assert_called "grim -l 1 -T aa11bb22 "
+}
+
+test_window_id_off_screen() {
+  # On a workspace no monitor is showing.
+  ENV=(CLIENTS='[{"at": [50, 60], "size": [70, 80], "stableId": "aa11bb22", "workspace": {"id": 7}}]')
+  run --window-id aa11bb22
+  assert_status 0
+  assert_not_called "grim -l 1 -T aa11bb22"
+  assert_called "grim -l 1 -T 18a2b3c4 "
+  case "$output" in *"window aa11bb22 isn't on screen; taking the focused window"*) ;; *) fail_test "no reason on stderr: $output" ;; esac
+  assert_clean
+  # Hidden, on a workspace that is showing.
+  : > "$CALLS"
+  ENV=(CLIENTS='[{"at": [50, 60], "size": [70, 80], "stableId": "aa11bb22", "workspace": {"id": 2}, "hidden": true}]')
+  run --window-id aa11bb22
+  assert_status 0
+  assert_not_called "grim -l 1 -T aa11bb22"
+  assert_called "grim -l 1 -T 18a2b3c4 "
+}
+
+test_window_id_special_workspace() {
+  # A special workspace that is open counts as on screen.
+  ENV=(CLIENTS='[{"at": [50, 60], "size": [70, 80], "stableId": "aa11bb22", "workspace": {"id": -98}}]'
+       MONITORS='[{"name": "DP-2", "focused": true, "activeWorkspace": {"id": 2}, "specialWorkspace": {"id": -98}}]')
+  run --window-id aa11bb22
+  assert_status 0
+  assert_called "grim -l 1 -T aa11bb22 "
+}
+
+test_window_toplevel_timeout() {
+  ENV=(GRIM_T_HANGS=1)
+  run --window
+  assert_status 0
+  assert_called "timeout 5 grim -l 1 -T 18a2b3c4 "
+  assert_called "grim -l 1 -g 10,20 300x400 "
+  assert_called "Screenshot copied"
+  case "$output" in *"grim -T: timed out after 5s; taking the window's rectangle"*) ;; *) fail_test "no reason on stderr: $output" ;; esac
+  assert_saved 2026-10-04_12-00-00.png
+  assert_clean
+}
+
+test_window_id_fallback_geometry() {
+  # The named window's own rectangle, not the focused one's.
+  ENV=(GRIM_T_FAILS=1)
+  run --window-id aa11bb22
+  assert_status 0
+  assert_called "grim -l 1 -g 50,60 70x80 "
+  assert_not_called "grim -l 1 -g 10,20 300x400"
+  assert_clean
+}
+
+test_window_id_gone() {
+  run --window-id 99999999
+  assert_status 0
+  assert_called "hyprctl activewindow -j"
+  assert_called "grim -l 1 -T 18a2b3c4 "
+  case "$output" in *"window 99999999 is gone; taking the focused window"*) ;; *) fail_test "no reason on stderr: $output" ;; esac
+  assert_clean
+}
+
+test_window_id_lookup_failure() {
+  ENV=(HYPRCTL_FAILS=1)
+  run --window-id aa11bb22
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed hyprctl: no socket"
+  assert_clean
+}
+
+test_window_id_parse_failure() {
+  ENV=(CLIENTS='not json')
+  run --window-id aa11bb22
+  assert_status 1
+  assert_not_called "grim"
+  assert_called "Screenshot failed jq: "
+  assert_clean
+}
+
+test_empty_window_id() {
+  run --window-id=
+  assert_status 2
+  test -z "$calls" || fail_test "an empty window id should take no shot"
+  run --window-id ''
+  assert_status 2
+  test -z "$calls" || fail_test "an empty window id should take no shot"
+}
+
+test_later_mode_overrides_empty_option() {
+  run --window-id= --screen
+  assert_status 0
+  assert_called "grim -l 1 -o DP-2 "
+  : > "$CALLS"
+  run --output= --window
+  assert_status 0
+  assert_called "grim -l 1 -T 18a2b3c4 "
+  assert_clean
+}
+
+test_window_after_window_id() {
+  run --window-id aa11bb22 -w
+  assert_status 0
+  assert_not_called "hyprctl clients"
+  assert_called "grim -l 1 -T 18a2b3c4 "
+}
+
 test_window_without_toplevel_capture() {
   ENV=(GRIM_T_FAILS=1)
   run --window
@@ -550,6 +673,17 @@ run_test "no focused monitor is reported" test_no_focused_monitor
 run_test "a failed monitor lookup is reported" test_monitor_lookup_failure
 run_test "unparsable monitor JSON is reported" test_monitor_parse_failure
 run_test "--window shoots the focused window" test_window
+run_test "--window-id shoots the named window" test_window_id
+run_test "--window-id falls back to the named window's rectangle" test_window_id_fallback_geometry
+run_test "an off-screen or hidden --window-id window takes the focused one, saying why" test_window_id_off_screen
+run_test "a window on an open special workspace is on screen" test_window_id_special_workspace
+run_test "a toplevel capture that times out takes the rectangle, saying why" test_window_toplevel_timeout
+run_test "a closed --window-id window takes the focused one, saying why" test_window_id_gone
+run_test "a failed client lookup is reported" test_window_id_lookup_failure
+run_test "unparsable client JSON is reported" test_window_id_parse_failure
+run_test "an empty --window-id is a usage error" test_empty_window_id
+run_test "--window after --window-id takes the focused window" test_window_after_window_id
+run_test "a later mode overrides an earlier empty option" test_later_mode_overrides_empty_option
 run_test "a grim without toplevel capture shoots the window's rectangle" test_window_without_toplevel_capture
 run_test "a window without a stableId shoots its rectangle" test_window_without_stable_id
 run_test "a failed rectangle fallback is reported" test_window_fallback_failure

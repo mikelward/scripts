@@ -19,11 +19,12 @@ usage() {
     cat <<EOF >&2
 Usage: $scriptname [-d <delay>] [-h] [-s | -o <output> | -r | -w | -g <geometry>]
        $scriptname [--delay <delay>] [--help]
-                  [--screen | --output <output> | --region | --window | --geometry <geometry>]
+                  [--screen | --output <output> | --region | --window |
+                   --window-id <stableId> | --geometry <geometry>]
 
 Copies the focused monitor (the default), a named one, a region picked with
-slurp, the focused window, or the rectangle 'X,Y WxH' to the clipboard as
-PNG, and saves it as
+slurp, the focused window or one named by its Hyprland stableId, or the
+rectangle 'X,Y WxH' to the clipboard as PNG, and saves it as
 ~/Pictures/Screenshots/YYYY-MM-DD_HH-MM-SS.png (-2, -3 and so on for a
 second shot in the same second).
 EOF
@@ -38,11 +39,13 @@ mode=screen
 output=
 named=
 toplevel=
+wanted=
+picked=
 geometry=
 delay=0
 while test $# -gt 0; do
     case "$1" in
-        -d|--delay|-g|--geometry|-o|--output)
+        -d|--delay|-g|--geometry|-o|--output|--window-id)
             if test $# -lt 2; then
                 echo "Option $1 requires an argument" >&2
                 usage
@@ -51,6 +54,7 @@ while test $# -gt 0; do
             case "$1" in
                 -d|--delay) delay=$2 ;;
                 -o|--output) mode=screen; output=$2; named=1 ;;
+                --window-id) mode=window; wanted=$2; picked=1 ;;
                 *) mode=geometry; geometry=$2 ;;
             esac
             shift
@@ -60,7 +64,8 @@ while test $# -gt 0; do
         --output=*) mode=screen; output=${1#*=}; named=1 ;;
         -s|--screen) mode=screen; output=; named= ;;
         -r|--region) mode=region ;;
-        -w|--window) mode=window ;;
+        --window-id=*) mode=window; wanted=${1#*=}; picked=1 ;;
+        -w|--window) mode=window; wanted=; picked= ;;
         -h|--help) usage; exit 0 ;;
         *)
             echo "Invalid option $1" >&2
@@ -75,7 +80,14 @@ if test "$mode" = geometry && test -z "$geometry"; then
     usage
     exit 2
 fi
-if test -n "$named" && test -z "$output"; then
+# Only the mode that wins is checked: a later option overrides an earlier
+# one, empty or not, as --screen overrides --output.
+if test "$mode" = window && test -n "$picked" && test -z "$wanted"; then
+    echo "--window-id needs a window's stableId, from hyprctl clients -j" >&2
+    usage
+    exit 2
+fi
+if test "$mode" = screen && test -n "$named" && test -z "$output"; then
     echo "--output needs a monitor name, like DP-1" >&2
     usage
     exit 2
@@ -117,8 +129,36 @@ case "$mode" in
         fi
         ;;
     window)
+        # A window named by its stableId (tide's launcher records the one it
+        # opened over) is looked up where it is now. If it has closed, or
+        # isn't on screen (its workspace isn't showing on any monitor, or it
+        # is hidden), the focused window is the next best thing, and stderr
+        # says so: grim -T can wait on a window that isn't shown until it is.
+        window=
+        if test -n "$wanted"; then
+            clients=$(hyprctl clients -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+            window=$(printf '%s\n' "$clients" \
+                | jq -c --arg id "$wanted" 'first(.[] | select((.stableId // "" | tostring) == $id)) // empty' 2>"$e") \
+                || fail "jq: $(cat "$e")"
+            if test -z "$window"; then
+                echo "$scriptname: window $wanted is gone; taking the focused window" >&2
+            else
+                monitors=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+                shown=$(printf '%s\n' "$window" \
+                    | jq -r --argjson m "$monitors" \
+                        '[$m[] | .activeWorkspace.id, .specialWorkspace.id] as $ws
+                         | if .hidden != true and .mapped != false and (.workspace.id as $w | $ws | index($w)) then "yes" else "" end' 2>"$e") \
+                    || fail "jq: $(cat "$e")"
+                if test -z "$shown"; then
+                    echo "$scriptname: window $wanted isn't on screen; taking the focused window" >&2
+                    window=
+                fi
+            fi
+        fi
         # An empty workspace has no active window: hyprctl prints {} then.
-        window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+        if test -z "$window"; then
+            window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+        fi
         geometry=$(printf '%s\n' "$window" \
             | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else "" end' 2>"$e") \
             || fail "jq: $(cat "$e")"
@@ -152,13 +192,22 @@ case "$mode" in
         # -T captures the window's own contents, even under a popup. It
         # needs grim 1.5 and a compositor with toplevel capture; failing
         # that, the window's rectangle is the next best thing, and stderr
-        # (which tide's launcher logs) says why it was used.
+        # (which tide's launcher logs) says why it was used. It is bounded,
+        # because a capture of a window that isn't being drawn can wait for
+        # it indefinitely (hyprwm/Hyprland discussion 13710), and a hung
+        # key binding is worse than a rectangle.
         if test -z "$toplevel"; then
             echo "$scriptname: the window has no stableId; taking its rectangle" >&2
-        elif ! grim -l 1 -T "$toplevel" "$f" 2>"$e"; then
-            echo "$scriptname: grim -T: $(cat "$e"); taking the window's rectangle" >&2
-        else
+        elif timeout 5 grim -l 1 -T "$toplevel" "$f" 2>"$e"; then
             geometry=
+        else
+            status=$?
+            if test "$status" -eq 124; then
+                why="timed out after 5s"
+            else
+                why=$(cat "$e")
+            fi
+            echo "$scriptname: grim -T: $why; taking the window's rectangle" >&2
         fi
         if test -n "$geometry"; then
             grim -l 1 -g "$geometry" "$f" 2>"$e" || fail "grim: $(cat "$e")"
