@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-04
+last_modified: 2026-10-06
 ---
 
 # AGENTS.md
@@ -235,16 +235,17 @@ reply, no offer to correct it. It is not a finding.
   - A few minutes out while CI or the current head's Codex verdict is
     outstanding; longer once only a human is left; short again after a push.
   - A PR reading `dirty` — always — or `behind` where the ruleset requires
-    branches up to date, takes: both refs
-    fetched by explicit refspec (`+refs/heads/<x>:refs/remotes/origin/<x>`;
-    a bare fetch, or one naming the branches, updates neither in the
-    single-branch clone a shallow one implies), `git fetch --unshallow` if
-    the clone is shallow, a rebase onto the fetched `origin/<base>` — not
-    always `main`, never the local branch — then `git push
-    --force-with-lease --force-if-includes`, both flags, since the fetch
-    refreshes the ref the lease compares against. A rejection means someone
-    else pushed to the head: integrate their tip and retry. Nothing reports
-    a base advance, so only the check catches it.
+    branches up to date, takes: both refs fetched by explicit refspec
+    (`+refs/heads/<x>:refs/remotes/origin/<x>`; a bare fetch, or one naming
+    the branches, updates neither in the single-branch clone a shallow one
+    implies), `git fetch --unshallow` if the clone is shallow, a rebase
+    onto the fetched `origin/<base>` — not always `main`, never the local
+    branch — then `git push --force-with-lease --force-if-includes`, both
+    flags, since the fetch refreshes the ref the lease compares against. A
+    rejection means someone else pushed to the head: integrate their tip
+    and retry. Read `mergeable_state` at every check, wake and drive step,
+    not this check alone, and act at once, unasked: nothing reports a base
+    advance, so that read is the only signal.
   - Name the PR, and say what to re-read rather than what you read. A SHA or
     a list of which PRs are open goes stale before it fires; one PR number
     does not, and the trigger has to be matchable to it.
