@@ -1,20 +1,5 @@
 # TODO
 
-## Prune a previously-installed joshuto on upgrade
-
-Removing joshuto from the install (its `tools` entry, the file-manager step,
-and the `homepkg` `TOOLS` registry) stops *new* setups from installing it, but
-does nothing for a machine where an earlier `setup` already installed joshuto
-through the managed mamba environment: the binary and its `~/.local/bin/joshuto`
-symlink linger, and because the registry entry is gone, `homepkg remove joshuto`
-now fails in `_require_known`, so there's no supported cleanup command either.
-
-Give upgrades a cleanup path: either prune the setup-managed joshuto (package +
-`~/.local/bin` symlink) during `setup`, or keep enough removal metadata that
-`homepkg remove joshuto` still works for a deregistered-but-installed tool.
-Out of scope for the removal PR itself, which only changes what gets installed
-going forward.
-
 ## Review and merge gates
 
 - [ ] **Add `zizmor` to the ruleset's required set** once it has reported
@@ -51,16 +36,6 @@ going forward.
   in `/usr/local/bin` on machines that built it.
 
 ## setup / homepkg
-
-- [ ] **Purge setup-managed tools that are retired from the registry.**
-      Dropping a tool from homepkg's `TOOLS` (e.g. `yazi`, replaced by
-      `joshuto` in #235) only stops *installing* it: `install_mamba` /
-      `_link_bins` never remove an already-installed package, so it
-      lingers orphaned in the managed env, and `homepkg remove <tool>`
-      rejects it as unknown once the registry entry is gone. Add a way to
-      remove setup-managed tools (distinguishing them from independently
-      installed copies) so an upgrade that retires one can clean it up.
-      Deferred from #235, where the orphan was accepted.
 
 - [ ] **Install zsh-autosuggestions on the `--no-root` path.** The
       privileged setup installs it from the distro package (apt/dnf/brew,

@@ -75,6 +75,7 @@ homepkg install ripgrep fd bat jq     # into a micromamba env, symlinked to ~/.l
 homepkg update                        # update everything (micromamba update --all)
 homepkg update ripgrep                # or a single tool
 homepkg remove jq
+homepkg prune                         # remove the tools homepkg has retired (joshuto, yazi)
 homepkg bootstrap                     # just fetch micromamba
 homepkg list                          # known tools
 ```
