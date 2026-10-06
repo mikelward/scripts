@@ -292,7 +292,7 @@ teardown
 
 setup; ARGS=(); run SETUP_OS=redhat
 check "Fedora installs Hyprland and Go with dnf" has "$calls" "dnf install -y hyprland hypridle"
-check "Fedora installs its swaync, notify-send and Go" has "$calls" "SwayNotificationCenter libnotify golang"
+check "Fedora installs its swaync, notify-send, Go and python3" has "$calls" "SwayNotificationCenter libnotify golang python3"
 teardown
 
 setup; ARGS=(); run SETUP_OS=redhat
@@ -563,7 +563,7 @@ teardown
 
 setup; ARGS=(); run SETUP_OS=arch
 check "Arch installs Hyprland and Go with pacman" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
-check "Arch installs its swaync, notify-send and Go" has "$calls" "swaync libnotify go"
+check "Arch installs its swaync, notify-send, Go and python" has "$calls" "swaync libnotify go python"
 check "Arch never builds Hyprland" lacks "$calls" "cmake"
 teardown
 
@@ -582,6 +582,7 @@ setup; ARGS=(); run SETUP_OS=unknown
 check "an unknown OS names what to install" has "$output" "unknown OS; install Hyprland"
 check "an unknown OS names hyprlock among the packages" has "$output" " hypridle hyprlock uwsm "
 check "an unknown OS names the portal and clipboard tools" has "$output" "xdg-desktop-portal-hyprland"
+check "an unknown OS names python3, for tide doctor" has "$output" "python3"
 check "an unknown OS installs nothing" lacks "$calls" "install -y"
 teardown
 
@@ -592,7 +593,7 @@ check "a missing package isn't fatal" test "$status" -eq 0
 check "a missing package is named" has "$output" "could not install: swww"
 check "a missing swww names the stand-in" has "$output" "swaybg shows the wallpaper instead"
 check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
-check "the rest install in one go, notify-send and Go too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang"
+check "the rest install in one go, notify-send, Go and python3 too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang python3"
 check "satty is asked for, for the screenshot's Annotate" has "$calls" "apt-get install -y satty"
 check "a missing package is never asked for" lacks "$calls" "swww"
 teardown
