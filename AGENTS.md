@@ -243,9 +243,9 @@ reply, no offer to correct it. It is not a finding.
     branch — then `git push --force-with-lease --force-if-includes`, both
     flags, since the fetch refreshes the ref the lease compares against. A
     rejection means someone else pushed to the head: integrate their tip
-    and retry. Read `mergeable_state` at every check, wake and drive step,
-    not this check alone, and act at once, unasked: nothing reports a base
-    advance, so that read is the only signal.
+    and retry. Read `mergeable_state` at every scheduled check, PR-event
+    wake and drive step, not this check alone, and act at once, unasked:
+    nothing reports a base advance, so that read is the only signal.
   - Name the PR, and say what to re-read rather than what you read. A SHA or
     a list of which PRs are open goes stale before it fires; one PR number
     does not, and the trigger has to be matchable to it.
