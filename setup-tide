@@ -13,12 +13,14 @@
 #   where the distro packages it: apt and pacman, and on Fedora the
 #   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), or
 #   only one older than tide's shell needs (Debian's 0.2.1), it builds a
-#   pinned release from source into ~/.local/opt/quickshell (see
+#   pinned release from source into /opt/quickshell (see
 #   build_quickshell). Without it the bar can't run, and waybar stays the
 #   bar;
 # - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
 #   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
-#   source, at pinned tags, into ~/.local/opt/hyprland (see build_hyprland);
+#   source, at pinned tags, into /opt/hyprland (see build_hyprland). Both
+#   builds are outside $HOME because the greeter runs them too, as greetd's
+#   own user, which can't read a home directory;
 # - clones or updates the tide repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
@@ -74,13 +76,16 @@ MIN_HYPRLAND=0.56
 
 # The Quickshell release build_quickshell builds where apt has none, from
 # the GitHub mirror tide's SPEC.md cites. Its own prefix, like
-# Hyprland's, with qs linked onto PATH. Overridable for tests.
+# Hyprland's, with qs linked onto PATH. Earlier versions built into the
+# legacy prefix, whose links and builds are still setup's own. Overridable
+# for tests.
 QUICKSHELL_REPO=https://github.com/quickshell-mirror/quickshell.git
 QUICKSHELL_TAG=v0.3.1
 # The commit that tag named when it was pinned. A tag can be moved, so the
 # clone must check out exactly this before its build files are run.
 QUICKSHELL_COMMIT=1a4716cde794a59928d9d9fc15f2afc7a95de360
-QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-$HOME/.local/opt/quickshell}"
+QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-/opt/quickshell}"
+LEGACY_QUICKSHELL_PREFIX="${LEGACY_QUICKSHELL_PREFIX:-$HOME/.local/opt/quickshell}"
 QUICKSHELL_SRC="${QUICKSHELL_SRC:-$HOME/src/quickshell-build}"
 QUICKSHELL_BIN_DIR="${QUICKSHELL_BIN_DIR:-/usr/local/bin}"
 QUICKSHELL_COMMANDS="qs quickshell"
@@ -113,9 +118,14 @@ QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
 # Where build_hyprland builds and installs Hyprland, and where it links its
 # commands. Its own prefix keeps its libraries out of the system's library
 # path: the distro's hypridle and portal link the distro's older hyprutils
-# and hyprlang, and would break on ours. In $HOME, it needs no sudo; only
-# the links do. Overridable for tests.
-HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-$HOME/.local/opt/hyprland}"
+# and hyprlang, and would break on ours. It's outside $HOME, which greetd's
+# greeter user can't read, and owned by root: a build is made as this user,
+# in a directory of its own, and handed to root once it's complete (see
+# make_build_dir and seal_build), so the greeter, which reads every
+# password typed at login, runs nothing this user can still change.
+# Earlier versions built into the legacy prefix. Overridable for tests.
+HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-/opt/hyprland}"
+LEGACY_HYPRLAND_PREFIX="${LEGACY_HYPRLAND_PREFIX:-$HOME/.local/opt/hyprland}"
 HYPRLAND_SRC="${HYPRLAND_SRC:-$HOME/src/hyprland-build}"
 HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 
@@ -456,9 +466,13 @@ install_quickshell() {
     # changed would crash rather than let waybar take over.
     if test "$(detect_os)" = debian && ! current_quickshell_matches_qt; then
         # current goes only once nothing links through it, or a link left
-        # behind would dangle.
+        # behind would dangle. The legacy prefix is this user's.
         if unlink_quickshell "it was built for a Qt that's no longer installed"; then
-            rm -f "$QUICKSHELL_PREFIX/current" || warn "couldn't remove $QUICKSHELL_PREFIX/current"
+            if test "$qs_prefix" = "$LEGACY_QUICKSHELL_PREFIX"; then
+                rm -f "$qs_prefix/current"
+            else
+                sudo_or_warn rm -f "$qs_prefix/current"
+            fi || warn "couldn't remove $qs_prefix/current"
         fi
     fi
 }
@@ -534,11 +548,113 @@ install_or_build_quickshell() {
     warn "installing Quickshell failed without naming a package, so tide's bar may not run; waybar stays the bar"
 }
 
+# --- Source builds ---
+
+# make_build_dir DIR makes DIR for this user to build into, in a prefix
+# only root can write. A directory already there is a build that stopped
+# partway. This user's own is resumed. Another account's can't be written,
+# and what that account built would be sealed as root's, so it's started
+# afresh.
+make_build_dir() {
+    if test -d "$1"; then
+        if ! _mine=$(find "$1" -maxdepth 0 -user "$(id -u)" -print); then
+            warn "couldn't check whose partial build $1 is"
+            return 1
+        fi
+        test -z "$_mine" || return 0
+        info "$1 is another account's partial build, so it's started afresh"
+        if ! sudo_or_warn rm -rf "$1"; then
+            warn "couldn't remove $1 to rebuild it"
+            return 1
+        fi
+    fi
+    if ! sudo_or_warn install -d -m 755 -o 0 -g 0 "${1%/*}" \
+        || ! sudo_or_warn install -d -m 755 -o "$(id -u)" -g "$(id -g)" "$1"; then
+        warn "couldn't make $1 to build into"
+        return 1
+    fi
+}
+
+# seal_build DIR COMMANDS hands a finished build to root, so nothing run as
+# this user can change it once it's on PATH: root owns every file, and no
+# one else can write one, whatever modes the build left (chown keeps them).
+# The prefix above it too, where current is: whoever can write there can
+# point current anywhere. Everyone can read it, though, and get into its
+# directories, which a restrictive umask (077) would otherwise leave to root
+# alone; each of COMMANDS is checked to still run for this user. It's rerun
+# before every link, so a build a failed seal left behind isn't linked until
+# it's sealed.
+seal_build() {
+    _prefix=${1%/*}
+    if ! sudo_or_warn chown -R 0:0 "$1" || ! sudo_or_warn chmod -R a+rX,go-w "$1" \
+        || ! sudo_or_warn chown 0:0 "$_prefix" || ! sudo_or_warn chmod a+rX,go-w "$_prefix"; then
+        warn "couldn't hand $1 to root, so it isn't linked onto PATH"
+        return 1
+    fi
+    # Links aren't followed, and their own modes mean nothing.
+    if ! _writable=$(find "$_prefix" -maxdepth 0 -perm /022 -print && find "$1" ! -type l -perm /022 -print); then
+        warn "couldn't check $1 is root's alone, so it isn't linked onto PATH"
+        return 1
+    fi
+    if test -n "$_writable"; then
+        warn "others can still write $(printf '%s\n' "$_writable" | head -n1), so $1 isn't linked onto PATH"
+        return 1
+    fi
+    for _cmd in $2; do
+        if ! test -x "$1/bin/$_cmd"; then
+            warn "$1/bin/$_cmd can't be run once it's root's, so $1 isn't linked onto PATH"
+            return 1
+        fi
+    done
+}
+
+# is_setup_link TARGET PREFIX LEGACY: whether a link to TARGET is one setup
+# made, into either prefix.
+is_setup_link() {
+    case "$1" in
+        "$2"/* | "$3"/*) return 0 ;;
+    esac
+    return 1
+}
+
+# remove_legacy_builds PREFIX MARKER BIN_DIR COMMANDS removes what earlier
+# versions built into PREFIX, in $HOME, once a build in the new prefix is
+# linked in its place: the builds, by their MARKER or a component's stamp,
+# and the current link. Not while any of COMMANDS in BIN_DIR still links
+# into it, as one does when relinking it failed. Anything else there is left
+# alone, and with it the prefix.
+remove_legacy_builds() {
+    legacy=$1
+    marker=$2
+    test -d "$legacy" || return 0
+    for cmd in $4; do
+        case "$(readlink "$3/$cmd")" in
+            "$legacy"/*) return 0 ;;
+        esac
+    done
+    for old in "$legacy"/v*-[0-9]*/; do
+        old=${old%/}
+        if ! test -d "$old" || test -L "$old"; then
+            continue
+        fi
+        set -- "$old"/.built-*
+        test -f "$old/$marker" || test -e "$1" || continue
+        info "Removing $old, an earlier build the greeter can't run"
+        rm -rf "$old" || warn "couldn't remove the earlier build in $old"
+    done
+    if test -L "$legacy/current"; then
+        rm -f "$legacy/current" || warn "couldn't remove $legacy/current"
+    fi
+    if test -z "$(ls -A "$legacy")"; then
+        rmdir "$legacy" || warn "couldn't remove the empty $legacy"
+    fi
+}
+
 # --- Quickshell from source ---
 
 # build_quickshell builds QUICKSHELL_TAG into its own directory under
-# $QUICKSHELL_PREFIX, as this user, and links its commands onto PATH. Its
-# argument says why apt's won't do.
+# $QUICKSHELL_PREFIX, as this user, then hands it to root and links its
+# commands onto PATH. Its argument says why apt's won't do.
 # Quickshell uses Qt's private API, so it must be rebuilt for each Qt
 # release: the directory is named for the tag and the versions of the Qt
 # packages it uses privately, a new one builds afresh, and a rerun with
@@ -570,12 +686,14 @@ build_quickshell() {
     else
         src="$QUICKSHELL_SRC/quickshell"
         # A stale clone or partial install left in place would be built into
-        # and then marked complete.
-        if ! rm -rf "$src" "$qs_dir"; then
+        # and then marked complete. The partial install is in root's prefix,
+        # so only root can remove it.
+        if ! rm -rf "$src" || { test -e "$qs_dir" && ! sudo_or_warn rm -rf "$qs_dir"; }; then
             warn "couldn't remove the old Quickshell sources or partial build in $src and $qs_dir; not building"
             return 1
         fi
         mkdir -p "$QUICKSHELL_SRC" || return 1
+        make_build_dir "$qs_dir" || return 1
         git clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
         commit=$(git -C "$src" rev-parse HEAD) || return 1
         if test "$commit" != "$QUICKSHELL_COMMIT"; then
@@ -595,10 +713,11 @@ build_quickshell() {
     fi
     link_quickshell || return 1
     remove_old_quickshell_builds
+    remove_legacy_builds "$LEGACY_QUICKSHELL_PREFIX" quickspace-build "$QUICKSHELL_BIN_DIR" "$QUICKSHELL_COMMANDS"
 }
 
-# link_quickshell points $QUICKSHELL_PREFIX/current at $qs_dir, then makes
-# sure the commands' links go through it.
+# link_quickshell hands $qs_dir to root, points $QUICKSHELL_PREFIX/current
+# at it, then makes sure the commands' links go through it.
 link_quickshell() {
     for cmd in $QUICKSHELL_COMMANDS; do
         if ! test -x "$qs_dir/bin/$cmd"; then
@@ -606,10 +725,13 @@ link_quickshell() {
             return 1
         fi
     done
+    seal_build "$qs_dir" "$QUICKSHELL_COMMANDS" || return 1
     current="$QUICKSHELL_PREFIX/current"
-    if ! ln -sfn "${qs_dir##*/}" "$current.new" || ! mv -Tf "$current.new" "$current"; then
+    if ! sudo_or_warn ln -sfn "${qs_dir##*/}" "$current.new" || ! sudo_or_warn mv -Tf "$current.new" "$current"; then
         warn "couldn't point $current at $qs_dir"
-        rm -f "$current.new" || warn "couldn't remove $current.new"
+        if test -L "$current.new"; then
+            sudo_or_warn rm -f "$current.new" || warn "couldn't remove $current.new"
+        fi
         return 1
     fi
     for cmd in $QUICKSHELL_COMMANDS; do
@@ -617,16 +739,13 @@ link_quickshell() {
         test "$(readlink "$link")" != "$current/bin/$cmd" || continue
         # Only replace a link of ours; anything else there is someone else's.
         if test -e "$link" || test -L "$link"; then
-            case "$(readlink "$link")" in
-                "$QUICKSHELL_PREFIX"/*) ;;
-                *)
-                    warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build"
-                    continue
-                    ;;
-            esac
+            if ! is_setup_link "$(readlink "$link")" "$QUICKSHELL_PREFIX" "$LEGACY_QUICKSHELL_PREFIX"; then
+                warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build"
+                continue
+            fi
         fi
-        # tide.service finds qs on the user manager's PATH, which may
-        # not reach into $HOME.
+        # tide.service finds qs on the user manager's PATH, and the greeter
+        # on greetd's.
         if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
             warn "COULDN'T LINK $cmd INTO $QUICKSHELL_BIN_DIR: the tide session won't find Quickshell; link $current/bin/$cmd onto its PATH yourself"
         fi
@@ -648,15 +767,21 @@ remove_old_quickshell_builds() {
                 "$old"/*) continue 2 ;;
             esac
         done
-        rm -rf "$old" || warn "couldn't remove the old Quickshell build in $old"
+        sudo_or_warn rm -rf "$old" || warn "couldn't remove the old Quickshell build in $old"
     done
 }
 
-# True when the current build, if any, was made for the Qt installed now.
-# No current build matches trivially: there's nothing stale to run.
+# True when the current build, if any, was made for the Qt installed now:
+# the one in the prefix qs links into, which after an upgrade can still be
+# the legacy one, and otherwise this prefix's. Sets qs_prefix to that
+# prefix. No current build matches trivially: there's nothing stale to run.
 current_quickshell_matches_qt() {
-    marker="$QUICKSHELL_PREFIX/current/quickspace-build"
-    test -e "$QUICKSHELL_PREFIX/current" || return 0
+    qs_prefix=$QUICKSHELL_PREFIX
+    case "$(readlink "$QUICKSHELL_BIN_DIR/qs")" in
+        "$LEGACY_QUICKSHELL_PREFIX"/*) qs_prefix=$LEGACY_QUICKSHELL_PREFIX ;;
+    esac
+    marker="$qs_prefix/current/quickspace-build"
+    test -e "$qs_prefix/current" || return 0
     test -f "$marker" || return 1
     # shellcheck disable=SC2086  # word-split the package list
     installed=$(dpkg-query -W -f='${Package} ${Version}\n' $QUICKSHELL_QT_PRIVATE) || return 1
@@ -673,15 +798,12 @@ unlink_quickshell() {
     for cmd in $QUICKSHELL_COMMANDS; do
         link="$QUICKSHELL_BIN_DIR/$cmd"
         test -L "$link" || continue
-        case "$(readlink "$link")" in
-            "$QUICKSHELL_PREFIX"/*)
-                info "Removing $link, which points to a source build: $_why"
-                if ! sudo_or_warn rm -f "$link"; then
-                    warn "couldn't remove $link; it still points to the source-built Quickshell"
-                    _unlinked=no
-                fi
-                ;;
-        esac
+        is_setup_link "$(readlink "$link")" "$QUICKSHELL_PREFIX" "$LEGACY_QUICKSHELL_PREFIX" || continue
+        info "Removing $link, which points to a source build: $_why"
+        if ! sudo_or_warn rm -f "$link"; then
+            warn "couldn't remove $link; it still points to the source-built Quickshell"
+            _unlinked=no
+        fi
     done
     test "$_unlinked" = yes
 }
@@ -689,7 +811,8 @@ unlink_quickshell() {
 # --- Hyprland from source ---
 
 # build_hyprland builds and installs each of HYPRLAND_PINS in turn, as this
-# user, then links its commands onto PATH. Each set of
+# user, then hands the build to root and links its commands onto PATH. Each
+# set of
 # pins gets its own directory under $HYPRLAND_PREFIX, so a failed rebuild
 # leaves the working one alone; quickspace-pins in it marks it complete, and
 # a rerun with the same pins only relinks.
@@ -699,6 +822,7 @@ build_hyprland() {
         info "Hyprland is already built from these pins in $install_dir"
         link_hyprland || return 1
         remove_old_builds
+        remove_legacy_builds "$LEGACY_HYPRLAND_PREFIX" quickspace-pins "$HYPRLAND_BIN_DIR" "$HYPRLAND_COMMANDS"
         return
     fi
     info "Building Hyprland from source into $install_dir (apt's is older than $MIN_HYPRLAND; this takes a while)"
@@ -712,7 +836,22 @@ build_hyprland() {
     export PKG_CONFIG_PATH
     # aquamarine and Hyprland run the hyprwayland-scanner we just built by name.
     PATH="$install_dir/bin:$PATH"
-    mkdir -p "$HYPRLAND_SRC" "$install_dir"
+    mkdir -p "$HYPRLAND_SRC" || return 1
+    # Every component stamped but no marker is a finished build whose marker
+    # was removed to rebuild it, as link_hyprland says to: resumed, it would
+    # rebuild nothing, and once sealed it's root's, so this user couldn't
+    # write its marker again. Like Quickshell's, it's built afresh.
+    if test -d "$install_dir" && printf '%s\n' "$HYPRLAND_PINS" | while read -r name _; do
+        test -n "$name" || continue
+        test -f "$install_dir/.built-$name" || exit 1
+    done; then
+        info "Hyprland's build in $install_dir has lost its marker, so it's rebuilt"
+        if ! sudo_or_warn rm -rf "$install_dir"; then
+            warn "couldn't remove $install_dir to rebuild it"
+            return 1
+        fi
+    fi
+    make_build_dir "$install_dir" || return 1
     # A failed build keeps what it finished, stamped, so a rerun picks up
     # where it stopped. Nothing uses it until it's complete and current.
     printf '%s\n' "$HYPRLAND_PINS" | while read -r name url tag commit kind; do
@@ -735,6 +874,7 @@ build_hyprland() {
     }
     link_hyprland || return 1
     remove_old_builds
+    remove_legacy_builds "$LEGACY_HYPRLAND_PREFIX" quickspace-pins "$HYPRLAND_BIN_DIR" "$HYPRLAND_COMMANDS"
 }
 
 # Once $HYPRLAND_PREFIX/current points at this build, older ones, finished
@@ -762,7 +902,7 @@ remove_old_builds() {
                 "$old"/*) continue 2 ;;
             esac
         done
-        rm -rf "$old" || warn "couldn't remove the old Hyprland build in $old"
+        sudo_or_warn rm -rf "$old" || warn "couldn't remove the old Hyprland build in $old"
     done
 }
 
@@ -770,9 +910,9 @@ remove_old_builds() {
 # Hyprland through start-hyprland, its crash watchdog, when it can find it.
 HYPRLAND_COMMANDS="Hyprland hyprctl start-hyprland"
 
-# link_hyprland points $HYPRLAND_PREFIX/current at this build, which
-# switches every command at once, then makes sure the commands' links go
-# through it.
+# link_hyprland hands this build to root and points $HYPRLAND_PREFIX/current
+# at it, which switches every command at once, then makes sure the
+# commands' links go through it.
 link_hyprland() {
     for cmd in $HYPRLAND_COMMANDS; do
         if ! test -x "$install_dir/bin/$cmd"; then
@@ -780,11 +920,14 @@ link_hyprland() {
             return 1
         fi
     done
+    seal_build "$install_dir" "$HYPRLAND_COMMANDS" || return 1
     # Renamed into place, so current is never missing or half-switched.
     current="$HYPRLAND_PREFIX/current"
-    if ! ln -sfn "${install_dir##*/}" "$current.new" || ! mv -Tf "$current.new" "$current"; then
+    if ! sudo_or_warn ln -sfn "${install_dir##*/}" "$current.new" || ! sudo_or_warn mv -Tf "$current.new" "$current"; then
         warn "couldn't point $current at $install_dir"
-        rm -f "$current.new"
+        if test -L "$current.new"; then
+            sudo_or_warn rm -f "$current.new" || warn "couldn't remove $current.new"
+        fi
         return 1
     fi
     for cmd in $HYPRLAND_COMMANDS; do
@@ -792,16 +935,13 @@ link_hyprland() {
         test "$(readlink "$link")" != "$current/bin/$cmd" || continue
         # Only replace a link of ours; anything else there is someone else's.
         if test -e "$link" || test -L "$link"; then
-            case "$(readlink "$link")" in
-                "$HYPRLAND_PREFIX"/*) ;;
-                *)
-                    warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build, or put $current/bin on the session's PATH"
-                    continue
-                    ;;
-            esac
+            if ! is_setup_link "$(readlink "$link")" "$HYPRLAND_PREFIX" "$LEGACY_HYPRLAND_PREFIX"; then
+                warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build, or put $current/bin on the session's PATH"
+                continue
+            fi
         fi
-        # The display manager's PATH may not reach into $HOME, so the links
-        # help, but the build is still usable without them.
+        # The display manager finds Hyprland on its PATH, and so does the
+        # greeter; without the links, only a session told where it is can.
         if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
             warn "COULDN'T LINK $cmd INTO $HYPRLAND_BIN_DIR: the tide session may not find it; link $current/bin/$cmd onto the session's PATH yourself"
         fi
@@ -818,13 +958,11 @@ unlink_hyprland() {
         link="$HYPRLAND_BIN_DIR/$cmd"
         test -L "$link" || continue
         target=$(readlink "$link")
-        case "$target" in
-            "$HYPRLAND_PREFIX"/*)
-                set -- "$@" "$link"
-                saved="$saved$link $target
+        if is_setup_link "$target" "$HYPRLAND_PREFIX" "$LEGACY_HYPRLAND_PREFIX"; then
+            set -- "$@" "$link"
+            saved="$saved$link $target
 "
-                ;;
-        esac
+        fi
     done
     test $# -gt 0 || return 0
     info "Removing $*, which point to a source build; using apt's Hyprland"

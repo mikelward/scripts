@@ -111,12 +111,14 @@ fi
 exit 0
 MOCK
     # sudo runs the command, so rm and the rest really happen (on $T paths).
-    # \$FAKE_LN_FAILS makes linking fail. \$FAKE_RM_KEEPS makes rm remove
-    # everything but the file it names, then fail.
+    # \$FAKE_LN_FAILS makes linking a command onto PATH fail. \$FAKE_RM_KEEPS
+    # makes rm remove everything but the file it names, then fail.
     cat > "$T/bin/sudo" <<MOCK
 #!/bin/sh
 printf "%s\\n" "sudo \$*" >> "$CALLS"
-test "\$1" != ln || test -z "\$FAKE_LN_FAILS" || exit 1
+if test "\$1" = ln && test -n "\$FAKE_LN_FAILS"; then
+    case "\$*" in *"$T/usr-local-bin/"*) exit 1 ;; esac
+fi
 if test "\$1" = rm && test -n "\$FAKE_RM_KEEPS"; then
     shift
     for f; do
@@ -167,6 +169,13 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "go \$*" >> "$CALLS"
 test "\$*" != "env GOVERSION" || echo "\${FAKE_GO_VERSION:-go1.22.2}"
+MOCK
+    # chown logs, since handing a build to root needs root, and fails with
+    # \$FAKE_CHOWN_FAILS.
+    cat > "$T/bin/chown" <<MOCK
+#!/bin/sh
+printf "%s\\n" "chown \$*" >> "$CALLS"
+test -z "\$FAKE_CHOWN_FAILS"
 MOCK
     cat > "$T/bin/dconf" <<MOCK
 #!/bin/sh
@@ -488,7 +497,9 @@ check "an unused old build is removed" test ! -e "$T/opt/quickshell/v0.2.0-3"
 teardown
 
 # A partial build that can't be removed isn't built into and marked complete.
-setup; ARGS=()
+setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
+check "a failed build leaves a partial one" test -d "$(qs_inst)"
+: > "$CALLS"
 cat > "$T/bin/rm" <<MOCK
 #!/bin/sh
 case "\$*" in *"$T/opt/quickshell/"*) exit 1 ;; esac
@@ -554,6 +565,43 @@ setup; ARGS=(); run FAKE_MISSING=quickshell
 run
 check "apt's Quickshell removes the build's qs link" test ! -L "$T/usr-local-bin/qs"
 check "apt's Quickshell removes the build's quickshell link" test ! -L "$T/usr-local-bin/quickshell"
+teardown
+
+# What earlier versions built in $HOME is setup's own, for Quickshell too.
+legacy_quickshell() {
+    legacy="$T/home/.local/opt/quickshell"
+    mkdir -p "$legacy/v0.3.1-1/bin"
+    : > "$legacy/v0.3.1-1/quickspace-build"
+    ln -s v0.3.1-1 "$legacy/current"
+    for cmd in qs quickshell; do
+        printf '#!/bin/sh\n' > "$legacy/v0.3.1-1/bin/$cmd"
+        chmod +x "$legacy/v0.3.1-1/bin/$cmd"
+        ln -s "$legacy/current/bin/$cmd" "$T/usr-local-bin/$cmd"
+    done
+}
+setup; ARGS=(); legacy_quickshell; run FAKE_MISSING=quickshell
+check "a qs link into the old prefix is replaced" test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
+check "the old Quickshell build is removed" test ! -e "$legacy"
+check "the Quickshell build is handed to root" has "$calls" "sudo chown -R 0:0 $(qs_inst)"
+teardown
+
+setup; ARGS=(); legacy_quickshell; run
+check "apt's Quickshell removes links into the old prefix" test ! -L "$T/usr-local-bin/qs"
+teardown
+
+# An old prefix's build still linked is checked against Qt, as the new
+# prefix's would be: when the new build fails, one made for an older Qt is
+# unlinked rather than left to crash, and one made for this Qt stays.
+qt_marker() {
+    printf 'qt6-base-private-dev %s\nqt6-declarative-private-dev 6.10.2+dfsg-3\nqt6-wayland-private-dev 6.10.2-4\n' "$1" \
+        > "$legacy/v0.3.1-1/quickspace-build"
+}
+setup; ARGS=(); legacy_quickshell; qt_marker 6.10.1-1; run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
+check "a failed build unlinks an old prefix's build for another Qt" test ! -L "$T/usr-local-bin/qs"
+check "and removes its current" test ! -L "$legacy/current"
+teardown
+setup; ARGS=(); legacy_quickshell; qt_marker 6.10.2+dfsg-7; run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
+check "a failed build keeps an old prefix's build for this Qt" test "$(readlink "$T/usr-local-bin/qs")" = "$legacy/current/bin/qs"
 teardown
 
 setup; ARGS=(); run SETUP_OS=arch
@@ -724,7 +772,7 @@ check "an upgrade switches current" test "$(readlink -f "$T/opt/hyprland/current
 check "an upgrade switches Hyprland and hyprctl together" \
     test "$(readlink -f "$T/usr-local-bin/Hyprland")" = "$(inst)/bin/Hyprland" -a \
         "$(readlink -f "$T/usr-local-bin/hyprctl")" = "$(inst)/bin/hyprctl"
-check "an upgrade needs no new links" lacks "$calls" "sudo ln"
+check "an upgrade needs no new links" lacks "$calls" "sudo ln -sfn $T/opt/hyprland/current/bin"
 check "an upgrade removes the older build" test ! -e "$old"
 check "an upgrade removes an unfinished older build" test ! -e "$T/opt/hyprland/v0.55.0-2"
 teardown
@@ -740,6 +788,127 @@ check "a rerun links start-hyprland onto an existing build" \
 check "a rerun that only links rebuilds nothing" lacks "$calls" "cmake"
 teardown
 
+# The greeter runs the build as greetd's own user, which can't read a home
+# directory, so it goes in /opt, and is root's once it's built.
+setup; ARGS=()
+check "Hyprland builds into /opt by default" \
+    grep -qxF 'HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-/opt/hyprland}"' "$SCRIPT"
+check "Quickshell builds into /opt by default" \
+    grep -qxF 'QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-/opt/quickshell}"' "$SCRIPT"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the prefix is root's" has "$calls" "sudo install -d -m 755 -o 0 -g 0 $T/opt/hyprland
+"
+check "and so it stays, with the build sealed" has "$calls" "sudo chown 0:0 $T/opt/hyprland
+"
+check "the build's directory is this user's, to build into" \
+    has "$calls" "sudo install -d -m 755 -o $(id -u) -g $(id -g) $(inst)"
+check "the finished build is handed to root" has "$calls" "sudo chown -R 0:0 $(inst)"
+check "it's handed over before current points at it" \
+    test "$(printf '%s\n' "$calls" | grep -n "chown -R 0:0 $(inst)" | head -n1 | cut -d: -f1)" -lt \
+        "$(printf '%s\n' "$calls" | grep -n "ln -sfn $(basename "$(inst)")" | head -n1 | cut -d: -f1)"
+check "current, in root's prefix, is switched with sudo" has "$calls" "sudo mv -Tf $T/opt/hyprland/current.new $T/opt/hyprland/current"
+teardown
+
+# Handing a build to root takes others' write access too, which chown keeps.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+chmod 777 "$(inst)/bin/Hyprland"; chmod 775 "$(inst)/bin"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the seal takes others' write access" has "$calls" "sudo chmod -R a+rX,go-w $(inst)"
+check "from a world-writable file" test "$(stat -c %a "$(inst)/bin/Hyprland")" = 755
+check "and a group-writable directory" test "$(stat -c %a "$(inst)/bin")" = 755
+check "then links it" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+teardown
+
+# A build made under a restrictive umask is everyone's to read and run once
+# it's root's, or neither this user nor the greeter could.
+setup; ARGS=(); (umask 077 && run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1)
+check "a umask 077 build's directories start as the owner's alone" test "$(stat -c %a "$(inst)/bin")" = 700
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the seal opens its directories to all" test "$(stat -c %a "$(inst)/bin")" = 755
+check "and its commands" test "$(stat -c %a "$(inst)/bin/Hyprland")" = 755
+teardown
+
+# A command that can't be run once sealed isn't linked.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+printf '#!/bin/sh\nprintf "%%s\\n" "chmod $*" >> "%s"\n/bin/chmod "$@" && /bin/chmod a-x "%s/bin/hyprctl"\n' "$CALLS" "$(inst)" > "$T/bin/chmod"
+chmod +x "$T/bin/chmod"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a command that can't run once sealed isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+check "and is named" has "$output" "$(inst)/bin/hyprctl can't be run once it's root's, so $(inst) isn't linked onto PATH"
+teardown
+
+# A prefix others can write, where current is, is sealed too.
+setup; ARGS=(); mkdir -p "$T/opt/hyprland"; chmod 777 "$T/opt/hyprland"; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a prefix others could write is sealed" test "$(stat -c %a "$T/opt/hyprland")" = 755
+check "with a sudo chmod" has "$calls" "sudo chmod a+rX,go-w $T/opt/hyprland"
+teardown
+
+# A build others could still write isn't linked.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+chmod 777 "$(inst)/bin/Hyprland"
+printf '#!/bin/sh\nprintf "%%s\\n" "chmod $*" >> "%s"\n' "$CALLS" > "$T/bin/chmod"; chmod +x "$T/bin/chmod"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build others can write isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+check "and says which file" has "$output" "others can still write $(inst)/bin/Hyprland, so $(inst) isn't linked onto PATH"
+teardown
+
+# A build that couldn't be handed to root isn't linked, and the next run
+# hands it over and links it without building it again.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+check "an unsealed build says why it isn't linked" has "$output" "couldn't hand $(inst) to root, so it isn't linked onto PATH"
+check "an unsealed build isn't current" test ! -e "$T/opt/hyprland/current"
+check "an unsealed build isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the next run hands it over" has "$calls" "sudo chown -R 0:0 $(inst)"
+check "and links it" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "without building it again" lacks "$calls" "cmake"
+teardown
+
+# What earlier versions built in $HOME is setup's own: its links are
+# replaced, and its builds removed once the new one is linked.
+legacy_hyprland() {
+    legacy="$T/home/.local/opt/hyprland"
+    mkdir -p "$legacy/v0.56.2-1/bin" "$legacy/v0.56.1-2"
+    : > "$legacy/v0.56.2-1/quickspace-pins"
+    : > "$legacy/v0.56.1-2/.built-hyprutils"
+    ln -s v0.56.2-1 "$legacy/current"
+    for cmd in Hyprland hyprctl start-hyprland; do
+        printf '#!/bin/sh\n' > "$legacy/v0.56.2-1/bin/$cmd"
+        chmod +x "$legacy/v0.56.2-1/bin/$cmd"
+        ln -s "$legacy/current/bin/$cmd" "$T/usr-local-bin/$cmd"
+    done
+}
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a link into the old prefix is replaced" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "and isn't taken for someone else's" lacks "$output" "NOT LINKING"
+check "the old prefix's builds are removed" test ! -e "$legacy/v0.56.2-1" -a ! -e "$legacy/v0.56.1-2"
+check "and with them the empty prefix" test ! -e "$legacy"
+teardown
+
+setup; ARGS=(); legacy_hyprland; mkdir "$legacy/mine"; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "what setup didn't make in the old prefix stays" test -d "$legacy/mine"
+check "and so does the prefix" test -d "$legacy"
+check "but not the old current" test ! -L "$legacy/current"
+teardown
+
+# A link that couldn't be replaced keeps the old build it points to.
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_LN_FAILS=1
+check "an old link that couldn't be replaced keeps its build" test -e "$T/usr-local-bin/Hyprland"
+teardown
+
+# A failed build leaves the old one in use.
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=Hyprland
+check "a failed build keeps the old prefix's build" test -d "$legacy/v0.56.2-1"
+check "and its links" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$legacy/current/bin/Hyprland"
+teardown
+
+# apt's Hyprland takes over from the old prefix's links too.
+setup; ARGS=(); legacy_hyprland; run
+check "apt's Hyprland removes links into the old prefix" test ! -L "$T/usr-local-bin/Hyprland"
+teardown
+
 # A rerun after a failure resumes from the step that failed.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
 : > "$CALLS"
@@ -749,6 +918,35 @@ check "a resumed build says so" has "$output" "Already built hyprutils v0.14.2"
 check "a resumed build redoes the failed step" has "$calls" "cmake -S $T/src/hyprland-build/hyprlang "
 check "a resumed build finishes" has "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
 check "a resumed build marks itself complete" test -f "$(inst)/quickspace-pins"
+check "a resumed build isn't removed" lacks "$calls" "sudo rm -rf $(inst)"
+teardown
+# Another account's partial build in the shared prefix can't be written,
+# and what it built would be sealed as root's, so it's started afresh.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+real_id=$(command -v id)
+cat > "$T/bin/id" <<MOCK
+#!/bin/sh
+test "\$*" != -u || { echo 4242; exit 0; }
+exec $real_id "\$@"
+MOCK
+chmod +x "$T/bin/id"; : > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "another account's partial build is removed" has "$calls" "sudo rm -rf $(inst)"
+check "another account's partial build says so" has "$output" "$(inst) is another account's partial build, so it's started afresh"
+check "another account's partial build is rebuilt from the start" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "another account's partial build is rebuilt to the end" test -f "$(inst)/quickspace-pins"
+teardown
+# A finished build whose marker was removed, as link_hyprland says to, is
+# rebuilt: resumed, it would rebuild nothing, and sealed it's root's, so its
+# marker couldn't be written again.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+rm "$(inst)/quickspace-pins"; : > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build that lost its marker is removed" has "$calls" "sudo rm -rf $(inst)"
+check "a build that lost its marker is rebuilt" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a build that lost its marker says so" has "$output" "has lost its marker, so it's rebuilt"
+check "a rebuilt build marks itself complete" test -f "$(inst)/quickspace-pins"
+check "a rebuilt build is linked" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
 teardown
 
 # New pins build beside the working Hyprland, which a failure leaves alone
