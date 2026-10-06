@@ -2458,6 +2458,270 @@ test_redact_url_credentials() {
         'https://ghe.corp.example.com/mikelward/a@b.git'
 }
 
+# --- Keeping the display card powered ---
+
+# The rule keep_display_gpu_awake should write, line for line.
+DISPLAY_GPU_RULE='ACTION=="add|bind", SUBSYSTEM=="pci", ATTR{class}=="0x03*", DRIVER=="amdgpu|radeon|nouveau|nvidia", ATTR{power/control}="on"'
+
+# Run keep_display_gpu_awake against a fake /sys and udev rules directory, so
+# the tests check what it does to real-shaped devices rather than what the
+# source says.
+#   $1  the PCI devices, space-separated, each ADDRESS/DRIVER/CLASS/CONTROL:
+#       DRIVER "-" for none bound, CLASS the PCI class as sysfs gives it
+#       (0x030000 for a VGA controller), CONTROL its power/control
+#   $2  how sudo goes (default ok): ok | denied
+#   $3  the OS (default debian)
+#   $4  the power supplies, space-separated, each NAME/TYPE/SCOPE, SCOPE "-"
+#       for none given (default none: a desktop)
+#   $5  the rule file already there (default none): none | setup (one an
+#       earlier run wrote) | other (somebody else's at the same path)
+# Leaves $calls set to the privileged commands asked for, $gpu_rule_body to the
+# rule file written (empty when none), and $gpu_controls to every device's
+# power/control afterwards, one ADDRESS=STATE line each.
+run_keep_display_gpu_awake() {
+    gpu_devices="$1"
+    gpu_sudo="${2:-ok}"
+    gpu_os="${3:-debian}"
+    gpu_supplies="${4:-}"
+    gpu_seed="${5:-none}"
+    gpu_tmpdir="$(mktemp -d)"
+    gpu_sys="$gpu_tmpdir/sys"
+    gpu_rules="$gpu_tmpdir/rules"
+    mkdir -p "$gpu_sys/bus/pci/devices" "$gpu_sys/class/power_supply" "$gpu_rules"
+    for gpu_spec in $gpu_supplies; do
+        IFS=/ read -r gpu_psu gpu_psu_type gpu_psu_scope <<SPEC
+$gpu_spec
+SPEC
+        mkdir -p "$gpu_sys/class/power_supply/$gpu_psu"
+        printf '%s\n' "$gpu_psu_type" > "$gpu_sys/class/power_supply/$gpu_psu/type"
+        if test "$gpu_psu_scope" != -; then
+            printf '%s\n' "$gpu_psu_scope" > "$gpu_sys/class/power_supply/$gpu_psu/scope"
+        fi
+    done
+    for gpu_spec in $gpu_devices; do
+        IFS=/ read -r gpu_addr gpu_driver gpu_class gpu_control <<SPEC
+$gpu_spec
+SPEC
+        gpu_dev="$gpu_sys/bus/pci/devices/$gpu_addr"
+        mkdir -p "$gpu_dev/power"
+        printf '%s\n' "$gpu_control" > "$gpu_dev/power/control"
+        printf '%s\n' "$gpu_class" > "$gpu_dev/class"
+        if test "$gpu_driver" != -; then
+            mkdir -p "$gpu_sys/bus/pci/drivers/$gpu_driver"
+            ln -s "../../drivers/$gpu_driver" "$gpu_dev/driver"
+        fi
+    done
+    case "$gpu_seed" in
+        setup)
+            printf '%s\n' "# Written by setup (github.com/mikelward/scripts): an earlier run's rule" \
+                "$DISPLAY_GPU_RULE" > "$gpu_rules/80-display-gpu-awake.rules"
+            ;;
+        other)
+            printf '%s\n' "# somebody's own rule" > "$gpu_rules/80-display-gpu-awake.rules"
+            ;;
+    esac
+    # Records each privileged command, then runs it as-is or refuses it the
+    # way sudo_or_warn reports a denial.
+    if test "$gpu_sudo" = denied; then
+        gpu_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$GPU_CALLS"; warn "sudo ${1##*/}: permission denied"; return 1; }'
+    else
+        gpu_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$GPU_CALLS"; "$@"; }'
+    fi
+
+    set +e
+    output="$(GPU_CALLS="$gpu_tmpdir/calls" SETUP_SYSFS="$gpu_sys" SETUP_UDEV_RULES="$gpu_rules" \
+        sh -c "set -e
+OS=$gpu_os
+$(extract_functions "info warn has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
+$gpu_stub
+keep_display_gpu_awake
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls=""
+    if test -f "$gpu_tmpdir/calls"; then
+        calls="$(cat "$gpu_tmpdir/calls")"
+    fi
+    gpu_rule_body=""
+    if test -f "$gpu_rules/80-display-gpu-awake.rules"; then
+        gpu_rule_body="$(cat "$gpu_rules/80-display-gpu-awake.rules")"
+    fi
+    gpu_controls="$(for gpu_dev in "$gpu_sys"/bus/pci/devices/*; do
+        printf '%s=%s\n' "${gpu_dev##*/}" "$(cat "$gpu_dev/power/control")"
+    done)"
+    rm -rf "$gpu_tmpdir"
+}
+
+assert_display_gpu_rule_written() {
+    case "$gpu_rule_body" in
+        *"$DISPLAY_GPU_RULE"*) ;;
+        *)
+            echo "  FAIL: the udev rule isn't the one that holds the display card powered"
+            echo "  rule file: $gpu_rule_body"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_no_display_gpu_rule() {
+    if test -n "$gpu_rule_body"; then
+        echo "  FAIL: a udev rule was written: $gpu_rule_body"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# The WX 3200 case: an amdgpu card driving the screens, with its HDMI audio
+# function beside it, which isn't a display controller and stays as it was.
+test_display_gpu_amd_desktop_held_powered() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto 0000:61:00.1/snd_hda_intel/0x040300/auto"
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "display card at 0000:61:00.0 (amdgpu) powered" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=on
+0000:61:00.1=auto" &&
+    assert_display_gpu_rule_written
+}
+
+# The drivers that power a card down only in a hybrid laptop are held too, as
+# a backstop against a changed default.
+test_display_gpu_other_drivers_held_powered() {
+    for gpu_test_driver in radeon nouveau nvidia; do
+        run_keep_display_gpu_awake "0000:01:00.0/$gpu_test_driver/0x030000/auto"
+        assert_status 0 &&
+        assert_eq "$gpu_controls" "0000:01:00.0=on" &&
+        assert_display_gpu_rule_written ||
+            { echo "  (driver $gpu_test_driver)"; return 1; }
+    done
+}
+
+# A desktop can start on its built-in graphics and drive its screens from an
+# AMD card; the AMD card is held all the same, and the Intel one left be.
+test_display_gpu_desktop_second_card_held() {
+    run_keep_display_gpu_awake "0000:00:02.0/i915/0x030000/auto 0000:01:00.0/amdgpu/0x030000/auto"
+    assert_status 0 &&
+    assert_eq "$gpu_controls" "0000:00:02.0=auto
+0000:01:00.0=on" &&
+    assert_display_gpu_rule_written
+}
+
+# A hybrid laptop's cards look like a desktop's, and a muxed one can even
+# start on its discrete card; a machine with its own battery keeps its power
+# saving whatever its cards say.
+test_display_gpu_laptop_left_alone() {
+    run_keep_display_gpu_awake "0000:00:02.0/i915/0x030000/auto 0000:01:00.0/amdgpu/0x030000/auto" \
+        ok debian "AC/Mains/- BAT0/Battery/-"
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$gpu_controls" "0000:00:02.0=auto
+0000:01:00.0=auto" &&
+    assert_no_display_gpu_rule
+}
+
+# A wireless mouse's battery is the mouse's, not the machine's.
+test_display_gpu_mouse_battery_still_a_desktop() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" ok debian "hidpp_battery_0/Battery/Device"
+    assert_status 0 &&
+    assert_eq "$gpu_controls" "0000:61:00.0=on" &&
+    assert_display_gpu_rule_written
+}
+
+# An earlier run's rule goes once the machine stops qualifying: a laptop whose
+# battery wasn't reported then, or a card swapped for one that needs no help.
+test_display_gpu_stale_rule_removed() {
+    run_keep_display_gpu_awake "0000:01:00.0/amdgpu/0x030000/auto" ok debian "BAT0/Battery/-" setup
+    assert_status 0 &&
+    assert_output_contains "this machine runs on a battery" &&
+    assert_no_display_gpu_rule || { echo "  (laptop)"; return 1; }
+    run_keep_display_gpu_awake "0000:00:02.0/i915/0x030000/auto" ok debian "" setup
+    assert_status 0 &&
+    assert_output_contains "no display card here powers itself down" &&
+    assert_no_display_gpu_rule || { echo "  (Intel card)"; return 1; }
+}
+
+# A file at the rule's path that setup didn't write is somebody else's: not
+# removed where no card qualifies, and not overwritten where one does -- though
+# the card is still held for this boot, and the warning says why not after.
+test_display_gpu_foreign_rule_left_alone() {
+    run_keep_display_gpu_awake "0000:00:02.0/i915/0x030000/auto" ok debian "" other
+    assert_status 0 &&
+    assert_calls_lack "rm" &&
+    assert_eq "$gpu_rule_body" "# somebody's own rule" || { echo "  (Intel card)"; return 1; }
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" ok debian "" other
+    assert_status 0 &&
+    assert_calls_lack "80-display-gpu-awake.rules" &&
+    assert_eq "$gpu_rule_body" "# somebody's own rule" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=on" &&
+    assert_output_contains "setup didn't write it, so the display card can power itself down again after a reboot" ||
+        { echo "  (AMD card)"; return 1; }
+}
+
+# An earlier run's rule is setup's own, so a run that still qualifies rewrites
+# it with the current one.
+test_display_gpu_own_rule_rewritten() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" ok debian "" setup
+    assert_status 0 &&
+    assert_display_gpu_rule_written &&
+    case "$gpu_rule_body" in
+        *"an earlier run's rule"*)
+            echo "  FAIL: the earlier rule was kept: $gpu_rule_body"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+# Intel's drivers keep seeing hotplugs while powered down, a card with no
+# driver has nothing to power it down, and a compute accelerator under amdgpu
+# drives no screens.
+test_display_gpu_intel_and_unbound_left_alone() {
+    for gpu_test_spec in "0000:00:02.0/xe/0x030000/auto" "0000:61:00.0/-/0x030000/auto" \
+        "0000:03:00.0/amdgpu/0x120000/auto"; do
+        run_keep_display_gpu_awake "$gpu_test_spec"
+        assert_status 0 &&
+        assert_eq "$calls" "" &&
+        assert_no_display_gpu_rule ||
+            { echo "  (device $gpu_test_spec)"; return 1; }
+    done
+}
+
+# A card already held powered isn't written again; the rule still is, so the
+# next boot holds it too.
+test_display_gpu_already_powered_not_rewritten() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/on"
+    assert_status 0 &&
+    assert_calls_lack "power/control" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=on" &&
+    assert_display_gpu_rule_written
+}
+
+# Refused sudo is reported, both halves, and the bootstrap carries on.
+test_display_gpu_sudo_denial_is_not_fatal() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" denied
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "could not hold the display card at 0000:61:00.0 powered for this boot" &&
+    assert_output_contains "can power itself down again after a reboot" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=auto" &&
+    assert_no_display_gpu_rule
+}
+
+test_display_gpu_linux_only() {
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" ok macos
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=auto" &&
+    assert_no_display_gpu_rule
+}
+
+# main runs it whatever the GUI setting: an SSH run on the desktop it protects
+# has no display, so a GUI guard would skip the very machine that needs it.
+test_display_gpu_not_keyed_on_the_gui() {
+    assert_source_contains '^keep_display_gpu_awake$' &&
+    assert_source_not_contains '^ \+keep_display_gpu_awake$'
+}
+
 run_test "--github is accepted and takes an argument" test_github_flag_accepted
 run_test "--github=VALUE form parses" test_github_equals_form_accepted
 run_test "--github without an argument errors" test_github_requires_argument
@@ -2714,6 +2978,32 @@ run_test "check_go rejects a missing Go" \
     test_check_go_rejects_no_go
 run_test "Go is installed by setup itself, and vcs waits for it" \
     test_go_is_installed_for_everything
+run_test "an AMD card driving the screens is held powered, now and from boot" \
+    test_display_gpu_amd_desktop_held_powered
+run_test "radeon, nouveau and nvidia display cards are held powered too" \
+    test_display_gpu_other_drivers_held_powered
+run_test "a desktop's AMD card is held even when it didn't start the machine" \
+    test_display_gpu_desktop_second_card_held
+run_test "a laptop's display cards are left to power down" \
+    test_display_gpu_laptop_left_alone
+run_test "a wireless mouse's battery doesn't make a desktop a laptop" \
+    test_display_gpu_mouse_battery_still_a_desktop
+run_test "setup's display card rule goes once the machine stops qualifying" \
+    test_display_gpu_stale_rule_removed
+run_test "a display card rule setup didn't write is left alone" \
+    test_display_gpu_foreign_rule_left_alone
+run_test "setup's own display card rule is rewritten" \
+    test_display_gpu_own_rule_rewritten
+run_test "Intel, driverless and non-display cards are left alone" \
+    test_display_gpu_intel_and_unbound_left_alone
+run_test "a display card already held powered isn't written again" \
+    test_display_gpu_already_powered_not_rewritten
+run_test "a refused sudo for the display card warns and carries on" \
+    test_display_gpu_sudo_denial_is_not_fatal
+run_test "the display card is only held powered on Linux" \
+    test_display_gpu_linux_only
+run_test "the display card is held powered whether or not this run has a GUI" \
+    test_display_gpu_not_keyed_on_the_gui
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

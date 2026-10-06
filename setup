@@ -16,7 +16,10 @@
 #
 # Graphical components (KDE/Plasma, kitty, fonts, desktop config) are
 # installed only when a display server is detected. Pass --gui to force
-# them on, or --no-gui to skip them (e.g. on a headless server).
+# them on, or --no-gui to skip them (e.g. on a headless server). On a
+# Linux machine with no battery whose screens hang off an AMD card, setup
+# also keeps that card from powering itself down while they're off, which
+# can leave the screen dark or hang the machine (see keep_display_gpu_awake).
 #
 # The heavyweight extras (helix, jj, nushell) install from Homebrew bottles
 # when brew is available (or on macOS), and otherwise from each project's
@@ -2154,6 +2157,125 @@ KEYBOARD
     fi
 }
 
+# --- Keep the display card powered ---
+
+# Whether this machine runs on a battery of its own: a laptop's, not the one in
+# a wireless mouse or keyboard, which the kernel marks with scope "Device".
+has_system_battery() {
+    for psu in "${SETUP_SYSFS:-/sys}"/class/power_supply/*; do
+        test -r "$psu/type" || continue
+        test "$(cat "$psu/type")" = Battery || continue
+        if test -r "$psu/scope" && test "$(cat "$psu/scope")" = Device; then
+            continue
+        fi
+        return 0
+    done
+    return 1
+}
+
+# Whether keep_display_gpu_awake may write or remove $gpu_rule: it's absent,
+# or setup wrote it (it carries $gpu_mark). A file there without the mark is
+# somebody else's, and every path that touches the rule asks this first.
+display_gpu_rule_is_ours() {
+    test -e "$gpu_rule" || return 0
+    grep -qF "$gpu_mark" "$gpu_rule"
+}
+
+# Removes the rule keep_display_gpu_awake wrote, once this machine no longer
+# qualifies for it ($1 says why), so a card doesn't stay held powered after,
+# say, a laptop's battery reappears or the card is swapped. The card stays
+# held until the next boot.
+remove_display_gpu_rule() {
+    test -e "$gpu_rule" || return 0
+    if ! display_gpu_rule_is_ours; then
+        info "Leaving $gpu_rule alone: setup didn't write it"
+        return 0
+    fi
+    info "Removing $gpu_rule: $1"
+    sudo_or_warn rm -f "$gpu_rule" \
+        || warn "could not remove $gpu_rule, so the display card stays held powered from the next boot"
+}
+
+# amdgpu powers a desktop card almost fully off (BACO) whenever none of its
+# screens is lit -- a monitor switched off, or the idle blank -- and that fails
+# two ways: a powered-down card can't see a monitor switched back on, so the
+# screen stays dark on a running machine, and waking it can hang the machine
+# outright. A Radeon PRO WX 3200 did both in one afternoon (2026-10-06), under
+# tide and then at GDM's login screen. Holding it powered costs a few watts
+# while the screens are off.
+#
+# Nothing is held on a machine with its own battery: there, a card's power
+# saving is what the battery runs on, and a laptop isn't safe to tell apart by
+# its cards -- a muxed hybrid laptop can start on its discrete card. Elsewhere
+# every display controller (PCI class 0x03) under one of these drivers is held,
+# since nothing says reliably which card the screens hang off: boot_vga names
+# the card the firmware started on, which a desktop can leave for another, and
+# a connector reads disconnected while its monitor is switched off -- the very
+# state this guards. A second card that drives no screens pays a few watts for
+# that (maintainer, 2026-10-06). amdgpu is the driver that powers a desktop
+# card down on its own; radeon, nouveau and the NVIDIA driver do it only in a
+# hybrid laptop, so for them this is a backstop against a changed default.
+# Intel's i915 and xe are left alone: they keep seeing hotplugs while powered
+# down.
+#
+# The sysfs write holds the card now, and the udev rule from the next boot on.
+# The rule matches add as well as bind: binding is when amdgpu turns runtime
+# power management on, so the rule has to come after it, and a card bound in
+# the initramfs gets its rules run again by the add udev replays at boot.
+# SETUP_SYSFS and SETUP_UDEV_RULES are for the tests.
+keep_display_gpu_awake() {
+    case "$OS" in
+        debian|redhat) ;;
+        *) return 0 ;;
+    esac
+    gpu_drivers="amdgpu|radeon|nouveau|nvidia"
+    gpu_rule="${SETUP_UDEV_RULES:-/etc/udev/rules.d}/80-display-gpu-awake.rules"
+    # The rule's first words, which tell a later run the rule is setup's own.
+    gpu_mark="# Written by setup (github.com/mikelward/scripts)"
+    if has_system_battery; then
+        remove_display_gpu_rule "this machine runs on a battery"
+        return 0
+    fi
+    gpu_found=no
+    for gpu_dev in "${SETUP_SYSFS:-/sys}"/bus/pci/devices/*; do
+        # A display controller, not, say, a compute accelerator under amdgpu.
+        test -r "$gpu_dev/class" || continue
+        case "$(cat "$gpu_dev/class")" in
+            0x03*) ;;
+            *) continue ;;
+        esac
+        # No driver bound means nothing to power it down.
+        test -L "$gpu_dev/driver" || continue
+        gpu_driver=$(basename "$(readlink "$gpu_dev/driver")")
+        case "|$gpu_drivers|" in
+            *"|$gpu_driver|"*) ;;
+            *) continue ;;
+        esac
+        gpu_found=yes
+        info "Keeping the display card at ${gpu_dev##*/} ($gpu_driver) powered while its screens are off"
+        if test "$(cat "$gpu_dev/power/control")" != on; then
+            printf 'on\n' | sudo_or_warn tee "$gpu_dev/power/control" >/dev/null \
+                || warn "could not hold the display card at ${gpu_dev##*/} powered for this boot"
+        fi
+    done
+    if test "$gpu_found" = no; then
+        remove_display_gpu_rule "no display card here powers itself down"
+        return 0
+    fi
+    if ! display_gpu_rule_is_ours; then
+        warn "leaving $gpu_rule alone because setup didn't write it, so the display card can power itself down again after a reboot"
+        return 0
+    fi
+    if ! sudo_or_warn tee "$gpu_rule" >/dev/null <<RULE
+$gpu_mark: holds display cards
+# powered while their screens are off. See keep_display_gpu_awake there.
+ACTION=="add|bind", SUBSYSTEM=="pci", ATTR{class}=="0x03*", DRIVER=="$gpu_drivers", ATTR{power/control}="on"
+RULE
+    then
+        warn "could not write $gpu_rule, so the display card can power itself down again after a reboot"
+    fi
+}
+
 # --- Main ---
 
 detect_os
@@ -2180,6 +2302,10 @@ if test "$GUI_ENABLED" -eq 1; then
     set_default_terminal
 fi
 configure_keyboard
+# Not keyed on the GUI: that only says whether this shell has a display, and a
+# run over SSH on the same desktop has none. A headless box whose boot card
+# qualifies pays a few watts for it (maintainer, 2026-10-06).
+keep_display_gpu_awake
 
 if ! command -v git >/dev/null 2>&1; then
     error "git is not installed and could not be installed"
