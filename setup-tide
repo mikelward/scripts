@@ -11,8 +11,9 @@
 #   (swww on Ubuntu 26.04) is reported and the rest still install;
 # - installs Quickshell, which draws tide's own shell (the bar so far),
 #   where the distro packages it: apt and pacman, and on Fedora the
-#   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), it
-#   builds a pinned release from source into ~/.local/opt/quickshell (see
+#   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), or
+#   only one older than tide's shell needs (Debian's 0.2.1), it builds a
+#   pinned release from source into ~/.local/opt/quickshell (see
 #   build_quickshell). Without it the bar can't run, and waybar stays the
 #   bar;
 # - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
@@ -86,6 +87,11 @@ QUICKSHELL_COMMANDS="qs quickshell"
 # Ubuntu has no cpptrace, so the crash handler is left out; systemd
 # restarts the shell instead.
 QUICKSHELL_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCRASH_HANDLER=OFF"
+# The oldest Quickshell tide's shell loads in: 0.3.0 added IdleInhibitor,
+# IdleMonitor and Quickshell.Networking, and an older qs can't load a file
+# that names one. tide's tide-shell and tide doctor check the same. All
+# three parts, so a 0.3.0 pre-release (0.3.0~rc1) is older.
+MIN_QUICKSHELL=0.3.0
 # Quickshell's CMakeLists.txt requires at least this Qt.
 MIN_QUICKSHELL_QT=6.6
 # The Qt packages whose private API Quickshell builds against. Each is
@@ -296,9 +302,10 @@ apt_candidates() {
 }
 
 # The upstream part of a Debian version (4:15.2.0-5ubuntu1 -> 15.2.0), or
-# nothing for "(none)".
+# nothing for "(none)". A pre-release's ~ stays (0.3.0~rc1-1 -> 0.3.0~rc1):
+# sort -V, like Debian, orders it before the release.
 upstream_version() {
-    printf '%s\n' "$1" | sed -n 's/^\([0-9]*:\)\{0,1\}\([0-9][0-9.]*\).*/\2/p'
+    printf '%s\n' "$1" | sed -n 's/^\([0-9]*:\)\{0,1\}\([0-9][0-9.]*\(~[0-9A-Za-z.]*\)\{0,1\}\).*/\2/p'
 }
 
 version_at_least() {
@@ -477,17 +484,26 @@ install_or_build_quickshell() {
         *) return 0 ;;
     esac
     # apt refuses to install a package it doesn't know, so it's asked first:
-    # where it has no Quickshell, it's built instead, given a Qt it builds
-    # with.
-    if test "$(detect_os)" = debian && known=$(apt_candidates quickshell qt6-base-dev) \
-        && ! printf '%s\n' "$known" | awk '$1 == "quickshell" && $2 != "(none)" { found = 1 } END { exit !found }'; then
-        qt=$(upstream_version "$(printf '%s\n' "$known" | awk '$1 == "qt6-base-dev" { print $2 }')")
-        if test -z "$qt" || ! version_at_least "$qt" "$MIN_QUICKSHELL_QT"; then
-            warn "apt has no Quickshell, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; tide's bar won't run, and waybar stays the bar"
+    # where it has no Quickshell, or one too old to load tide's shell, it's
+    # built instead, given a Qt it builds with.
+    if test "$(detect_os)" = debian && known=$(apt_candidates quickshell qt6-base-dev); then
+        apt_qs=$(upstream_version "$(printf '%s\n' "$known" | awk '$1 == "quickshell" { print $2 }')")
+        if test -z "$apt_qs"; then
+            why="apt has no Quickshell"
+        elif ! version_at_least "$apt_qs" "$MIN_QUICKSHELL"; then
+            why="apt's Quickshell is $apt_qs, and tide's shell needs $MIN_QUICKSHELL"
+        else
+            why=
+        fi
+        if test -n "$why"; then
+            qt=$(upstream_version "$(printf '%s\n' "$known" | awk '$1 == "qt6-base-dev" { print $2 }')")
+            if test -z "$qt" || ! version_at_least "$qt" "$MIN_QUICKSHELL_QT"; then
+                warn "$why, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; tide's bar won't run, and waybar stays the bar"
+                return 0
+            fi
+            build_quickshell "$why" || warn "building Quickshell failed, so tide's bar won't run yet; waybar stays the bar. Rerun setup-tide to retry"
             return 0
         fi
-        build_quickshell || warn "building Quickshell failed, so tide's bar won't run yet; waybar stays the bar. Rerun setup-tide to retry"
-        return 0
     fi
     # shellcheck disable=SC2086  # $effects is one name or none
     missing=$(install_all quickshell $effects) && return_ok=yes || return_ok=no
@@ -520,13 +536,14 @@ install_or_build_quickshell() {
 # --- Quickshell from source ---
 
 # build_quickshell builds QUICKSHELL_TAG into its own directory under
-# $QUICKSHELL_PREFIX, as this user, and links its commands onto PATH.
+# $QUICKSHELL_PREFIX, as this user, and links its commands onto PATH. Its
+# argument says why apt's won't do.
 # Quickshell uses Qt's private API, so it must be rebuilt for each Qt
 # release: the directory is named for the tag and the versions of the Qt
 # packages it uses privately, a new one builds afresh, and a rerun with
 # none changed only relinks.
 build_quickshell() {
-    info "apt has no Quickshell; building $QUICKSHELL_TAG from source"
+    info "$1; building $QUICKSHELL_TAG from source"
     # shellcheck disable=SC2086  # word-split the package list
     if ! missing=$(install_all $QUICKSHELL_BUILD_DEPS); then
         warn "could not install Quickshell's build dependencies:$(printf ' %s' $missing)"

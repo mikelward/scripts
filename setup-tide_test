@@ -67,7 +67,8 @@ MOCK
     # apt-cache policy knows every package but those in \$FAKE_MISSING,
     # offering Hyprland \$FAKE_APT_HYPRLAND (or a new enough one), g++-16
     # \$FAKE_APT_GXX and libxkbcommon-dev \$FAKE_APT_XKB (or Ubuntu 26.04's),
-    # and 1.0 of the rest. \$FAKE_APT_CACHE_FAILS makes it fail.
+    # Quickshell \$FAKE_APT_QS (or 0.3.0, new enough), and 1.0 of the rest.
+    # \$FAKE_APT_CACHE_FAILS makes it fail.
     cat > "$T/bin/apt-cache" <<MOCK
 #!/bin/sh
 test -z "\$FAKE_APT_CACHE_FAILS" || exit 100
@@ -79,6 +80,7 @@ for pkg; do
         g++-16) version="\${FAKE_APT_GXX:-16-20260322-1ubuntu1}" ;;
         libxkbcommon-dev) version="\${FAKE_APT_XKB:-1.13.1-1}" ;;
         qt6-base-dev) version="\${FAKE_APT_QT:-6.10.2+dfsg-7}" ;;
+        quickshell) version="\${FAKE_APT_QS:-0.3.0-1build1}" ;;
         *) version=1.0-1 ;;
     esac
     printf "%s:\\n  Installed: (none)\\n  Candidate: %s\\n  Version table:\\n" "\$pkg" "\$version"
@@ -373,6 +375,7 @@ check "the Quickshell build is current" test "$(readlink -f "$T/opt/quickshell/c
 check "the Quickshell build links qs onto PATH, through current" \
     test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
 check "the Quickshell build doesn't warn" lacks "$output" "waybar stays the bar"
+check "the Quickshell build says why" has "$output" "apt has no Quickshell; building v0.3.1 from source"
 : > "$CALLS"
 run FAKE_MISSING=quickshell
 check "the same Quickshell and Qt don't rebuild" lacks "$calls" "cmake -S"
@@ -393,6 +396,43 @@ chmod +x "$T/setup-repinned"
 SCRIPT="$T/setup-repinned" run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_QTDECL_VERSION=6.10.3-1 \
     FAKE_QS_COMMIT=2222222222222222222222222222222222222222
 check "a new pinned commit alone rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
+teardown
+
+# apt's Quickshell older than tide's shell loads in (Debian's 0.2.1) is
+# passed over for the build, as if apt had none.
+setup; ARGS=(); run FAKE_APT_QS=0.2.1-3
+check "apt's old Quickshell isn't fatal" test "$status" -eq 0
+check "apt's old Quickshell isn't installed" lacks "$calls" "apt-get install -y quickshell"
+check "apt's old Quickshell is named" has "$output" "apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0; building v0.3.1 from source"
+check "apt's old Quickshell is replaced by the build" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
+check "the build replacing it is linked onto PATH" \
+    test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
+teardown
+
+# 0.3.0 is new enough, with an epoch too...
+setup; ARGS=(); run FAKE_APT_QS=1:0.3.0-1build1
+check "apt's Quickshell 0.3.0 is installed" has "$calls" "apt-get install -y quickshell"
+check "apt's Quickshell 0.3.0 isn't built" lacks "$calls" "quickshell-mirror"
+teardown
+
+# ...but a pre-release of it isn't: Debian orders 0.3.0~rc1 before 0.3.0.
+setup; ARGS=(); run FAKE_APT_QS=0.3.0~rc1-1
+check "apt's Quickshell 0.3.0~rc1 isn't installed" lacks "$calls" "apt-get install -y quickshell"
+check "apt's Quickshell 0.3.0~rc1 is named" has "$output" "apt's Quickshell is 0.3.0~rc1, and tide's shell needs 0.3.0"
+teardown
+
+# A pre-release of a later one is new enough.
+setup; ARGS=(); run FAKE_APT_QS=0.3.1~rc1-1
+check "apt's Quickshell 0.3.1~rc1 is installed" has "$calls" "apt-get install -y quickshell"
+teardown
+
+# With apt's Quickshell too old and its Qt too old to build one, there's
+# none, and the warning says both.
+setup; ARGS=(); run FAKE_APT_QS=0.2.1-3 FAKE_APT_QT=6.4.2+dfsg-21.1build5
+check "an old Quickshell and Qt isn't fatal" test "$status" -eq 0
+check "an old Quickshell and Qt says why" has "$output" "apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0, and building it needs Qt 6.6"
+check "an old Quickshell and Qt installs no Quickshell" lacks "$calls" "apt-get install -y quickshell"
+check "an old Quickshell and Qt clones nothing" lacks "$calls" "quickshell-mirror"
 teardown
 
 # apt's Quickshell without its effects module still takes over from a
