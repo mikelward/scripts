@@ -1784,15 +1784,15 @@ prune_retired_tools() {
 # --- Install the interactive shell tools with no packaged build ---
 
 # The conf repo's shell config wires up five optional tools. fzf, zoxide and
-# zsh-autosuggestions are packaged (installed from the distro sets above; fzf
-# and zoxide also come from conda-forge via homepkg on the --no-root path,
-# where zsh-autosuggestions has no equivalent yet -- see TODO.md), but atuin
-# and carapace are in neither the distro repos nor conda-forge, so they come
-# from their GitHub releases through homepkg's stateless github backend. That
-# needs no root, so the same call serves every path -- privileged, --no-root
-# and macOS alike. Each shell config skips whichever tool is missing, so a
-# failure here degrades to "no history search / no extra completions" rather
-# than breaking the shell.
+# zsh-autosuggestions are packaged (installed from the distro sets above; on
+# the --no-root path fzf and zoxide come from conda-forge via homepkg, and
+# zsh-autosuggestions from install_zsh_autosuggestions_home's pinned clone),
+# but atuin and carapace are in neither the distro repos nor conda-forge, so
+# they come from their GitHub releases through homepkg's stateless github
+# backend. That needs no root, so the same call serves every path --
+# privileged, --no-root and macOS alike. Each shell config skips whichever tool
+# is missing, so a failure here degrades to "no history search / no extra
+# completions" rather than breaking the shell.
 #
 # Offline hosts install from a push bundle instead, the same way
 # install_home_tools does. The mamba bundle can't carry these two (no
@@ -1860,6 +1860,57 @@ install_shell_tools() {
     # shellcheck disable=SC2086  # deliberate word split: one flag per tool
     "$homepkg" --backend github install $shell_tools \
         || warn "could not install$shell_tools (offline? stage a bundle with 'homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace'); the shell config skips whichever is missing"
+}
+
+# --- zsh-autosuggestions without root ---
+
+# The privileged paths install zsh-autosuggestions from apt, dnf or brew, but
+# --no-root skips apt and dnf, and conda-forge has no package for homepkg to
+# fetch, so an unprivileged Linux box clones the pinned release into
+# ~/.zsh/zsh-autosuggestions -- the first place conf's shrc looks. A tag can be
+# moved, so the clone must be exactly this commit. (macOS is covered already:
+# brew needs no root, so it installs the formula even under --no-root.)
+ZSH_AUTOSUGGESTIONS_REPO=https://github.com/zsh-users/zsh-autosuggestions.git
+ZSH_AUTOSUGGESTIONS_TAG=v0.7.1
+ZSH_AUTOSUGGESTIONS_COMMIT=e52ee8ca55bcc56a17c828767a3f98f22a68d4eb
+
+# A copy already there -- this checkout from an earlier run, or one the system
+# has -- is left alone. Without it the shell only loses its ghost text, so a
+# failure warns rather than stopping the bootstrap. SETUP_SYSROOT is for the
+# tests.
+install_zsh_autosuggestions_home() {
+    case "$OS" in
+        debian|redhat) ;;
+        *) return 0 ;;
+    esac
+    zas_dir="$HOME/.zsh/zsh-autosuggestions"
+    if test -e "$zas_dir"; then
+        info "zsh-autosuggestions is already in ~/.zsh/zsh-autosuggestions"
+        return 0
+    fi
+    for zas_system in "${SETUP_SYSROOT:-}/usr/share/zsh-autosuggestions" \
+            "${SETUP_SYSROOT:-}/usr/share/zsh/plugins/zsh-autosuggestions"; do
+        if test -r "$zas_system/zsh-autosuggestions.zsh"; then
+            info "zsh-autosuggestions is already installed in ${zas_system#"${SETUP_SYSROOT:-}"}"
+            return 0
+        fi
+    done
+    info "Installing zsh-autosuggestions $ZSH_AUTOSUGGESTIONS_TAG into ~/.zsh/zsh-autosuggestions"
+    if ! mkdir -p "${zas_dir%/*}" \
+            || ! git clone -c advice.detachedHead=false --quiet --depth 1 \
+                --branch "$ZSH_AUTOSUGGESTIONS_TAG" "$ZSH_AUTOSUGGESTIONS_REPO" "$zas_dir"; then
+        warn "could not clone zsh-autosuggestions; inline history ghost text will be unavailable"
+        # A clone that died partway would pass for a finished one next run.
+        rm -rf "$zas_dir" || warn "couldn't remove the partial clone in $zas_dir"
+        return 0
+    fi
+    if ! zas_commit=$(git -C "$zas_dir" rev-parse HEAD); then
+        zas_commit="unreadable"
+    fi
+    if test "$zas_commit" != "$ZSH_AUTOSUGGESTIONS_COMMIT"; then
+        warn "zsh-autosuggestions' $ZSH_AUTOSUGGESTIONS_TAG tag is commit $zas_commit, not the pinned $ZSH_AUTOSUGGESTIONS_COMMIT; not using it"
+        rm -rf "$zas_dir" || warn "couldn't remove the rejected clone in $zas_dir"
+    fi
 }
 
 # --- Install uv (Python package manager) ---
@@ -2331,6 +2382,8 @@ elif test "$ROOT" = no; then
     # homepkg instead. --no-sudo alone (ROOT=yes) leaves this to install_extras
     # below, whose brew and release installs are themselves rootless.
     install_home_tools
+    # The one packaged shell tool homepkg can't fetch.
+    install_zsh_autosuggestions_home
 elif test "$MINIMAL_ENABLED" -eq 0; then
     install_extras
 else
