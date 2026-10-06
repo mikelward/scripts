@@ -402,7 +402,8 @@ install_packages() {
     # hyprlock is the lock screen until tide-lock lands (M5): conf's
     # Super+L and hypridle's lock_cmd both run it. It's a separate program,
     # so the distro's works beside a source-built Hyprland. notify-send (the
-    # libnotify package below) is how screenshot reports from a key binding.
+    # libnotify package below) is how screenshot reports from a key binding,
+    # and python3 is how `tide doctor` reads the session bus's XML config.
     # tide-shell shows the wallpaper with swww, or with swaybg where
     # the distro has no swww (Ubuntu 26.04), so both are asked for.
     common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
@@ -413,12 +414,12 @@ install_packages() {
         common="hyprland $common"
     fi
     case "$(detect_os)" in
-        debian) extra="sway-notification-center libnotify-bin golang" ;;
-        redhat) extra="SwayNotificationCenter libnotify golang" ;;
-        arch) extra="swaync libnotify go" ;;
+        debian) extra="sway-notification-center libnotify-bin golang python3" ;;
+        redhat) extra="SwayNotificationCenter libnotify golang python3" ;;
+        arch) extra="swaync libnotify go python" ;;
         *)
             # shellcheck disable=SC2086  # word-split the package list
-            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, Quickshell, swaync, notify-send, Go $MIN_GO+ and these manually:$(printf ' %s' ${common#hyprland })"
+            warn "unknown OS; install Hyprland $MIN_HYPRLAND+, Quickshell, swaync, notify-send, Go $MIN_GO+, python3 and these manually:$(printf ' %s' ${common#hyprland })"
             return 0
             ;;
     esac
