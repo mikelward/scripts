@@ -396,6 +396,34 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$fm_tmpdir"
 }
 
+# Run prune_retired_tools against a sandboxed HOME with a homepkg stub that
+# records its calls and exits $1 (default 0). Leaves $output/$status/$calls set.
+run_prune_retired_tools() {
+    prune_exit="${1:-0}"
+    prune_tmpdir="$(mktemp -d)"
+    prune_scripts="$prune_tmpdir/home/scripts"
+    prune_calls="$prune_tmpdir/calls"
+    mkdir -p "$prune_scripts"
+    cat > "$prune_scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$prune_calls"
+exit $prune_exit
+MOCK
+    chmod +x "$prune_scripts/homepkg"
+
+    set +e
+    output="$(sh -c "set -e
+HOME='$prune_tmpdir/home'
+SCRIPTS_DIR='$prune_scripts'
+$(extract_functions "info warn prune_retired_tools")
+prune_retired_tools
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$prune_calls" 2>/dev/null)"
+    rm -rf "$prune_tmpdir"
+}
+
 # Run the two "homepkg is missing" warning paths with SCRIPTS_DIR pointed at a
 # home-shaped path that doesn't exist. Both functions bail right after warning,
 # so this exercises exactly the messages under test -- and the path is what the
@@ -1467,6 +1495,36 @@ test_purge_obsolete_flag_accepted_and_documented() {
 test_purge_obsolete_off_by_default() {
     assert_source_contains "PURGE_OBSOLETE=no" &&
     assert_source_contains 'test "$PURGE_OBSOLETE" = yes'
+}
+
+# --purge-obsolete also asks homepkg to remove the tools it has retired
+# (joshuto, yazi) from its env, after the scripts clone so the list is current.
+test_purge_obsolete_prunes_retired_tools() {
+    run_prune_retired_tools
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    test "$calls" = "homepkg prune"
+}
+
+# A prune that fails warns, with the command to retry, and setup goes on.
+test_failed_prune_warns_and_continues() {
+    run_prune_retired_tools 1
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "couldn't remove the tools homepkg has retired"
+}
+
+test_retired_tools_pruned_only_on_purge_obsolete_after_the_clone() {
+    files=$(grep -n '^    install_file_managers$' "$SETUP" | cut -d: -f1)
+    prune=$(grep -n '^    prune_retired_tools$' "$SETUP" | cut -d: -f1)
+    gate=$((prune - 1))
+    if test -z "$files" || test -z "$prune" || test "$prune" -le "$files"; then
+        echo "  FAIL: prune_retired_tools runs before the clone's install_file_managers"
+        TEST_FAILED=1
+    elif test "$(sed -n "${gate}p" "$SETUP")" != 'if test "$PURGE_OBSOLETE" = yes; then'; then
+        echo "  FAIL: prune_retired_tools isn't gated on --purge-obsolete"
+        TEST_FAILED=1
+    fi
 }
 
 # Only the packages the query reports installed reach apt-get purge: swaync
@@ -2582,6 +2640,12 @@ run_test "lf is not attempted via apt" \
     test_file_managers_not_in_apt_transaction
 run_test "lf is not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
+run_test "--purge-obsolete prunes homepkg's retired tools" \
+    test_purge_obsolete_prunes_retired_tools
+run_test "a failed prune of retired tools warns and setup continues" \
+    test_failed_prune_warns_and_continues
+run_test "retired tools are pruned only on --purge-obsolete, after the clone" \
+    test_retired_tools_pruned_only_on_purge_obsolete_after_the_clone
 run_test "--purge-obsolete is accepted and documented" \
     test_purge_obsolete_flag_accepted_and_documented
 run_test "obsolete-package purge is off by default" \

@@ -1366,6 +1366,123 @@ with tempfile.TemporaryDirectory() as td:
           not os.path.islink(os.path.join(realbin, "rg"))
           and open(os.path.join(realbin, "rg")).read() == "not a symlink")
 
+# _unlink_bins removes only the links _link_bins made: one pointing anywhere
+# else is another install's.
+with tempfile.TemporaryDirectory() as td:
+    os.makedirs(os.path.join(td, "bin"))
+    os.symlink("/opt/elsewhere/rg", os.path.join(td, "bin", "rg"))
+    hp._unlink_bins(["ripgrep"], td)
+    check("_unlink_bins leaves another install's symlink",
+          os.readlink(os.path.join(td, "bin", "rg")) == "/opt/elsewhere/rg")
+
+# --- retired tools -----------------------------------------------------------
+
+check("_env_packages is empty without an env",
+      hp._env_packages(os.path.join(tempfile.gettempdir(), "hp-no-such-prefix")) == set())
+with tempfile.TemporaryDirectory() as td:
+    meta = os.path.join(hp.mamba_env(td), "conda-meta")
+    os.makedirs(meta)
+    for f in ("git-delta-0.18.2-h1234_0.json", "ripgrep-14.1.0-0.json", "history"):
+        open(os.path.join(meta, f), "w").close()
+    check("_env_packages names each package, dashes and all",
+          hp._env_packages(td) == {"git-delta", "ripgrep"})
+
+check("every retired tool is out of the registry",
+      not set(hp.RETIRED) & set(hp.TOOLS))
+check("every retired tool names its conda package and binaries",
+      all(m.get("conda") and m.get("bins") for m in hp.RETIRED.values()))
+
+
+def _retired_prefix(td, packages, links):
+    """A prefix whose env holds `packages` (conda names, with their binaries),
+    and whose bin/ links each of `links` ({binary: target, or "env"})."""
+    env = hp.mamba_env(td)
+    os.makedirs(os.path.join(env, "conda-meta"))
+    os.makedirs(os.path.join(env, "bin"))
+    for pkg in packages:
+        open(os.path.join(env, "conda-meta", f"{pkg}-1.0-0.json"), "w").close()
+    os.makedirs(os.path.join(td, "bin"))
+    for b, target in links.items():
+        if target == "env":
+            target = os.path.join(env, "bin", b)
+        os.symlink(target, os.path.join(td, "bin", b))
+
+
+# Runs main with micromamba stubbed, returning its status and each micromamba
+# run it asked for.
+def _main_stubbed(td, *args, micromamba=True):
+    calls = []
+    saved = hp.micromamba_path, hp._run_mamba
+    hp.micromamba_path = lambda prefix: "/stub/micromamba" if micromamba else None
+    hp._run_mamba = lambda mm, prefix, a, dry_run: calls.append(a)
+    try:
+        status = hp.main(["--prefix", td, "--arch", "linux/x86_64", *args])
+    finally:
+        hp.micromamba_path, hp._run_mamba = saved
+    return status, calls
+
+
+# An earlier setup left joshuto in the env and linked; ripgrep is current; a
+# yazi link points at another install.
+with tempfile.TemporaryDirectory() as td:
+    _retired_prefix(td, ["joshuto", "ripgrep"],
+                    {"joshuto": "env", "rg": "env", "yazi": "/opt/yazi/bin/yazi"})
+    status, calls = _main_stubbed(td, "prune")
+    check("prune exits 0", status == 0)
+    check("prune removes the retired package in the env, and nothing else",
+          calls == [["remove", "-y", "-p", hp.mamba_env(td), "joshuto"]])
+    check("prune removes the retired tool's link",
+          not os.path.lexists(os.path.join(td, "bin", "joshuto")))
+    check("prune leaves a current tool's link",
+          os.path.islink(os.path.join(td, "bin", "rg")))
+    check("prune leaves another install's link to a retired tool",
+          os.readlink(os.path.join(td, "bin", "yazi")) == "/opt/yazi/bin/yazi")
+
+# A link of ours can outlive its package; prune clears it without micromamba.
+with tempfile.TemporaryDirectory() as td:
+    _retired_prefix(td, ["ripgrep"], {"ya": "env"})
+    status, calls = _main_stubbed(td, "prune", micromamba=False)
+    check("prune with no retired package runs no micromamba", status == 0 and calls == [])
+    check("prune removes a dangling link of ours to a retired tool",
+          not os.path.lexists(os.path.join(td, "bin", "ya")))
+
+with tempfile.TemporaryDirectory() as td:
+    status, calls = _main_stubbed(td, "prune", micromamba=False)
+    check("prune without an env does nothing", status == 0 and calls == [])
+
+with tempfile.TemporaryDirectory() as td:
+    _retired_prefix(td, ["yazi"], {"yazi": "env"})
+    saved_mp = hp.micromamba_path
+    hp.micromamba_path = lambda prefix: None
+    try:
+        hp.prune_mamba(td, ("linux", "x86_64"), False)
+        prune_err = ""
+    except hp.HomepkgError as e:
+        prune_err = str(e)
+    finally:
+        hp.micromamba_path = saved_mp
+    check("prune without micromamba names the retired tools it can't remove",
+          "(yazi) can't be removed; run homepkg bootstrap" in prune_err)
+    status, calls = _main_stubbed(td, "prune", micromamba=False)
+    check("prune fails when a retired package needs a micromamba it can't find",
+          status == 1 and calls == [])
+    check("and leaves that package's link",
+          os.path.islink(os.path.join(td, "bin", "yazi")))
+
+with tempfile.TemporaryDirectory() as td:
+    _retired_prefix(td, ["yazi"], {"yazi": "env", "ya": "env"})
+    status, calls = _main_stubbed(td, "remove", "yazi")
+    check("remove takes a retired tool",
+          status == 0 and calls == [["remove", "-y", "-p", hp.mamba_env(td), "yazi"]])
+    check("remove unlinks every binary of a retired tool",
+          not os.path.lexists(os.path.join(td, "bin", "yazi"))
+          and not os.path.lexists(os.path.join(td, "bin", "ya")))
+
+_install_retired = _run("install", "joshuto")
+check("install refuses a retired tool",
+      _install_retired.returncode != 0 and "unknown tool" in _install_retired.stderr)
+check("prune takes no tools", _run("prune", "joshuto").returncode != 0)
+
 # --- push bundles ------------------------------------------------------------
 
 # A combined bundle carries both payloads. Only the github half is exercised

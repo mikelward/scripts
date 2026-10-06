@@ -23,6 +23,7 @@ Usage:
     homepkg install TOOL...                 # mamba env (default)
     homepkg update [TOOL...]                # native micromamba update (all if none)
     homepkg remove TOOL...
+    homepkg prune                           # remove the retired tools (RETIRED)
     homepkg --backend conda|github|codeberg install TOOL...
     homepkg list
 
@@ -130,6 +131,22 @@ TOOLS = {
     "krohnkite": {"conda": None, "codeberg": "anametologin/Krohnkite"},
 }
 
+# Tools the registry has dropped, with what an earlier install left in the
+# managed env: its conda package and the binaries linked into <prefix>/bin.
+# Dropping a tool only stops new installs, so these let `remove` still name
+# one and `prune` clear them all out. Install doesn't take them.
+RETIRED = {
+    # Replaced by joshuto in #235.
+    "yazi":    {"conda": "yazi",    "bins": ["yazi", "ya"]},
+    # Dropped for lf alone.
+    "joshuto": {"conda": "joshuto", "bins": ["joshuto"]},
+}
+
+
+def _entry(tool):
+    """A tool's registry entry, current or retired."""
+    return TOOLS.get(tool) or RETIRED[tool]
+
 
 def info(msg):
     print(msg, file=sys.stderr)
@@ -160,15 +177,15 @@ def conda_pkgs(tools, skip_missing=False):
     something that never landed -- while operations over the whole registry
     (bundle --all) skip it with a warning and carry on.
     """
-    missing = [t for t in tools if not TOOLS[t].get("conda")]
+    missing = [t for t in tools if not _entry(t).get("conda")]
     if missing and not skip_missing:
         backends = sorted({b for t in missing for b in ("github", "codeberg")
-                            if TOOLS[t].get(b)})
+                            if _entry(t).get(b)})
         hint = f"; install with --backend {'/'.join(backends)}" if backends else ""
         raise HomepkgError(f"no conda-forge package for: {', '.join(missing)}{hint}")
     if missing:
         warn(f"no conda-forge package, skipping: {', '.join(missing)}")
-    return [TOOLS[t]["conda"] for t in tools if TOOLS[t].get("conda")]
+    return [_entry(t)["conda"] for t in tools if _entry(t).get("conda")]
 
 
 # --- Platform ----------------------------------------------------------------
@@ -1057,12 +1074,20 @@ def _link_bins(tools, prefix):
                 warn(f"{tool}: {dst} exists and isn't our symlink; leaving it")
 
 
-def _unlink_bins(tools, prefix):
+def _unlink_bins(tools, prefix, warn_foreign=True):
+    """Remove the links _link_bins made. A link pointing anywhere else is
+    another install's, as _link_bins treats it, and stays."""
     for tool in tools:
-        for b in TOOLS[tool]["bins"]:
+        for b in _entry(tool)["bins"]:
+            src = os.path.join(mamba_env(prefix), "bin", b)
             dst = os.path.join(prefix, "bin", b)
-            if os.path.islink(dst):
+            if not os.path.islink(dst):
+                continue
+            target = os.path.join(os.path.dirname(dst), os.readlink(dst))
+            if os.path.normpath(target) == os.path.normpath(src):
                 os.unlink(dst)
+            elif warn_foreign:
+                warn(f"{tool}: {dst} isn't our symlink; leaving it")
 
 
 MAMBA_CHANNEL_ARGS = ["-c", "conda-forge", "--override-channels"]
@@ -1111,6 +1136,38 @@ def remove_mamba(tools, prefix, plat, dry_run):
     _run_mamba(mm, prefix, ["remove", "-y", "-p", mamba_env(prefix), *pkgs], dry_run)
     if not dry_run:
         _unlink_bins(tools, prefix)
+
+
+def _env_packages(prefix):
+    """The names of the packages in the managed env, from its conda-meta
+    records (NAME-VERSION-BUILD.json)."""
+    meta = os.path.join(mamba_env(prefix), "conda-meta")
+    if not os.path.isdir(meta):
+        return set()
+    return {f[:-len(".json")].rsplit("-", 2)[0]
+            for f in os.listdir(meta) if f.endswith(".json")}
+
+
+def prune_mamba(prefix, plat, dry_run):
+    """Remove each retired tool still in the managed env, and its links. A
+    copy installed any other way isn't in the env, so it stays. Says nothing
+    when there's nothing to remove, as on every run after the first."""
+    installed = _env_packages(prefix)
+    tools = [t for t in sorted(RETIRED) if RETIRED[t]["conda"] in installed]
+    if tools:
+        if micromamba_path(prefix) is None:
+            raise HomepkgError(
+                f"micromamba isn't installed, so the retired tools in "
+                f"{mamba_env(prefix)} ({', '.join(tools)}) can't be removed; "
+                f"run homepkg bootstrap, then homepkg prune")
+        info(f"removing retired tools: {', '.join(tools)}")
+        remove_mamba(tools, prefix, plat, dry_run)
+    # A link can outlive its package, removed some other way; it dangles.
+    # Another install's link to a retired tool is the user's own, and stays
+    # without a word, or every later run would warn about it.
+    if not dry_run:
+        _unlink_bins([t for t in sorted(RETIRED) if t not in tools], prefix,
+                     warn_foreign=False)
 
 
 # --- push bundles ------------------------------------------------------------
@@ -1724,8 +1781,9 @@ def _resolve_plat(p, arch):
     return plat
 
 
-def _require_known(p, tools):
-    unknown = [t for t in tools if t not in TOOLS]
+def _require_known(p, tools, retired_ok=False):
+    unknown = [t for t in tools
+               if t not in TOOLS and not (retired_ok and t in RETIRED)]
     if unknown:
         p.error(f"unknown tool(s): {', '.join(unknown)} (see 'homepkg list')")
 
@@ -1748,8 +1806,8 @@ def main(argv=None):
     p.add_argument("-o", "--output", default=None,
                    help="output file for 'bundle'")
     p.add_argument("command",
-                   choices=["install", "update", "remove", "bootstrap", "list",
-                            "bundle", "install-bundle"])
+                   choices=["install", "update", "remove", "prune", "bootstrap",
+                            "list", "bundle", "install-bundle"])
     p.add_argument("tools", nargs="*",
                    help="logical tool names, or the bundle file for install-bundle")
     # parse_intermixed_args so options can appear after the command, e.g.
@@ -1838,10 +1896,22 @@ def main(argv=None):
 
     plat = _resolve_plat(p, args.arch)
 
+    if args.command == "prune":
+        if args.tools:
+            p.error("prune takes no tools: it removes every retired one")
+        try:
+            prune_mamba(args.prefix, plat, args.dry_run)
+        except Exception as e:
+            warn(str(e))
+            return 1
+        return 0
+
     # update with no tools means "the whole env"; everything else needs names.
     if not args.tools and args.command != "update":
         p.error(f"{args.command} requires at least one tool")
-    _require_known(p, args.tools)
+    # remove takes a retired tool too, to clear out what an earlier install
+    # left.
+    _require_known(p, args.tools, retired_ok=args.command == "remove")
 
     # update/remove operate on the managed mamba env regardless of --backend.
     if args.command == "update":

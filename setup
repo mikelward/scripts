@@ -247,8 +247,9 @@ Options:
                    installed (setup now builds only KDE Plasma + Krohnkite):
                    the compositors, their lock/idle/bg helpers, the wlroots
                    portals, and the shared bar/launcher/notification stack
-                   (waybar, fuzzel, swaync). Off by default; only removes
-                   packages that are installed, so it's safe to re-run. Leaves
+                   (waybar, fuzzel, swaync), and the CLI tools homepkg has
+                   retired (joshuto, yazi) from its env. Off by default; only
+                   removes what's installed, so it's safe to re-run. Leaves
                    the generic Wayland utilities -- run autoremove for orphans
   --no-sudo        Run no sudo at all: every privileged command (package
                    installs included) is skipped up front instead of attempted,
@@ -1759,6 +1760,24 @@ install_file_managers() {
         || warn "could not install lf via homepkg; install manually if you want it"
 }
 
+# --- Remove the homepkg tools setup no longer installs ---
+
+# Dropping a tool from homepkg's registry stops new installs, but a machine an
+# earlier setup installed it on keeps it in homepkg's env, linked into
+# ~/.local/bin: joshuto and yazi, both replaced by lf. homepkg prune removes
+# its RETIRED tools, and only from its own env and links, so a copy installed
+# any other way stays. A removal, so it runs on --purge-obsolete, with the
+# obsolete desktop packages.
+prune_retired_tools() {
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found in the scripts repo; skipping the tools it has retired"
+        return 0
+    fi
+    "$homepkg" prune \
+        || warn "couldn't remove the tools homepkg has retired; run $homepkg prune to retry"
+}
+
 # --- Install the interactive shell tools with no packaged build ---
 
 # The conf repo's shell config wires up five optional tools. fzf, zoxide and
@@ -2211,6 +2230,10 @@ fi
 if test "$INSTALL" = yes; then
     install_shell_tools
     install_file_managers
+fi
+# After the clone, so it reads the scripts repo's current list.
+if test "$PURGE_OBSOLETE" = yes; then
+    prune_retired_tools
 fi
 
 start_services
