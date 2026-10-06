@@ -32,7 +32,7 @@
 #   with tide's greeter as its default session (see setup_greeter). It
 #   checks first that the greeter can run, notes the display manager it
 #   replaces, and --no-greeter puts that one back. Plasma stays a session
-#   at the new greeter;
+#   at the new greeter, and logging in unlocks gnome-keyring, as GDM does;
 # - on a GDM machine, puts the short hostname on GDM's login screen, as
 #   hyprlock shows it on the lock screen, for as long as GDM is the way
 #   back;
@@ -185,6 +185,8 @@ LOGIN_DEFS="${SETUP_LOGIN_DEFS:-/etc/login.defs}"
 # The home setup gives greetd's user when it has none of its own to write,
 # where the greeter remembers the last login.
 GREETER_HOME="${SETUP_GREETER_HOME:-/var/lib/tide-greeter}"
+# PAM's config, where greetd's stack is.
+PAM_DIR="${SETUP_PAM_DIR:-/etc/pam.d}"
 # Where setup notes the display manager greetd replaced, for --no-greeter.
 STATE_DIR="${SETUP_STATE_DIR:-/var/lib/setup-tide}"
 PREVIOUS_DM_FILE="$STATE_DIR/previous-display-manager"
@@ -1315,6 +1317,19 @@ install_greetd() {
     if ! install_all greetd >/dev/null; then
         warn "couldn't install greetd, so tide's greeter can't be the login screen"
     fi
+    # PAM's gnome-keyring module, which unlocks the keyring at login. Arch
+    # ships it in gnome-keyring itself. On its own, so a name a distro
+    # doesn't know can't stop greetd installing.
+    case "$(detect_os)" in
+        debian) _keyring="gnome-keyring libpam-gnome-keyring" ;;
+        redhat) _keyring="gnome-keyring gnome-keyring-pam" ;;
+        arch) _keyring=gnome-keyring ;;
+    esac
+    # shellcheck disable=SC2086  # word-split the package list
+    if ! _missing=$(install_all $_keyring); then
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "couldn't install$(printf ' %s' $_missing), so logging in won't unlock the keyring"
+    fi
 }
 
 # is_system_account NAME: whether NAME is a system account, which is what
@@ -1412,6 +1427,12 @@ greeter_ready() {
     fi
     if ! greeter_user; then
         why="greetd has no system account to run the greeter as (setup looked for$greeter_looked)"
+        return 1
+    fi
+    # Without it PAM checks greetd's logins with its "other" service, which
+    # can refuse them all: it does on Fedora.
+    if ! test -f "$PAM_DIR/greetd"; then
+        why="greetd has no PAM file at $PAM_DIR/greetd, and PAM's fallback for one can refuse every login"
         return 1
     fi
     for _cmd in tide-greeter Hyprland qs; do
@@ -1519,6 +1540,131 @@ greeter_home() {
     info "Giving greetd's user $greeter the home $GREETER_HOME, in place of $_home"
     sudo_or_warn usermod -d "$GREETER_HOME" "$greeter" \
         || warn "couldn't give $greeter the home $GREETER_HOME, so the greeter won't remember the last login"
+}
+
+# KEYRING_AWK reads a PAM file as PAM does, joining the lines a backslash
+# carries on, past blank and comment lines, until a # or the file's end. It
+# prints, one a line: auth and session for each line of that type that
+# loads pam_gnome_keyring; for a session one without auto_start, fix and its
+# line's number, or, when a backslash carries it on, carried and its first
+# line's number, since setup leaves that alone; and dangling if the file
+# ends in a line a backslash carries on, which anything added after it
+# would join.
+# shellcheck disable=SC2016  # $0 and the rest are awk's
+KEYRING_AWK='
+    function flush(    n, w, c, mi, i, type) {
+        if (line == "") return
+        n = split(line, w)
+        line = ""
+        c = w[2]
+        mi = 3
+        if (c ~ /^\[/) while (c !~ /\]/ && mi <= n) c = c " " w[mi++]
+        if (mi > n || w[mi] !~ /(^|\/)pam_gnome_keyring\.so$/) return
+        type = tolower(w[1])
+        sub(/^-/, "", type)
+        if (type == "auth") print "auth"
+        if (type != "session") return
+        print "session"
+        for (i = mi + 1; i <= n; i++) if (w[i] == "auto_start") return
+        print (cont ? "carried" : "fix"), first
+    }
+    /^[ \t]*(#|$)/ { next }
+    {
+        s = $0
+        if (line == "") {
+            first = NR
+            cont = 0
+        }
+        if (index(s, "#")) {
+            sub(/#.*/, "", s)
+            line = line " " s
+            flush()
+            next
+        }
+        if (s ~ /\\[ \t]*$/) {
+            sub(/\\[ \t]*$/, "", s)
+            line = line " " s
+            cont = 1
+            next
+        }
+        line = line " " s
+        flush()
+    }
+    END {
+        if (line != "") print "dangling"
+        flush()
+    }'
+
+# greeter_keyring has greetd's PAM stack unlock gnome-keyring with the
+# login password, as GDM's does, so the session's apps find their secrets
+# without asking for it again. Debian's file lists the module already; on
+# another distro's, the lines go at the end, after whatever it includes,
+# which is where the module has to come. It reads the file as PAM does.
+greeter_keyring() {
+    _nl='
+'
+    _pam="$PAM_DIR/greetd"
+    if ! _stack=$(cat "$_pam"); then
+        warn "couldn't read $_pam, so logging in may not unlock the keyring"
+        return 0
+    fi
+    if ! _found=$(printf '%s\n' "$_stack" | awk "$KEYRING_AWK"); then
+        warn "couldn't read $_pam's lines, so logging in may not unlock the keyring"
+        return 0
+    fi
+    # A session line without auto_start unlocks a keyring daemon that's
+    # already running but starts none, which at login none is, so it gains
+    # auto_start. PAM ignores everything from a # to the end of the line, so
+    # auto_start goes before one. A line a backslash carries on is left
+    # alone: text added at its end would follow the backslash.
+    _fixed=$_stack
+    for _line in $(printf '%s\n' "$_found" | sed -n 's/^fix //p'); do
+        if ! _fixed=$(printf '%s\n' "$_fixed" | sed -E "${_line}{/#/!s/[[:space:]]*\$/ auto_start/;/#/s/^([^#]*[^#[:space:]])/\\1 auto_start/;}"); then
+            warn "couldn't add auto_start to $_pam, so logging in may not unlock the keyring"
+            return 0
+        fi
+    done
+    case "$_nl$_found$_nl" in
+        *"${_nl}carried "*)
+            warn "$_pam carries a pam_gnome_keyring session line on with a backslash, so setup leaves it, and logging in may not unlock the keyring unless it has auto_start"
+            ;;
+    esac
+    _add=
+    for _type in auth session; do
+        case "$_nl$_found$_nl" in
+            *"$_nl$_type$_nl"*) continue ;;
+        esac
+        case "$_type" in
+            auth) _add="${_add}auth       optional     pam_gnome_keyring.so
+" ;;
+            session) _add="${_add}session    optional     pam_gnome_keyring.so auto_start
+" ;;
+        esac
+    done
+    case "$_nl$_found$_nl" in
+        *"${_nl}dangling$_nl"*)
+            if test -n "$_add"; then
+                warn "$_pam ends in a line a backslash carries on, which lines added after it would join, so setup adds no pam_gnome_keyring lines, and logging in may not unlock the keyring"
+                _add=
+            fi
+            ;;
+    esac
+    if test -z "$_add" && test "$_fixed" = "$_stack"; then
+        return 0
+    fi
+    if test -n "$_add"; then
+        _fixed="$_fixed
+
+# Unlock gnome-keyring with the login password (setup-tide).
+${_add%
+}"
+    fi
+    changed=no
+    if install_text "$_pam" "$_fixed"; then
+        info "greetd's PAM stack now unlocks the keyring at login"
+    else
+        warn "couldn't add pam_gnome_keyring to $_pam, so logging in won't unlock the keyring"
+    fi
 }
 
 # replaced_display_manager prints the display manager greetd replaced, as
@@ -1646,6 +1792,7 @@ setup_greeter() {
     fi
     test "$changed" = no || info "greetd now runs tide's greeter as $greeter"
     greeter_home
+    greeter_keyring
     if test "$dm_before" = greetd.service; then
         GREETER_ACTIVE=yes
         return 0
