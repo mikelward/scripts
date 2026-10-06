@@ -28,9 +28,14 @@
 # - enables tide.service, which hangs it off the tide session's
 #   target only, and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
+# - installs greetd and makes it the display manager, from the next boot,
+#   with tide's greeter as its default session (see setup_greeter). It
+#   checks first that the greeter can run, notes the display manager it
+#   replaces, and --no-greeter puts that one back. Plasma stays a session
+#   at the new greeter;
 # - on a GDM machine, puts the short hostname on GDM's login screen, as
-#   hyprlock shows it on the lock screen, until tide's own greeter
-#   replaces GDM;
+#   hyprlock shows it on the lock screen, for as long as GDM is the way
+#   back;
 # - removes the logind lid drop-ins the retired setup-hypr/setup-sway
 #   installed. They set HandleLidSwitch=ignore, and tide leaves suspend
 #   to logind's defaults, so with one left in place an undocked lid close
@@ -41,7 +46,7 @@
 #
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
-#                      [--no-build-hyprland] [-h | --help]
+#                      [--no-build-hyprland] [--no-greeter] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -49,12 +54,15 @@
 # is: setup passes it after cloning or pulling the repo with its own
 # clone_or_pull, which honors --github and redacts the URLs it prints.
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
+# --no-greeter leaves the display manager alone, or puts back the one setup
+# replaced with greetd.
 
 INSTALL=yes
 SUDO=yes
 IGNORE_ERRORS=no
 FETCH=yes
 BUILD_HYPRLAND=yes
+GREETER=yes
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
@@ -162,6 +170,25 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
     glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
     libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
     xwayland"
+# greetd's config directory, and tide's greetd config template, which
+# `make install-session PREFIX=/usr` installs. Overridable for tests.
+GREETD_DIR="${SETUP_GREETD_DIR:-/etc/greetd}"
+GREETD_TEMPLATE="${SETUP_GREETD_TEMPLATE:-/usr/share/tide/greeter/greetd.toml}"
+# The greeter's PATH: greetd sources /etc/profile, which sets this for every
+# user but root.
+GREETER_PATH="${SETUP_GREETER_PATH:-/usr/local/bin:/usr/bin:/bin}"
+# greetd's own default name for its user, Debian's, and a plain greetd, for
+# when greetd's config names none that exists.
+GREETER_USERS="greeter _greetd greetd"
+# Where UID_MIN, the first UID for a person's account, is set.
+LOGIN_DEFS="${SETUP_LOGIN_DEFS:-/etc/login.defs}"
+# The home setup gives greetd's user when it has none of its own to write,
+# where the greeter remembers the last login.
+GREETER_HOME="${SETUP_GREETER_HOME:-/var/lib/tide-greeter}"
+# Where setup notes the display manager greetd replaced, for --no-greeter.
+STATE_DIR="${SETUP_STATE_DIR:-/var/lib/setup-tide}"
+PREVIOUS_DM_FILE="$STATE_DIR/previous-display-manager"
+
 # tide's make install builds tide-grant with this Go, which
 # must be at least MIN_GO (its go.mod). setup installs Go for everything
 # that needs it, vcs too; this installs it again for a run on its own.
@@ -233,7 +260,8 @@ sudo_or_warn() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors] [-h | --help]
+Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
+                  [--no-build-hyprland] [--no-greeter] [-h | --help]
 
 Install the tide session (Hyprland + uwsm) beside KDE Plasma.
 
@@ -245,6 +273,9 @@ Options:
   --no-build-hyprland
                    On Debian and Ubuntu, don't build Hyprland from source when
                    apt's is older than 0.56 (the build takes 10-20 minutes)
+  --no-greeter     Don't make greetd, with tide's greeter, the display
+                   manager; if setup made it one, put back the display
+                   manager it replaced
   -h, --help       Show this help and exit
 USAGE
 }
@@ -260,6 +291,8 @@ while test $# -gt 0; do
         --no-fetch) FETCH=no ;;
         --build-hyprland) BUILD_HYPRLAND=yes ;;
         --no-build-hyprland) BUILD_HYPRLAND=no ;;
+        --greeter) GREETER=yes ;;
+        --no-greeter) GREETER=no ;;
         -h|--help) usage; exit 0 ;;
         *)
             warn "Unknown option: $1"
@@ -1235,7 +1268,433 @@ banner-message-text='$host'" || {
     fi
 }
 
+# --- greetd ---
+
+# greetd runs tide's greeter (tide's SPEC.md §11) as its default session,
+# as a user of its own. setup makes it the display manager from the next
+# boot, and never restarts one, which would end the session setup runs in.
+# Debian's GDM and SDDM units refuse to start unless
+# /etc/X11/default-display-manager names them, and greetd's doesn't check,
+# so that file is left alone: it's what lets the way back work.
+
+unit_property() {
+    systemctl show --property="$2" --value "$1"
+}
+
+# display_manager prints the unit display-manager.service is, or "none".
+display_manager() {
+    _state=$(unit_property display-manager.service LoadState) || return 1
+    if test "$_state" != loaded; then
+        echo none
+        return 0
+    fi
+    unit_property display-manager.service Id
+}
+
+# Whether $1 is a display manager setup can put back: a unit's name, or
+# "none". The note it comes from is root's, but it's checked anyway before
+# it reaches systemctl.
+valid_display_manager() {
+    case "$1" in
+        none) return 0 ;;
+        "" | *[!A-Za-z0-9@._-]*) return 1 ;;
+        *.service) return 0 ;;
+    esac
+    return 1
+}
+
+# install_greetd installs the packages the greeter needs from the distro.
+install_greetd() {
+    case "$(detect_os)" in
+        debian | redhat | arch) ;;
+        *)
+            warn "unknown OS; install greetd to log in with tide's greeter"
+            return 0
+            ;;
+    esac
+    if ! install_all greetd >/dev/null; then
+        warn "couldn't install greetd, so tide's greeter can't be the login screen"
+    fi
+}
+
+# is_system_account NAME: whether NAME is a system account, which is what
+# the greeter runs as: not root, which would hand everything it parses root's
+# privileges, nor a person's account, whose files and processes the greeter
+# would share while it reads every password typed at login. One whose UID is
+# below login.defs' UID_MIN, as a package's are.
+is_system_account() {
+    _uid=$(getent passwd "$1" | cut -d: -f3) || return 1
+    _uid_min=
+    if test -r "$LOGIN_DEFS"; then
+        _uid_min=$(awk '$1 == "UID_MIN" { print $2; exit }' "$LOGIN_DEFS") || _uid_min=
+    fi
+    case "$_uid_min" in
+        "" | *[!0-9]*) _uid_min=1000 ;;
+    esac
+    case "$_uid" in
+        "" | *[!0-9]*) return 1 ;;
+    esac
+    test "$_uid" -gt 0 && test "$_uid" -lt "$_uid_min"
+}
+
+# greeter_user sets greeter to the user greetd runs its greeter as: one of
+# greetd's own, GREETER_USERS, that's a system account. The one greetd's
+# config names comes first, which is the one the distro's package made
+# (Debian's _greetd). A config naming any other account isn't followed: the
+# greeter, which reads every password typed at login, would share that
+# account's files and processes. Sets greeter_looked to the names it tried.
+greeter_user() {
+    _named=
+    if test -r "$GREETD_DIR/config.toml"; then
+        _named=$(awk '
+            /^[[:space:]]*\[/ { section = $0; gsub(/[[:space:]]/, "", section) }
+            section == "[default_session]" && /^[[:space:]]*user[[:space:]]*=/ {
+                sub(/^[^=]*=[[:space:]]*/, "")
+                sub(/[[:space:]]*(#.*)?$/, "")
+                gsub(/"/, "")
+                print
+                exit
+            }' "$GREETD_DIR/config.toml") || _named=
+        case " $GREETER_USERS " in
+            *" $_named "*) ;;
+            *) _named= ;;
+        esac
+    fi
+    greeter_looked=
+    for _user in $_named $GREETER_USERS; do
+        greeter_looked="$greeter_looked $_user"
+        if is_system_account "$_user"; then
+            greeter=$_user
+            return 0
+        fi
+    done
+    return 1
+}
+
+# greeter_vt sets vt to the VT greetd's unit keeps getty off, which its
+# config has to name: upstream's unit takes VT 1 and Debian's VT 7, and a
+# greeter on any other VT would fight a getty for it. Fails, setting why,
+# when it can't tell, or the unit keeps getty off none, or off one Linux
+# hasn't got, which greetd would fail to start on at every boot.
+greeter_vt() {
+    if ! _conflicts=$(unit_property greetd.service Conflicts); then
+        why="couldn't ask systemd which VT greetd's unit keeps for it"
+        return 1
+    fi
+    vt=$(printf '%s\n' "$_conflicts" | tr ' ' '\n' \
+        | sed -n 's/^getty@tty\([0-9][0-9]*\)\.service$/\1/p' | head -n1)
+    if test -z "$vt"; then
+        why="greetd's unit keeps getty off no VT, so the greeter would share one with a login prompt"
+        return 1
+    fi
+    case "$vt" in
+        [1-9] | [1-5][0-9] | 6[0-3]) ;;
+        *)
+            why="greetd's unit keeps getty off tty$vt, which isn't one of Linux's VTs, 1 to 63, so greetd couldn't start there"
+            return 1
+            ;;
+    esac
+}
+
+# greeter_ready sets greeter to greetd's user, after checking that the
+# greeter can run: greetd, tide's template, each command the greeter starts,
+# found on the greeter's PATH by greetd's user itself, and a new enough
+# Hyprland and Quickshell among them. Otherwise it sets why to what's
+# missing.
+greeter_ready() {
+    if test "$(unit_property greetd.service LoadState)" != loaded; then
+        why="greetd isn't installed"
+        return 1
+    fi
+    if ! test -r "$GREETD_TEMPLATE"; then
+        why="tide's greetd config isn't installed at $GREETD_TEMPLATE"
+        return 1
+    fi
+    if ! greeter_user; then
+        why="greetd has no system account to run the greeter as (setup looked for$greeter_looked)"
+        return 1
+    fi
+    for _cmd in tide-greeter Hyprland qs; do
+        # shellcheck disable=SC2016  # $1 is the inner shell's
+        if ! sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c '_p=$(command -v "$1") && test -x "$_p"' sh "$_cmd"; then
+            why="greetd's user $greeter can't run $_cmd from $GREETER_PATH"
+            return 1
+        fi
+    done
+    # The Hyprland the greeter runs, which needn't be the one on this user's
+    # PATH.
+    # shellcheck disable=SC2016  # the inner shell's
+    if ! _version=$(sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c 'Hyprland --version'); then
+        why="greetd's user $greeter couldn't ask its Hyprland for its version"
+        return 1
+    fi
+    # The number has to end the word: a prerelease, 0.56.0-rc1, isn't 0.56.0.
+    _version=$(printf '%s\n' "$_version" | sed -n 's/^Hyprland \([0-9][0-9.]*\)\([ ,].*\)\{0,1\}$/\1/p' | head -n1)
+    if test -z "$_version" || ! version_at_least "$_version" "$MIN_HYPRLAND"; then
+        why="the greeter's Hyprland is ${_version:-of no version setup can read}, and it needs $MIN_HYPRLAND or later"
+        return 1
+    fi
+    # And its Quickshell, which loads the greeter's QML as tide's shell is
+    # loaded. 0.2 prints its version as "quickshell 0.2.1, revision ...", 0.3
+    # as "Quickshell 0.3.1 (revision ...)", as tide-shell reads them.
+    # shellcheck disable=SC2016  # the inner shell's
+    if ! _version=$(sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c 'qs --version' 2>&1); then
+        why="greetd's user $greeter couldn't ask its Quickshell for its version"
+        return 1
+    fi
+    _version=$(printf '%s\n' "$_version" | sed -n 's/^[Qq]uickshell \([0-9][0-9]*\.[0-9][0-9.]*\)\([ ,].*\)\{0,1\}$/\1/p' | head -n1)
+    if test -z "$_version" || ! version_at_least "$_version" "$MIN_QUICKSHELL"; then
+        why="the greeter's Quickshell is ${_version:-of no version setup can read}, and it needs $MIN_QUICKSHELL or later"
+        return 1
+    fi
+}
+
+# describe_dm names display manager $1 for a message.
+describe_dm() {
+    case "$1" in
+        none) echo "the text console login" ;;
+        *) echo "$1" ;;
+    esac
+}
+
+# greetd_config sets greetd_text to tide's template with this greetd's user
+# and VT, or why to what stops it.
+greetd_config() {
+    greeter_vt || return 1
+    if ! greetd_text=$(sed -e "s/^user = .*/user = \"$greeter\"/" -e "s/^vt = .*/vt = $vt/" "$GREETD_TEMPLATE"); then
+        why="couldn't read $GREETD_TEMPLATE"
+        return 1
+    fi
+    if ! printf '%s\n' "$greetd_text" | grep -qxF "user = \"$greeter\"" \
+        || ! printf '%s\n' "$greetd_text" | grep -qxF "vt = $vt"; then
+        why="$GREETD_TEMPLATE has no user or vt line for setup to set"
+        return 1
+    fi
+    # greetd runs as root what this names, so it has to be tide's greeter
+    # on this VT as this user, and nothing else, whatever a stale or
+    # half-installed template says. Comments and blank lines aside, that's
+    # these five lines, in this order: no other command or key, no key
+    # twice, nothing TOML would read another way.
+    _want="[terminal]
+vt = $vt
+[default_session]
+command = \"tide-greeter\"
+user = \"$greeter\""
+    if ! _got=$(printf '%s\n' "$greetd_text" | sed -e 's/[[:space:]]*#.*//' -e 's/^[[:space:]]*//' -e '/^$/d'); then
+        why="couldn't read $GREETD_TEMPLATE"
+        return 1
+    fi
+    if test "$_got" != "$_want"; then
+        why="$GREETD_TEMPLATE isn't the config setup knows how to write: one [terminal] vt, and a [default_session] running tide-greeter as greetd's user, and nothing more"
+        return 1
+    fi
+}
+
+# greeter_home gives greetd's user a home it can write, where the greeter
+# remembers the last login: its own, when it owns one outside /etc, or
+# GREETER_HOME. Debian's _greetd has greetd's config directory, and /etc is
+# no place for state. Without one, the greeter only forgets the last login,
+# so a failure warns.
+greeter_home() {
+    if ! _entry=$(getent passwd "$greeter"); then
+        warn "couldn't look up $greeter, so the greeter may not remember the last login"
+        return 0
+    fi
+    _uid=$(printf '%s\n' "$_entry" | cut -d: -f3)
+    _gid=$(printf '%s\n' "$_entry" | cut -d: -f4)
+    _home=$(printf '%s\n' "$_entry" | cut -d: -f6)
+    case "$_home" in
+        /etc/* | "$GREETD_DIR" | "$GREETD_DIR"/*) ;;
+        *)
+            if test -d "$_home" && test "$(stat -c %u "$_home")" = "$_uid"; then
+                return 0
+            fi
+            ;;
+    esac
+    if ! sudo_or_warn install -d -m 700 -o "$_uid" -g "$_gid" "$GREETER_HOME"; then
+        warn "couldn't make $GREETER_HOME, so the greeter won't remember the last login"
+        return 0
+    fi
+    test "$_home" != "$GREETER_HOME" || return 0
+    info "Giving greetd's user $greeter the home $GREETER_HOME, in place of $_home"
+    sudo_or_warn usermod -d "$GREETER_HOME" "$greeter" \
+        || warn "couldn't give $greeter the home $GREETER_HOME, so the greeter won't remember the last login"
+}
+
+# replaced_display_manager prints the display manager greetd replaced, as
+# setup noted it, or nothing.
+replaced_display_manager() {
+    if test -r "$PREVIOUS_DM_FILE"; then
+        cat "$PREVIOUS_DM_FILE" || warn "couldn't read $PREVIOUS_DM_FILE"
+    fi
+}
+
+# way_back prints the command that puts $1 back as the display manager.
+way_back() {
+    case "$1" in
+        none) echo "sudo systemctl disable greetd.service" ;;
+        *) echo "sudo systemctl enable --force $1 && sudo systemctl disable greetd.service" ;;
+    esac
+}
+
+# restore_display_manager makes $1 the display manager again in greetd's
+# place, from the next boot: a unit, or "none".
+restore_display_manager() {
+    if ! valid_display_manager "$1" || test "$1" = greetd.service; then
+        warn "greetd is the display manager, and setup doesn't know which one it replaced; enable yours, as in '$(way_back gdm.service)'"
+        return 1
+    fi
+    # Enabling the other moves the alias, but greetd's other links, a
+    # WantedBy=, say, would start it beside it, so it's disabled too: after,
+    # so a failure leaves greetd rather than neither.
+    case "$1" in
+        none) sudo_or_warn systemctl disable greetd.service ;;
+        *) sudo_or_warn systemctl enable --force "$1" && sudo_or_warn systemctl disable greetd.service ;;
+    esac || {
+        warn "couldn't put back $1; run '$(way_back "$1")'"
+        return 1
+    }
+    if test "$1" = none; then
+        info "greetd is no longer the display manager; from the next boot, log in on a text console"
+    else
+        info "$1 is the display manager again from the next boot"
+    fi
+}
+
+# not_switching WHY says greetd isn't made the display manager, and why.
+# When installing greetd just now made it one anyway (Debian's package does,
+# where there was none), or setup can't tell whether it did, the one before
+# is put back, so every way of not switching leaves the login screen as it
+# was. Putting it back when nothing changed is harmless. greetd that was the
+# display manager already gives way to the one it replaced too: greetd runs
+# as root, and a config this run couldn't put right can be one that's
+# malformed, someone else's, or for a greeter that has since changed. The
+# next run that can puts greetd back.
+not_switching() {
+    if test "$dm_before" = greetd.service; then
+        _back=$(replaced_display_manager)
+        warn "$1; greetd isn't kept with a config this run couldn't put right, so putting back $(describe_dm "$_back") for the next boot"
+        restore_display_manager "$_back" || :
+        return 0
+    fi
+    warn "not making greetd the display manager, so $(describe_dm "$dm_before") stays: $1"
+    # Asked afresh: whatever ran since, a package's install or an enable that
+    # failed after replacing the alias, can have changed it.
+    if ! _dm=$(display_manager) || ! valid_display_manager "$_dm"; then
+        _dm=unknown
+    fi
+    if test "$_dm" != "$dm_before"; then
+        restore_display_manager "$dm_before" || :
+    fi
+}
+
+# setup_greeter makes greetd, with tide's greeter, the display manager, or
+# with --no-greeter puts back the one it replaced. Nothing here is fatal:
+# the tide session runs under any display manager. "setup_greeter early"
+# installs nothing, leaving packages to the end like everything else, and
+# takes greetd as the display manager, as early_greeter has just found it:
+# a second query that failed would skip what that pass is for.
+setup_greeter() {
+    if ! is_command systemctl; then
+        info "No systemd, so the display manager is left alone"
+        return 0
+    fi
+    if test "${1-}" = early; then
+        dm_now=greetd.service
+    elif ! dm_now=$(display_manager) || ! valid_display_manager "$dm_now"; then
+        warn "couldn't tell which display manager this is, so it's left alone"
+        return 0
+    fi
+    dm_before=$dm_now
+    if test "$GREETER" = no; then
+        test "$dm_now" = greetd.service || return 0
+        restore_display_manager "$(replaced_display_manager)" || :
+        return 0
+    fi
+    # Installed here, after everything that can end the run, and once the
+    # display manager is noted: Debian's package enables greetd on a machine
+    # that has none, and from here on every way of not switching puts that
+    # back.
+    if test "$INSTALL" = yes && test "${1-}" != early; then
+        install_greetd
+        if ! dm_now=$(display_manager) || ! valid_display_manager "$dm_now"; then
+            not_switching "couldn't tell which display manager this is after installing greetd"
+            return 0
+        fi
+    fi
+    if ! greeter_ready; then
+        if test "$dm_before" != greetd.service; then
+            not_switching "$why"
+            return 0
+        fi
+        # greetd was the display manager before this run, and its greeter
+        # wouldn't come up at the next boot: what it runs has broken since.
+        # The login screen goes back to the one greetd replaced.
+        _back=$(replaced_display_manager)
+        warn "greetd's greeter can't run, so putting back $(describe_dm "$_back") for the next boot: $why"
+        restore_display_manager "$_back" || :
+        return 0
+    fi
+    if ! greetd_config; then
+        not_switching "$why"
+        return 0
+    fi
+    changed=no
+    if ! install_text "$GREETD_DIR/config.toml" "$greetd_text"; then
+        not_switching "couldn't write $GREETD_DIR/config.toml"
+        return 0
+    fi
+    test "$changed" = no || info "greetd now runs tide's greeter as $greeter"
+    greeter_home
+    if test "$dm_before" = greetd.service; then
+        GREETER_ACTIVE=yes
+        return 0
+    fi
+    if ! install_text "$PREVIOUS_DM_FILE" "$dm_before"; then
+        not_switching "couldn't note it in $PREVIOUS_DM_FILE, which is the way back"
+        return 0
+    fi
+    if ! sudo_or_warn systemctl enable --force greetd.service; then
+        not_switching "systemctl couldn't enable greetd"
+        return 0
+    fi
+    # Only a unit with Alias=display-manager.service takes the alias when
+    # it's enabled; one without would start beside the display manager.
+    if ! _dm=$(display_manager) || test "$_dm" != greetd.service; then
+        # Enabling it made the links its unit names, a WantedBy=, say, which
+        # would start it beside the display manager, so they go again.
+        if ! sudo_or_warn systemctl disable greetd.service; then
+            warn "couldn't disable greetd again, so it may start beside $(describe_dm "$dm_before") from the next boot; run 'sudo systemctl disable greetd.service'"
+        fi
+        not_switching "enabling greetd didn't make it the display manager, as its unit would with Alias=display-manager.service"
+        return 0
+    fi
+    GREETER_ACTIVE=yes
+    info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --tide --no-greeter'"
+}
+
+# early_greeter runs before anything that can end the run, so a failure
+# there can't keep greetd, as the display manager, with what it shouldn't
+# have. When greetd is the display manager it does what setup_greeter does
+# at the end, short of installing: with --no-greeter it puts back the one
+# greetd replaced, and so it does when the greeter can't run as things
+# stand; otherwise it puts greetd's config, the greeter's home and the PAM
+# stack right. setup_greeter, at the end, makes greetd the display manager
+# again if this run has made its greeter runnable.
+early_greeter() {
+    is_command systemctl || return 0
+    # A display manager that can't be told is setup_greeter's to name.
+    if ! _dm=$(display_manager) || test "$_dm" != greetd.service; then
+        return 0
+    fi
+    setup_greeter early
+}
+
 # --- Main ---
+
+if test "$SUDO" != no; then
+    early_greeter
+fi
 
 if test "$INSTALL" = no; then
     info "Skipping tide packages (--no-install)"
@@ -1267,11 +1726,17 @@ enable_unit
 if is_command systemctl; then
     mask_distro_units
 fi
+GREETER_ACTIVE=no
 if test "$SUDO" = no; then
-    info "Leaving the logind lid drop-ins and GDM alone (needs sudo; --no-sudo)"
+    info "Leaving the logind lid drop-ins, GDM and the display manager alone (needs sudo; --no-sudo)"
 else
     remove_old_lid_dropins
     gdm_hostname_banner
+    setup_greeter
 fi
 
-info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+if test "$GREETER_ACTIVE" = yes; then
+    info "tide installed. Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
+else
+    info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+fi

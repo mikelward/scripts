@@ -961,6 +961,14 @@ test_no_build_hyprland_is_forwarded() {
     assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS'
 }
 
+# setup takes --no-greeter and hands it to setup-tide.
+test_no_greeter_is_forwarded() {
+    run_setup --no-greeter --help
+    assert_status 0 &&
+    assert_output_contains "--no-greeter" &&
+    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"'
+}
+
 # With --tide the purge keeps the Hyprland stack tide runs on
 # and still removes what it doesn't use (sway).
 test_purge_obsolete_keeps_tide_stack() {
@@ -2965,6 +2973,7 @@ run_test "--kde is accepted as a no-op" test_kde_flag_is_a_noop
 run_test "--tide is accepted" test_tide_flag_is_accepted
 run_test "--tide is off by default" test_tide_off_by_default
 run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
+run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
 run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack
 run_test "tsc installs from the distro alongside node" \
     test_typescript_installed_from_distro
