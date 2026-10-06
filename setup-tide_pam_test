@@ -1,0 +1,304 @@
+#!/bin/bash
+# Tests setup-tide's reading of PAM against PAM itself.
+#
+# setup-tide decides whether greetd's PAM stack can let anyone log in by
+# reading it as libpam does and walking it as libpam's dispatcher does. This
+# checks that against the libpam on this machine: it builds a module that
+# returns what its arguments say, writes random stacks of it, with PAM's own
+# pam_deny, pam_permit, pam_warn, pam_debug and pam_exec among them, runs
+# each through libpam as greetd would, for a login and for the greeter, and
+# has setup-tide's awk predict every result. On a machine without Linux-PAM,
+# or a compiler, there is nothing to compare with, and it says so and skips,
+# except on CI.
+#
+# To check against another build of libpam, put it first on LD_LIBRARY_PATH,
+# with PAM_TEST_MODDIR naming the directory of its modules and
+# PAM_TEST_DEBIAN=yes if it has Debian's patches, or no.
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+SCRIPT=${SCRIPT:-./setup-tide}
+CASES=${PAM_TEST_CASES:-400}
+SEED=${PAM_TEST_SEED:-1}
+
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+
+# The awk program assigned to NAME in setup-tide, which runs from a line
+# NAME=' to the next line that is a lone '.
+program() {
+    awk -v name="$1" '
+        $0 == name "=\047" { on = 1; next }
+        on && $0 == "\047" { exit }
+        on { print }
+    ' "$SCRIPT"
+}
+CHAIN_AWK=$(program CHAIN_AWK)
+SIM_AWK=$(program SIM_AWK)
+if test -z "$CHAIN_AWK" || test -z "$SIM_AWK"; then
+    echo "setup-tide_pam_test: couldn't find CHAIN_AWK and SIM_AWK in $SCRIPT" >&2
+    exit 1
+fi
+
+# A machine without what this needs skips it, but CI, which has it, fails
+# rather than pass a check that never ran.
+skip() {
+    if test -n "${CI:-}"; then
+        echo "setup-tide_pam_test: $1, which CI should have" >&2
+        exit 1
+    fi
+    echo "setup-tide_pam_test: skipped, $1"
+    exit 0
+}
+command -v gcc >/dev/null || skip "no gcc to build a test module with"
+# The directory PAM's own modules are in, where it was built to look.
+moddir=${PAM_TEST_MODDIR:-}
+if test -z "$moddir"; then
+    for dir in /usr/lib/*/security /usr/lib64/security /lib/*/security /lib64/security /usr/lib/security /lib/security; do
+        if test -f "$dir/pam_deny.so"; then
+            moddir=$dir
+            break
+        fi
+    done
+fi
+
+cat > "$T/pam_ret.c" <<'EOF'
+/* A PAM module that returns what its arguments say: auth=N and the rest. */
+#include <stdlib.h>
+#include <string.h>
+static int ret(const char *key, int argc, const char **argv)
+{
+    size_t n = strlen(key);
+    for (int i = 0; i < argc; i++)
+        if (strncmp(argv[i], key, n) == 0 && argv[i][n] == '=')
+            return atoi(argv[i] + n + 1);
+    return 0;
+}
+int pam_sm_authenticate(void *h, int f, int argc, const char **argv) { return ret("auth", argc, argv); }
+int pam_sm_setcred(void *h, int f, int argc, const char **argv) { return ret("cred", argc, argv); }
+int pam_sm_acct_mgmt(void *h, int f, int argc, const char **argv) { return ret("acct", argc, argv); }
+int pam_sm_open_session(void *h, int f, int argc, const char **argv) { return ret("open", argc, argv); }
+int pam_sm_close_session(void *h, int f, int argc, const char **argv) { return ret("close", argc, argv); }
+/* PAM_PRELIM_CHECK is 0x4000. */
+int pam_sm_chauthtok(void *h, int f, int argc, const char **argv) { return ret(f & 0x4000 ? "prelim" : "update", argc, argv); }
+EOF
+cat > "$T/harness.c" <<'EOF'
+/* harness CONFDIR SERVICE MODE: what greetd calls through libpam, for a
+   login, which authenticates first, or the greeter, and what each returns. */
+#include <dlfcn.h>
+#include <stdio.h>
+#include <string.h>
+struct pam_message;
+struct pam_response;
+struct pam_conv {
+    int (*conv)(int, const struct pam_message **, struct pam_response **, void *);
+    void *appdata_ptr;
+};
+typedef int (*start_fn)(const char *, const char *, const struct pam_conv *, const char *, void **);
+typedef int (*call_fn)(void *, int);
+/* PAM_CONV_ERR: nothing here answers a prompt. */
+static int conv(int n, const struct pam_message **m, struct pam_response **r, void *d) { return 19; }
+int main(int argc, char **argv)
+{
+    if (argc != 4)
+        return 2;
+    void *lib = dlopen("libpam.so.0", RTLD_NOW | RTLD_GLOBAL);
+    if (!lib)
+        return 3;
+    start_fn start = (start_fn)dlsym(lib, "pam_start_confdir");
+    call_fn authenticate = (call_fn)dlsym(lib, "pam_authenticate");
+    call_fn acct = (call_fn)dlsym(lib, "pam_acct_mgmt");
+    call_fn setcred = (call_fn)dlsym(lib, "pam_setcred");
+    call_fn open = (call_fn)dlsym(lib, "pam_open_session");
+    call_fn chauthtok = (call_fn)dlsym(lib, "pam_chauthtok");
+    call_fn end = (call_fn)dlsym(lib, "pam_end");
+    if (!start || !authenticate || !acct || !setcred || !open || !chauthtok || !end)
+        return 3;
+    struct pam_conv c = { conv, NULL };
+    void *h;
+    if (start(argv[2], "nobody", &c, argv[1], &h) != 0)
+        return 4;
+    int a = -1, s;
+    if (strcmp(argv[3], "login") == 0)
+        a = authenticate(h, 0);
+    printf("account %d\n", acct(h, 0));
+    /* PAM_ESTABLISH_CRED, as greetd sets them. */
+    s = setcred(h, 0x2);
+    if (a >= 0)
+        printf("pair %d %d\n", a, s);
+    else
+        printf("setcred %d\n", s);
+    printf("session %d\n", open(h, 0));
+    /* PAM_CHANGE_EXPIRED_AUTHTOK */
+    printf("chauthtok %d\n", chauthtok(h, 0x20));
+    end(h, 0);
+    return 0;
+}
+EOF
+gcc -shared -fPIC -o "$T/pam_ret.so" "$T/pam_ret.c"
+gcc -o "$T/harness" "$T/harness.c" -ldl
+mkdir -p "$T/probe"
+printf 'auth required %s\n' "$T/pam_ret.so" > "$T/probe/probe"
+if test -z "$moddir" || ! "$T/harness" "$T/probe" probe login >/dev/null 2>&1; then
+    skip "no Linux-PAM with pam_start_confdir here"
+fi
+
+# Debian's PAM reads @include, as setup-tide supposes it does on Debian.
+if test -n "${PAM_TEST_DEBIAN:-}"; then
+    debian=$PAM_TEST_DEBIAN
+elif test -f /etc/debian_version; then
+    debian=yes
+else
+    debian=no
+fi
+
+# GEN_AWK writes the stacks of case n into dir: a service, svc, and three
+# files it may include, each of which may include only those after it, so
+# that none is a loop. Its lines mix every type, control and module, bare
+# control words among them, with comments and lines a backslash carries on,
+# and a few PAM fails on.
+# shellcheck disable=SC2016  # the awk's
+GEN_AWK='
+    function pick(list,    p, n) {
+        n = split(list, p, " ")
+        return p[int(rand() * n) + 1]
+    }
+    function module(    m, s, f, p, n, i) {
+        m = rand()
+        if (m < 0.06) return "pam_gone.so"
+        if (m < 0.13) return moddir "/pam_deny.so"
+        if (m < 0.2) return moddir "/pam_permit.so"
+        if (m < 0.24) return moddir "/pam_warn.so"
+        if (m < 0.29) {
+            s = moddir "/pam_debug.so"
+            n = split("auth cred acct open_session close_session prechauthtok chauthtok authtok Auth", f, " ")
+            for (i = 1; i <= n; i++) if (rand() < 0.5) s = s " " f[i] "=" pick("success success auth_err ignore system_err new_authtok_reqd perm_denied session_err cred_err default bogus")
+            return s
+        }
+        if (m < 0.38) {
+            s = moddir "/pam_exec.so"
+            if (rand() < 0.4) s = s " " pick("type=auth type=account type=open_session type=password type=Auth TYPE=auth")
+            if (rand() < 0.3) s = s " " pick("quiet DEBUG log=/dev/null")
+            if (rand() < 0.85) s = s " " pick("/bin/true /bin/false /nonexistent/hook")
+            return s
+        }
+        s = ret
+        n = split("auth cred acct open close prelim update", f, " ")
+        for (i = 1; i <= n; i++) if (rand() < 0.7) s = s " " f[i] "=" pick("0 0 0 0 0 0 0 7 12 25 4 17 14 20 6 28 26 9")
+        return s
+    }
+    function bracket(    s, k, i) {
+        if (rand() < 0.02) return "[succes=ok]"
+        k = int(rand() * 3) + 1
+        s = ""
+        for (i = 1; i <= k; i++) s = s (i > 1 ? (rand() < 0.15 ? "" : " ") : "") pick("success success new_authtok_reqd ignore module_unknown system_err auth_err cred_err session_err authtok_err perm_denied default default") "=" pick("ignore ok done bad die reset 1 2 3 ok done")
+        return "[" s "]"
+    }
+    function line(f, last,    t, c, r, s) {
+        t = pick("auth auth auth account session password")
+        r = rand()
+        if (r < 0.01) return "autth required " ret
+        if (r < 0.07 && f < last) return (debian == "yes" ? "@include" : t " include") " inc" (f + 1 + int(rand() * (last - f)))
+        if (r < 0.075) return t " include gone"
+        if (rand() < 0.1) t = "-" t
+        if (rand() < 0.05) t = toupper(t)
+        r = rand()
+        if (r < 0.2) c = "required"
+        else if (r < 0.28) c = "requisite"
+        else if (r < 0.42) c = "optional"
+        else if (r < 0.56) c = "sufficient"
+        else if (r < 0.66 && f < last) return t " " pick("include substack substack") " inc" (f + 1 + int(rand() * (last - f)))
+        else if (r < 0.7) c = pick("success=done default=die success=ok default=bad default=ok success=1 requird")
+        else c = bracket()
+        s = t " " c " " module()
+        if (rand() < 0.1) s = s " # " pick("a comment auth required")
+        if (rand() < 0.1 && s !~ /#/) sub(/ /, " \\\n    ", s)
+        return s
+    }
+    BEGIN {
+        srand(seed * 100003 + n)
+        for (f = 0; f <= 3; f++) {
+            file = dir "/" (f ? "inc" f : "svc")
+            k = int(rand() * 7) + (f ? 1 : 4)
+            for (i = 1; i <= k; i++) {
+                if (rand() < 0.1) print (rand() < 0.5 ? "# a comment" : "") > file
+                print line(f, 3) > file
+            }
+            close(file)
+        }
+    }'
+
+# SPEC_AWK makes each module setup-tide reads in a case return just what it
+# does here: pam_ret what its arguments say, and pam_exec what its program
+# does. Those it would take as returning anything otherwise.
+# shellcheck disable=SC2016  # the awk's
+SPEC_AWK='
+    BEGIN { FS = OFS = "\t" }
+    $1 == "H" && $5 == "M" && $7 ~ /\/pam_ret\.so$/ {
+        split("auth cred acct open close prelim update", f, " ")
+        for (i = 1; i <= 7; i++) v[f[i]] = 0
+        n = split(substr($10, 2), a, " ")
+        for (i = 1; i <= n; i++) if (split(a[i], kv, "=") == 2 && (kv[1] in v)) v[kv[1]] = kv[2] + 0
+        $8 = v["auth"] "/" v["cred"] "/" v["acct"] "/" v["open"] "/" v["close"] "/" v["prelim"] "/" v["update"]
+    }
+    $1 == "H" && $5 == "M" && $7 ~ /\/pam_exec\.so$/ {
+        gsub(/x/, substr($9, 2) == "/bin/true" ? "0" : "4", $8)
+    }
+    { print }'
+
+table() {
+    local kind name all=pam_sm_authenticate,pam_sm_setcred,pam_sm_acct_mgmt,pam_sm_open_session,pam_sm_close_session,pam_sm_chauthtok
+    while IFS=$'\t' read -r kind name; do
+        test "$kind" = M || continue
+        name=${name#=}
+        case "$name" in
+            pam_gone.so) printf 'T\tM\t=%s\t-\t=which is not there\n' "$name" ;;
+            *) printf 'T\tM\t=%s\t+%s\t=\n' "$name" "$all" ;;
+        esac
+    done
+}
+
+failures=0
+for n in $(seq 1 "$CASES"); do
+    dir="$T/case$n"
+    mkdir -p "$dir"
+    awk -v dir="$dir" -v n="$n" -v seed="$SEED" -v debian="$debian" -v moddir="$moddir" -v ret="$T/pam_ret.so" "$GEN_AWK"
+    files=$(find "$dir" -type f)
+    chain=$(PAM_CHAIN_SERVICE=svc PAM_CHAIN_DIR=$dir PAM_CHAIN_VENDOR='' PAM_CHAIN_DEBIAN=$debian \
+        PAM_CHAIN_FILES=$files LC_ALL=C awk "$CHAIN_AWK" </dev/null)
+    plan=$(printf '%s\n' "$chain" | LC_ALL=C awk -v phase=plan -v mode=login "$SIM_AWK")
+    tab=$(printf '%s\n' "$plan" | table)
+    for mode in login greeter; do
+        TESTS_RUN=$((TESTS_RUN + 1))
+        if ! got=$("$T/harness" "$dir" svc "$mode" 2>/dev/null); then
+            got="libpam refused to start"
+        fi
+        got=$(printf '%s\n' "$got" | sort)
+        want=$(printf '%s\n%s\n' "$chain" "$tab" | LC_ALL=C awk "$SPEC_AWK" \
+            | LC_ALL=C awk -v phase=check -v mode="$mode" -v debian="$debian" -v report=yes "$SIM_AWK" | sort)
+        if test "$got" = "$want"; then
+            TESTS_PASSED=$((TESTS_PASSED + 1))
+            continue
+        fi
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        failures=$((failures + 1))
+        test "$failures" -le 5 || continue
+        echo "FAIL: case $n, $mode (PAM_TEST_SEED=$SEED)"
+        for f in "$dir"/*; do
+            echo "  --- ${f##*/}"
+            sed 's/^/  /' "$f"
+        done
+        echo "  libpam:"
+        printf '%s\n' "$got" | sed 's/^/    /'
+        echo "  setup-tide:"
+        printf '%s\n' "$want" | sed 's/^/    /'
+    done
+done
+
+echo "setup-tide_pam_test: $TESTS_PASSED/$TESTS_RUN passed"
+test "$TESTS_FAILED" -eq 0

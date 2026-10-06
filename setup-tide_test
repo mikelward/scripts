@@ -10,6 +10,9 @@ SCRIPT="$SCRIPT_DIR/setup-tide"
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
+# The fixtures' modes, which setup's checks of what the greeter runs read,
+# don't depend on the caller's umask.
+umask 022
 
 setup() {
     T="$(mktemp -d)"
@@ -123,16 +126,27 @@ MOCK
     # sudo runs the command, so rm and the rest really happen (on $T paths).
     # \$FAKE_LN_FAILS makes linking a command onto PATH fail. \$FAKE_RM_KEEPS
     # makes rm remove everything but the file it names, then fail.
+    # \$FAKE_INSTALL_FAILS makes installing to the path it names fail.
+    # Another user can't run the files in \$FAKE_USER_NOEXEC, or read those in
+    # \$FAKE_USER_NOREAD, as the loader would for them.
     cat > "$T/bin/sudo" <<MOCK
 #!/bin/sh
 printf "%s\\n" "sudo \$*" >> "$CALLS"
 # -u USER runs the command as this user.
 if test "\$1" = -u; then
     shift 2
+    if test "\$1" = test && test "\$2" = -x; then
+        case " \$FAKE_USER_NOEXEC " in *" \$3 "*) exit 1 ;; esac
+    fi
+    FAKE_AS_USER=yes
+    export FAKE_AS_USER
     exec "\$@"
 fi
 if test "\$1" = ln && test -n "\$FAKE_LN_FAILS"; then
     case "\$*" in *"$T/usr-local-bin/"*) exit 1 ;; esac
+fi
+if test "\$1" = install && test -n "\$FAKE_INSTALL_FAILS"; then
+    case "\$*" in *" \$FAKE_INSTALL_FAILS") exit 1 ;; esac
 fi
 if test "\$1" = rm && test -n "\$FAKE_RM_KEEPS"; then
     shift
@@ -182,9 +196,23 @@ MOCK
     # takes the alias and still fails. With \$FAKE_DM_QUERY_FAILS_AFTER_INSTALL, it
     # can't say which display manager there is once greetd is installed, and
     # with \$FAKE_DM_QUERY_FAILS_FROM, from that query of a run on.
+    # greetd's unit is $T/units/greetd.service, or \$FAKE_GREETD_UNIT, with
+    # the drop-ins in \$FAKE_GREETD_DROPINS and the environment file in
+    # \$FAKE_GREETD_ENVFILES, one a missing one of is an error for unless
+    # \$FAKE_GREETD_ENVFILES_IGNORED is yes, and runs $T/usr-sbin/greetd, or
+    # \$FAKE_GREETD_EXEC, after \$FAKE_GREETD_EXEC_PRE and stopping with
+    # \$FAKE_GREETD_EXEC_STOP, each - before it if
+    # \$FAKE_GREETD_EXEC_IGNORED is yes, greetd with the arguments
+    # \$FAKE_GREETD_ARGS, from systemd's unit path, $T/units
+    # and $T/units-etc, and has the names \$FAKE_GREETD_NAMES, or its own.
+    # greetd restarts with \$FAKE_GREETD_RESTART, or always, except on
+    # \$FAKE_GREETD_RESTART_PREVENT, and stays active after exiting with
+    # \$FAKE_GREETD_REMAIN, or no.
+    # \$FAKE_UNIT_QUERY_FAILS names a property it won't say.
     # enable --force and disable move
     # display-manager.service as systemd's alias does. Enabling fails with
-    # \$FAKE_ENABLE_FAILS, and leaves the alias with \$FAKE_ENABLE_NO_ALIAS.
+    # \$FAKE_ENABLE_FAILS, and leaves the alias for greetd with
+    # \$FAKE_ENABLE_NO_ALIAS, and for the unit \$FAKE_ENABLE_NO_ALIAS_FOR.
     # Disabling greetd fails with \$FAKE_DISABLE_FAILS.
     cat > "$T/bin/systemctl" <<MOCK
 #!/bin/sh
@@ -207,13 +235,44 @@ if test "\$1" = show; then
             test -z "\$FAKE_CONFLICTS_FAILS" || exit 1
             echo "\${FAKE_GREETD_CONFLICTS-getty@tty7.service shutdown.target}"
             ;;
+        greetd.service:Restart | greetd.service:RestartPreventExitStatus | greetd.service:RemainAfterExit)
+            test "\${2#--property=}" != "\$FAKE_UNIT_QUERY_FAILS" || exit 1
+            case "\${2#--property=}" in
+                Restart) echo "\${FAKE_GREETD_RESTART-always}" ;;
+                RestartPreventExitStatus) echo "\${FAKE_GREETD_RESTART_PREVENT-}" ;;
+                RemainAfterExit) echo "\${FAKE_GREETD_REMAIN-no}" ;;
+            esac
+            ;;
+        greetd.service:FragmentPath | greetd.service:DropInPaths | greetd.service:Names | :UnitPath | greetd.service:EnvironmentFiles | greetd.service:Exec*)
+            test "\${2#--property=}" != "\$FAKE_UNIT_QUERY_FAILS" || exit 1
+            case "\${2#--property=}" in
+                FragmentPath) echo "\${FAKE_GREETD_UNIT-$T/units/greetd.service}" ;;
+                DropInPaths) echo "\${FAKE_GREETD_DROPINS-}" ;;
+                Names) echo "\${FAKE_GREETD_NAMES-greetd.service}" ;;
+                UnitPath) echo "$T/units $T/units-etc" ;;
+                EnvironmentFiles) test -z "\$FAKE_GREETD_ENVFILES" || echo "\$FAKE_GREETD_ENVFILES (ignore_errors=\${FAKE_GREETD_ENVFILES_IGNORED:-no})" ;;
+                Exec*)
+                    case "\${2#--property=}" in
+                        ExecStart) exe=\${FAKE_GREETD_EXEC-$T/usr-sbin/greetd} ;;
+                        ExecStartPre) exe=\${FAKE_GREETD_EXEC_PRE-} ;;
+                        ExecStop) exe=\${FAKE_GREETD_EXEC_STOP-} ;;
+                        *) exe= ;;
+                    esac
+                    test -z "\$exe" || echo "{ path=\$exe ; argv[]=\$exe\${FAKE_GREETD_ARGS:+ \$FAKE_GREETD_ARGS} ; ignore_errors=\${FAKE_GREETD_EXEC_IGNORED:-no} ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+                    ;;
+                *) echo ;;
+            esac
+            ;;
     esac
 fi
 case "\$*" in
     "enable --force "*.service)
         test -z "\$FAKE_ENABLE_FAILS" || exit 1
         # A unit without Alias=display-manager.service doesn't take it.
-        test -n "\$FAKE_ENABLE_NO_ALIAS" && test "\$3" = greetd.service || echo "\$3" > "$T/dm"
+        if test -n "\$FAKE_ENABLE_NO_ALIAS" && test "\$3" = greetd.service; then :
+        elif test -n "\$FAKE_ENABLE_NO_ALIAS_FOR" && test "\$3" = "\$FAKE_ENABLE_NO_ALIAS_FOR"; then :
+        else echo "\$3" > "$T/dm"
+        fi
         # Replaces the alias, then fails to reload.
         if test -n "\$FAKE_ENABLE_FAILS_AFTER" && test "\$3" = greetd.service; then exit 1; fi
         ;;
@@ -228,6 +287,50 @@ MOCK
     cat > "$T/bin/getent" <<MOCK
 #!/bin/sh
 grep "^\$2:" "$T/passwd" || exit 2
+MOCK
+    # ldd answers for the loader. A module in \$FAKE_LDD_FAILS won't load,
+    # one named with a library in \$FAKE_LDD_MISSING, as PATH:LIB, needs a
+    # library that isn't there, one named with a file in \$FAKE_LDD_LIBS, as
+    # PATH:FILE, loads that file, and one with a symbol in \$FAKE_LDD_UNDEFINED,
+    # as PATH:SYMBOL, uses one nothing defines, unless what it's told to
+    # preload has \$FAKE_LDD_PROVIDER. greetd links \$FAKE_GREETD_LIBS, or
+    # libpam and libc. The real one answers for the file \$FAKE_LDD_REAL.
+    # With \$FAKE_LDD_LOCALE, it says so in other words unless LC_ALL is C.
+    # Asked as another user, a library in \$FAKE_USER_NOREAD isn't found.
+    cat > "$T/bin/ldd" <<MOCK
+#!/bin/sh
+printf "%s\\n" "ldd\${LD_PRELOAD:+ LD_PRELOAD=\$LD_PRELOAD} \$*" >> "$CALLS"
+for file; do :; done
+test -z "\$FAKE_LDD_REAL" || test "\$file" != "\$FAKE_LDD_REAL" || exec /usr/bin/ldd "\$@"
+case " \$FAKE_LDD_FAILS " in *" \$file "*) echo "	not a dynamic executable" >&2; exit 1 ;; esac
+if test "\$1" != -r; then
+    for lib in \${FAKE_GREETD_LIBS:-$T/libpam.so.0 /lib/libc.so.6}; do
+        printf '\\t%s => %s (0x00007f0000000000)\\n' "\${lib##*/}" "\$lib"
+    done
+    exit 0
+fi
+echo "	statically linked"
+not_found="not found"
+undefined="undefined symbol"
+if test -n "\$FAKE_LDD_LOCALE" && test "\${LC_ALL:-}" != C; then
+    not_found="introuvable"
+    undefined="symbole indefini"
+fi
+for entry in \$FAKE_LDD_MISSING; do
+    test "\${entry%:*}" != "\$file" || printf '\\t%s => %s\\n' "\${entry##*:}" "\$not_found"
+done
+for entry in \$FAKE_LDD_LIBS; do
+    test "\${entry%:*}" = "\$file" || continue
+    case " \${FAKE_AS_USER:+\$FAKE_USER_NOREAD} " in
+        *" \${entry##*:} "*) printf '\\t%s => %s\\n' "\${entry##*/}" "\$not_found" ;;
+        *) printf '\\t%s => %s (0x00007f0000000000)\\n' "\${entry##*/}" "\${entry##*:}" ;;
+    esac
+done
+for entry in \$FAKE_LDD_UNDEFINED; do
+    test "\${entry%:*}" = "\$file" || continue
+    case " \$LD_PRELOAD " in *" \$FAKE_LDD_PROVIDER "*) test -n "\$FAKE_LDD_PROVIDER" && continue ;; esac
+    printf '%s: %s\\t(%s)\\n' "\$undefined" "\${entry##*:}" "\$file"
+done
 MOCK
     # usermod -d HOME USER changes USER's home in $T/passwd, or fails with
     # \$FAKE_USERMOD_FAILS.
@@ -257,18 +360,31 @@ exec /usr/bin/install "$@"
 MOCK
     # What the greeter runs, on the greeter's PATH, and greetd's user,
     # with Debian's home: greetd's config directory.
-    mkdir -p "$T/usr-bin" "$T/etc/greetd"
-    for cmd in tide-greeter Hyprland qs; do
+    mkdir -p "$T/usr-bin" "$T/etc/greetd" "$T/units" "$T/usr-sbin"
+    printf '[Service]\nExecStart=%s\n' "$T/usr-sbin/greetd" > "$T/units/greetd.service"
+    printf '#!/bin/sh\n' > "$T/usr-sbin/greetd"
+    chmod +x "$T/usr-sbin/greetd"
+    for cmd in tide-greeter Hyprland hyprctl qs; do
         printf '#!/bin/sh\n' > "$T/usr-bin/$cmd"
         chmod +x "$T/usr-bin/$cmd"
     done
+    # tide's greeter files, beside the bin directory tide-greeter is in.
+    mkdir -p "$T/share/tide/greeter" "$T/share/tide/shell"
+    : > "$T/share/tide/greeter/hyprland.lua"
+    : > "$T/share/tide/shell/greeter.qml"
     # The greeter's Hyprland is \$FAKE_GREETER_HYPRLAND_VERSION, or new enough,
     # and its qs answers \$FAKE_GREETER_QS_VERSION, or Quickshell 0.3.1.
     printf '#!/bin/sh\necho "Hyprland ${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"\n' > "$T/usr-bin/Hyprland"
     printf '#!/bin/sh\necho "${FAKE_GREETER_QS_VERSION:-Quickshell 0.3.1 (revision 1a4716c, distributed by test)}" >&2\n' > "$T/usr-bin/qs"
     printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/etc/greetd" > "$T/passwd"
-    # Debian's greetd PAM file, which lists the keyring already.
-    mkdir -p "$T/pam.d"
+    # Debian's greetd PAM file, which lists the keyring already, and the one
+    # it includes, with a line of each type for a module that's there.
+    mkdir -p "$T/pam.d" "$T/security"
+    pam_module "$T/security/pam_test.so"
+    pam_module_dir_is "$T/security/"
+    for type in auth account password session; do
+        printf '%-10s required     %s\n' "$type" "$T/security/pam_test.so"
+    done > "$T/pam.d/login"
     cat > "$T/pam.d/greetd" <<'PAM'
 #%PAM-1.0
 @include login
@@ -304,6 +420,47 @@ MOCK
 printf "%s\\n" "chown \$*" >> "$CALLS"
 test -z "\$FAKE_CHOWN_FAILS"
 MOCK
+    # stat reports the files a test makes as root's, as the files they
+    # stand in for are, and the directories above $T, /tmp among them, as
+    # root's and closed, as / and /usr are. A file at or under a path in
+    # \$FAKE_OWNER's UID:PATH entries is UID's instead. Every format setup
+    # asks for starts with %u.
+    real_stat=$(command -v stat)
+    cat > "$T/bin/stat" <<MOCK
+#!/bin/sh
+fmt=\$2
+shift 2
+test "\$1" != -- || shift
+me=\$(id -u)
+status=0
+for f; do
+    if test "\$f" != "$T"; then
+        case "$T/" in
+            "\${f%/}/"*)
+                printf "%s\\n" "\$fmt" | sed -e "s/%u/0/" -e "s/%a/755/" -e "s/%F/directory/" -e "s|%n|\$f|"
+                continue
+                ;;
+        esac
+    fi
+    if ! line=\$($real_stat -c "\$fmt" -- "\$f"); then
+        status=1
+        continue
+    fi
+    uid=\${line%% *}
+    case "\$line" in
+        *" "*) rest=" \${line#* }" ;;
+        *) rest= ;;
+    esac
+    test "\$uid" != "\$me" || uid=0
+    for entry in \$FAKE_OWNER; do
+        case "\$f" in
+            "\${entry#*:}" | "\${entry#*:}"/*) uid=\${entry%%:*} ;;
+        esac
+    done
+    printf "%s%s\\n" "\$uid" "\$rest"
+done
+exit \$status
+MOCK
     cat > "$T/bin/dconf" <<MOCK
 #!/bin/sh
 printf "%s\\n" "dconf \$*" >> "$CALLS"
@@ -330,6 +487,7 @@ run() {
         SETUP_GREETD_DIR="$T/etc/greetd" SETUP_GREETD_TEMPLATE="$T/greetd.toml" \
         SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" \
         SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \
+        SETUP_PAM_VENDOR_DIR="$T/vendor-pam.d" SETUP_PAM_AT_INCLUDE=yes \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
     status=$?
     set -e
@@ -356,6 +514,111 @@ check() {
 inst() { printf '%s\n' "$T"/opt/hyprland/v0.56.2-*; }
 has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 lacks() { ! has "$1" "$2"; }
+# N bytes of VALUE, least significant first, as printf escapes.
+elf_le() {
+    local v=$1 n=$2 out=
+    while test "$n" -gt 0; do
+        out+=$(printf '\\x%02x' $((v & 255)))
+        v=$((v >> 8))
+        n=$((n - 1))
+    done
+    printf '%s' "$out"
+}
+# PAM_MODULE FILE [--machine=N] [--stripped] [NAME[:hidden]]...: a PAM
+# module as setup reads one, a 64-bit little-endian ELF shared object for
+# this machine, with a segment to map and a dynamic table naming its
+# symbols, exporting each function named, or every one PAM calls when none
+# is. :hidden puts one in its symbols without exporting it, --machine
+# builds it for another machine, and --stripped leaves out the section
+# headers its symbols are found by. Whether the loader can load it is the
+# ldd mock's to say.
+# pam_module_dir_is DIR has greetd's libpam load a module named without a
+# full path from DIR, among the other strings a library holds.
+pam_module_dir_is() {
+    printf '\177ELF\0GLIBC_2.34\0/etc/pam.d/\0%s\0/etc/security/\0../lib64/security/\0' "$1" > "$T/libpam.so.0"
+}
+pam_module() {
+    local file=$1 machine stripped='' name vis nsym strs='\x00' syms at=1 out size
+    shift
+    machine=$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')
+    while :; do
+        case "${1:-}" in
+            --machine=*) machine=${1#--machine=} ;;
+            --stripped) stripped=yes ;;
+            *) break ;;
+        esac
+        shift
+    done
+    test $# -gt 0 || set -- pam_sm_authenticate pam_sm_setcred pam_sm_acct_mgmt \
+        pam_sm_open_session pam_sm_close_session pam_sm_chauthtok
+    nsym=$(($# + 1))
+    syms=$(elf_le 0 24)
+    for name; do
+        vis=0
+        case "$name" in *:hidden) vis=2 name=${name%:hidden} ;; esac
+        # GLOBAL FUNC, defined in section 1.
+        syms+=$(elf_le "$at" 4)$(elf_le 18 1)$(elf_le "$vis" 1)$(elf_le 1 2)$(elf_le 0 16)
+        strs+="$name\\x00"
+        at=$((at + ${#name} + 1))
+    done
+    # The program headers at 64, the section headers at 176, the dynamic
+    # table at 368, and the symbols and their names at 416.
+    size=$((416 + 24 * nsym + at))
+    out='\x7fELF'$(elf_le 2 1)$(elf_le 1 1)$(elf_le 1 1)$(elf_le 0 9)
+    out+=$(elf_le 3 2)$(elf_le "$machine" 2)$(elf_le 1 4)$(elf_le 0 8)
+    out+=$(elf_le 64 8)
+    if test -n "$stripped"; then out+=$(elf_le 0 8); else out+=$(elf_le 176 8); fi
+    out+=$(elf_le 0 4)$(elf_le 64 2)
+    out+=$(elf_le 56 2)$(elf_le 2 2)
+    if test -n "$stripped"; then out+=$(elf_le 0 6); else out+=$(elf_le 64 2)$(elf_le 3 2)$(elf_le 0 2); fi
+    # PT_LOAD, the whole file, and PT_DYNAMIC, its table.
+    out+=$(elf_le 1 4)$(elf_le 5 4)$(elf_le 0 24)$(elf_le "$size" 8)$(elf_le "$size" 8)$(elf_le 4096 8)
+    out+=$(elf_le 2 4)$(elf_le 6 4)$(elf_le 368 8)$(elf_le 368 8)$(elf_le 368 8)$(elf_le 48 8)$(elf_le 48 8)$(elf_le 8 8)
+    # The null section, the symbols, and their names.
+    out+=$(elf_le 0 64)
+    out+=$(elf_le 0 4)$(elf_le 11 4)$(elf_le 0 16)$(elf_le 416 8)$(elf_le $((24 * nsym)) 8)$(elf_le 2 4)$(elf_le 1 4)$(elf_le 8 8)$(elf_le 24 8)
+    out+=$(elf_le 0 4)$(elf_le 3 4)$(elf_le 0 16)$(elf_le $((416 + 24 * nsym)) 8)$(elf_le "$at" 8)$(elf_le 0 8)$(elf_le 1 8)$(elf_le 0 8)
+    # DT_STRTAB, DT_SYMTAB and DT_NULL.
+    out+=$(elf_le 5 8)$(elf_le $((416 + 24 * nsym)) 8)$(elf_le 6 8)$(elf_le 416 8)$(elf_le 0 16)
+    # shellcheck disable=SC2059  # the format is the bytes
+    printf "$out$syms$strs" > "$file"
+}
+# elf_program FILE [--machine=N] [--type=N] [--entry=N] [--flags=N]
+# [--interp=PATH] [--short]: a 64-bit little-endian ELF program for this
+# machine, or MACHINE, of TYPE, executable by default, starting at ENTRY,
+# within its code by default, loaded by the loader PATH, or by none, with a
+# PT_LOAD of the whole file, mapped as FLAGS, readable and executable by
+# default, that runs past its end when --short. Executable.
+elf_program() {
+    local file=$1 machine type=2 entry=64 flags=5 interp='' short='' phnum=1 size filesz out
+    shift
+    machine=$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')
+    for arg; do
+        case "$arg" in
+            --machine=*) machine=${arg#--machine=} ;;
+            --type=*) type=${arg#--type=} ;;
+            --entry=*) entry=${arg#--entry=} ;;
+            --flags=*) flags=${arg#--flags=} ;;
+            --interp=*) interp=${arg#--interp=} ;;
+            --short) short=yes ;;
+        esac
+    done
+    test -z "$interp" || phnum=2
+    size=$((64 + 56 * phnum))
+    test -z "$interp" || size=$((size + ${#interp} + 1))
+    filesz=$size
+    test -z "$short" || filesz=$((size + 4096))
+    out='\x7fELF'$(elf_le 2 1)$(elf_le 1 1)$(elf_le 1 1)$(elf_le 0 9)
+    out+=$(elf_le "$type" 2)$(elf_le "$machine" 2)$(elf_le 1 4)$(elf_le "$entry" 8)
+    out+=$(elf_le 64 8)$(elf_le 0 8)$(elf_le 0 4)$(elf_le 64 2)$(elf_le 56 2)$(elf_le "$phnum" 2)$(elf_le 0 6)
+    # PT_INTERP, the name after the headers, and PT_LOAD, the whole file.
+    test -z "$interp" || out+=$(elf_le 3 4)$(elf_le 4 4)$(elf_le $((64 + 56 * phnum)) 8)$(elf_le 0 16)$(elf_le $((${#interp} + 1)) 8)$(elf_le $((${#interp} + 1)) 8)$(elf_le 1 8)
+    out+=$(elf_le 1 4)$(elf_le "$flags" 4)$(elf_le 0 24)$(elf_le "$filesz" 8)$(elf_le "$filesz" 8)$(elf_le 4096 8)
+    test -z "$interp" || out+="$interp\\x00"
+    # shellcheck disable=SC2059  # the format is the bytes
+    printf "$out" > "$file"
+    chmod +x "$file"
+}
 # Real git, for the fixtures and for replaying the options setup-tide gave a
 # clone, with a config of its own: the caller's global and system config never
 # reach it, so a signing setup or a silenced advice can't fail a fixture or
@@ -1381,7 +1644,7 @@ check "greetd: the config is tide's, with Debian's user and VT" \
     test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
 check "greetd: the config is root's" has "$calls" "sudo install -D -m 644"
 check "greetd: checks greetd's user can run each command the greeter starts" \
-    test "$(printf '%s\n' "$calls" | grep -c "^sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c _p=")" -eq 3
+    test "$(printf '%s\n' "$calls" | grep -c "^sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c _p=")" -eq 4
 check "greetd: and asks its own Hyprland for its version" \
     has "$calls" "sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c Hyprland --version"
 check "greetd: notes the display manager it replaces" test "$(cat "$T/var/lib/setup-tide/previous-display-manager")" = gdm3.service
@@ -1441,6 +1704,24 @@ ARGS=(--no-greeter); run
 check "--no-greeter: disables greetd where there was none" has "$calls" "sudo systemctl disable greetd.service"
 check "--no-greeter: leaving no display manager" test ! -s "$T/dm"
 teardown
+# One whose unit doesn't name the alias, made the display manager by hand,
+# doesn't take it back when enabled, and disabling greetd would leave none.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+ARGS=(--no-greeter); run FAKE_ENABLE_NO_ALIAS_FOR=gdm3.service
+check "--no-greeter: an old display manager that doesn't take the alias back is enabled" has "$calls" "sudo systemctl enable --force gdm3.service"
+check "--no-greeter: and greetd stays" test "$(cat "$T/dm")" = greetd.service
+check "--no-greeter: and isn't disabled" lacks "$calls" "systemctl disable greetd.service"
+check "--no-greeter: and says what to do" has "$output" "enabling gdm3.service didn't make it the display manager again, as its unit would with Alias=display-manager.service, so greetd stays; make gdm3.service the display manager, then run 'sudo systemctl disable greetd.service'"
+check "--no-greeter: and doesn't say it's back" lacks "$output" "gdm3.service is the display manager again"
+teardown
+# Nor when systemd won't say which is the display manager after.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"; : > "$T/dm-queries"
+ARGS=(--no-greeter); run FAKE_DM_QUERY_FAILS_FROM=2
+check "--no-greeter: a display manager systemd won't say after leaves greetd" lacks "$calls" "systemctl disable greetd.service"
+check "--no-greeter: and says so" has "$output" "couldn't ask systemd whether gdm3.service is the display manager again, so greetd stays; once it is, run 'sudo systemctl disable greetd.service'"
+teardown
 
 # Each thing the greeter needs is checked before greetd takes over, and
 # what's missing is named; the display manager stays.
@@ -1456,7 +1737,16 @@ check "greetd: no greetd says it couldn't be installed" has "$output" "couldn't 
 teardown
 # Without its own PAM file, PAM's fallback checks greetd's logins.
 setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; run
-greeter_not_ready "no PAM file for greetd" "greetd has no PAM file at $T/pam.d/greetd, and PAM's fallback for one can refuse every login"
+greeter_not_ready "no PAM file for greetd" "greetd has no PAM file at $T/pam.d/greetd or $T/vendor-pam.d/greetd, and PAM's fallback for one can refuse every login"
+teardown
+# PAM reads the vendor's when PAM_DIR has none, and the keyring's lines go
+# in a copy of it in PAM_DIR, which PAM then reads in its place.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; mkdir -p "$T/vendor-pam.d"
+printf '#%%PAM-1.0\n@include login\n' > "$T/vendor-pam.d/greetd"; cp "$T/vendor-pam.d/greetd" "$T/original-pam"; run
+check "greetd: a PAM file only in the vendor's directory is the greeter's" test "$(cat "$T/dm")" = greetd.service
+check "keyring: a vendor's PAM file gains it in a copy in PAM's own directory" \
+    test "$(cat "$T/pam.d/greetd")" = "$(cat "$T/original-pam"; printf '\n# Unlock gnome-keyring with the login password (setup-tide).\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start')"
+check "keyring: and leaves the vendor's alone" cmp -s "$T/vendor-pam.d/greetd" "$T/original-pam"
 teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/greetd.toml"; run
 greeter_not_ready "no template" "tide's greetd config isn't installed at $T/greetd.toml"
@@ -1496,6 +1786,1198 @@ teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/qs"; run
 greeter_not_ready "a qs greetd's user can't run" "greetd's user _greetd can't run qs from $T/usr-local-bin:$T/usr-bin"
 teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/hyprctl"; run
+greeter_not_ready "a hyprctl greetd's user can't run, which ends its Hyprland," "greetd's user _greetd can't run hyprctl from $T/usr-local-bin:$T/usr-bin"
+teardown
+# Each has to be a program the kernel can start: an ELF file, or a script
+# whose #! names what runs it, which has to be there, and root's alone, as
+# does what env finds on the greeter's PATH.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'not a program\n' > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter that isn't a program" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter isn't a program the kernel can start: it's neither an ELF file nor a script whose #! names what runs it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/nonexistent/sh\n' > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter whose interpreter isn't there" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by /nonexistent/sh, which isn't there or can't be run"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod +x "$T/interp/sh"
+chmod o+w "$T/interp/sh"; printf '#! %s -e\n' "$T/interp/sh" > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter run by an interpreter others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by $T/interp/sh: users other than root can write $T/interp/sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env sh\n' > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter run by an env's interpreter not on the greeter's PATH" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's sh, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env -S sh -e\n' > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter run by env with options" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env with -S sh -e, which setup can't follow"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin"; printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"
+chmod +x "$T/usr-local-bin/greeter-sh"; chmod o+w "$T/usr-local-bin/greeter-sh"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter run by env, with one of that name on the greeter's PATH others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by env's greeter-sh, $T/usr-local-bin/greeter-sh: users other than root can write $T/usr-local-bin/greeter-sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run
+check "greetd: a tide-greeter run by env's interpreter on the greeter's PATH, a script itself, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# env by another name, through a link, is still env.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin" "$T/interp"; ln -s /usr/bin/env "$T/interp/envalias"
+printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"; chmod +x "$T/usr-local-bin/greeter-sh"; chmod o+w "$T/usr-local-bin/greeter-sh"
+printf '#!%s greeter-sh\n' "$T/interp/envalias" > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter run by a link to env, with one of that name on the greeter's PATH others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by env's greeter-sh, $T/usr-local-bin/greeter-sh: users other than root can write $T/usr-local-bin/greeter-sh"
+teardown
+# An ELF one has to be a program for this machine, whole, and, when a loader
+# starts it, have that loader there, root's alone, able to load it with
+# every library it needs.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter"; run
+check "greetd: a tide-greeter that's a static program is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run
+check "greetd: a tide-greeter its loader can load is the greeter's" test "$(cat "$T/dm")" = greetd.service
+check "greetd: which the loader is asked about" has "$calls" "ldd -r -- $T/usr-bin/tide-greeter"
+teardown
+greeter_elf_not_ready() {
+    greeter_not_ready "a tide-greeter that $1" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter $2"
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF' > "$T/usr-bin/tide-greeter"; run
+greeter_elf_not_ready "is only an ELF file's first bytes" "isn't a program the kernel can start"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --machine=183; run
+greeter_elf_not_ready "is built for another machine" "is built for another kind of machine than this one"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_module "$T/usr-bin/tide-greeter"; chmod +x "$T/usr-bin/tide-greeter"; run
+greeter_elf_not_ready "is a library" "has no code where the kernel would start it"
+teardown
+# The program starts at its entry point, which has to be in code it loads.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --entry=4096; run
+greeter_elf_not_ready "starts past what it loads" "has no code where the kernel would start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --flags=4; run
+greeter_elf_not_ready "starts in what it maps not executable" "has no code where the kernel would start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --type=1; run
+greeter_elf_not_ready "is an object file" "is an ELF file, but not a program the kernel can start"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --short; run
+greeter_elf_not_ready "is cut short" "is cut short: a part of it the kernel loads runs past its end"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --interp=/nonexistent/ld.so; run
+greeter_elf_not_ready "names a loader that isn't there" "is loaded by /nonexistent/ld.so, which isn't there"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod o+w "$T/loader/ld.so"
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run
+greeter_not_ready "a tide-greeter loaded by a loader others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is loaded by $T/loader/ld.so: users other than root can write $T/loader/ld.so"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_LDD_FAILS="$T/usr-bin/tide-greeter"
+greeter_elf_not_ready "its loader can't load" "can't be loaded by the system's loader"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_LDD_MISSING="$T/usr-bin/tide-greeter:libgone.so.1"
+greeter_elf_not_ready "needs a library that isn't there" "needs libgone.so.1, which isn't there, or _greetd can't read it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
+run LC_ALL= FAKE_LDD_LOCALE=fr FAKE_LDD_UNDEFINED="$T/usr-bin/tide-greeter:gone_function"
+greeter_elf_not_ready "needs a symbol nothing defines, which ldd would say in another locale" "needs gone_function, which nothing it loads defines"
+teardown
+# The loader takes a library from wherever an RPATH, a RUNPATH or
+# ld.so.conf leads, and each it takes has to be root's alone.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+: > "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
+run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1"
+check "greetd: a tide-greeter whose libraries are root's alone is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+: > "$T/libs/libx.so.1"; chmod o+w "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
+run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1"
+greeter_not_ready "a tide-greeter that loads a library others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
+teardown
+# The kernel runs an interpreter or a loader for greetd's user, and the
+# loader opens libraries as that user, so root being able to isn't enough.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod 744 "$T/interp/sh"
+printf '#!%s\n' "$T/interp/sh" > "$T/usr-bin/tide-greeter"; run FAKE_USER_NOEXEC="$T/interp/sh"
+greeter_not_ready "a tide-greeter run by an interpreter greetd's user can't run" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by $T/interp/sh, which isn't there or can't be run"
+check "greetd: which is asked as greetd's user" has "$calls" "sudo -u _greetd test -x $T/interp/sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod 744 "$T/usr-bin/greeter-sh"
+printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run FAKE_USER_NOEXEC="$T/usr-bin/greeter-sh"
+greeter_not_ready "a tide-greeter run by env's interpreter greetd's user can't run" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's greeter-sh, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_USER_NOEXEC="$T/loader/ld.so"
+greeter_elf_not_ready "is loaded by a loader greetd's user can't run" "is loaded by $T/loader/ld.so, which _greetd can't run"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+: > "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
+run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1" FAKE_USER_NOREAD="$T/libs/libx.so.1"
+greeter_elf_not_ready "loads a library greetd's user can't read" "needs libx.so.1, which isn't there, or _greetd can't read it"
+check "greetd: which ldd is asked as greetd's user" has "$calls" "sudo -u _greetd env LC_ALL=C ldd -r -- $T/usr-bin/tide-greeter"
+teardown
+# A loader no one can run can't start what's run as root either.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod 644 "$T/loader/ld.so"
+elf_program "$T/usr-sbin/greetd" --interp="$T/loader/ld.so"; run
+greeter_not_ready "a greetd loaded by a loader no one can run" "greetd's unit runs $T/usr-sbin/greetd, and $T/usr-sbin/greetd is loaded by $T/loader/ld.so, which root can't run, so systemd won't start it"
+teardown
+
+# The greeter reads every password typed at login, so setup only switches to
+# a greeter whose every piece only root can change: on the way from /,
+# through every link, and through the build a command comes from.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/qs"
+# The fixtures' usr-bin isn't a bin directory by name, so it's checked
+# whole, from the first command found there.
+greeter_not_ready "a qs that isn't root's" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/qs is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod g+w "$T/usr-bin"; run
+greeter_not_ready "a directory on the way that others can write" "the greeter's PATH isn't root's alone: users other than root can write $T/usr-bin"
+teardown
+# A directory earlier on the PATH could hold a Hyprland of someone else's.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod o+w "$T/usr-local-bin"; run
+greeter_not_ready "a PATH directory others can write" "the greeter's PATH isn't root's alone: users other than root can write $T/usr-local-bin"
+teardown
+# One that isn't there is fine, while only root could make it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH="$T/none:$T/usr-local-bin:$T/usr-bin"
+check "greetd: a PATH directory that isn't there doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -m 777 "$T/open"
+run SETUP_GREETER_PATH="$T/open/bin:$T/usr-local-bin:$T/usr-bin"
+greeter_not_ready "a missing PATH directory others could make" "the greeter's PATH isn't root's alone: users other than root can write $T/open"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH=":$T/usr-local-bin:$T/usr-bin"
+greeter_not_ready "a PATH with the current directory" "the greeter's PATH, :$T/usr-local-bin:$T/usr-bin, names the current directory"
+teardown
+# A build in a home directory greetd's user can read: a 755 home.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+mkdir -p "$T/home/build/bin"
+mv "$T/usr-bin/qs" "$T/home/build/bin/qs"
+ln -s "$T/home/build/bin/qs" "$T/usr-local-bin/qs"
+run FAKE_OWNER="1000:$T/home"
+greeter_not_ready "a qs linked into a home directory" "the greeter's qs isn't root's alone: $T/home is uid 1000's, not root's"
+teardown
+# The build a linked command comes from is checked whole, since the command
+# loads its libraries from it, and wherever its links lead. One setup didn't
+# make, which it leaves alone.
+fake_qs_build() {
+    mkdir -p "$T/opt/qs-build/v1/bin" "$T/opt/qs-build/v1/lib"
+    mv "$T/usr-bin/qs" "$T/opt/qs-build/v1/bin/qs"
+    : > "$T/opt/qs-build/v1/lib/libqs.so.1"
+    ln -s libqs.so.1 "$T/opt/qs-build/v1/lib/libqs.so"
+    ln -s v1 "$T/opt/qs-build/current"
+    ln -s ../opt/qs-build/current/bin/qs "$T/usr-local-bin/qs"
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; run
+check "greetd: a sealed build, through relative links, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; chmod g+w "$T/opt/qs-build/v1/lib/libqs.so.1"; run
+greeter_not_ready "a build library others can write" "the greeter's qs isn't root's alone: users other than root can write $T/opt/qs-build/v1/lib/libqs.so.1"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; run FAKE_OWNER="1000:$T/opt/qs-build/v1/lib/libqs.so.1"
+greeter_not_ready "a build library that isn't root's" "the greeter's qs isn't root's alone: $T/opt/qs-build/v1/lib/libqs.so.1 is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
+ln -s "$T/home/lib/libplugin.so" "$T/opt/qs-build/v1/lib/libplugin.so"; : > "$T/home/lib/libplugin.so"
+run FAKE_OWNER="1000:$T/home"
+greeter_not_ready "a build link out to a home directory" "the greeter's qs isn't root's alone: $T/home is uid 1000's, not root's"
+teardown
+# A build replaced by a link to someone's own copy of it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build
+mv "$T/opt/qs-build/v1" "$T/home/v1"; ln -s "$T/home/v1" "$T/opt/qs-build/v1"
+run FAKE_OWNER="1000:$T/home"
+greeter_not_ready "a build that links into a home directory" "the greeter's qs isn't root's alone: $T/home is uid 1000's, not root's"
+teardown
+# A scan that fails stops the switch rather than passing for a clean one.
+# The PAM stack's is the first.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+real_awk=$(command -v awk)
+cat > "$T/bin/awk" <<MOCK
+#!/bin/sh
+case "\$*" in *'print "writable "'*) exit 2 ;; esac
+exec $real_awk "\$@"
+MOCK
+chmod +x "$T/bin/awk"; run
+greeter_not_ready "a failed ownership scan" "what systemd starts greetd from isn't root's alone: couldn't check who can change what's in $T/usr-sbin"
+teardown
+# A link to a directory outside the build, itself root's, has everything in
+# it checked too.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext/plugins"
+: > "$T/ext/plugins/libplugin.so"; ln -s "$T/ext" "$T/opt/qs-build/v1/lib/qml"
+run FAKE_OWNER="1000:$T/ext/plugins/libplugin.so"
+greeter_not_ready "a library under a directory a build links to" "the greeter's qs isn't root's alone: $T/ext/plugins/libplugin.so is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
+: > "$T/ext/libplugin.so"; chmod g+w "$T/ext/libplugin.so"; ln -s ../../../../ext "$T/opt/qs-build/v1/lib/qml"; run
+greeter_not_ready "a writable library under a directory a build links to" "the greeter's qs isn't root's alone: users other than root can write $T/ext/libplugin.so"
+teardown
+# Links back into what's been looked through end there, loops included.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
+ln -s .. "$T/opt/qs-build/v1/lib/up"; ln -s "$T/ext" "$T/opt/qs-build/v1/lib/ext"; ln -s "$T/opt/qs-build/v1" "$T/ext/back"
+run
+check "greetd: a build whose links loop back is still the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; ln -s loop "$T/opt/qs-build/v1/lib/loop"; run
+greeter_not_ready "a link loop in a build" "the greeter's qs isn't root's alone: $T/opt/qs-build/v1/lib/loop leads through too many links"
+teardown
+# A command installed straight into /usr/local loads its libraries from
+# /usr/local/lib, so /usr/local is checked whole too; only the package
+# manager's own directories, under $SYSTEM_ROOT, are left to it.
+fake_system() {
+    mkdir -p "$T/sys/usr/bin" "$T/sys/usr/lib" "$T/sys/usr/local/$1" "$T/sys/usr/local/lib"
+    mv "$T/usr-bin/qs" "$T/sys/usr/$2/qs"
+    : > "$T/sys/usr/lib/libc.so.6"
+    : > "$T/sys/usr/local/lib/libqs.so.1"
+}
+system_run() {
+    run SETUP_SYSTEM_ROOT="$T/sys" SETUP_GREETER_PATH="$T/sys/usr/local/$1:$T/sys/usr/bin:$T/usr-bin" "${@:2}"
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin local/bin; system_run bin
+check "greetd: a sealed /usr/local install is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin local/bin; chmod g+w "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
+greeter_not_ready "a /usr/local library others can write" "the greeter's qs isn't root's alone: users other than root can write $T/sys/usr/local/lib/libqs.so.1"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system sbin local/sbin; system_run sbin FAKE_OWNER="1000:$T/sys/usr/local/lib/libqs.so.1"
+greeter_not_ready "a /usr/local/sbin command's library that isn't root's" "the greeter's qs isn't root's alone: $T/sys/usr/local/lib/libqs.so.1 is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin bin; chmod g+w "$T/sys/usr/lib/libc.so.6" "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
+check "greetd: the package manager's own qs isn't held to what's beside it" test "$(cat "$T/dm")" = greetd.service
+teardown
+# hyprctl ends the greeter's Hyprland, so it has to be that Hyprland's own,
+# not another install's earlier on the greeter's PATH.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; cp "$T/usr-bin/hyprctl" "$T/usr-local-bin/hyprctl"; run
+greeter_not_ready "a hyprctl from another install" "the greeter's hyprctl, in $T/usr-local-bin, isn't from the same install as its Hyprland, in $T/usr-bin, so it may not be able to end it"
+teardown
+# Both linked from a build in a prefix of their own are the same install.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/h/v1/bin"
+mv "$T/usr-bin/Hyprland" "$T/usr-bin/hyprctl" "$T/opt/h/v1/bin/"
+ln -s ../opt/h/v1/bin/Hyprland "$T/usr-local-bin/Hyprland"; ln -s "$T/opt/h/v1/bin/hyprctl" "$T/usr-local-bin/hyprctl"; run
+check "greetd: Hyprland and hyprctl linked from one build are the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A link whose target ends in a newline, which $(readlink) would drop, to
+# check another file than the one the kernel runs.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/other"
+cp "$T/usr-bin/qs" "$T/opt/other/qs"
+cp "$T/usr-bin/qs" "$T/opt/other/qs
+"
+chmod o+w "$T/opt/other/qs
+"
+rm "$T/usr-bin/qs"; ln -s "$T/opt/other/qs
+" "$T/usr-local-bin/qs"; run
+greeter_not_ready "a link to a name ending in a newline" "the greeter's qs isn't root's alone: the link $T/usr-local-bin/qs leads to a name with a newline in it"
+teardown
+# And a name with a newline anywhere in a build, which would read as two,
+# one of them a decoy, and leave what it names unchecked.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
+: > "$T/home/lib/libplugin.so"; chmod o+w "$T/home/lib/libplugin.so"
+: > "$T/opt/qs-build/v1/lib/libplugin.so"
+ln -s "$T/home/lib/libplugin.so" "$T/opt/qs-build/v1/lib/libplugin.so
+"; run
+greeter_not_ready "a name with a newline in a build" "the greeter's qs isn't root's alone: $T/opt/qs-build/v1/lib holds a name with a newline in it"
+teardown
+# So is the directory setup writes greetd's config in.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod o+w "$T/etc/greetd"; run
+greeter_not_ready "a greetd config directory others can write" "greetd's config directory isn't root's alone: users other than root can write $T/etc/greetd"
+teardown
+# So is greetd's PAM stack, its own file and what it includes from the same
+# directory, since anyone who could change one could let any password in.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+sed -i '/pam_gnome_keyring/d' "$T/pam.d/greetd"; chmod o+w "$T/pam.d/greetd"; run
+greeter_not_ready "a greetd PAM file others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/pam.d/greetd"
+check "greetd: and setup adds nothing to it" lacks "$(cat "$T/pam.d/greetd")" pam_gnome_keyring
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/pam.d/login"; run FAKE_OWNER="1000:$T/pam.d/login"
+greeter_not_ready "an included PAM file that isn't root's" "greetd's PAM stack isn't root's alone: $T/pam.d/login is uid 1000's, not root's"
+teardown
+# Another service's file isn't greetd's, in either directory, so only the
+# directories themselves count there.
+for unrelated in pam.d/cups:o+w pam.d/cups:1000 vendor-pam.d/cups:g+w; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; f=$T/${unrelated%%:*}
+    printf 'auth required pam_permit.so\n' > "$f"
+    case "$unrelated" in
+        *:1000) run FAKE_OWNER="1000:$f" ;;
+        *) chmod "${unrelated##*:}" "$f"; run ;;
+    esac
+    check "greetd: another service's PAM file, $unrelated, doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; chmod o+w "$T/vendor-pam.d"; run
+greeter_not_ready "a vendor's PAM directory others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/vendor-pam.d"
+teardown
+# One setup can't read is skipped while finding what greetd's stacks read,
+# so another service's doesn't stop the switch, and one greetd's do read
+# still does. Root reads any file, so as root the run gives that up.
+run_unprivileged() {
+    if test "$(id -u)" = 0; then
+        run setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all
+    else
+        run
+    fi
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'auth required pam_permit.so\n' > "$T/pam.d/cups"; chmod 000 "$T/pam.d/cups"; run_unprivileged
+check "greetd: another service's PAM file setup can't read doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod 000 "$T/pam.d/login"; run_unprivileged
+greeter_not_ready "a PAM file greetd's stack reads that setup can't" "greetd's PAM stack isn't root's alone: couldn't read $T/pam.d/login"
+teardown
+# So is what it names by its full path, which loads or runs as root too: a
+# module, a program pam_exec runs, a file a module reads, and the prefix each
+# is installed in, wherever on a line the name is.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; : > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+printf 'auth optional %s\n' "$T/mods/pam_evil.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/hooks"; printf '#!/bin/sh\n' > "$T/hooks/on-login"
+printf 'session optional pam_exec.so quiet %s\n' "$T/hooks/on-login" > "$T/pam.d/login"; run FAKE_OWNER="1000:$T/hooks/on-login"
+greeter_not_ready "a program a PAM module runs that isn't root's" "greetd's PAM stack isn't root's alone: $T/pam.d/login names $T/hooks/on-login: $T/hooks/on-login is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/env"; chmod o+w "$T/env"
+printf 'session optional pam_env.so [envfile=%s]\n' "$T/env/locale" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a file a PAM module reads, in a directory others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/env/locale: users other than root can write $T/env"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; : > "$T/opt/pam/lib/security/pam_x.so"
+: > "$T/opt/pam/lib/libdep.so"; chmod g+w "$T/opt/pam/lib/libdep.so"
+printf 'auth optional %s\n' "$T/opt/pam/lib/security/pam_x.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a library beside a PAM module others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/opt/pam/lib/security/pam_x.so: users other than root can write $T/opt/pam/lib/libdep.so"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional ../../../mods/pam_x.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module that climbs out of PAM's directory" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names ../../../mods/pam_x.so, which climbs out of where PAM looks"
+teardown
+# A file included by its full path from outside the PAM directory isn't
+# looked through, so it fails, even where a backslash carries the line on
+# past a comment.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/elsewhere"; : > "$T/elsewhere/common"
+printf 'auth \\\n# carried on\n    include %s\n' "$T/elsewhere/common" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM file included from elsewhere" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd includes $T/elsewhere/common, outside $T/pam.d and $T/vendor-pam.d, which setup doesn't look through"
+teardown
+# Another service's lines aren't greetd's: what they name or include fails
+# only a stack that reads them, its other service's included, whose
+# modules PAM loads for greetd too.
+for reads in none include other; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods" "$T/elsewhere"; : > "$T/elsewhere/common"
+    : > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+    printf 'auth optional %s\nsession optional pam_exec.so %s\nauth include %s\n' \
+        "$T/mods/pam_evil.so" "$T/mods/pam_evil.so" "$T/elsewhere/common" > "$T/pam.d/cups"
+    case "$reads" in
+        include) printf 'auth include cups\n' >> "$T/pam.d/greetd" ;;
+        other) cp "$T/pam.d/cups" "$T/pam.d/other" ;;
+    esac
+    run
+    case "$reads" in
+        none) check "greetd: another service's lines naming what others can write don't stop the switch" test "$(cat "$T/dm")" = greetd.service ;;
+        include) greeter_not_ready "a PAM file greetd includes that names what others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/cups names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so" ;;
+        other) greeter_not_ready "greetd's other service naming what others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/other names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so" ;;
+    esac
+    teardown
+done
+# One from inside it, a name in a comment, and one that isn't there, which
+# only root could make, all pass.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+: > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+printf '@include %s\n# auth optional %s\nauth optional pam_unix.so # %s\nsession optional pam_env.so envfile=%s\n' \
+    "$T/pam.d/login" "$T/mods/pam_evil.so" "$T/mods/pam_evil.so" "$T/nowhere/env" >> "$T/pam.d/greetd"; run
+check "greetd: a PAM stack naming only root's is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+cat > "$T/bin/awk" <<MOCK
+#!/bin/sh
+case "\$*" in *'print "climbs"'*) exit 2 ;; esac
+exec $real_awk "\$@"
+MOCK
+chmod +x "$T/bin/awk"; run
+greeter_not_ready "a failed PAM scan" "greetd's PAM stack isn't root's alone: couldn't read the files in $T/pam.d"
+teardown
+# PAM refuses a login through a stack it can't load whole, so each file
+# greetd's stack includes has to be there, however far down, by its full
+# path or not.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '@include %s\n' "$T/pam.d/gone" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM include" "greetd's PAM stack, in $T/pam.d/greetd, includes $T/pam.d/gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include common-gone\n' > "$T/pam.d/login"; run
+greeter_not_ready "a missing PAM include further down" "greetd's PAM stack, in $T/pam.d/login, includes common-gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth substack common-gone\n' > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a missing include in the greeter's PAM file" "greetd's PAM stack for the greeter, in $T/pam.d/greetd-greeter, includes common-gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+# So does a loop of them, which PAM stops following 16 deep.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '@include greetd\n' > "$T/pam.d/login"; run
+greeter_not_ready "a loop of PAM includes" "greetd's PAM stack, in $T/pam.d/login, includes greetd 16 deep, as a loop of includes does, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM include that names no file" "greetd's PAM stack, in $T/pam.d/greetd, has an include that names no file, and PAM refuses a login through a stack it can't load whole"
+teardown
+# Another service's isn't greetd's, one named by its full path in PAM's
+# directory but a link out of it is there, and so is one only the vendor's
+# /usr/lib/pam.d has, where PAM looks next.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/alt" "$T/vendor-pam.d"
+: > "$T/alt/common"; ln -s "$T/alt/common" "$T/pam.d/common"; cp "$T/pam.d/login" "$T/vendor-pam.d/common-vendor"
+printf 'auth include gone\n' > "$T/pam.d/cups"
+printf '@include %s\n@include common-vendor\n' "$T/pam.d/common" >> "$T/pam.d/greetd"
+run
+check "greetd: a PAM stack whose includes are all there is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# What a vendor's file has is held to the same rules as PAM's own.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; printf 'auth required pam_gone.so\n' > "$T/vendor-pam.d/common-vendor"
+printf '@include common-vendor\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing module in a vendor's PAM file" "greetd's PAM stack, in $T/vendor-pam.d/common-vendor, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; cp "$T/pam.d/login" "$T/vendor-pam.d/common-vendor"
+chmod g+w "$T/vendor-pam.d/common-vendor"; printf '@include common-vendor\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a vendor's PAM file others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/vendor-pam.d/common-vendor"
+teardown
+# Only the lines PAM loads count: an include reads the lines of its own
+# type, and @include, which only Debian's PAM reads, those of the type the
+# file it's in is read for.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'session required pam_gone.so\nautth required pam_gone.so\n' > "$T/pam.d/common-misc"
+cp "$T/pam.d/login" "$T/pam.d/common-misc-ok"; printf 'session required pam_gone.so\n' >> "$T/pam.d/common-misc-ok"
+printf 'auth include common-misc-ok\n' >> "$T/pam.d/greetd"; run
+check "greetd: a line an include doesn't read doesn't count" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include common-misc\n' >> "$T/pam.d/greetd"
+printf 'session required pam_gone.so\nautth required pam_gone.so\n' > "$T/pam.d/common-misc"; run
+greeter_not_ready "a line of a type PAM doesn't know, wherever it's included" "greetd's PAM stack, in $T/pam.d/common-misc, has a line of a type PAM doesn't know, autth, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_PAM_AT_INCLUDE=no
+greeter_not_ready "an @include where PAM isn't Debian's" "greetd's PAM stack, in $T/pam.d/greetd, has a line of a type PAM doesn't know, @include, and PAM refuses a login through a stack it can't load whole"
+teardown
+# PAM takes a type a service's file has no lines for from its other
+# service, and with none there either, refuses every call on it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/pam.d/greetd"; run
+greeter_not_ready "an empty greetd PAM file" "greetd's PAM stack, from $T/pam.d/greetd, has no auth lines, and nor has its other service, which PAM takes them from, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'account include login\nsession include login\n' > "$T/pam.d/greetd"; run
+greeter_not_ready "a greetd PAM file that only includes another's account and session lines" "greetd's PAM stack, from $T/pam.d/greetd, has no auth lines, and nor has its other service, which PAM takes them from, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^session' "$T/pam.d/login" > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a greeter PAM file with no session lines" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, has no session lines, and nor has its other service, which PAM takes them from, so greetd couldn't start the greeter"
+teardown
+# Its other service's lines are as good as its own when they let a login
+# through, and refuse it when they don't, as Fedora's do.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include login\nsession include login\n' > "$T/pam.d/greetd"
+printf 'account required %s\n' "$T/security/pam_test.so" > "$T/pam.d/other"; run
+check "greetd: a stack whose account lines are its other service's is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+printf 'auth include login\nsession include login\n' > "$T/pam.d/greetd"; printf 'account required %s\n' "$T/mods/pam_deny.so" > "$T/pam.d/other"; run
+greeter_not_ready "a stack whose account lines are a denying other service's" "greetd's PAM stack, from $T/pam.d/other, its other service, which PAM takes its account lines from, can't pass anyone's account check, whatever the modules it can use return, so PAM would refuse every login"
+teardown
+# PAM runs the lines of a type in order, each counting as its control says,
+# and fails what none of them can let through, whatever their modules
+# return: a module it can't load returns module_unknown, pam_deny fails,
+# a jump only skips lines, and greetd sets credentials, too, on the lines
+# that authenticated.
+# Each with @ for where the test's files are, and | between lines.
+for auth in 'optional pam_gone.so' '-auth sufficient pam_gone.so' '[success=ignore default=ignore] @/security/pam_test.so' \
+    '[success=1 default=ignore] @/security/pam_test.so' '[default=bad] @/security/pam_test.so' 'optional @/mods/pam_half.so' \
+    'required @/mods/pam_deny.so' 'sufficient @/mods/pam_deny.so' 'required @/security/pam_test.so|auth required @/mods/pam_deny.so' \
+    'substack sub|auth required @/mods/pam_deny.so' 'required @/security/pam_test.so|auth [default=reset] @/security/pam_test.so' \
+    'required @/mods/pam_faildelay.so' 'sufficient @/mods/pam_warn.so|auth required @/mods/pam_nologin.so' \
+    'required @/mods/pam_wheel.so group=wheel' '[default=ok] @/mods/pam_env.so|auth required @/mods/pam_canonicalize_user.so'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+    # It authenticates, but sets no credentials, which greetd also asks of
+    # an auth line.
+    pam_module "$T/mods/pam_half.so" pam_sm_authenticate
+    # It refuses whatever it's asked.
+    pam_module "$T/mods/pam_deny.so"
+    # Linux-PAM's own, which never authenticate anyone: they set a delay,
+    # log, or check something only to refuse or step aside.
+    for m in faildelay warn nologin wheel env canonicalize_user; do pam_module "$T/mods/pam_$m.so"; done
+    # A substack's sufficient line ends only the substack.
+    printf 'auth sufficient %s\n' "$T/security/pam_test.so" > "$T/pam.d/sub"
+    case "$auth" in
+        -auth*) printf '%s\n' "${auth//@/$T}" ;;
+        *) printf 'auth %s\n' "${auth//@/$T}" ;;
+    esac | tr '|' '\n' > "$T/pam.d/greetd"
+    printf 'account include login\nsession include login\n' >> "$T/pam.d/greetd"; run
+    why="can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login"
+    case "$auth" in
+        *pam_gone*) why="$why; PAM can't use pam_gone.so there, which isn't there" ;;
+        *pam_half*) why="can't set the credentials of anyone it authenticates, whatever the modules it can use return, so PAM would refuse every login; PAM can't use $T/mods/pam_half.so there, which has no pam_sm_setcred" ;;
+    esac
+    greeter_not_ready "a stack whose auth lines are $auth" "greetd's PAM stack, from $T/pam.d/greetd, $why"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_gone.so\naccount include login\nsession include login\n' > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a greeter stack whose auth lines can't pass, which greetd sets credentials with" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, can't set the greeter's credentials, whatever the modules it can use return, so greetd couldn't start the greeter; PAM can't use pam_gone.so there, which isn't there"
+teardown
+# Each with @ for where the test's files are, and | between lines.
+for auth in 'sufficient @/security/pam_test.so' '[success=done default=die] @/security/pam_test.so' \
+    '[success=ok default=bad] @/security/pam_test.so' '[default=ok] @/security/pam_test.so' \
+    'include sub|auth required @/mods/pam_deny.so' \
+    '[success=1 default=ignore] @/security/pam_test.so|auth requisite @/mods/pam_deny.so|auth required @/mods/pam_permit.so' \
+    'optional @/mods/pam_faildelay.so delay=3000000|auth requisite @/mods/pam_nologin.so|auth required @/security/pam_test.so' \
+    'required @/mods/pam_nologin.so successok' 'sufficient @/mods/pam_wheel.so trust'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"; pam_module "$T/mods/pam_permit.so"
+    # Linux-PAM's own, which pass a login only with an option that says to.
+    for m in faildelay nologin wheel; do pam_module "$T/mods/pam_$m.so"; done
+    # An included sufficient line ends the stack.
+    printf 'auth sufficient %s\n' "$T/security/pam_test.so" > "$T/pam.d/sub"
+    printf 'auth %s\n' "${auth//@/$T}" | tr '|' '\n' > "$T/pam.d/greetd"
+    printf 'auth optional pam_gone.so\naccount include login\nsession include login\n' >> "$T/pam.d/greetd"; run
+    check "greetd: a stack whose auth lines can pass, through $auth, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+    teardown
+done
+# Debian's PAM ignores a line that jumps when it sets credentials, and
+# upstream PAM counts it as ok, which matters for the greeter, whose
+# credentials it sets without authenticating it first.
+for debian in yes no; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+    printf 'auth [success=1 default=ignore] %s\nauth requisite %s\naccount include login\nsession include login\n' \
+        "$T/security/pam_test.so" "$T/mods/pam_deny.so" > "$T/pam.d/greetd-greeter"
+    if test "$debian" = yes; then
+        run SETUP_PAM_AT_INCLUDE=yes
+        greeter_not_ready "a greeter stack that only jumps to set credentials, on Debian" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, can't set the greeter's credentials, whatever the modules it can use return, so greetd couldn't start the greeter"
+    else
+        sed -i 's/^@include login/auth include login\naccount include login\nsession include login\npassword include login/' "$T/pam.d/greetd"
+        run SETUP_PAM_AT_INCLUDE=no
+        check "greetd: a greeter stack that only jumps to set credentials, upstream, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+    fi
+    teardown
+done
+# An account check that needs the password changed passes only if the
+# password lines can change it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+printf 'auth include login\naccount [success=bad new_authtok_reqd=ok default=bad] %s\nsession include login\npassword required %s\n' \
+    "$T/security/pam_test.so" "$T/mods/pam_deny.so" > "$T/pam.d/greetd"; run
+greeter_not_ready "an account check only a password change passes, with password lines that can't change one" "greetd's PAM stack, from $T/pam.d/greetd, can pass an account check only by changing its password, and can't change one, whatever the modules it can use return, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'auth include login\naccount [success=bad new_authtok_reqd=ok default=bad] %s\nsession include login\npassword required %s\n' \
+    "$T/security/pam_test.so" "$T/security/pam_test.so" > "$T/pam.d/greetd"; run
+check "greetd: an account check a password change passes, with password lines that can change one, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"
+printf 'password required pam_gone.so\nauth required pam_gone.so\n' > "$T/pam.d/other"; run
+greeter_not_ready "other's password lines that can't load" "greetd's PAM stack, in $T/pam.d/other, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"; run
+check "greetd: a stack with no password lines, and no other, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# So does a module a line can't do without, by its full path or not, and a
+# line PAM can't read.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth required %s\n' "$T/mods/pam_gone.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM module" "greetd's PAM stack, in $T/pam.d/greetd, needs the module $T/mods/pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth requisite pam_gone.so\n' > "$T/pam.d/login"; run
+greeter_not_ready "a missing PAM module further down" "greetd's PAM stack, in $T/pam.d/login, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+# PAM runs a module without the function it calls on a line as one that
+# isn't there: auth needs both authenticating and setting credentials.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_half.so" pam_sm_authenticate
+printf 'auth required %s\n' "$T/mods/pam_half.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module that can't set credentials, on an auth line" "greetd's PAM stack, in $T/pam.d/greetd, needs the module $T/mods/pam_half.so, which has no pam_sm_setcred for PAM to call on auth lines, and PAM refuses a login through a stack it can't load whole"
+teardown
+# dlsym finds only a function a module exports, and dlopen loads only a
+# shared object built for this machine, whose libraries and symbols the
+# loader finds. One setup can't check, its section headers stripped, fails
+# like one it checks.
+other_machine=62
+test "$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')" != 62 || other_machine=183
+for module in hidden text machine unloadable missing-library missing-symbol missing-library-elsewhere missing-symbol-elsewhere stripped; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+    loader=()
+    case "$module" in
+        hidden)
+            pam_module "$T/mods/pam_x.so" pam_sm_authenticate pam_sm_setcred:hidden
+            reason="which has no pam_sm_setcred for PAM to call on auth lines"
+            ;;
+        text)
+            printf '%s\n' pam_sm_authenticate pam_sm_setcred > "$T/mods/pam_x.so"
+            reason="which isn't a library PAM can load"
+            ;;
+        machine)
+            pam_module "$T/mods/pam_x.so" --machine="$other_machine"
+            reason="which is built for another kind of machine than this one"
+            ;;
+        unloadable)
+            pam_module "$T/mods/pam_x.so"
+            loader=(FAKE_LDD_FAILS="$T/mods/pam_x.so")
+            reason="which the system's loader can't load"
+            ;;
+        missing-library)
+            pam_module "$T/mods/pam_x.so"
+            loader=(FAKE_LDD_MISSING="$T/mods/pam_x.so:libgone.so.1")
+            reason="which needs libgone.so.1, which isn't there"
+            ;;
+        missing-symbol)
+            pam_module "$T/mods/pam_x.so"
+            loader=(FAKE_LDD_UNDEFINED="$T/mods/pam_x.so:gone_function")
+            reason="which needs gone_function, which nothing it loads defines"
+            ;;
+        # ldd says the same in another locale, which setup asks for in C.
+        missing-library-elsewhere)
+            pam_module "$T/mods/pam_x.so"
+            loader=(LC_ALL= FAKE_LDD_LOCALE=fr FAKE_LDD_MISSING="$T/mods/pam_x.so:libgone.so.1")
+            reason="which needs libgone.so.1, which isn't there"
+            ;;
+        missing-symbol-elsewhere)
+            pam_module "$T/mods/pam_x.so"
+            loader=(LC_ALL= FAKE_LDD_LOCALE=fr FAKE_LDD_UNDEFINED="$T/mods/pam_x.so:gone_function")
+            reason="which needs gone_function, which nothing it loads defines"
+            ;;
+        stripped)
+            pam_module "$T/mods/pam_x.so" --stripped
+            reason="whose functions setup can't read"
+            ;;
+    esac
+    printf 'auth required %s\n' "$T/mods/pam_x.so" >> "$T/pam.d/greetd"; run "${loader[@]}"
+    greeter_not_ready "a PAM module, $module, $reason" "greetd's PAM stack, in $T/pam.d/greetd, needs the module $T/mods/pam_x.so, $reason, and PAM refuses a login through a stack it can't load whole"
+    teardown
+done
+# A symbol a library greetd links defines is one a module it loads finds.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_x.so"
+printf 'auth required %s\n' "$T/mods/pam_x.so" >> "$T/pam.d/greetd"
+run FAKE_LDD_UNDEFINED="$T/mods/pam_x.so:pam_get_item" FAKE_LDD_PROVIDER="$T/libpam.so.0"
+check "greetd: a PAM module that uses what greetd's libraries define is the greeter's" test "$(cat "$T/dm")" = greetd.service
+check "greetd: which the loader is asked with them loaded" has "$calls" "ldd LD_PRELOAD=$T/libpam.so.0 /lib/libc.so.6 -r -- $T/mods/pam_x.so"
+teardown
+# And what it loads is loaded into greetd, as root.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods" "$T/libs"; pam_module "$T/mods/pam_x.so"
+: > "$T/libs/libx.so.1"; chmod g+w "$T/libs/libx.so.1"; printf 'auth optional %s\n' "$T/mods/pam_x.so" >> "$T/pam.d/greetd"
+run FAKE_LDD_LIBS="$T/mods/pam_x.so:$T/libs/libx.so.1"
+greeter_not_ready "a PAM module that loads a library others can write" "greetd's PAM stack isn't root's alone: $T/mods/pam_x.so loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
+teardown
+# The real loader passes one of this machine's own modules, where it has
+# Linux-PAM's.
+real_permit=
+for dir in /usr/lib/*/security /usr/lib64/security /lib/*/security /lib64/security; do
+    if test -f "$dir/pam_permit.so"; then
+        real_permit=$dir/pam_permit.so
+        break
+    fi
+done
+if test -n "$real_permit"; then
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional %s\n' "$real_permit" >> "$T/pam.d/greetd"; run FAKE_LDD_REAL="$real_permit"
+    check "greetd: a module of this machine's own, as the real loader sees it, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+    check "greetd: which the real loader is asked about" has "$calls" "ldd -r -- $real_permit"
+    teardown
+fi
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security"; pam_module "$T/sys/lib/security/pam_sess.so" pam_sm_open_session pam_sm_close_session
+pam_module_dir_is "$T/sys/lib/security/"
+printf 'account required pam_sess.so\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a session-only PAM module on an account line" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_sess.so, which has no pam_sm_acct_mgmt for PAM to call on account lines, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session [success=ok] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM module brackets take as a failure" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success=1 module_unknown=die default=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM module brackets refuse" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth requird pam_unix.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line with a control PAM doesn't know" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, requird, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success=1 pam_unix.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line whose brackets don't close" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, [success=1 pam_unix.so, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'autth required pam_unix.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line of a type PAM doesn't know" "greetd's PAM stack, in $T/pam.d/greetd, has a line of a type PAM doesn't know, autth, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session required\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line with no module" "greetd's PAM stack, in $T/pam.d/greetd, has a line of type session that names no module, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line with no control" "greetd's PAM stack, in $T/pam.d/greetd, has a line of type session that names no control, and PAM refuses a login through a stack it can't load whole"
+teardown
+# PAM versions disagree on these, so setup can't tell what PAM reads.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n# a comment\nauth required pam_deny.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line carried on past a comment" "greetd's PAM stack, in $T/pam.d/greetd, carries a line on with a backslash past a blank or comment line, which PAM 1.6 and later end the line at and earlier versions don't, so setup can't tell what PAM makes of it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so %s\n' "$(printf '%01100d' 0)" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM line too long for older PAM" "greetd's PAM stack, in $T/pam.d/greetd, has a line longer than PAM before 1.6 reads as one, so setup can't tell what PAM makes of it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional ?.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module PAM can't name" "greetd's PAM stack, in $T/pam.d/greetd, names ?.so, which PAM can't name a module or substack after, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM file that ends mid-line" "greetd's PAM stack, in $T/pam.d/greetd, ends in a line a backslash carries on, which PAM can't read, and PAM refuses a login through a stack it can't load whole"
+teardown
+# A - before the type only keeps PAM from logging a module it fails to
+# load: the control still decides.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf -- '-auth required pam_gone.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM module after a -" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+# PAM takes brackets it can't read as bad for every result.
+for control in '[default=0]' '[success=okay]' '[sucess=ok]' '[default=IGNORE]'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth %s pam_test.so\n' "$control" >> "$T/pam.d/greetd"; run
+    greeter_not_ready "a PAM line whose brackets PAM can't read, $control" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, $control, and PAM refuses a login through a stack it can't load whole"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success = 1 module_unknown=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+check "greetd: brackets PAM can read, spaced or not, pass" test "$(cat "$T/dm")" = greetd.service
+teardown
+# pam_exec fails without the program it runs, so a line that can't do
+# without it needs it there and runnable.
+pam_exec_sys() {
+    mkdir -p "$T/sys/lib/x86_64-linux-gnu/security" "$T/hooks"
+    pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_exec.so"
+    pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys
+printf 'auth required pam_exec.so quiet log=%s %s\n' "$T/hooks/log" "$T/hooks/gone" >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a program pam_exec can't do without that isn't there" "greetd's PAM stack, in $T/pam.d/greetd, runs $T/hooks/gone with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; : > "$T/hooks/hook"
+printf 'session [default=die] pam_exec.so %s\n' "$T/hooks/hook" > "$T/pam.d/login"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a program pam_exec can't run" "greetd's PAM stack, in $T/pam.d/login, runs $T/hooks/hook with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf 'auth requisite pam_exec.so expose_authtok\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a pam_exec line with no program" "greetd's PAM stack, in $T/pam.d/greetd, has a pam_exec line that names no program to run, and PAM refuses a login through a stack it can't load whole"
+teardown
+# pam_exec runs a program named without a full path from greetd's
+# directory, /, as root, whether its line can do without it or not.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/hooks"; chmod o+w "$T/hooks"; hook=${T#/}/hooks/hook
+printf 'auth optional pam_exec.so quiet %s\n' "$hook" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a pam_exec program named without a full path, where others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $hook (which pam_exec runs as /$hook): users other than root can write $T/hooks"
+teardown
+# Any module opens a file an argument names without a full path from /,
+# as pam_userdb does its db=.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/open"; chmod o+w "$T/open"
+printf 'auth optional %s db=%s\n' "$T/security/pam_test.so" "${T#/}/open/users" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a file a module reads, named without a full path, where others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names ${T#/}/open/users (which a module reads as $T/open/users): users other than root can write $T/open"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/shut"
+printf 'auth optional %s db=%s nullok\n' "$T/security/pam_test.so" "${T#/}/shut/users" >> "$T/pam.d/greetd"; run
+check "greetd: a file a module reads, named without a full path, that only root can change, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session optional pam_exec.so bin/true\n' >> "$T/pam.d/greetd"; run
+check "greetd: a pam_exec program named without a full path, that only root can change, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+# pam_exec ignores setting credentials, which greetd does for the greeter
+# without authenticating it, so brackets have to say what ignore does.
+printf '%s\n' "auth required pam_exec.so quiet $T/hooks/hook" "auth optional pam_exec.so $T/hooks/gone" \
+    "auth [success=1 system_err=ignore ignore=ignore] pam_exec.so $T/hooks/gone" "-auth sufficient pam_exec.so" \
+    "auth required pam_exec.so type=account $T/hooks/gone" "auth required pam_exec.so DEBUG Type=auth $T/hooks/hook" >> "$T/pam.d/greetd"
+run SETUP_SYSTEM_ROOT="$T/sys"
+check "greetd: a PAM stack whose pam_exec lines have what they need is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A pam_exec line passes only with the program it runs, even where
+# it's optional, when it's the only one of its type.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys
+printf 'auth optional pam_exec.so %s\naccount include login\nsession include login\n' "$T/hooks/gone" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a stack whose only auth line runs a program that isn't there" "greetd's PAM stack, from $T/pam.d/greetd, can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login; pam_exec can't run $T/hooks/gone there, which isn't there or can't be run"
+teardown
+# What runs a program pam_exec runs has to be root's alone too, and one
+# the kernel can't start, it can't run.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"
+chmod +x "$T/interp/sh"; chmod o+w "$T/interp/sh"; printf '#!%s\n' "$T/interp/sh" > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+printf 'session optional pam_exec.so %s\n' "$T/hooks/hook" >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a pam_exec program run by an interpreter others can write" "greetd's PAM stack isn't root's alone: $T/hooks/hook is run by $T/interp/sh: users other than root can write $T/interp/sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/nonexistent/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+printf 'session [default=die] pam_exec.so %s\n' "$T/hooks/hook" > "$T/pam.d/login"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a pam_exec program whose interpreter isn't there" "greetd's PAM stack, in $T/pam.d/login, runs $T/hooks/hook with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
+teardown
+# pam_exec returns what the program it runs says, which for true and false
+# is always the same: a stack that needs false can't authenticate anyone.
+for prog in false true; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
+    printf '#!/bin/sh\nexec /bin/%s\n' "$prog" > "$T/hooks/$prog"; chmod +x "$T/hooks/$prog"
+    printf 'auth required pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/$prog" "$T/mods/pam_permit.so" > "$T/pam.d/greetd"
+    run SETUP_SYSTEM_ROOT="$T/sys"
+    case "$prog" in
+        false) greeter_not_ready "a stack that needs pam_exec's false to succeed" "greetd's PAM stack, from $T/pam.d/greetd, can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login" ;;
+        true) check "greetd: a stack that needs pam_exec's true to succeed is the greeter's" test "$(cat "$T/dm")" = greetd.service ;;
+    esac
+    teardown
+done
+# The kernel runs the file a link leads to, so that's the program, unless
+# it's one that runs as the name it's given, as busybox does.
+for link in true:false:no check:false:no false:busybox:no true:busybox:yes; do
+    IFS=: read -r name to ok <<<"$link"
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
+    printf '#!/bin/sh\nexec /bin/%s\n' "$to" > "$T/hooks/$to"; chmod +x "$T/hooks/$to"; ln -s "$to" "$T/hooks/$name"
+    printf 'auth required pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/$name" "$T/mods/pam_permit.so" > "$T/pam.d/greetd"
+    run SETUP_SYSTEM_ROOT="$T/sys"
+    case "$ok" in
+        no) greeter_not_ready "a stack that needs pam_exec's $name, a link to $to, to succeed" "greetd's PAM stack, from $T/pam.d/greetd, can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login" ;;
+        yes) check "greetd: a stack that needs pam_exec's $name, a link to $to, to succeed is the greeter's" test "$(cat "$T/dm")" = greetd.service ;;
+    esac
+    teardown
+done
+# pam_debug returns what its arguments say, success for a call none names,
+# so one whose authentication says auth_err can't authenticate anyone.
+for arg in auth=auth_err authtok=auth_err; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_debug.so"
+    printf 'auth required pam_debug.so %s\naccount include login\nsession include login\n' "$arg" > "$T/pam.d/greetd"
+    run SETUP_SYSTEM_ROOT="$T/sys"
+    case "$arg" in
+        auth=*) greeter_not_ready "a stack whose only auth line is pam_debug's $arg" "greetd's PAM stack, from $T/pam.d/greetd, can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login" ;;
+        *) check "greetd: a stack whose only auth line is pam_debug's, with $arg, which names no call, is the greeter's" test "$(cat "$T/dm")" = greetd.service ;;
+    esac
+    teardown
+done
+# And it sets no credentials, so it can't be the only line that does.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+printf 'auth optional pam_exec.so %s\naccount include login\nsession include login\n' "$T/hooks/hook" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a stack whose only auth line runs a program that's there" "greetd's PAM stack, from $T/pam.d/greetd, can't set the credentials of anyone it authenticates, whatever the modules it can use return, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+printf 'auth optional pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/hook" "$T/security/pam_test.so" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+check "greetd: a stack whose auth lines run a program that's there, and set credentials, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A line that does without its module, another service's, and a module in
+# PAM's own directory or where a line names it, pass.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/x86_64-linux-gnu/security" "$T/mods"
+pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_here.so"; pam_module "$T/mods/pam_here.so"
+pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
+printf 'auth required pam_gone.so\n' > "$T/pam.d/cups"
+printf '%s\n' '-auth optional pam_gone.so' 'auth optional pam_gone.so' 'AUTH Sufficient pam_gone.so' \
+    'auth [success=1 default=ignore] pam_gone.so' 'auth [success=1 module_unknown=reset default=bad] pam_gone.so' \
+    "auth required $T/security/pam_test.so" 'session [default=1] pam_here.so' 'session required pam_here.so' \
+    "account requisite $T/mods/pam_here.so" >> "$T/pam.d/greetd"
+run SETUP_SYSTEM_ROOT="$T/sys"
+check "greetd: a PAM stack with each module it needs is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# PAM loads a module named without a full path from the one directory its
+# libpam was built with, not from wherever another PAM keeps them.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security" "$T/sys/lib/x86_64-linux-gnu/security"
+pam_module "$T/sys/lib/security/pam_x.so"; pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
+printf 'auth required pam_x.so\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+greeter_not_ready "a PAM module only where libpam doesn't look" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_x.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
+pam_module_dir_is "$T/opt/pam/lib/security/"; chmod o+w "$T/opt/pam/lib"
+printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module directory in a prefix others can write" "PAM's modules, in $T/opt/pam/lib/security/, aren't root's alone: users other than root can write $T/opt/pam/lib"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
+pam_module_dir_is "$T/opt/pam/lib/security/"; printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"; run
+check "greetd: a PAM module directory in a prefix only root can change is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# The package manager's own directory is left to it, but the module PAM
+# loads from it, and where a link to one leads, still have to be root's
+# alone.
+for kind in o+w uid-1000 link; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; d=$T/sys/lib/x86_64-linux-gnu/security; mkdir -p "$d" "$T/mods"
+    pam_module_dir_is "$d/"; printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"
+    case "$kind" in
+        o+w)
+            pam_module "$d/pam_x.so"; chmod o+w "$d/pam_x.so"; run SETUP_SYSTEM_ROOT="$T/sys"
+            expected="users other than root can write $d/pam_x.so"
+            ;;
+        uid-1000)
+            pam_module "$d/pam_x.so"; run SETUP_SYSTEM_ROOT="$T/sys" FAKE_OWNER="1000:$d/pam_x.so"
+            expected="$d/pam_x.so is uid 1000's, not root's"
+            ;;
+        link)
+            pam_module "$T/mods/pam_real.so"; chmod o+w "$T/mods/pam_real.so"; ln -s "$T/mods/pam_real.so" "$d/pam_x.so"
+            run SETUP_SYSTEM_ROOT="$T/sys"
+            expected="users other than root can write $T/mods/pam_real.so"
+            ;;
+    esac
+    greeter_not_ready "a PAM module in the package manager's directory, $kind," "greetd's PAM stack isn't root's alone: $expected"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_LIBS=/lib/libc.so.6
+greeter_not_ready "a greetd that doesn't link libpam" "setup couldn't find the libpam greetd loads, so it can't tell where PAM finds its modules"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF\0/etc/pam.d/\0' > "$T/libpam.so.0"; run
+greeter_not_ready "a libpam that names no module directory" "setup couldn't tell where $T/libpam.so.0 finds PAM's modules"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF\0/usr/lib/security/\0/usr/lib64/security/\0' > "$T/libpam.so.0"; run
+greeter_not_ready "a libpam that names two module directories" "setup couldn't tell where $T/libpam.so.0 finds PAM's modules"
+teardown
+# PAM puts a directory of its own in place of $ISA.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_$ISA.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module named with \$ISA" "greetd's PAM stack names the module pam_\$ISA.so, and setup can't fill in its \$ISA as PAM does"
+teardown
+# A config that already says the right thing is replaced when it isn't
+# root's, since greetd, which runs as root, starts what it names.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/etc/greetd/config.toml"
+check "greetd: a matching config that isn't root's is reinstalled" \
+    grep -q "^sudo install -D -m 644 .* $T/etc/greetd/config.toml\$" <<<"$calls"
+check "greetd: and greetd stays" test "$(cat "$T/dm")" = greetd.service
+# One that can't be, isn't kept.
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/etc/greetd/config.toml" FAKE_INSTALL_FAILS="$T/etc/greetd/config.toml"
+check "greetd: a config that isn't root's and can't be replaced puts GDM back" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "couldn't write $T/etc/greetd/config.toml; greetd isn't kept with a config this run couldn't put right, so putting back gdm3.service for the next boot"
+teardown
+# The note of what greetd replaced is what root enables to undo it, so it
+# isn't written where someone else could swap it, nor read once they could.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/var/lib/setup-tide"; chmod o+w "$T/var/lib/setup-tide"; run
+check "greetd: a state directory others can write doesn't switch" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and gets no note" test ! -e "$T/var/lib/setup-tide/previous-display-manager"
+check "greetd: and says why" has "$output" "not writing $T/var/lib/setup-tide/previous-display-manager: users other than root can write $T/var/lib/setup-tide"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+ARGS=(--no-greeter); run FAKE_OWNER="1000:$T/var/lib/setup-tide/previous-display-manager"
+check "--no-greeter: a note that isn't root's isn't used" lacks "$calls" "enable --force"
+check "--no-greeter: and says why" has "$output" "not reading $T/var/lib/setup-tide/previous-display-manager, since only root should be able to change it: $T/var/lib/setup-tide/previous-display-manager is uid 1000's, not root's"
+teardown
+# The template is root's too, since its command is what greetd runs.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/greetd.toml"
+greeter_not_ready "a template that isn't root's" "tide's greetd config isn't root's alone: $T/greetd.toml is uid 1000's, not root's"
+teardown
+# systemd runs greetd as root at every boot, so its unit, its drop-ins and
+# where they could go, its environment files, and what it runs, with the
+# prefix that's installed in, are root's alone too.
+unit_why="what systemd starts greetd from isn't root's alone"
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/units/greetd.service"
+greeter_not_ready "a greetd unit that isn't root's" "$unit_why: $T/units/greetd.service is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"; : > "$T/units/greetd.service.d/override.conf"
+chmod o+w "$T/units/greetd.service.d/override.conf"; run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/override.conf"
+greeter_not_ready "a greetd drop-in others can write" "$unit_why: users other than root can write $T/units/greetd.service.d/override.conf"
+teardown
+for dir in units-etc units-etc/greetd.service.d units/service.d units/display-manager.service.d units-etc/display-.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"; chmod o+w "$T/$dir"; run
+    greeter_not_ready "a directory others can write a greetd drop-in into, $dir" "$unit_why: users other than root can write $T/$dir"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/greetd.env"; chmod o+w "$T/greetd.env"; run FAKE_GREETD_ENVFILES="$T/greetd.env"
+greeter_not_ready "a greetd environment file others can write" "$unit_why: users other than root can write $T/greetd.env"
+teardown
+# systemd won't start a unit whose environment file isn't there, unless a
+# - before it says that's fine.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ENVFILES="$T/greetd.env"
+greeter_not_ready "a greetd environment file that isn't there" "greetd's unit reads its environment from $T/greetd.env, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ENVFILES="$T/greetd.env" FAKE_GREETD_ENVFILES_IGNORED=yes
+check "greetd: a greetd environment file that may be missing, and is, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/bin" "$T/opt/greetd/lib"; : > "$T/opt/greetd/bin/greetd"
+chmod o+w "$T/opt/greetd/lib"; run FAKE_GREETD_EXEC="$T/opt/greetd/bin/greetd"
+greeter_not_ready "a greetd installed where others can write its libraries" "$unit_why: users other than root can write $T/opt/greetd/lib"
+teardown
+# One outside a bin directory can load what's beside it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/plugins"; printf '#!/bin/sh\n' > "$T/opt/greetd/greetd"
+chmod +x "$T/opt/greetd/greetd"; run FAKE_GREETD_EXEC="$T/opt/greetd/greetd"
+check "greetd: a greetd installed outside a bin directory, all root's, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/plugins"; printf '#!/bin/sh\n' > "$T/opt/greetd/greetd"
+chmod +x "$T/opt/greetd/greetd"; chmod o+w "$T/opt/greetd/plugins"; run FAKE_GREETD_EXEC="$T/opt/greetd/greetd"
+greeter_not_ready "a greetd installed outside a bin directory, beside a directory others can write" "$unit_why: users other than root can write $T/opt/greetd/plugins"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-sbin/greetd"
+greeter_not_ready "a greetd that isn't root's" "$unit_why: $T/usr-sbin/greetd is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=DropInPaths
+greeter_not_ready "a greetd unit systemd won't say the drop-ins of" "systemd didn't say where greetd's drop-ins are"
+teardown
+# systemd won't start greetd without the programs its start runs, unless
+# a - before one says that's fine, and never without greetd itself.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin/gone"
+greeter_not_ready "a greetd that isn't there" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin/gone" FAKE_GREETD_EXEC_IGNORED=yes
+greeter_not_ready "a greetd that isn't there, after a -" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod a-x "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd that can't be run" "greetd's unit runs $T/usr-sbin/greetd, which isn't a program it can run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin"
+greeter_not_ready "a greetd that's a directory" "greetd's unit runs $T/usr-sbin, which isn't a program it can run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_PRE="$T/usr-sbin/gone"
+greeter_not_ready "a program greetd's start runs first that isn't there" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_PRE="$T/usr-sbin/gone" FAKE_GREETD_EXEC_IGNORED=yes
+check "greetd: a program greetd's start may do without, and does, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_STOP="$T/usr-sbin/gone"
+check "greetd: a program only stopping greetd runs, which isn't there, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# What starts a program greetd's unit runs has to be root's alone, and
+# greetd has to be one the kernel can start.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/nonexistent/sh\n' > "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd whose interpreter isn't there" "greetd's unit runs $T/usr-sbin/greetd, and $T/usr-sbin/greetd is run by /nonexistent/sh, which isn't there or can't be run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod +x "$T/interp/sh"
+chmod o+w "$T/interp/sh"; printf '#!%s\n' "$T/interp/sh" > "$T/usr-sbin/stop"; chmod +x "$T/usr-sbin/stop"; run FAKE_GREETD_EXEC_STOP="$T/usr-sbin/stop"
+greeter_not_ready "a program stopping greetd run by an interpreter others can write" "$unit_why: $T/usr-sbin/stop is run by $T/interp/sh: users other than root can write $T/interp/sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=greetd
+greeter_not_ready "a greetd command setup can't read" "systemd named a command for greetd's ExecStart setup can't read: { path=greetd ; argv[]=greetd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+teardown
+# greetd's unit may only make settings setup knows can't change what
+# greetd runs, as its packages' units do, and start greetd with no
+# arguments.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Unit]\nDescription=Greeter daemon\nAfter=systemd-user-sessions.service plymouth-quit-wait.service\nAfter=getty@tty7.service\nConflicts=getty@tty7.service\n\n[Service]\nType=simple\nExecStart=greetd\nIgnoreSIGPIPE=no\nSendSIGHUP=yes\nTimeoutStopSec=30s\nKeyringMode=shared\nRestart=always\nRestartSec=1\nStartLimitBurst=5\nStartLimitInterval=30\n\n[Install]\nAlias=display-manager.service\n' > "$T/units/greetd.service"
+mkdir -p "$T/units-etc/service.d"; printf '[Service]\nTimeoutStopFailureMode=abort\n' > "$T/units-etc/service.d/10-timeout-abort.conf"
+run FAKE_GREETD_DROPINS="$T/units-etc/service.d/10-timeout-abort.conf"
+check "greetd: Debian's unit, with Fedora's drop-in for every service, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service.d/root.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/root.conf"
+greeter_not_ready "a greetd unit that runs it in another root" "greetd's unit sets RootDirectory= in $T/units/greetd.service.d/root.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'Environment=LD_PRELOAD=/tmp/x.so\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that sets its environment" "greetd's unit sets Environment= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '.include /tmp/more.service\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that includes another file" "greetd's unit has a .include line in $T/units/greetd.service, which setup doesn't follow"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Unit]\nConditionPathExists=/missing\n' > "$T/units/greetd.service.d/cond.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/cond.conf"
+greeter_not_ready "a greetd unit with a condition that can stop it starting" "greetd's unit sets ConditionPathExists= in $T/units/greetd.service.d/cond.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/units/greetd.service.d/pre.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/pre.conf"
+greeter_not_ready "a greetd unit that runs something before it" "greetd's unit sets ExecStartPre= in $T/units/greetd.service.d/pre.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+# Enabling greetd names it display-manager.service, whose drop-ins systemd
+# reads for it from then on.
+for dir in display-manager.service.d display-.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units-etc/$dir"
+    printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/units-etc/$dir/hook.conf"; run
+    greeter_not_ready "a $dir drop-in greetd would take when it's the display manager" "greetd's unit sets ExecStartPre= in $T/units-etc/$dir/hook.conf, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+printf '[Service]\nTimeoutStopSec=30s\n' > "$T/units/display-manager.service.d/ok.conf"; run
+check "greetd: a display-manager.service drop-in setup knows can't change it is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+: > "$T/units/display-manager.service.d/open.conf"; chmod o+w "$T/units/display-manager.service.d/open.conf"; run
+greeter_not_ready "a display-manager.service drop-in others can write" "$unit_why: users other than root can write $T/units/display-manager.service.d/open.conf"
+teardown
+# So does every other name greetd has, and each of their prefixes.
+for dir in units-etc/x-greeter.service.d units/x-.service.d units/other.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"
+    printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/$dir/hook.conf"
+    run FAKE_GREETD_NAMES="greetd.service other.service x-greeter.service"
+    greeter_not_ready "a drop-in of another of greetd's names, in $dir" "greetd's unit sets ExecStartPre= in $T/$dir/hook.conf, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"; chmod o+w "$T/$dir"
+    run FAKE_GREETD_NAMES="greetd.service other.service x-greeter.service"
+    greeter_not_ready "a directory others can write a drop-in of another of greetd's names into, $dir" "$unit_why: users other than root can write $T/$dir"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/x-greeter.service.d"
+printf '[Service]\nTimeoutStopSec=30s\n' > "$T/units/x-greeter.service.d/ok.conf"
+printf '[Install]\nAlias=display-manager.service\nWantedBy=graphical.target\n' >> "$T/units/greetd.service"
+run FAKE_GREETD_NAMES="greetd.service x-greeter.service"
+check "greetd: a unit with another name, whose drop-ins setup knows can't change it, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# Enabling greetd with --force replaces what another name links to, so its
+# unit may name no alias but display-manager.service: another would take
+# that unit's place.
+for alias in network.service x-greeter.service %p-x.service; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"
+    printf '[Install]\nAlias=display-manager.service %s\n' "$alias" >> "$T/units/greetd.service"; run
+    greeter_not_ready "a greetd unit with the alias $alias" "greetd's unit sets Alias=$alias in $T/units/greetd.service, which isn't one setup knows is safe there: only those greetd's own units use are"
+    check "greetd: a greetd unit with the alias $alias enables nothing" lacks "$calls" "systemctl enable"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '[Install]\nAlso=other.service\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that enables another with it" "greetd's unit sets Also= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+printf '[Install]\nAlias=more.service\n' > "$T/units/display-manager.service.d/more.conf"; run
+greeter_not_ready "a drop-in of another of greetd's names that names it yet another" "greetd's unit sets Alias=more.service in $T/units/display-manager.service.d/more.conf, which isn't one setup knows is safe there: only those greetd's own units use are"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_NAMES="greetd.service other@x.service"
+greeter_not_ready "a name of greetd's setup can't look for drop-ins of" "systemd names greetd other@x.service, which setup can't look for drop-ins of"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=Names
+greeter_not_ready "greetd's names unsaid" "systemd didn't say what greetd's names are"
+teardown
+# Nor may it end greetd once it's running, or wait for it to fork or say
+# it's ready, which it doesn't.
+for setting in RuntimeMaxSec=1s WatchdogSec=1s Type=notify Type=forking; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '%s\n' "$setting" >> "$T/units/greetd.service"; run
+    case "$setting" in
+        Type=*) shown=$setting ;;
+        *) shown=${setting%%=*}= ;;
+    esac
+    greeter_not_ready "a greetd unit with $setting" "greetd's unit sets $shown in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'Type=idle\n' >> "$T/units/greetd.service"; run
+check "greetd: a greetd unit of Type=idle, as Arch's is, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# Nor may it name a unit, or set a StartLimitAction, other than those its
+# packages' units do: one can keep greetd from starting at boot, or take
+# the boot down with it.
+for setting in '[Unit]\nConflicts=getty@tty1.service graphical.target' '[Unit]\nAfter=graphical.target' \
+    '[Unit]\nWants=gdm.service' '[Unit]\nConflicts=getty@tty%I.service' '[Install]\nRequiredBy=basic.target' \
+    '[Install]\nWantedBy=sysinit.target' '[Unit]\nStartLimitAction=reboot' '[Service]\nStartLimitAction=poweroff' \
+    '[Unit]\nConflicts=getty@tty0.service' '[Unit]\nConflicts=getty@tty64.service' '[Unit]\nAfter=getty@tty07.service'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '%b\n' "$setting" >> "$T/units/greetd.service"; run
+    shown=${setting#*\\n}
+    case "$shown" in
+        *' '*) shown=${shown%%=*}=${shown##* } ;;
+    esac
+    greeter_not_ready "a greetd unit with $shown" "greetd's unit sets $shown in $T/units/greetd.service, which isn't one setup knows is safe there: only those greetd's own units use are"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '[Unit]\nBefore=multi-user.target\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that comes before another" "greetd's unit sets Before= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Unit]\nAfter=\nWants=plymouth-quit-wait.service\nStartLimitAction=none\n[Install]\nWantedBy=graphical.target multi-user.target\nRequiredBy=graphical.target\n' >> "$T/units/greetd.service"; run
+check "greetd: a greetd unit naming only what its packages' units name is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# systemd carries a line ending in a backslash on, past a comment line, and
+# reads the rest as part of it, not a setting of its own; one ending in two
+# doesn't carry on.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Service]\nTimeoutStopSec=30s \\\n# a comment\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service"; run
+check "greetd: a setting carried on into another isn't one" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Service]\nTimeoutStopSec=30s \\\\\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service"; run
+greeter_not_ready "a setting after a line ending in an escaped backslash" "greetd's unit sets RootDirectory= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+# systemd reads a line still carried on at the end of its file, too.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nRestartSec=1 \\\n' > "$T/units/greetd.service.d/a.conf"
+printf '[Service]\nRootDirectory=/srv/greetd \\' > "$T/units/greetd.service.d/b.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/a.conf $T/units/greetd.service.d/b.conf"
+greeter_not_ready "a setting carried on past the end of its file" "greetd's unit sets RootDirectory= in $T/units/greetd.service.d/b.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-sbin/true"; chmod +x "$T/usr-sbin/true"
+run FAKE_GREETD_EXEC="$T/usr-sbin/true"
+greeter_not_ready "a greetd unit that starts something else" "greetd's unit starts $T/usr-sbin/true, which isn't greetd"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-sbin/true"; chmod +x "$T/usr-sbin/true"
+rm "$T/usr-sbin/greetd"; ln -s true "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd that's a link to something else" "greetd's unit starts $T/usr-sbin/greetd, which is $T/usr-sbin/true, not greetd"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; ln -s greetd "$T/usr-sbin/display-daemon"; run FAKE_GREETD_EXEC="$T/usr-sbin/display-daemon"
+check "greetd: a link to greetd, by another name, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A oneshot unit can have no ExecStart, and then starts nothing.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=
+greeter_not_ready "a greetd unit that starts nothing" "greetd's unit starts nothing, so it wouldn't start a login screen"
+teardown
+# greetd is the only login screen once it's the display manager, so a unit
+# systemd wouldn't always start again when greetd stops isn't switched to.
+for policy in FAKE_GREETD_RESTART=no:Restart=no FAKE_GREETD_RESTART=on-failure:Restart=on-failure \
+    FAKE_GREETD_RESTART_PREVENT=1:RestartPreventExitStatus=1 FAKE_GREETD_REMAIN=yes:RemainAfterExit=yes; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; run "${policy%%:*}"
+    greeter_not_ready "a greetd unit with ${policy#*:}" "greetd's unit has ${policy#*:}, so systemd wouldn't always start greetd again when it stops, leaving no login screen"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=Restart
+greeter_not_ready "a greetd restart policy systemd won't say" "systemd didn't say greetd's Restart"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ARGS="--config /tmp/greetd.toml"
+greeter_not_ready "a greetd started with arguments" "greetd's unit starts it as $T/usr-sbin/greetd --config /tmp/greetd.toml, and setup only trusts greetd started with no arguments"
+teardown
+# tide-greeter's Hyprland config and QML, which the greeter runs as code.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/share/tide/shell/greeter.qml"
+greeter_not_ready "greeter QML that isn't root's" "tide's greeter files aren't root's alone: $T/share/tide/shell/greeter.qml is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm -r "$T/share/tide"; run
+greeter_not_ready "no greeter files" "tide's greeter files aren't installed beside $T/usr-bin/tide-greeter"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/share/tide/greeter/hyprland.lua"; run
+greeter_not_ready "no greeter Hyprland config" "greetd's user _greetd can't read $T/share/tide/greeter/hyprland.lua"
+teardown
+# What the greeter runs is checked before any of it runs, even as greetd's
+# user.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/Hyprland"
+check "greetd: an untrusted Hyprland isn't run" lacks "$calls" "Hyprland --version"
+teardown
+
 setup; ARGS=(); echo gdm3.service > "$T/dm"; sed -i '/^user = /d' "$T/greetd.toml"; run
 check "greetd: a template without a user line doesn't switch" lacks "$calls" "enable --force greetd"
 check "greetd: a template without a user line is named" has "$output" "has no user or vt line for setup to set"
@@ -1524,6 +3006,14 @@ run
 check "greetd: a greeter that can't run any more puts GDM back" has "$calls" "sudo systemctl enable --force gdm3.service"
 check "greetd: and says why" has "$output" "greetd's greeter can't run, so putting back gdm3.service for the next boot: greetd's user _greetd can't run qs"
 check "greetd: GDM is the display manager again" test "$(cat "$T/dm")" = gdm3.service
+teardown
+
+# And so does one someone else has since been able to change.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/usr-bin/qs"
+check "greetd: a greeter that's no longer root's alone puts GDM back" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "so putting back gdm3.service for the next boot: the greeter's tide-greeter isn't root's alone: $T/usr-bin/qs is uid 1000's, not root's"
 teardown
 
 # The way back runs before anything that can end the run, so a failure
@@ -1561,6 +3051,11 @@ rm -f "$T/dm-queries"
 printf 'garbage\n' > "$T/etc/greetd/config.toml"
 run FAKE_GO_VERSION=go1.19.8 FAKE_DM_QUERY_FAILS_FROM=2
 check "greetd: a config is put right even when asking again which display manager this is fails" cmp -s "$T/etc/greetd/config.toml" "$T/config.want"
+# Nor one someone else could change.
+: > "$CALLS"
+run FAKE_GO_VERSION=go1.19.8 FAKE_OWNER="1000:$T/etc/greetd/config.toml"
+check "greetd: a config someone else could change is rewritten even when a later step fails" \
+    grep -q "^sudo install -D -m 644 .* $T/etc/greetd/config.toml\$" <<<"$calls"
 teardown
 # And a config this run can't make tide's at all isn't kept: one setup
 # can't check could be anything, and greetd runs it as root.
@@ -1703,11 +3198,10 @@ check "greetd: an unreadable unit doesn't switch" test "$(cat "$T/dm")" = gdm3.s
 check "greetd: and says why" has "$output" "couldn't ask systemd which VT greetd's unit keeps for it"
 teardown
 
-# A home greetd's user owns, outside /etc, is kept. stat says it's 999's.
+# A home greetd's user owns, outside /etc, is kept.
 setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir "$T/greeter-home"
 printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/greeter-home" > "$T/passwd"
-printf '#!/bin/sh\necho 999\n' > "$T/bin/stat"; chmod +x "$T/bin/stat"
-run
+run FAKE_OWNER="999:$T/greeter-home"
 check "greetd: a home of its own is kept" lacks "$calls" "usermod"
 check "greetd: and nothing is made for it" test ! -e "$T/var/lib/tide-greeter"
 teardown
@@ -1778,7 +3272,7 @@ teardown
 # A file without it gets both lines, after everything it includes; a
 # commented-out line doesn't count.
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\nauth       substack     system-auth\n#auth optional pam_gnome_keyring.so\nsession    include      system-auth\n' > "$T/pam.d/greetd"
+printf '#%%PAM-1.0\nauth       substack     system-auth\n#auth optional pam_gnome_keyring.so\naccount    include      system-auth\nsession    include      system-auth\n' > "$T/pam.d/greetd"; cp "$T/pam.d/login" "$T/pam.d/system-auth"
 cp "$T/pam.d/greetd" "$T/original-pam"
 run
 check "keyring: a stack without it gains it" \
@@ -1791,7 +3285,7 @@ teardown
 
 # Only the missing one is added.
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
 run
 check "keyring: a stack with auth gains only session" \
     test "$(grep -c pam_gnome_keyring "$T/pam.d/greetd")" -eq 2 -a "$(grep -c '^session.*auto_start$' "$T/pam.d/greetd")" -eq 1
@@ -1800,26 +3294,26 @@ teardown
 # A session line without auto_start starts no keyring daemon at login, so
 # it gains auto_start, and nothing is added.
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so\n-session optional pam_gnome_keyring.so  \n' > "$T/pam.d/greetd"
+printf '#%%PAM-1.0\n@include login\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so\n-session optional pam_gnome_keyring.so  \n' > "$T/pam.d/greetd"
 run
 check "keyring: a session line without auto_start gains it" \
-    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n-session optional pam_gnome_keyring.so auto_start')"
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\n@include login\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n-session optional pam_gnome_keyring.so auto_start')"
 check "keyring: and says so" has "$output" "greetd's PAM stack now unlocks the keyring at login"
 teardown
 # PAM ignores everything from a # on, so the module or auto_start named
 # only in a comment doesn't count, and auto_start goes before one.
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so # auto_start\n' > "$T/pam.d/greetd"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so # auto_start\n' > "$T/pam.d/greetd"
 run
 check "keyring: auto_start goes before a comment" \
-    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so auto_start # auto_start')"
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so auto_start # auto_start')"
 cp "$T/pam.d/greetd" "$T/once-pam"
 run
 check "keyring: and a rerun leaves it" cmp -s "$T/pam.d/greetd" "$T/once-pam"
 teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\nauth optional pam_unix.so # pam_gnome_keyring.so\nsession include system-auth # pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
-run
+printf '#%%PAM-1.0\nauth optional pam_unix.so # pam_gnome_keyring.so\naccount include system-auth\nsession include system-auth # pam_gnome_keyring.so\n' > "$T/pam.d/greetd"; cp "$T/pam.d/login" "$T/pam.d/system-auth"
+pam_module "$T/security/pam_unix.so"; run
 check "keyring: a module named only in comments is added" \
     test "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
 teardown
@@ -1833,7 +3327,7 @@ check "keyring: a session line carried on to its auto_start is left" cmp -s "$T/
 check "keyring: and greetd takes over" test "$(cat "$T/dm")" = greetd.service
 teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"
-printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional \\\n# the keyring\n    pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional \\\n    pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
 cp "$T/pam.d/greetd" "$T/original-pam"; run
 check "keyring: a carried session line without auto_start is left" cmp -s "$T/pam.d/greetd" "$T/original-pam"
 check "keyring: and says so" has "$output" "$T/pam.d/greetd carries a pam_gnome_keyring session line on with a backslash, so setup leaves it, and logging in may not unlock the keyring unless it has auto_start"
@@ -1846,15 +3340,49 @@ cp "$T/pam.d/greetd" "$T/original-pam"; run
 check "keyring: the rest of a carried line isn't a keyring line" \
     test "$(head -n 4 "$T/pam.d/greetd")" = "$(cat "$T/original-pam")" -a "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
 teardown
-# Nothing is added after a last line a backslash carries on, which it would
-# join.
+# PAM can't read a file that ends in a line a backslash carries on, so
+# greetd doesn't take over, and nothing is added after it.
 setup; ARGS=(); echo gdm3.service > "$T/dm"
 printf '#%%PAM-1.0\n@include login\nsession optional pam_permit.so \\\n' > "$T/pam.d/greetd"
 cp "$T/pam.d/greetd" "$T/original-pam"; run
+greeter_not_ready "a PAM file that ends in a carried line" "greetd's PAM stack, in $T/pam.d/greetd, ends in a line a backslash carries on, which PAM can't read, and PAM refuses a login through a stack it can't load whole"
 check "keyring: nothing is added after a carried last line" cmp -s "$T/pam.d/greetd" "$T/original-pam"
-check "keyring: and says so" has "$output" "$T/pam.d/greetd ends in a line a backslash carries on, which lines added after it would join, so setup adds no pam_gnome_keyring lines, and logging in may not unlock the keyring"
+teardown
+# What setup would write is checked as PAM would load it, before it's
+# written, and isn't written if it can't be checked.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\n' > "$T/pam.d/greetd"; cp "$T/pam.d/greetd" "$T/original-pam"
+cat > "$T/bin/awk" <<MOCK
+#!/bin/sh
+test -z "\$PAM_CHAIN_OVERRIDE" || exit 2
+exec $real_awk "\$@"
+MOCK
+chmod +x "$T/bin/awk"; run
+check "keyring: a change that can't be checked isn't written" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and says why" has "$output" "not adding pam_gnome_keyring to $T/pam.d/greetd, since PAM couldn't load greetd's stack with it: couldn't read greetd's PAM stack"
 check "keyring: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
 teardown
+
+# Each awk program setup runs has to parse under whichever awk a distro
+# ships as awk: mawk on Debian and Ubuntu, gawk on Fedora and Arch. A name
+# one of them reserves, as gawk does func, breaks only that one. Each is
+# checked here, when it's installed, without running anything: the first
+# BEGIN and END exit before the program's own.
+awk_programs=$(grep -o "^[A-Z_]*_AWK='" "$SCRIPT" | sed "s/='\$//")
+check "awk: setup's awk programs are found" test -n "$awk_programs"
+awk_parses() {
+    test -n "$2" && "$1" "BEGIN { exit } END { exit } $2" /dev/null
+}
+for awk_name in mawk gawk; do
+    command -v "$awk_name" >/dev/null || continue
+    for awk_program in $awk_programs; do
+        awk_text=$(awk -v name="$awk_program" '
+            !on && index($0, name "=\047") == 1 { on = 1; $0 = substr($0, length(name) + 3) }
+            on && index($0, "\047") { print substr($0, 1, index($0, "\047") - 1); exit }
+            on { print }' "$SCRIPT")
+        check "awk: $awk_program parses under $awk_name" awk_parses "$awk_name" "$awk_text"
+    done
+done
 
 setup; ARGS=(--bogus); run
 check "an unknown option fails" test "$status" -eq 1
