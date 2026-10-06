@@ -267,6 +267,18 @@ MOCK
     printf '#!/bin/sh\necho "Hyprland ${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"\n' > "$T/usr-bin/Hyprland"
     printf '#!/bin/sh\necho "${FAKE_GREETER_QS_VERSION:-Quickshell 0.3.1 (revision 1a4716c, distributed by test)}" >&2\n' > "$T/usr-bin/qs"
     printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/etc/greetd" > "$T/passwd"
+    # Debian's greetd PAM file, which lists the keyring already.
+    mkdir -p "$T/pam.d"
+    cat > "$T/pam.d/greetd" <<'PAM'
+#%PAM-1.0
+@include login
+
+-auth        optional        pam_gnome_keyring.so
+-auth        optional        pam_kwallet5.so
+
+-session     optional        pam_gnome_keyring.so auto_start
+-session     optional        pam_kwallet5.so auto_start
+PAM
     # tide's greeter/greetd.toml, comments aside.
     cat > "$T/greetd.toml" <<'TOML'
 # greetd's config for the tide greeter.
@@ -317,7 +329,7 @@ run() {
         QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
         SETUP_GREETD_DIR="$T/etc/greetd" SETUP_GREETD_TEMPLATE="$T/greetd.toml" \
         SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" \
-        SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_LOGIN_DEFS="$T/login.defs" \
+        SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
     status=$?
     set -e
@@ -1442,6 +1454,10 @@ setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_MISSING=greetd
 greeter_not_ready "no greetd" "greetd isn't installed"
 check "greetd: no greetd says it couldn't be installed" has "$output" "couldn't install greetd"
 teardown
+# Without its own PAM file, PAM's fallback checks greetd's logins.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; run
+greeter_not_ready "no PAM file for greetd" "greetd has no PAM file at $T/pam.d/greetd, and PAM's fallback for one can refuse every login"
+teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/greetd.toml"; run
 greeter_not_ready "no template" "tide's greetd config isn't installed at $T/greetd.toml"
 teardown
@@ -1740,6 +1756,104 @@ teardown
 setup; ARGS=(--no-sudo); echo gdm3.service > "$T/dm"; : > "$T/greetd-installed"; run
 check "--no-sudo leaves the display manager alone" test "$(cat "$T/dm")" = gdm3.service
 check "--no-sudo writes no greetd config" test ! -e "$T/etc/greetd/config.toml"
+teardown
+
+# Logging in at the greeter unlocks gnome-keyring, as GDM's login does.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; cp "$T/pam.d/greetd" "$T/debian-pam"; run
+check "keyring: installs PAM's gnome-keyring module" has "$calls" "sudo apt-get install -y gnome-keyring libpam-gnome-keyring"
+check "keyring: leaves Debian's file, which lists it" cmp -s "$T/pam.d/greetd" "$T/debian-pam"
+teardown
+
+setup; ARGS=(); run SETUP_OS=redhat
+check "keyring: Fedora's module is gnome-keyring-pam" has "$calls" "dnf install -y gnome-keyring gnome-keyring-pam"
+teardown
+setup; ARGS=(); run SETUP_OS=arch
+check "keyring: Arch's is in gnome-keyring" has "$calls" "pacman -S --needed --noconfirm gnome-keyring"
+teardown
+setup; ARGS=(); run FAKE_MISSING=libpam-gnome-keyring
+check "keyring: a missing module is named" has "$output" "couldn't install libpam-gnome-keyring, so logging in won't unlock the keyring"
+check "keyring: and greetd still installs" has "$calls" "apt-get install -y greetd"
+teardown
+
+# A file without it gets both lines, after everything it includes; a
+# commented-out line doesn't count.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth       substack     system-auth\n#auth optional pam_gnome_keyring.so\nsession    include      system-auth\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"
+run
+check "keyring: a stack without it gains it" \
+    test "$(cat "$T/pam.d/greetd")" = "$(cat "$T/original-pam"; printf '\n# Unlock gnome-keyring with the login password (setup-tide).\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start')"
+check "keyring: and says so" has "$output" "greetd's PAM stack now unlocks the keyring at login"
+cp "$T/pam.d/greetd" "$T/once-pam"
+run
+check "keyring: a rerun adds nothing" cmp -s "$T/pam.d/greetd" "$T/once-pam"
+teardown
+
+# Only the missing one is added.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+run
+check "keyring: a stack with auth gains only session" \
+    test "$(grep -c pam_gnome_keyring "$T/pam.d/greetd")" -eq 2 -a "$(grep -c '^session.*auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+
+# A session line without auto_start starts no keyring daemon at login, so
+# it gains auto_start, and nothing is added.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so\n-session optional pam_gnome_keyring.so  \n' > "$T/pam.d/greetd"
+run
+check "keyring: a session line without auto_start gains it" \
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n-session optional pam_gnome_keyring.so auto_start')"
+check "keyring: and says so" has "$output" "greetd's PAM stack now unlocks the keyring at login"
+teardown
+# PAM ignores everything from a # on, so the module or auto_start named
+# only in a comment doesn't count, and auto_start goes before one.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so # auto_start\n' > "$T/pam.d/greetd"
+run
+check "keyring: auto_start goes before a comment" \
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so auto_start # auto_start')"
+cp "$T/pam.d/greetd" "$T/once-pam"
+run
+check "keyring: and a rerun leaves it" cmp -s "$T/pam.d/greetd" "$T/once-pam"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth optional pam_unix.so # pam_gnome_keyring.so\nsession include system-auth # pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+run
+check "keyring: a module named only in comments is added" \
+    test "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+# Lines are read as PAM reads them, joined where a backslash carries one
+# on. One that's carried on already has auto_start or is left alone, since
+# text added at its end would follow the backslash.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional pam_gnome_keyring.so \\\n    auto_start\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: a session line carried on to its auto_start is left" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and greetd takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional \\\n# the keyring\n    pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: a carried session line without auto_start is left" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and says so" has "$output" "$T/pam.d/greetd carries a pam_gnome_keyring session line on with a backslash, so setup leaves it, and logging in may not unlock the keyring unless it has auto_start"
+check "keyring: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A line that only looks like one, as the rest of a line carried on, isn't.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_permit.so \\\n    session optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: the rest of a carried line isn't a keyring line" \
+    test "$(head -n 4 "$T/pam.d/greetd")" = "$(cat "$T/original-pam")" -a "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+# Nothing is added after a last line a backslash carries on, which it would
+# join.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nsession optional pam_permit.so \\\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: nothing is added after a carried last line" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and says so" has "$output" "$T/pam.d/greetd ends in a line a backslash carries on, which lines added after it would join, so setup adds no pam_gnome_keyring lines, and logging in may not unlock the keyring"
+check "keyring: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
 teardown
 
 setup; ARGS=(--bogus); run
