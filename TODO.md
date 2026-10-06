@@ -35,18 +35,6 @@
   build no longer runs; delete it then, with `~/.local/opt/hyprland` and the links
   in `/usr/local/bin` on machines that built it.
 
-## setup / homepkg
-
-- [ ] **Install zsh-autosuggestions on the `--no-root` path.** The
-      privileged setup installs it from the distro package (apt/dnf/brew,
-      alongside zoxide), but under `--no-root` the distro step is skipped
-      and, unlike fzf/zoxide, it has no conda-forge package for homepkg to
-      fetch. So an unprivileged box gets no inline history ghost text. A
-      git clone of zsh-users/zsh-autosuggestions into
-      `~/.zsh/zsh-autosuggestions` (pinned to a tag) would cover every path
-      uniformly, since the conf shell config already checks that location
-      first; deferred from the setup PR that added the packaged steps.
-
 ## Decisions needing review
 
 - **setup-tide masks waybar and swaync per user, instead of disabling

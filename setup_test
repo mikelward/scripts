@@ -2338,8 +2338,22 @@ test_home_tools_provisioned_by_a_partial_bundle() {
 # faked when there's nothing usable on disk.
 test_clone_or_pull_degrades_offline() {
     assert_source_contains "could not pull" &&
-    assert_source_contains "using the existing checkout" &&
-    assert_source_not_contains "could not clone"
+    assert_source_contains "using the existing checkout" || return 1
+    # Within clone_or_pull: other steps clone optional extras whose failure
+    # is rightly only a warning.
+    clone_src="$(extract_functions clone_or_pull)"
+    if test -z "$clone_src"; then
+        echo "  FAIL: clone_or_pull not found in setup"
+        TEST_FAILED=1
+        return 1
+    fi
+    case "$clone_src" in
+        *"could not clone"*)
+            echo "  FAIL: clone_or_pull downgrades a failed clone to a warning"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
 }
 
 # --- --github internal-mirror flag ---
@@ -2722,6 +2736,152 @@ test_display_gpu_not_keyed_on_the_gui() {
     assert_source_not_contains '^ \+keep_display_gpu_awake$'
 }
 
+# --- zsh-autosuggestions without root ---
+
+# Run install_zsh_autosuggestions_home against a local tagged repo standing in
+# for zsh-users/zsh-autosuggestions, with a sandboxed HOME and system root.
+# setup's own ZSH_AUTOSUGGESTIONS_* lines are replayed, then the repo and the
+# pinned commit are pointed at the fixture.
+#   $1  what's already there (default none): none | checkout (an earlier run's
+#       ~/.zsh/zsh-autosuggestions) | system (the distro package)
+#   $2  the fixture's tag (default pinned): pinned (names the pinned commit) |
+#       moved (names a later one) | missing (none, so the clone fails)
+#   $3  the OS (default debian)
+# Leaves $zas_state: absent | pinned (a checkout at the pinned commit) | kept
+# (the earlier checkout, untouched) | other.
+run_install_zsh_autosuggestions_home() {
+    zas_seed="${1:-none}"
+    zas_tag="${2:-pinned}"
+    zas_os="${3:-debian}"
+    zas_tmp="$(mktemp -d)"
+    zas_home="$zas_tmp/home"
+    zas_dir="$zas_home/.zsh/zsh-autosuggestions"
+    mkdir -p "$zas_home"
+    cat > "$zas_tmp/gitconfig" <<'CONFIG'
+[user]
+	name = t
+	email = t@example.com
+[commit]
+	gpgSign = false
+[tag]
+	gpgSign = false
+[protocol "file"]
+	allow = always
+CONFIG
+    zas_git() {
+        GIT_CONFIG_GLOBAL="$zas_tmp/gitconfig" GIT_CONFIG_NOSYSTEM=1 git "$@"
+    }
+    zas_consts="$(grep '^ZSH_AUTOSUGGESTIONS_' "$SETUP")"
+    zas_tag_name="$(printf '%s\n' "$zas_consts" | sed -n 's/^ZSH_AUTOSUGGESTIONS_TAG=//p')"
+    zas_git init -q "$zas_tmp/repo"
+    printf '# the plugin\n' > "$zas_tmp/repo/zsh-autosuggestions.zsh"
+    zas_git -C "$zas_tmp/repo" add zsh-autosuggestions.zsh
+    zas_git -C "$zas_tmp/repo" commit -q -m plugin
+    zas_pinned="$(zas_git -C "$zas_tmp/repo" rev-parse HEAD)"
+    if test "$zas_tag" = moved; then
+        zas_git -C "$zas_tmp/repo" commit -q --allow-empty -m moved
+    fi
+    if test "$zas_tag" != missing; then
+        zas_git -C "$zas_tmp/repo" tag "$zas_tag_name"
+    fi
+    case "$zas_seed" in
+        checkout)
+            mkdir -p "$zas_dir"
+            printf 'an earlier run\n' > "$zas_dir/earlier"
+            ;;
+        system)
+            mkdir -p "$zas_tmp/sysroot/usr/share/zsh-autosuggestions"
+            printf '# packaged\n' > "$zas_tmp/sysroot/usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh"
+            ;;
+    esac
+
+    set +e
+    output="$(HOME="$zas_home" SETUP_SYSROOT="$zas_tmp/sysroot" \
+        GIT_CONFIG_GLOBAL="$zas_tmp/gitconfig" GIT_CONFIG_NOSYSTEM=1 \
+        sh -c "set -e
+OS=$zas_os
+$zas_consts
+ZSH_AUTOSUGGESTIONS_REPO='file://$zas_tmp/repo'
+ZSH_AUTOSUGGESTIONS_COMMIT='$zas_pinned'
+$(extract_functions "info warn install_zsh_autosuggestions_home")
+install_zsh_autosuggestions_home
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    if ! test -e "$zas_dir"; then
+        zas_state=absent
+    elif test -f "$zas_dir/earlier"; then
+        zas_state=kept
+    elif test -f "$zas_dir/zsh-autosuggestions.zsh" &&
+            test "$(zas_git -C "$zas_dir" rev-parse HEAD)" = "$zas_pinned"; then
+        zas_state=pinned
+    else
+        zas_state=other
+    fi
+    rm -rf "$zas_tmp"
+}
+
+# The pin is a real tag and a full commit, so a clone can be held to it.
+test_zsh_autosuggestions_pin_is_complete() {
+    assert_source_contains '^ZSH_AUTOSUGGESTIONS_REPO=https://github.com/zsh-users/zsh-autosuggestions.git$' &&
+    assert_source_contains '^ZSH_AUTOSUGGESTIONS_TAG=v[0-9][0-9.]*$' &&
+    assert_source_contains '^ZSH_AUTOSUGGESTIONS_COMMIT=[0-9a-f]\{40\}$'
+}
+
+test_zsh_autosuggestions_cloned_without_root() {
+    run_install_zsh_autosuggestions_home
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$zas_state" pinned
+}
+
+# A tag that names another commit than the pin isn't used, and its clone goes,
+# so the next run tries again rather than taking it for a finished one.
+test_zsh_autosuggestions_moved_tag_rejected() {
+    run_install_zsh_autosuggestions_home none moved
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "not the pinned" &&
+    assert_eq "$zas_state" absent
+}
+
+# Offline, or the tag gone: a warning, nothing half-cloned, and on with setup.
+test_zsh_autosuggestions_failed_clone_not_fatal() {
+    run_install_zsh_autosuggestions_home none missing
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "could not clone zsh-autosuggestions" &&
+    assert_eq "$zas_state" absent
+}
+
+# An earlier run's checkout, or the distro's package, is used as it is.
+test_zsh_autosuggestions_existing_copy_used() {
+    run_install_zsh_autosuggestions_home checkout
+    assert_status 0 &&
+    assert_eq "$zas_state" kept || { echo "  (earlier checkout)"; return 1; }
+    run_install_zsh_autosuggestions_home system
+    assert_status 0 &&
+    assert_output_contains "already installed in /usr/share/zsh-autosuggestions" &&
+    assert_eq "$zas_state" absent || { echo "  (distro package)"; return 1; }
+}
+
+# macOS gets the brew formula even under --no-root.
+test_zsh_autosuggestions_clone_linux_only() {
+    run_install_zsh_autosuggestions_home none pinned macos
+    assert_status 0 &&
+    assert_eq "$zas_state" absent
+}
+
+# main clones it on the --no-root path, beside the other home-prefix tools.
+test_zsh_autosuggestions_clone_on_no_root_path() {
+    zas_branch=$(awk '
+        /^elif test "\$ROOT" = no; then$/ { inside = 1; next }
+        inside && /^(elif|else|fi)/ { inside = 0 }
+        inside && /^    install_zsh_autosuggestions_home$/ { print "found" }
+    ' "$SETUP")
+    assert_eq "$zas_branch" found
+}
+
 run_test "--github is accepted and takes an argument" test_github_flag_accepted
 run_test "--github=VALUE form parses" test_github_equals_form_accepted
 run_test "--github without an argument errors" test_github_requires_argument
@@ -3004,6 +3164,20 @@ run_test "the display card is only held powered on Linux" \
     test_display_gpu_linux_only
 run_test "the display card is held powered whether or not this run has a GUI" \
     test_display_gpu_not_keyed_on_the_gui
+run_test "the zsh-autosuggestions pin names a tag and a full commit" \
+    test_zsh_autosuggestions_pin_is_complete
+run_test "--no-root clones zsh-autosuggestions at the pinned commit" \
+    test_zsh_autosuggestions_cloned_without_root
+run_test "a moved zsh-autosuggestions tag isn't used" \
+    test_zsh_autosuggestions_moved_tag_rejected
+run_test "a failed zsh-autosuggestions clone warns and carries on" \
+    test_zsh_autosuggestions_failed_clone_not_fatal
+run_test "an existing zsh-autosuggestions is used as it is" \
+    test_zsh_autosuggestions_existing_copy_used
+run_test "zsh-autosuggestions is only cloned on Linux" \
+    test_zsh_autosuggestions_clone_linux_only
+run_test "zsh-autosuggestions is cloned on the --no-root path" \
+    test_zsh_autosuggestions_clone_on_no_root_path
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
