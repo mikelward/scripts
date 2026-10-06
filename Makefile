@@ -17,6 +17,7 @@ test:
 	./runenv_test
 	./setup_test
 	./setup-tide_test
+	./setup-tide_pam_test
 	./setup-kde_test
 	./setup-macos_test
 	./kdeshortcut_test

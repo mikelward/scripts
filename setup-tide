@@ -177,6 +177,18 @@ GREETD_TEMPLATE="${SETUP_GREETD_TEMPLATE:-/usr/share/tide/greeter/greetd.toml}"
 # The greeter's PATH: greetd sources /etc/profile, which sets this for every
 # user but root.
 GREETER_PATH="${SETUP_GREETER_PATH:-/usr/local/bin:/usr/bin:/bin}"
+# The PATH a program systemd or pam_exec runs as root finds a command on,
+# or more: systemd's own for a service, and the one pam_env sets on Debian,
+# where it sets one.
+SERVICE_PATH="${SETUP_SERVICE_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+# What the greeter runs from that PATH: tide-greeter, the Hyprland it
+# starts, the hyprctl that ends that Hyprland, and the qs it shows.
+GREETER_COMMANDS="tide-greeter Hyprland hyprctl qs"
+# Where the package manager's /bin, /sbin, /usr/bin and /usr/sbin are, whose
+# commands load only what it installs. Overridable for tests, which still
+# count /'s own as the package manager's, since what a script's #! names
+# is there.
+SYSTEM_ROOT="${SETUP_SYSTEM_ROOT:-}"
 # greetd's own default name for its user, Debian's, and a plain greetd, for
 # when greetd's config names none that exists.
 GREETER_USERS="greeter _greetd greetd"
@@ -187,6 +199,18 @@ LOGIN_DEFS="${SETUP_LOGIN_DEFS:-/etc/login.defs}"
 GREETER_HOME="${SETUP_GREETER_HOME:-/var/lib/tide-greeter}"
 # PAM's config, where greetd's stack is.
 PAM_DIR="${SETUP_PAM_DIR:-/etc/pam.d}"
+# Where PAM looks for a file PAM_DIR hasn't got: the vendor's.
+PAM_VENDOR_DIR="${SETUP_PAM_VENDOR_DIR:-$SYSTEM_ROOT/usr/lib/pam.d}"
+# Whether PAM reads @include lines, which Debian's patch adds. Another
+# distro's takes one for a line of a type it doesn't know, which fails.
+PAM_AT_INCLUDE="${SETUP_PAM_AT_INCLUDE:-}"
+if test -z "$PAM_AT_INCLUDE"; then
+    if test -f /etc/debian_version; then
+        PAM_AT_INCLUDE=yes
+    else
+        PAM_AT_INCLUDE=no
+    fi
+fi
 # Where setup notes the display manager greetd replaced, for --no-greeter.
 STATE_DIR="${SETUP_STATE_DIR:-/var/lib/setup-tide}"
 PREVIOUS_DM_FILE="$STATE_DIR/previous-display-manager"
@@ -1203,9 +1227,17 @@ remove_old_lid_dropins() {
 
 # --- GDM ---
 
-# Installs $2 as the root-owned file $1, unless it already says that.
-# Returns 1 if it couldn't, and sets $changed when it wrote.
+# Installs $2 as the root-owned file $1, unless it already says that and
+# only root can change it: a copy someone else can change is replaced, since
+# root reads each of these, and nothing is written in a directory someone
+# else can. Returns 1 if it couldn't, and sets $changed when it wrote.
 install_text() {
+    # In a directory someone else can write, they could swap the file once
+    # it's written, so it isn't written there.
+    if ! trusted "${1%/*}" missing-ok; then
+        warn "not writing $1: $why"
+        return 1
+    fi
     _tmp=$(mktemp) || {
         warn "couldn't create a temporary file for $1"
         return 1
@@ -1215,7 +1247,7 @@ install_text() {
         rm -f "$_tmp"
         return 1
     fi
-    if cmp -s "$_tmp" "$1"; then
+    if cmp -s "$_tmp" "$1" && trusted "$1"; then
         rm -f "$_tmp"
         return 0
     fi
@@ -1411,37 +1443,2608 @@ greeter_vt() {
     esac
 }
 
+# trusted_entry PATH: whether PATH itself, not where a link leads, is root's,
+# and writable by no one else unless it's a link, whose own mode means
+# nothing. Sets entry_type, or why it isn't.
+trusted_entry() {
+    # %F is translated, so ask for C's.
+    if ! _e_stat=$(LC_ALL=C stat -c '%u %a %F' -- "$1"); then
+        why="couldn't look at $1"
+        return 1
+    fi
+    _e_uid=${_e_stat%% *}
+    _e_stat=${_e_stat#* }
+    _e_mode=${_e_stat%% *}
+    entry_type=${_e_stat#* }
+    if test "$_e_uid" != 0; then
+        why="$1 is uid $_e_uid's, not root's"
+        return 1
+    fi
+    test "$entry_type" != "symbolic link" || return 0
+    case "$_e_mode" in
+        "" | *[!0-7]*)
+            why="couldn't read $1's mode"
+            return 1
+            ;;
+    esac
+    if test $((0$_e_mode & 022)) -ne 0; then
+        why="users other than root can write $1"
+        return 1
+    fi
+}
+
+# trusted PATH [missing-ok]: whether only root can change what PATH names,
+# setting why if not. The greeter reads every password typed at login, so
+# nothing it runs, or reads as code, may be anyone else's to change. Every
+# directory on the way down from /, every link on the way and every one
+# where it leads, and PATH itself, have to be root's and writable by no one
+# else, as the kernel would walk them. Sets trusted_to to where PATH leads.
+# With missing-ok, a PATH that isn't there passes, since only root could
+# make it.
+trusted() {
+    case "$1" in
+        /*) ;;
+        *)
+            why="$1 isn't a full path"
+            return 1
+            ;;
+    esac
+    trusted_entry / || return 1
+    _t_nl='
+'
+    _t_dir=/
+    _t_rest=$1
+    _t_links=0
+    while :; do
+        _t_rest=${_t_rest#"${_t_rest%%[!/]*}"}
+        test -n "$_t_rest" || break
+        _t_name=${_t_rest%%/*}
+        _t_rest=${_t_rest#"$_t_name"}
+        case "$_t_name" in
+            .) continue ;;
+            ..)
+                _t_dir=${_t_dir%/*}
+                test -n "$_t_dir" || _t_dir=/
+                continue
+                ;;
+        esac
+        _t_path=${_t_dir%/}/$_t_name
+        if ! test -e "$_t_path" && ! test -L "$_t_path"; then
+            if test "$2" = missing-ok; then
+                trusted_to=
+                return 0
+            fi
+            why="$_t_path isn't there"
+            return 1
+        fi
+        trusted_entry "$_t_path" || return 1
+        if test "$entry_type" != "symbolic link"; then
+            _t_dir=$_t_path
+            continue
+        fi
+        # The kernel's limit.
+        _t_links=$((_t_links + 1))
+        if test "$_t_links" -gt 40; then
+            why="$1 leads through too many links"
+            return 1
+        fi
+        # The x keeps a newline the target ends in, which $(...) would
+        # strip, to check a name other than the one the kernel follows.
+        if ! _t_target=$(readlink -- "$_t_path" && echo x); then
+            why="couldn't read the link $_t_path"
+            return 1
+        fi
+        _t_target=${_t_target%x}
+        _t_target=${_t_target%"$_t_nl"}
+        case "$_t_target" in
+            *"$_t_nl"*)
+                why="the link $_t_path leads to a name with a newline in it"
+                return 1
+                ;;
+        esac
+        case "$_t_target" in
+            /*) _t_dir=/ ;;
+        esac
+        _t_rest=$_t_target/$_t_rest
+    done
+    trusted_to=$_t_dir
+}
+
+# trusted_tree DIR: whether DIR is trusted, and everything in it, and
+# wherever each link in it leads, through the whole of each directory a link
+# leads to, setting why if not. For a build, whose commands load its
+# libraries, and tide's greeter files, which the greeter runs as code. Sets
+# trusted_to to where DIR leads.
+trusted_tree() {
+    trusted "$1" || return 1
+    _tt_root=$trusted_to
+    _tt_nl='
+'
+    # Directories still to look through, and those looked through already,
+    # one a line: a link back into one, or a loop of them, ends there.
+    _tt_todo=$_tt_root
+    _tt_seen=
+    while test -n "$_tt_todo"; do
+        case "$_tt_todo" in
+            *"$_tt_nl"*)
+                _tt_dir=${_tt_todo%%"$_tt_nl"*}
+                _tt_todo=${_tt_todo#*"$_tt_nl"}
+                ;;
+            *)
+                _tt_dir=$_tt_todo
+                _tt_todo=
+                ;;
+        esac
+        _tt_inside=no
+        while IFS= read -r _tt_done; do
+            test -n "$_tt_done" || continue
+            case "$_tt_dir" in
+                "$_tt_done" | "${_tt_done%/}"/*) _tt_inside=yes ;;
+            esac
+        done <<EOF
+$_tt_seen
+EOF
+        test "$_tt_inside" = no || continue
+        _tt_seen=$_tt_seen$_tt_nl$_tt_dir
+        # What follows reads a name a line, so a name with a newline in it
+        # would read as two, and what it names go unchecked.
+        if ! _tt_nlname=$(find "$_tt_dir" -name "*$_tt_nl*" -print -quit); then
+            why="couldn't look through $_tt_dir"
+            return 1
+        fi
+        if test -n "$_tt_nlname"; then
+            why="${_tt_nlname%/*} holds a name with a newline in it"
+            return 1
+        fi
+        if ! _tt_entries=$(find "$_tt_dir" ! -type l -exec stat -c '%u %a %n' -- {} +); then
+            why="couldn't look through $_tt_dir"
+            return 1
+        fi
+        if ! _tt_bad=$(printf '%s\n' "$_tt_entries" | awk '
+            {
+                name = $0
+                sub(/^[^ ]* [^ ]* /, "", name)
+                group = substr($2, length($2) - 1, 1)
+                others = substr($2, length($2), 1)
+                if ($1 != 0) { print "uid " $1 " " name; exit }
+                if (group ~ /[2367]/ || others ~ /[2367]/) { print "writable " name; exit }
+            }'); then
+            why="couldn't check who can change what's in $_tt_dir"
+            return 1
+        fi
+        case "$_tt_bad" in
+            uid\ *)
+                _tt_bad=${_tt_bad#uid }
+                why="${_tt_bad#* } is uid ${_tt_bad%% *}'s, not root's"
+                return 1
+                ;;
+            writable\ *)
+                why="users other than root can write ${_tt_bad#writable }"
+                return 1
+                ;;
+        esac
+        if ! _tt_links=$(find "$_tt_dir" -type l -print); then
+            why="couldn't look through $_tt_dir"
+            return 1
+        fi
+        while IFS= read -r _tt_link; do
+            test -n "$_tt_link" || continue
+            trusted "$_tt_link" || return 1
+            # find doesn't follow a link, so a directory one leads to is
+            # looked through in turn.
+            if test -d "$trusted_to"; then
+                _tt_todo=$_tt_todo${_tt_todo:+$_tt_nl}$trusted_to
+            fi
+        done <<EOF
+$_tt_links
+EOF
+    done
+    trusted_to=$_tt_root
+}
+
+# PAM_AWK reads PAM files, and prints each name pam_names_trusted checks,
+# one a line: a kind, -, the name, and the file it's in. A name starts a
+# word, or follows a [, =, : or , in one, and it's a path, a file an
+# include names by its full path, a program pam_exec runs named without
+# one, or relative, any other name in a module's arguments; and climbs is
+# a word that climbs out of where PAM looks with "..".
+# at_include says whether PAM reads @include lines. It joins the lines a
+# backslash carries on, as PAM does, but needn't read them as PAM does:
+# CHAIN_AWK does that, and every name in every word here is checked anyway.
+# shellcheck disable=SC2016  # $0 and the rest are awk's
+PAM_AWK='
+    function flush(    n, w, i, t, s, at, first, full, name, inc, c, mi, a, prog) {
+        if (line == "") return
+        n = split(line, w)
+        line = ""
+        # The word that names the file an include reads.
+        inc = 0
+        if (at_include == "yes" && tolower(w[1]) ~ /^-?@include$/) inc = 2
+        else if (tolower(w[2]) == "include" || tolower(w[2]) == "substack") inc = 3
+        for (i = 1; i <= n; i++) {
+            t = w[i]
+            if (i == inc && t ~ /^\//) print "include", "-", t, file
+            first = 0
+            s = t
+            while (match(s, /(^|\[|=|:|,)\//)) {
+                at = RSTART + (substr(s, RSTART, 1) == "/" ? 0 : 1)
+                if (!first) first = length(t) - length(s) + at
+                full = substr(s, at)
+                name = full
+                # A bracketed argument ends in one.
+                if (sub(/\]$/, "", name)) print "path", "-", name, file
+                print "path", "-", full, file
+                s = substr(s, at + 1)
+            }
+            s = first ? substr(t, 1, first - 1) : t
+            if (s ~ /(^|\[|\/|=|:|,)\.\.(\]|\/|=|:|,|$)/) print "climbs", "-", t, file
+        }
+        if (inc) return
+        c = w[2]
+        mi = 3
+        if (c ~ /^\[/) while (c !~ /\]$/ && mi <= n) c = c " " w[mi++]
+        # pam_exec runs a program on any line, as root: the first word after
+        # its options. One named without a full path, which it runs from the
+        # directory greetd runs in, /, is held to the same rule as a full one.
+        prog = 0
+        if (mi <= n && w[mi] ~ /(^|\/)pam_exec\.so$/) {
+            for (i = mi + 1; i <= n; i++) {
+                a = tolower(w[i])
+                if (a !~ /^\// && (a ~ /^(debug|stdout|seteuid|quiet|quiet_log|expose_authtok)$/ || a ~ /^(log|type)=/)) continue
+                if (a !~ /^\//) {
+                    print "program", "-", w[i], file
+                    prog = i
+                }
+                break
+            }
+        }
+        # Any module opens a file an argument names without a full path from
+        # there too: every other word after the module, and what follows a
+        # =, : or , in one, could name one.
+        for (i = mi + 1; i <= n; i++) {
+            if (i == prog) continue
+            s = w[i]
+            sub(/^\[/, "", s)
+            sub(/\]$/, "", s)
+            while (s != "") {
+                if (s !~ /^\//) print "relative", "-", s, file
+                if (!match(s, /[=:,]/)) break
+                s = substr(s, RSTART + 1)
+            }
+        }
+    }
+    FNR == 1 { flush(); file = as != "" ? as : FILENAME }
+    /^[ \t]*(#|$)/ { next }
+    {
+        s = $0
+        if (index(s, "#")) {
+            sub(/#.*/, "", s)
+            line = line " " s
+            flush()
+            next
+        }
+        if (s ~ /\\[ \t]*$/) {
+            sub(/\\[ \t]*$/, "", s)
+            line = line " " s
+            next
+        }
+        line = line " " s
+        flush()
+    }
+    END { flush() }'
+
+# pam_names_trusted: whether only root can change the directory greetd's
+# PAM files are in, and where each include by its full path in them leads,
+# setting why if not. The vendor's /usr/lib/pam.d, where PAM looks for a
+# file PAM_DIR hasn't got, is held to the rule too. Sets pam_files to the
+# files in both, pam_fullpaths to where each include by its full path leads
+# in them, a tab between, one a line, pam_root to where PAM_DIR leads, and
+# pam_vendor and pam_vendor_root to the vendor's directory and where it
+# leads, or nothing when it isn't there. Each file, and what its lines
+# name, is checked only when greetd's stacks read it, by
+# pam_files_trusted, since another service's aren't greetd's.
+pam_names_trusted() {
+    trusted "$PAM_DIR" || return 1
+    pam_root=$trusted_to
+    pam_checked=
+    # PAM looks for a file in the vendor's directory when PAM_DIR hasn't
+    # got it.
+    pam_vendor=$PAM_VENDOR_DIR
+    pam_vendor_root=
+    set -- "$PAM_DIR"
+    if test -d "$pam_vendor"; then
+        trusted "$pam_vendor" || return 1
+        pam_vendor_root=$trusted_to
+        set -- "$@" "$pam_vendor"
+    fi
+    # Only the includes by full path are read out of them here, which a
+    # file greetd's stacks never read doesn't need: one setup can't read is
+    # skipped, and if greetd's stacks do read it, reading them fails.
+    if ! pam_files=$(find -L "$@" -type f) \
+        || ! _pn_names=$(find -L "$@" -type f -readable -exec awk -v at_include="$PAM_AT_INCLUDE" "$PAM_AWK" {} +); then
+        why="couldn't read the files in $*"
+        return 1
+    fi
+    pam_fullpaths=
+    while read -r _pn_kind _pn_type _pn_name _pn_file; do
+        test "$_pn_kind" = include || continue
+        # One that isn't root's alone, or leads outside where setup looks,
+        # isn't followed, and pam_files_trusted fails a stack that reads
+        # the file including it.
+        trusted "$_pn_name" missing-ok || continue
+        test -n "$trusted_to" || continue
+        pam_include_inside "$_pn_name" || continue
+        pam_fullpaths="$pam_fullpaths$_pn_name	$pam_include
+"
+    done <<EOF
+$_pn_names
+EOF
+}
+
+# pam_files_trusted FILES: whether only root can change each of FILES, one
+# a line, and every full path a line in one names, setting why if not.
+# Anyone who could change one could let any password in. A module
+# named by its full path loads from there, not from PAM's own directory,
+# and an argument can name a program a module runs, as pam_exec's does, or
+# a file it reads, all as root. So each is held to trusted's rule, and one
+# in a bin, sbin, lib or lib64 directory outside the package manager's has
+# the whole prefix it's installed in checked too, since it loads its
+# libraries from there. A file included from outside PAM_DIR and the
+# vendor's directory isn't looked through, so it fails, and so does a
+# relative name that climbs out of where PAM looks with "..". A file a
+# module reads without a line naming it, as pam_env reads /etc/environment,
+# isn't greetd's: every login on the machine reads it, so keeping it root's
+# is the system's to do, and setup doesn't list them.
+# pam_names_trusted has to have read the stack.
+pam_files_trusted() {
+    _pf_nl='
+'
+    while IFS= read -r _pf_file; do
+        test -n "$_pf_file" || continue
+        if test "$_pf_file" != "$pam_override"; then
+            case "$_pf_nl$pam_checked" in
+                *"$_pf_nl$_pf_file$_pf_nl"*) continue ;;
+            esac
+        fi
+        # One setup would write in place of the file there keeps its owner
+        # and mode, so it's checked too, when it's there.
+        trusted "$_pf_file" missing-ok || return 1
+        # What setup would write in place of one is read as PAM would.
+        if test "$_pf_file" = "$pam_override"; then
+            _pn_names=$(printf '%s\n' "$pam_override_text" | awk -v at_include="$PAM_AT_INCLUDE" -v as="$_pf_file" "$PAM_AWK")
+        else
+            _pn_names=$(awk -v at_include="$PAM_AT_INCLUDE" "$PAM_AWK" "$_pf_file")
+        fi || {
+            why="couldn't read $_pf_file"
+            return 1
+        }
+        pam_names_check || return 1
+        test "$_pf_file" = "$pam_override" || pam_checked="$pam_checked$_pf_file$_pf_nl"
+    done <<EOF
+$1
+EOF
+}
+
+# pam_names_check: whether only root can change each name PAM_AWK printed,
+# in _pn_names, as pam_files_trusted says, setting why if not.
+pam_names_check() {
+    while read -r _pn_kind _pn_type _pn_name _pn_file; do
+        _pn_named=$_pn_name
+        if test "$_pn_kind" = program; then
+            # pam_exec runs a program named without a full path from
+            # greetd's directory, /.
+            _pn_kind=path
+            _pn_named="$_pn_name (which pam_exec runs as /$_pn_name)"
+            _pn_name=/$_pn_name
+        elif test "$_pn_kind" = relative; then
+            # A module opens a file named without a full path from there
+            # too. Only root can make one in / itself, so a name with no
+            # directory in it matters only when it's there.
+            case "$_pn_name" in
+                */*) ;;
+                *) test -e "/$_pn_name" || test -L "/$_pn_name" || continue ;;
+            esac
+            _pn_kind=path
+            _pn_named="$_pn_name (which a module reads as /$_pn_name)"
+            _pn_name=/$_pn_name
+        fi
+        case "$_pn_kind" in
+            climbs)
+                why="$_pn_file names $_pn_name, which climbs out of where PAM looks"
+                return 1
+                ;;
+            include)
+                if ! trusted "$_pn_name" missing-ok; then
+                    why="$_pn_file includes $_pn_name: $why"
+                    return 1
+                fi
+                # pam_stack_works looks for one that isn't there.
+                test -n "$trusted_to" || continue
+                pam_include_inside "$_pn_name" && continue
+                why="$_pn_file includes $_pn_name, outside $PAM_DIR and $pam_vendor, which setup doesn't look through"
+                return 1
+                ;;
+            path)
+                if ! trusted "$_pn_name" missing-ok; then
+                    why="$_pn_file names $_pn_named: $why"
+                    return 1
+                fi
+                test -f "$trusted_to" || continue
+                _pn_prefix=
+                case "$trusted_to" in
+                    "$SYSTEM_ROOT"/bin/* | "$SYSTEM_ROOT"/sbin/* | "$SYSTEM_ROOT"/usr/bin/* | "$SYSTEM_ROOT"/usr/sbin/*) ;;
+                    "$SYSTEM_ROOT"/lib/* | "$SYSTEM_ROOT"/lib64/* | "$SYSTEM_ROOT"/usr/lib/* | "$SYSTEM_ROOT"/usr/lib64/*) ;;
+                    */bin/*) _pn_prefix=${trusted_to%/bin/*} ;;
+                    */sbin/*) _pn_prefix=${trusted_to%/sbin/*} ;;
+                    */lib/*) _pn_prefix=${trusted_to%/lib/*} ;;
+                    */lib64/*) _pn_prefix=${trusted_to%/lib64/*} ;;
+                esac
+                if test -n "$_pn_prefix" && ! trusted_tree "$_pn_prefix"; then
+                    why="$_pn_file names $_pn_named: $why"
+                    return 1
+                fi
+                ;;
+        esac
+    done <<EOF
+$_pn_names
+EOF
+}
+
+# pam_include_inside NAME: whether NAME, a file a PAM file includes by its
+# full path, which trusted has just followed, is one in PAM_DIR or the
+# vendor's directory, which pam_names_trusted looks through, and sets
+# pam_include to how that names it. That's either by its name, as one under
+# either, wherever a link there leads, or by where it leads.
+pam_include_inside() {
+    case "$1" in
+        */./* | */../* | */. | */..) ;;
+        "$PAM_DIR"/*)
+            pam_include=$1
+            return 0
+            ;;
+        "$pam_vendor"/*)
+            if test -n "$pam_vendor_root"; then
+                pam_include=$1
+                return 0
+            fi
+            ;;
+    esac
+    case "$trusted_to" in
+        "$pam_root"/*)
+            pam_include=$PAM_DIR/${trusted_to#"$pam_root"/}
+            return 0
+            ;;
+    esac
+    if test -n "$pam_vendor_root"; then
+        case "$trusted_to" in
+            "$pam_vendor_root"/*)
+                pam_include=$pam_vendor/${trusted_to#"$pam_vendor_root"/}
+                return 0
+                ;;
+        esac
+    fi
+    return 1
+}
+
+# ELF_IDENT_AWK reads the start of a file, as od -An -v -tu1 prints it,
+# and prints the class, byte order and machine of the ELF file it is, or
+# nothing when it isn't one.
+# shellcheck disable=SC2016  # $i and the rest are awk's
+ELF_IDENT_AWK='
+    { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+    END {
+        if (n < 20 || b[0] != 127 || b[1] != 69 || b[2] != 76 || b[3] != 70) exit
+        print b[4], b[5], (b[5] == 1 ? b[18] + 256 * b[19] : 256 * b[18] + b[19])
+    }'
+
+# ELF_EXEC_AWK reads the start of a file, as od -An -v -tu1 prints it, the
+# first 65536 bytes or all of it, and prints what the kernel makes of it as
+# a program to start, given its size, size, and ident, the system's class,
+# byte order and machine: static, for one it starts itself, interp and the
+# loader it names, for one it starts with that loader, or why it won't:
+# notelf, arch, noident, type, for an ELF file that isn't a program, entry,
+# for one whose entry point isn't in code it loads from the file, headers,
+# for program headers that aren't whole within what was read, short, for a
+# part of it the kernel loads that runs past its end, or interp, for a
+# loader it can't name.
+# shellcheck disable=SC2016  # $i and the rest are awk's
+ELF_EXEC_AWK='
+    { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+    # The len-byte number at off, in the byte order of the file.
+    function num(off, len,    v, i) {
+        v = 0
+        if (le) for (i = len - 1; i >= 0; i--) v = v * 256 + b[off + i]
+        else for (i = 0; i < len; i++) v = v * 256 + b[off + i]
+        return v
+    }
+    END {
+        if (n < 52 || b[0] != 127 || b[1] != 69 || b[2] != 76 || b[3] != 70) { print "notelf"; exit }
+        if (ident == "") { print "noident"; exit }
+        le = b[5] == 1
+        wide = b[4] == 2
+        if (b[4] " " b[5] " " num(18, 2) != ident) { print "arch"; exit }
+        # A program, or a position-independent one.
+        type = num(16, 2)
+        if (type != 2 && type != 3) { print "type"; exit }
+        if (wide) {
+            if (n < 64) { print "headers"; exit }
+            entry = num(24, 8); phoff = num(32, 8); phsize = num(54, 2); phnum = num(56, 2)
+        } else {
+            entry = num(24, 4); phoff = num(28, 4); phsize = num(42, 2); phnum = num(44, 2)
+        }
+        # In ELF, an entry point of 0 means there is none.
+        if (entry == 0) { print "entry"; exit }
+        if (phnum == 0 || phnum == 65535 || phsize != (wide ? 56 : 32) || phoff + phnum * phsize > n) { print "headers"; exit }
+        interp = ""
+        code = 0
+        for (k = 0; k < phnum; k++) {
+            h = phoff + k * phsize
+            ptype = num(h, 4)
+            if (wide) { flags = num(h + 4, 4); off = num(h + 8, 8); vaddr = num(h + 16, 8); filesz = num(h + 32, 8) }
+            else { off = num(h + 4, 4); vaddr = num(h + 8, 4); filesz = num(h + 16, 4); flags = num(h + 24, 4) }
+            # PT_LOAD, mapped from the file, which faults past its end.
+            if (ptype == 1 && off + filesz > size) { print "short"; exit }
+            # The program starts at its entry point, which has to be in code
+            # loaded from the file, mapped executable, as PF_X says.
+            if (ptype == 1 && flags % 2 == 1 && entry >= vaddr && entry < vaddr + filesz) code = 1
+            # PT_INTERP, a name ending in a NUL.
+            if (ptype == 3) {
+                if (filesz < 2 || off + filesz > n || b[off + filesz - 1] != 0) { print "interp"; exit }
+                interp = ""
+                for (i = off; i < off + filesz - 1; i++) {
+                    if (b[i] < 33 || b[i] > 126) { print "interp"; exit }
+                    interp = interp sprintf("%c", b[i])
+                }
+            }
+        }
+        if (!code) { print "entry"; exit }
+        if (interp == "") print "static"
+        else print "interp", interp
+    }'
+
+# ELF_AWK reads a file, as od -An -v -tu1 prints it, and prints exports
+# and the functions PAM calls that it exports, a , after each, when it's an
+# ELF shared object of the class, byte order and machine in ident, the
+# system's, which is all dlopen takes. dlsym finds only a symbol it defines
+# and exports, with default or protected visibility. Otherwise it prints
+# notelf, arch, noident when ident isn't known, or unread when its symbols
+# can't be read, as when strip has removed the section headers they're
+# found by. Each fails, as what setup can't check does. Whether the loader
+# can map and link it is ldd's to say.
+# shellcheck disable=SC2016  # $i and the rest are awk's
+ELF_AWK='
+    { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+    # The len-byte number at off, in the byte order of the file.
+    function num(off, len,    v, i) {
+        v = 0
+        if (le) for (i = len - 1; i >= 0; i--) v = v * 256 + b[off + i]
+        else for (i = 0; i < len; i++) v = v * 256 + b[off + i]
+        return v
+    }
+    END {
+        if (n < 64 || b[0] != 127 || b[1] != 69 || b[2] != 76 || b[3] != 70 || (b[4] != 1 && b[4] != 2) || (b[5] != 1 && b[5] != 2)) {
+            print "notelf"
+            exit
+        }
+        wide = b[4] == 2
+        le = b[5] == 1
+        # ET_DYN, a shared object.
+        if (num(16, 2) != 3) {
+            print "notelf"
+            exit
+        }
+        if (split(ident, id) != 3) {
+            print "noident"
+            exit
+        }
+        if (b[4] != id[1] || b[5] != id[2] || num(18, 2) != id[3]) {
+            print "arch"
+            exit
+        }
+        shoff = wide ? num(40, 8) : num(32, 4)
+        shsize = wide ? num(58, 2) : num(46, 2)
+        shnum = wide ? num(60, 2) : num(48, 2)
+        if (shoff == 0 || shnum == 0 || shsize < (wide ? 64 : 40) || shoff + shnum * shsize > n) {
+            print "unread"
+            exit
+        }
+        for (s = 0; s < shnum; s++) {
+            h = shoff + s * shsize
+            # SHT_DYNSYM, and the string table it links to.
+            if (num(h + 4, 4) != 11) continue
+            dynsym = 1
+            off = wide ? num(h + 24, 8) : num(h + 16, 4)
+            size = wide ? num(h + 32, 8) : num(h + 20, 4)
+            link = num(h + (wide ? 40 : 24), 4)
+            ent = wide ? num(h + 56, 8) : num(h + 36, 4)
+            if (link >= shnum || ent < (wide ? 24 : 16)) continue
+            str = wide ? num(shoff + link * shsize + 24, 8) : num(shoff + link * shsize + 16, 4)
+            for (o = off; o + ent <= off + size && o + ent <= n; o += ent) {
+                bind = int(b[o + (wide ? 4 : 12)] / 16)
+                vis = b[o + (wide ? 5 : 13)] % 4
+                # Undefined, local, or hidden, it is not exported.
+                if (num(o + (wide ? 6 : 14), 2) == 0 || (bind != 1 && bind != 2 && bind != 10) || (vis != 0 && vis != 3)) continue
+                name = ""
+                for (p = str + num(o, 4); p < n && b[p] != 0; p++) name = name sprintf("%c", b[p])
+                if (name ~ /^pam_sm_(authenticate|setcred|acct_mgmt|open_session|close_session|chauthtok)$/ && !(name in has)) {
+                    has[name] = 1
+                    out = out name ","
+                }
+            }
+        }
+        if (!dynsym) {
+            print "unread"
+            exit
+        }
+        print "exports " out
+    }'
+pam_elf_ident_read=
+
+# pam_module_check NAME: whether PAM finds the module NAME, by its full
+# path, or named without one in pam_module_dir, and can load it, setting
+# pam_module_exports to the functions PAM calls that it has, a , after
+# each, or pam_module_why to why it can't, as when it isn't there. It loads
+# only a library built for this system, as /bin/sh is, and one whose
+# libraries and symbols the system's loader can all find, setting
+# pam_module_untrusted to why when it, or one of those libraries, isn't
+# root's alone.
+pam_module_check() {
+    pam_module_why=
+    pam_module_exports=
+    pam_module_untrusted=
+    elf_ident_find
+    case "$1" in
+        /*) set -- "$1" ;;
+        *) set -- "$pam_module_dir$1" ;;
+    esac
+    for _pm_module; do
+        test -f "$_pm_module" || continue
+        # PAM loads it as root, so it has to be root's alone, where a link
+        # to it leads too, even in the package manager's directory.
+        if ! trusted "$_pm_module"; then
+            pam_module_untrusted=$why
+            return 1
+        fi
+        # One setup can't read fails, as what it can't check does.
+        if ! test -r "$_pm_module" \
+            || ! _pm_verdict=$(od -An -v -tu1 -- "$_pm_module" | LC_ALL=C awk -v ident="$pam_elf_ident" "$ELF_AWK"); then
+            test -n "$pam_module_why" || pam_module_why="which setup couldn't read"
+            continue
+        fi
+        case "$_pm_verdict" in
+            "exports "*)
+                if pam_module_links "$_pm_module"; then
+                    pam_module_exports=${_pm_verdict#exports }
+                    return 0
+                fi
+                test -z "$pam_module_untrusted" || return 1
+                ;;
+            arch) _pm_why="which is built for another kind of machine than this one" ;;
+            noident) _pm_why="which setup can't tell is built for this machine, since it couldn't read /bin/sh as one" ;;
+            unread) _pm_why="whose functions setup can't read" ;;
+            *) _pm_why="which isn't a library PAM can load" ;;
+        esac
+        test -n "$pam_module_why" || pam_module_why=$_pm_why
+    done
+    test -n "$pam_module_why" || pam_module_why="which isn't there"
+    return 1
+}
+
+# elf_ident_find sets pam_elf_ident to the class, byte order and machine
+# of this system's programs, as /bin/sh is built, once, or to nothing when
+# it can't read it, and then no module or program passes.
+elf_ident_find() {
+    test "$pam_elf_ident_read" != yes || return 0
+    pam_elf_ident=$(od -An -v -tu1 -N 20 /bin/sh | LC_ALL=C awk "$ELF_IDENT_AWK") || pam_elf_ident=
+    pam_elf_ident_read=yes
+}
+
+# LDD_LIBS_AWK reads what ldd says and prints each file it says the loader
+# loads, by its full path, one a line, or a ? and the rest of the line for
+# one it names in a way setup can't read. Something mapped from no file,
+# the vdso, is no file to check, and one not found is no file at all.
+# shellcheck disable=SC2016  # $0 is awk's
+LDD_LIBS_AWK='
+    function lib(s) {
+        if (s ~ /^\(0x[0-9a-fA-F]+\)$/) return
+        if (s !~ /^\/[^ \t]+ \(0x[0-9a-fA-F]+\)$/) { print "?" s; return }
+        sub(/ \(0x[0-9a-fA-F]+\)$/, "", s)
+        print s
+    }
+    / => not found/ { next }
+    / => / { s = $0; sub(/^.* => +/, "", s); lib(s); next }
+    /^[ \t]+\// { s = $0; sub(/^[ \t]+/, "", s); lib(s) }'
+
+# ldd_libs_trusted OUT WHO: whether only root can change each file ldd,
+# whose output is OUT, says the loader loads for WHO, setting why if not.
+# The loader takes a library from wherever an RPATH, a RUNPATH or
+# ld.so.conf leads, and it runs as whatever loads it.
+ldd_libs_trusted() {
+    if ! _ll_libs=$(printf '%s\n' "$1" | LC_ALL=C awk "$LDD_LIBS_AWK"); then
+        why="couldn't read what ldd says $2 loads"
+        return 1
+    fi
+    while IFS= read -r _ll_lib; do
+        case "$_ll_lib" in
+            "") continue ;;
+            "?"*)
+                why="ldd says $2 loads ${_ll_lib#?}, which setup can't read as a file"
+                return 1
+                ;;
+        esac
+        if ! trusted "$_ll_lib"; then
+            why="$2 loads $_ll_lib: $why"
+            return 1
+        fi
+    done <<EOF
+$_ll_libs
+EOF
+}
+
+# pam_module_links FILE: whether the system's loader can load FILE as PAM
+# does, binding every symbol at once, setting _pm_why if not: each library
+# it needs is there, and each symbol it uses is defined, by one of them, or
+# by a library greetd itself links, which a module it loads sees too. ldd
+# has the loader map it and bind its symbols without running it.
+pam_module_links() {
+    if ! is_command ldd; then
+        _pm_why="which setup can't check without ldd"
+        return 1
+    fi
+    # What ldd says is read in C's words, whatever the locale.
+    if ! _pl_out=$(unset LD_LIBRARY_PATH LD_PRELOAD; LC_ALL=C ldd -r -- "$1" 2>&1); then
+        _pm_why="which the system's loader can't load"
+        return 1
+    fi
+    _pl_lib=$(printf '%s\n' "$_pl_out" | sed -n 's/^[[:space:]]*\([^[:space:]]*\) => not found.*/\1/p' | head -n 1)
+    if test -n "$_pl_lib"; then
+        _pm_why="which needs $_pl_lib, which isn't there"
+        return 1
+    fi
+    if ! ldd_libs_trusted "$_pl_out" "$1"; then
+        pam_module_untrusted=$why
+        _pm_why="which loads what isn't root's alone"
+        return 1
+    fi
+    _pl_symbol=$(printf '%s\n' "$_pl_out" | sed -n 's/^undefined symbol: \([^[:space:],]*\).*/\1/p' | head -n 1)
+    test -n "$_pl_symbol" || return 0
+    # Without them, a symbol only they define isn't found.
+    pam_greetd_libs_find
+    if test -n "$pam_greetd_libs"; then
+        if ! _pl_out=$(unset LD_LIBRARY_PATH; LD_PRELOAD=$pam_greetd_libs LC_ALL=C ldd -r -- "$1" 2>&1); then
+            _pm_why="which the system's loader can't load"
+            return 1
+        fi
+        _pl_symbol=$(printf '%s\n' "$_pl_out" | sed -n 's/^undefined symbol: \([^[:space:],]*\).*/\1/p' | head -n 1)
+        test -n "$_pl_symbol" || return 0
+    fi
+    _pm_why="which needs $_pl_symbol, which nothing it loads defines"
+    return 1
+}
+pam_greetd_libs_read=
+
+# pam_greetd_libs_find sets pam_greetd_libs to the libraries greetd links,
+# a space between each, and pam_libpam to the libpam among them, once.
+# Neither is set when ldd can't say.
+pam_greetd_libs_find() {
+    test "$pam_greetd_libs_read" != yes || return 0
+    pam_greetd_libs_read=yes
+    pam_greetd_libs=
+    pam_libpam=
+    test -n "$greetd_exe" || return 0
+    _pg_out=$(unset LD_LIBRARY_PATH LD_PRELOAD; LC_ALL=C ldd -- "$greetd_exe" 2>&1) || return 0
+    pam_greetd_libs=$(printf '%s\n' "$_pg_out" | sed -n 's/^.* => \(\/[^[:space:]]*\) (.*/\1/p' | tr '\n' ' ')
+    pam_greetd_libs=${pam_greetd_libs% }
+    pam_libpam=$(printf '%s\n' "$_pg_out" | sed -n 's/^[[:space:]]*libpam\.so[^[:space:]]* => \(\/[^[:space:]]*\) (.*/\1/p' | head -n 1)
+}
+
+# pam_module_dir_find sets pam_module_dir to the directory greetd's libpam
+# loads a module named without a full path from, setting why if setup
+# can't tell, or someone other than root could change what's there. libpam
+# puts the name after a directory fixed when it was built, and keeps that
+# as a string of its own, the only one that's a directory named security.
+# One outside the package manager's directories is checked like a module
+# named by its full path: the whole prefix it's in.
+pam_module_dir_find() {
+    pam_module_dir=
+    pam_greetd_libs_find
+    if test -z "$pam_libpam"; then
+        why="setup couldn't find the libpam greetd loads, so it can't tell where PAM finds its modules"
+        return 1
+    fi
+    if ! test -r "$pam_libpam" || ! _pd_text=$(LC_ALL=C tr '\0' '\n' < "$pam_libpam"); then
+        why="setup couldn't read $pam_libpam, so it can't tell where PAM finds its modules"
+        return 1
+    fi
+    _pd_dirs=$(printf '%s\n' "$_pd_text" | LC_ALL=C awk '/^\/([^\/]+\/)*security\/$/ && !/^\/etc\// && !seen[$0]++')
+    case "$_pd_dirs" in
+        "" | *"
+"*)
+            why="setup couldn't tell where $pam_libpam finds PAM's modules"
+            return 1
+            ;;
+    esac
+    case "$_pd_dirs" in
+        "$SYSTEM_ROOT"/lib/* | "$SYSTEM_ROOT"/lib64/* | "$SYSTEM_ROOT"/usr/lib/* | "$SYSTEM_ROOT"/usr/lib64/*) ;;
+        */lib/* | */lib64/*)
+            if ! trusted_tree "${_pd_dirs%/lib*/*}"; then
+                why="PAM's modules, in $_pd_dirs, aren't root's alone: $why"
+                return 1
+            fi
+            ;;
+        *)
+            if ! trusted_tree "${_pd_dirs%/}"; then
+                why="PAM's modules, in $_pd_dirs, aren't root's alone: $why"
+                return 1
+            fi
+            ;;
+    esac
+    pam_module_dir=$_pd_dirs
+}
+
+# pam_program_runs NAME: whether the program pam_exec runs as NAME is there
+# and can be run, one named without a full path from greetd's directory, /,
+# as program_starts says, setting pam_program_status to what that returned,
+# or 1 when it isn't there.
+pam_program_runs() {
+    case "$1" in
+        /*) set -- "$1" ;;
+        *) set -- "/$1" ;;
+    esac
+    pam_program_status=1
+    test -f "$1" && test -x "$1" || return 1
+    program_starts "$1" "$SERVICE_PATH"
+    pam_program_status=$?
+    test "$pam_program_status" -eq 0
+}
+
+# CHAIN_AWK reads the PAM stack of a service as libpam does, and prints, one
+# a line, each handler libpam makes of it, in order, and each line it
+# makes a failing one of. It reads the service from its file, in PAM_DIR or
+# else the vendor directory, and its other service from other, the same
+# way, every include in place, and takes as libpam does what each line
+# says: whatever its case, a - before its type, an @include where PAM is
+# Debian's, a control a list of result=action, and a [word] as one. What the
+# versions of PAM in use read differently, or stop reading the stack at,
+# stops it. Its input is the environment, PAM_CHAIN_ and SERVICE, DIR,
+# VENDOR (none when there is none), DEBIAN (yes or no), FILES (the files in
+# both, one a line), FULLPATHS (each include by its full path a tab and
+# where in them it leads, one a line), and OVERRIDE and TEXT (a file, and
+# what to read in its place). It prints, a tab between each:
+#   S CHAIN FILE: the file the service, conf, or other, is read from.
+#   I CHAIN FILE: each file it reads, that one and each it includes.
+#   H CHAIN TYPE LEVEL KIND ACTIONS =MODULE SPEC =PROGRAM =ARGS FILE: a
+#     handler for TYPE, at the substack LEVEL, of KIND M (a module), S (a
+#     substack) or F (a line that fails), with ACTIONS, as PAM numbers each
+#     of the 32 results, and SPEC, what the module returns, as below.
+#   E CHAIN TYPE FILE WHAT =DETAIL: a line that fails, or, CHAIN all, one
+#     that stops PAM reading the stack.
+# shellcheck disable=SC2016  # $1 and the rest are awk's
+CHAIN_AWK='
+    # PAM breaks a line into words at spaces, tabs and newlines, and takes
+    # a word that starts with [ to run to the first ], a \] in it standing
+    # for ], as one word without its brackets. Each is in w, and as it is
+    # written in raw.
+    function words(s, w, raw,    n, i, len, c, t, at) {
+        n = 0
+        i = 1
+        len = length(s)
+        while (1) {
+            while (i <= len && index(" \t\n", substr(s, i, 1))) i++
+            if (i > len) break
+            t = ""
+            at = i
+            if (substr(s, i, 1) == "[") {
+                for (i++; i <= len && (c = substr(s, i, 1)) != "]"; i++) {
+                    if (c == "\\" && substr(s, i + 1, 1) == "]") c = substr(s, ++i, 1)
+                    t = t c
+                }
+                raw[n + 1] = substr(s, at, i - at + 1)
+            } else {
+                for (; i <= len && !index(" \t\n", c = substr(s, i, 1)); i++) t = t c
+                raw[n + 1] = t
+            }
+            i++
+            w[++n] = t
+        }
+        return n
+    }
+    function norm(p) {
+        while (sub(/\/\.\//, "/", p)) ;
+        gsub(/\/\/+/, "/", p)
+        return p
+    }
+    # Where PAM finds the file it includes as name: by its full path, or
+    # in its own directory, then the vendor one. One named by its full path
+    # is where pam_names_trusted found it leads, inside either.
+    function locate(name,    q) {
+        if (name ~ /^\//) return (name in fullpath) ? norm(fullpath[name]) : ""
+        q = norm(dir "/" name)
+        if (q in files || q == override) return q
+        if (vendor == "") return ""
+        q = norm(vendor "/" name)
+        return (q in files) ? q : ""
+    }
+    # The lines of the file at path p, into raw, and how many.
+    function load(p, raw,    n, r, l) {
+        if (p == override) {
+            n = split(text, raw, "\n")
+            if (n > 0 && raw[n] == "") delete raw[n--]
+            return n
+        }
+        n = 0
+        while ((r = (getline l < p)) > 0) raw[++n] = l
+        close(p)
+        return n
+    }
+    # Every action bad, ok, done and the rest as PAM numbers them, for each
+    # result it has none for yet.
+    function fill(act, a,    r) {
+        for (r = 0; r < 32; r++) if (act[r] == -6) act[r] = a
+    }
+    # What a control PAM reads as a list of result=action sets act to,
+    # returning 0, with every action bad, where it can not read one: each a
+    # result it knows, or default, which sets those without one, and an
+    # action it knows, or a jump of one or more.
+    function control(c, act,    r, a, len, num) {
+        while (1) {
+            sub(/^[ \t\n\v\f\r]+/, "", c)
+            if (c == "") return 1
+            for (r = 0; r <= 32; r++) if (substr(c, 1, length(result[r])) == result[r]) break
+            if (r > 32 || length(c) == length(result[r])) break
+            c = substr(c, length(result[r]) + 1)
+            sub(/^[ \t\n\v\f\r]+/, "", c)
+            if (substr(c, 1, 1) != "=") break
+            c = substr(c, 2)
+            sub(/^[ \t\n\v\f\r]+/, "", c)
+            if (c == "") break
+            for (a = 0; a < 6; a++) if (substr(c, 1, length(action[a])) == action[a]) break
+            if (a < 6) {
+                c = substr(c, length(action[a]) + 1)
+                a = -a
+            } else {
+                if (!match(c, /^[0-9]+/)) break
+                num = substr(c, 1, RLENGTH) + 0
+                c = substr(c, RLENGTH + 1)
+                # PAM 1.6 refuses a jump too big for an int, and earlier
+                # ones overflow.
+                if (num == 0 || num > 2147483647) break
+                a = num
+            }
+            if (r < 32) act[r] = a
+            else fill(act, a)
+        }
+        for (r = 0; r < 32; r++) act[r] = -3
+        return 0
+    }
+    # Whether PAM, which names a handler after its module, or the file a
+    # substack reads, from its last / to its last ., refuses the name.
+    function badname(m) {
+        sub(/.*\//, "", m)
+        sub(/\.[^.]*$/, "", m)
+        return m == "" || m == "?"
+    }
+    # What pam_exec returns, run for ptype, given the words w after mi: as
+    # in spec, below.
+    function execs(w, n, mi, ptype,    i, a) {
+        if (mi >= n) return "3"
+        for (i = mi + 1; i <= n; i++) {
+            a = w[i]
+            if (substr(a, 1, 1) == "/") return "x"
+            a = tolower(a)
+            if (a ~ /^(debug|stdout|seteuid|quiet|quiet_log|expose_authtok)$/ || a ~ /^log=/) continue
+            if (a !~ /^type=/) return "x"
+            if (substr(w[i], 6) != ptype) return "25"
+        }
+        return "3"
+    }
+    # pam_debug returns, to a call, the result named by the first of its
+    # arguments for that call, or success when none is, or when that one
+    # names none.
+    function debugs(w, n, mi, call,    i) {
+        for (i = mi + 1; i <= n; i++) {
+            if (substr(w[i], 1, length(call) + 1) != call "=") continue
+            return (substr(w[i], length(call) + 2) in code) ? code[substr(w[i], length(call) + 2)] : 0
+        }
+        return 0
+    }
+    function hasword(w, n, mi, a,    i) {
+        for (i = mi + 1; i <= n; i++) if (w[i] == a) return 1
+        return 0
+    }
+    function program(w, n, mi,    i, a) {
+        for (i = mi + 1; i <= n; i++) {
+            a = tolower(w[i])
+            if (substr(a, 1, 1) != "/" && (a ~ /^(debug|stdout|seteuid|quiet|quiet_log|expose_authtok)$/ || a ~ /^(log|type)=/)) continue
+            return w[i]
+        }
+        return ""
+    }
+    function stop(p, what, detail) {
+        print "E", "all", "-", p, what, "=" detail
+        exit
+    }
+    function failed(chain, type, p, what, detail) {
+        print "E", chain, type, p, what, "=" detail
+    }
+    function handler(kind, chain, type, level, act, module, spec, prog, args, p,    r, s) {
+        s = act[0]
+        for (r = 1; r < 32; r++) s = s "," act[r]
+        print "H", chain, type, level, kind, s, "=" module, spec, "=" prog, "=" args, p
+    }
+    function parse(p, chain, req, depth, level,    raw, n, k, s, t, i, at, carried, line) {
+        print "I", chain, p
+        n = load(p, raw)
+        at = 0
+        carried = 0
+        line = ""
+        for (k = 1; k <= n; k++) {
+            s = raw[k]
+            # PAM before 1.6 reads a line into what is left of 1024 bytes,
+            # and splits one too long for it.
+            if (at + length(s) + 1 > 1023) stop(p, "long", "")
+            t = s
+            sub(/^[ \t]+/, "", t)
+            if (t == "" || substr(t, 1, 1) == "#") {
+                # PAM 1.6 and later end a line a backslash carries on at a
+                # blank or comment line, and earlier ones carry it past.
+                if (carried) stop(p, "carried", "")
+                continue
+            }
+            if (i = index(t, "#")) {
+                entry(line substr(t, 1, i - 1), p, chain, req, depth, level)
+            } else if (match(t, /\\[ \t]*$/)) {
+                line = line substr(t, 1, RSTART - 1) " "
+                at += length(s) - length(t) + RSTART
+                carried = 1
+                continue
+            } else {
+                entry(line t, p, chain, req, depth, level)
+            }
+            line = ""
+            carried = 0
+            at = 0
+        }
+        if (carried) stop(p, "dangling", "")
+    }
+    function entry(line, p, chain, req, depth, level,    w, raw, n, i, t, type, at, broken, act, c, incl, sub1, mi, m, base, args, spec, prog) {
+        n = words(line, w, raw)
+        for (i = 0; i < 32; i++) act[i] = -6
+        if (n == 0) {
+            type = req == "any" ? "auth" : req
+            failed(chain, type, p, "empty", "")
+            fill(act, -3)
+            handler("F", chain, type, level, act, "", "", "", "", p)
+            return
+        }
+        t = w[1]
+        if (substr(t, 1, 1) == "-") t = substr(t, 2)
+        t = tolower(t)
+        at = 0
+        broken = 0
+        if (debian == "yes" && t == "@include") {
+            at = 1
+            type = req
+        } else if (t == "auth" || t == "account" || t == "session" || t == "password") {
+            type = t
+        } else {
+            type = req == "any" ? "auth" : req
+            broken = 1
+            failed(chain, type, p, "badtype", raw[1])
+        }
+        if (!at && req != "any" && type != req) return
+        incl = at
+        sub1 = 0
+        mi = at ? 2 : 3
+        if (!at && n < 2) {
+            fill(act, -3)
+            broken = 1
+            failed(chain, type, p, "nocontrol", "")
+        } else if (!at) {
+            c = tolower(w[2])
+            if (c == "required" || c == "requisite") {
+                act[0] = act[12] = -1
+                act[25] = 0
+                fill(act, c == "required" ? -3 : -4)
+            } else if (c == "optional" || c == "sufficient") {
+                act[0] = act[12] = c == "optional" ? -1 : -2
+                fill(act, 0)
+            } else if (c == "include" || c == "substack") {
+                incl = 1
+                sub1 = c == "substack"
+            } else {
+                if (!control(w[2], act)) failed(chain, type, p, "badcontrol", raw[2])
+                fill(act, -3)
+            }
+        }
+        if (incl) {
+            m = mi <= n ? w[mi] : ""
+            if (sub1) {
+                if (m != "" && badname(m)) stop(p, "badname", m)
+                handler("S", chain, type, level, act, "", "", "", "", p)
+            }
+            # PAM loads an include it can not read as a line that fails,
+            # and stops reading the stack at one an @include in a file read
+            # whole makes.
+            if (m == "") {
+                if (type == "any") stop(p, "noinclude", "")
+                failed(chain, type, p, "noinclude", "")
+            } else if (depth + 1 >= 16) {
+                if (type == "any") stop(p, "deep", m)
+                failed(chain, type, p, "deep", m)
+            } else if ((t = locate(m)) == "") {
+                if (type == "any") stop(p, "missing", m)
+                failed(chain, type, p, "missing", m)
+            } else {
+                parse(t, chain, type, depth + 1, level + sub1)
+                return
+            }
+            fill(act, -3)
+            handler("F", chain, type, level, act, "", "", "", "", p)
+            return
+        }
+        if (mi > n) {
+            failed(chain, type, p, "nomodule", "")
+            handler("F", chain, type, level, act, "", "", "", "", p)
+            return
+        }
+        m = w[mi]
+        if (badname(m)) stop(p, "badname", m)
+        if (m ~ /\t/) stop(p, "tab", m)
+        if (broken) {
+            handler("F", chain, type, level, act, m, "", "", "", p)
+            return
+        }
+        args = ""
+        for (i = mi + 1; i <= n; i++) {
+            t = w[i]
+            gsub(/\t/, " ", t)
+            args = args (i > mi + 1 ? " " : "") t
+        }
+        # What the module returns to each call: authenticating, setting
+        # credentials, the account, opening and closing a session, and the
+        # check and the change of a password; f when it may return anything,
+        # n when anything but success, x when pam_exec returns success or
+        # system_err as the program it runs does. pam_debug returns what its
+        # arguments say. Modules Linux-PAM ships
+        # are in known where some call can never succeed, as one that only
+        # sets a delay or a prompt can not, so a stack of nothing else fails.
+        base = m
+        sub(/.*\//, "", base)
+        prog = ""
+        if (base == "pam_exec.so") {
+            spec = execs(w, n, mi, "auth") "/25/" execs(w, n, mi, "account") "/" execs(w, n, mi, "open_session") "/" execs(w, n, mi, "close_session") "/0/" execs(w, n, mi, "password")
+            prog = program(w, n, mi)
+        } else if (base == "pam_debug.so") {
+            spec = debugs(w, n, mi, "auth") "/" debugs(w, n, mi, "cred") "/" debugs(w, n, mi, "acct") "/" debugs(w, n, mi, "open_session") "/" debugs(w, n, mi, "close_session") "/" debugs(w, n, mi, "prechauthtok") "/" debugs(w, n, mi, "chauthtok")
+        } else if (base == "pam_nologin.so" && !hasword(w, n, mi, "successok")) spec = "n/25/n/f/f/f/f"
+        else if (base == "pam_wheel.so" && !hasword(w, n, mi, "trust")) spec = "n/f/n/f/f/f/f"
+        else if (base in known) spec = known[base]
+        else spec = "f/f/f/f/f/f/f"
+        handler("M", chain, type, level, act, m, spec, prog, args, p)
+    }
+    BEGIN {
+        OFS = "\t"
+        split("success open_err symbol_err service_err system_err buf_err perm_denied auth_err cred_insufficient authinfo_unavail user_unknown maxtries new_authtok_reqd acct_expired session_err cred_unavail cred_expired cred_err no_module_data conv_err authtok_err authtok_recover_err authtok_lock_busy authtok_disable_aging try_again ignore abort authtok_expired module_unknown bad_item conv_again incomplete default", tmp, " ")
+        for (i = 0; i <= 32; i++) result[i] = tmp[i + 1]
+        for (i = 0; i < 32; i++) code[result[i]] = i
+        split("ignore ok done bad die reset", tmp, " ")
+        for (i = 0; i < 6; i++) action[i] = tmp[i + 1]
+        # From the source of each in Linux-PAM 1.7: ignore, a fixed
+        # error, or n for a call that returns either but never success.
+        known["pam_deny.so"] = "7/17/7/14/14/20/20"
+        known["pam_permit.so"] = "0/0/0/0/0/0/0"
+        known["pam_access.so"] = known["pam_ftp.so"] = known["pam_sepermit.so"] = "f/25/f/f/f/f/f"
+        known["pam_succeed_if.so"] = known["pam_usertype.so"] = "f/25/f/f/f/f/f"
+        known["pam_canonicalize_user.so"] = known["pam_faildelay.so"] = known["pam_issue.so"] = "n/25/f/f/f/f/f"
+        known["pam_echo.so"] = "f/25/f/f/25/f/25"
+        known["pam_env.so"] = "25/f/3/f/f/3/3"
+        known["pam_group.so"] = known["pam_keyinit.so"] = known["pam_mail.so"] = "25/f/f/f/f/f/f"
+        known["pam_motd.so"] = "f/f/f/n/25/f/f"
+        known["pam_selinux.so"] = "7/f/f/f/f/f/f"
+        known["pam_warn.so"] = "25/25/25/25/25/25/25"
+        service = ENVIRON["PAM_CHAIN_SERVICE"]
+        dir = ENVIRON["PAM_CHAIN_DIR"]
+        vendor = ENVIRON["PAM_CHAIN_VENDOR"]
+        debian = ENVIRON["PAM_CHAIN_DEBIAN"]
+        n = split(ENVIRON["PAM_CHAIN_FILES"], tmp, "\n")
+        for (i = 1; i <= n; i++) if (tmp[i] != "") files[norm(tmp[i])] = 1
+        n = split(ENVIRON["PAM_CHAIN_FULLPATHS"], tmp, "\n")
+        for (i = 1; i <= n; i++) if ((k = index(tmp[i], "\t")) > 0) fullpath[substr(tmp[i], 1, k - 1)] = substr(tmp[i], k + 1)
+        override = ENVIRON["PAM_CHAIN_OVERRIDE"]
+        if (override != "") override = norm(override)
+        text = ENVIRON["PAM_CHAIN_TEXT"]
+        if ((p = locate(service)) != "") {
+            print "S", "conf", p
+            parse(p, "conf", "any", 0, 0)
+        }
+        if ((p = locate("other")) != "") {
+            print "S", "other", p
+            parse(p, "other", "any", 0, 0)
+        }
+    }
+'
+
+# SIM_AWK walks, as libpam does, the handlers CHAIN_AWK prints of a
+# service, each through every result its module can return, and says
+# whether every call greetd makes can succeed, for the login or greeter
+# mode names: for a login, authenticating, the account, setting
+# credentials and opening the session, and for the greeter the same
+# without authenticating. Its input is what CHAIN_AWK printed, with what
+# setup found of each module and program, a tab between each:
+#   T M =MODULE +FUNCTIONS =: one PAM can load, with the functions it has
+#     that PAM calls, a , after each, or T M =MODULE - =WHY: one it can't.
+#   T P =PROGRAM yes or no: whether pam_exec can run it, and after yes,
+#     what pam_exec returns for it, when that is always the same.
+# Run with phase=plan, it prints M =MODULE and P =PROGRAM for each module
+# and program the calls run, for the shell to find out about. Otherwise
+# it prints ok, or R and why not:
+#   R error FILE WHAT =DETAIL TYPE: a line that fails, from CHAIN_AWK.
+#   R needs FILE =MODULE TYPE =WHY: a module PAM can't load or call on a
+#     line that fails without it.
+#   R runs FILE =PROGRAM TYPE: a program pam_exec can't run on such a line.
+#   R noprogram FILE =MODULE TYPE: a pam_exec line with no program.
+#   R fail CALL CHAIN TYPE FILE module =MODULE =WHY: a call that can't
+#     succeed whatever the modules return, but would with the first module
+#     PAM can't call there, or program pam_exec can't run, R fail CALL
+#     CHAIN TYPE FILE program =PROGRAM, or with neither, R fail CALL CHAIN
+#     TYPE FILE -; or R empty CALL TYPE FILE for one with no handlers. With report=yes it prints
+#     every result each call can return instead, for the tests.
+# Debian, debian=yes, ignores the result of a line that jumps when it
+# sets credentials, and upstream PAM counts it as ok.
+# shellcheck disable=SC2016  # $1 and the rest are awk's
+SIM_AWK='
+    # Whether an action, as PAM numbers them, counts a result against the
+    # stack: ok and done, which make it what the stack returns, and bad and
+    # die.
+    function fails(a) {
+        a += 0
+        return a == -1 || a == -2 || a == -3 || a == -4
+    }
+    # Whether PAM can call function f, numbered as in a spec, on module m.
+    function works(m, f) {
+        return loads[m] && index(exports[m], "," symbol[f] ",") > 0
+    }
+    # Why module m can not do what a line of type t needs of it, or nothing.
+    function lacks(m, t,    i, f) {
+        if (!loads[m]) return why[m]
+        for (i = 1; i <= split(calls[t], f, " "); i++) if (!works(m, f[i])) return "which has no " symbol[f[i]] " for PAM to call on " t " lines"
+        return ""
+    }
+    # What handler k of the list c keeps for type t can return when PAM calls
+    # function f: what a line PAM can not read fails with, what a module PAM
+    # can not call returns, and otherwise what its spec says.
+    function outcomes(c, t, k, f,    s, m) {
+        if (KD[c, t, k] == "F") return "6"
+        m = MD[c, t, k]
+        if (!works(m, f) && m != fix) return "28"
+        split(SP[c, t, k], s, "/")
+        if (s[f] == "f") return free
+        if (s[f] == "n") return notok
+        if (s[f] == "x") {
+            if (PG[c, t, k] == fixprog) return "0,4"
+            if (!runs[PG[c, t, k]]) return "4"
+            return (PG[c, t, k] in exits) ? exits[PG[c, t, k]] : "0,4"
+        }
+        return s[f]
+    }
+    # One of each result in the list o that the stack tells apart at
+    # handler k: what the line does with it, and whether it is success,
+    # new_authtok_reqd or ignore, which PAM checks for.
+    function reps(k, o,    p, j, n, r, key, seen1, out) {
+        n = split(o, p, ",")
+        out = ""
+        for (j = 1; j <= n; j++) {
+            r = p[j] + 0
+            key = ac[k, r] ":" (r == 0 || r == 12 || r == 25 ? r : "x")
+            if (key in seen1) continue
+            seen1[key] = 1
+            out = out (out == "" ? "" : ",") r
+        }
+        return out
+    }
+    # Reads the list c keeps for type t into the arrays the walk reads, with
+    # what each handler returns to function f1, and to f2 if there is one.
+    function list(c, t, f1, f2,    k, a, r) {
+        n = nh[c, t] + 0
+        for (k = 1; k <= n; k++) {
+            lv[k] = LV[c, t, k] + 0
+            kd[k] = KD[c, t, k]
+            split(AC[c, t, k], a, ",")
+            for (r = 0; r < 32; r++) ac[k, r] = a[r + 1] + 0
+            A[k] = kd[k] == "S" ? "0" : reps(k, outcomes(c, t, k, f1))
+            B[k] = kd[k] == "S" || !f2 ? "0" : reps(k, outcomes(c, t, k, f2))
+        }
+    }
+    # The state of a walk about to run handler i, or that has run them all
+    # and returns st: PAM fails a stack that succeeds with no module that
+    # said so. Only the substacks it is in, down to level 0, matter.
+    function state(i, imp, st, prev, subs,    p, j, out) {
+        if (i > n) return "F " (st == 0 && imp != 1 ? 6 : st)
+        split(subs, p, ",")
+        out = p[1]
+        for (j = 2; j <= lv[i] + 1 && (j in p); j++) out = out "," p[j]
+        return i " " imp " " st " " prev " " out
+    }
+    # PAM running handler i, as _pam_dispatch_aux does, when its module
+    # returns r and the action is taken for cv, which differs when setting
+    # credentials follows authenticating, and cached says it does.
+    function step(i, imp, st, prev, subs, r, cv, cached,    L, a, p, j, left, k, saved) {
+        L = lv[i]
+        if (prev < L) {
+            k = split(subs, p, ",")
+            while (k < L + 1) p[++k] = "0:6"
+            p[L + 1] = imp ":" st
+            subs = p[1]
+            for (j = 2; j <= k; j++) subs = subs "," p[j]
+        }
+        if (kd[i] == "S") return state(i + 1, imp, st, L, subs)
+        a = ac[i, cv]
+        if (a == -5) {
+            split(subs, p, ",")
+            saved = p[L + 1]
+            split(saved, p, ":")
+            return state(i + 1, p[1] + 0, p[2] + 0, L, subs)
+        }
+        if (a == -1 || a == -2) {
+            if ((imp == 0 || (imp == 1 && st == 0)) && (r != 25 || cv == r)) {
+                imp = 1
+                st = r
+            }
+            if (imp == 1 && a == -2) return state(done(i), imp, st, L, subs)
+            return state(i + 1, imp, st, L, subs)
+        }
+        if (a == -3 || a == -4) {
+            if (imp != -1) {
+                imp = -1
+                st = r == 25 ? 6 : r
+            }
+            if (a == -4) return state(done(i), imp, st, L, subs)
+            return state(i + 1, imp, st, L, subs)
+        }
+        if (a == 0) return state(i + 1, imp, st, L, subs)
+        # A jump: Debian PAM ignores the result, and upstream PAM, setting
+        # credentials, counts it as ok too.
+        if (a > 0 && cached && debian != "yes" && (imp == 0 || (imp == 1 && st == 0)) && (r != 25 || cv == r)) {
+            imp = 1
+            st = r
+        }
+        j = i
+        for (left = a > 0 ? a : 1; a > 0 && j < n && lv[j + 1] >= L && left > 0; left--) {
+            do {
+                j++
+            } while (j < n && lv[j + 1] > L)
+        }
+        if (left > 0) {
+            imp = -1
+            st = 6
+        }
+        return state(j + 1, imp, st, L, subs)
+    }
+    # The handler after the rest of the substack i is in.
+    function done(i,    j) {
+        for (j = i; j < n && lv[j + 1] >= lv[i]; j++) ;
+        return j + 1
+    }
+    function push(s) {
+        if (s in seen) return
+        seen[s] = 1
+        q[++tail] = s
+    }
+    # Every result PAM can return walking the list once, into fin.
+    function walk(cached,    head, p, i, o, j, m) {
+        split("", seen)
+        split("", fin)
+        if (n == 0) {
+            fin[6] = 1
+            return
+        }
+        tail = 0
+        push(state(1, 0, 6, 0, "0:6"))
+        for (head = 1; head <= tail; head++) {
+            if (q[head] ~ /^F /) {
+                fin[substr(q[head], 3) + 0] = 1
+                continue
+            }
+            split(q[head], p, " ")
+            i = p[1] + 0
+            m = split(A[i], o, ",")
+            for (j = 1; j <= m; j++) push(step(i, p[2] + 0, p[3] + 0, p[4] + 0, p[5], o[j] + 0, o[j] + 0, cached))
+        }
+    }
+    # Authenticating, then setting credentials on the chain that froze,
+    # into pairs: PAM sets them as each handler authenticating ran returned,
+    # and as one it skipped returns now.
+    function joint(    head, h, a, s, ai, si, oa, os, ka, ks, x, y, start) {
+        split("", seen)
+        split("", pairs)
+        if (n == 0) {
+            pairs["6 6"] = 1
+            return
+        }
+        tail = 0
+        start = state(1, 0, 6, 0, "0:6")
+        push(start "|" start)
+        for (head = 1; head <= tail; head++) {
+            split(q[head], h, "|")
+            split(h[1], a, " ")
+            split(h[2], s, " ")
+            ai = a[1] == "F" ? n + 1 : a[1] + 0
+            si = s[1] == "F" ? n + 1 : s[1] + 0
+            if (ai > n && si > n) {
+                pairs[a[2] " " s[2]] = 1
+            } else if (ai < si) {
+                ka = split(A[ai], oa, ",")
+                for (x = 1; x <= ka; x++) push(step(ai, a[2] + 0, a[3] + 0, a[4] + 0, a[5], oa[x] + 0, oa[x] + 0, 0) "|" h[2])
+            } else if (si < ai) {
+                ks = split(B[si], os, ",")
+                for (y = 1; y <= ks; y++) push(h[1] "|" step(si, s[2] + 0, s[3] + 0, s[4] + 0, s[5], os[y] + 0, os[y] + 0, 1))
+            } else {
+                ka = split(A[ai], oa, ",")
+                ks = split(B[ai], os, ",")
+                for (x = 1; x <= ka; x++)
+                    for (y = 1; y <= ks; y++)
+                        push(step(ai, a[2] + 0, a[3] + 0, a[4] + 0, a[5], oa[x] + 0, oa[x] + 0, 0) "|" step(si, s[2] + 0, s[3] + 0, s[4] + 0, s[5], os[y] + 0, oa[x] + 0, 1))
+            }
+        }
+    }
+    # Whether greetd can get through call, with the module fix taken as one
+    # PAM can use: authenticating, the account, which with new_authtok_reqd
+    # takes changing the password, setting credentials, which for a login
+    # follows the chain authenticating froze, and opening the session.
+    function can(call,    x, y) {
+        if (call == "authenticate" || (call == "setcred" && mode == "login")) {
+            list(use["auth"], "auth", 1, 2)
+            joint()
+            for (x in pairs) {
+                split(x, y, " ")
+                if (call == "authenticate" ? y[1] == 0 : x == "0 0") return 1
+            }
+            return 0
+        }
+        if (call == "setcred") {
+            list(use["auth"], "auth", 2, 0)
+            walk(1)
+            return (0 in fin)
+        }
+        if (call == "account") {
+            list(use["account"], "account", 3, 0)
+            walk(0)
+            if (0 in fin) return 1
+            expired = (12 in fin)
+            return expired && can("chauthtok")
+        }
+        if (call == "chauthtok") {
+            list(use["password"], "password", 6, 0)
+            walk(0)
+            if (!(0 in fin)) return 0
+            list(use["password"], "password", 7, 0)
+            walk(0)
+            return (0 in fin)
+        }
+        list(use["session"], "session", 4, 0)
+        walk(0)
+        return (0 in fin)
+    }
+    # Refuses call, made on the lines of type t, naming the first module
+    # there PAM can not use without which the call would succeed, and why.
+    function refuse(call, t,    c, f, k, m, more) {
+        c = use[t]
+        if (!nh[c, t]) {
+            print "R", "empty", call, t, ("conf" in src) ? src["conf"] : "-"
+            exit
+        }
+        f = spec[call]
+        more = "\t-"
+        for (k = 1; k <= nh[c, t] && more == "\t-"; k++) {
+            if (KD[c, t, k] != "M") continue
+            m = MD[c, t, k]
+            if (!works(m, f)) {
+                fix = m
+                if (can(call)) more = "\tmodule\t=" m "\t=" (loads[m] ? "which has no " symbol[f] : why[m])
+                fix = ""
+            } else if (PG[c, t, k] != "" && !runs[PG[c, t, k]]) {
+                fixprog = PG[c, t, k]
+                if (can(call)) more = "\tprogram\t=" fixprog
+                fixprog = ""
+            }
+        }
+        print "R", "fail", call, c, t, src[c] more
+        exit
+    }
+    BEGIN {
+        FS = OFS = "\t"
+        notok = "1"
+        for (r = 2; r <= 30; r++) notok = notok "," r
+        free = "0," notok
+        split("pam_sm_authenticate pam_sm_setcred pam_sm_acct_mgmt pam_sm_open_session pam_sm_close_session pam_sm_chauthtok pam_sm_chauthtok", symbol, " ")
+        calls["auth"] = "1 2"
+        calls["account"] = "3"
+        calls["session"] = "4"
+        calls["password"] = "6"
+        # The call greetd makes on each type, as a spec numbers them.
+        main["auth"] = 1
+        main["account"] = 3
+        main["session"] = 4
+        main["password"] = 7
+        spec["authenticate"] = 1
+        spec["setcred"] = 2
+        spec["account"] = 3
+        spec["session"] = 4
+        spec["chauthtok"] = 7
+    }
+    $1 == "S" {
+        src[$2] = $3
+        next
+    }
+    $1 == "E" {
+        e[++en] = $0
+        next
+    }
+    $1 == "H" {
+        k = ++nh[$2, $3]
+        LV[$2, $3, k] = $4
+        KD[$2, $3, k] = $5
+        AC[$2, $3, k] = $6
+        MD[$2, $3, k] = substr($7, 2)
+        SP[$2, $3, k] = $8
+        PG[$2, $3, k] = substr($9, 2)
+        FL[$2, $3, k] = $11
+        next
+    }
+    $1 == "T" && $2 == "M" {
+        m = substr($3, 2)
+        loads[m] = $4 != "-"
+        exports[m] = "," substr($4, 2) ","
+        why[m] = substr($5, 2)
+        next
+    }
+    $1 == "T" && $2 == "P" {
+        runs[substr($3, 2)] = $4 == "yes"
+        if ($5 != "") exits[substr($3, 2)] = $5
+        next
+    }
+    END {
+        # A type the service has no lines of PAM takes from its other
+        # service.
+        split("auth account session password", types, " ")
+        for (i = 1; i <= 4; i++) use[types[i]] = nh["conf", types[i]] ? "conf" : "other"
+        if (phase == "plan") {
+            for (i = 1; i <= 4; i++) {
+                t = types[i]
+                c = use[t]
+                for (k = 1; k <= nh[c, t]; k++) {
+                    if (KD[c, t, k] != "M") continue
+                    if (!((m = MD[c, t, k]) in planned)) print "M", "=" m
+                    planned[m] = 1
+                    if ((m = PG[c, t, k]) != "" && !(("=" m) in planned)) print "P", "=" m
+                    planned["=" m] = 1
+                }
+            }
+            exit
+        }
+        for (i = 1; i <= en && report != "yes"; i++) {
+            split(e[i], f, "\t")
+            if (f[2] == "other" && use[f[3]] != "other") continue
+            print "R", "error", f[4], f[5], f[6], f[3]
+            exit
+        }
+        for (i = 1; i <= 4 && report != "yes"; i++) {
+            t = types[i]
+            c = use[t]
+            for (k = 1; k <= nh[c, t]; k++) {
+                if (KD[c, t, k] != "M") continue
+                m = MD[c, t, k]
+                split(AC[c, t, k], a, ",")
+                split(SP[c, t, k], s, "/")
+                if (fails(a[29]) && (w = lacks(m, t)) != "") {
+                    print "R", "needs", FL[c, t, k], "=" m, t, "=" w
+                    exit
+                }
+                if (!works(m, main[t])) continue
+                if (s[main[t]] == "x" && !runs[PG[c, t, k]] && fails(a[5])) {
+                    print "R", "runs", FL[c, t, k], "=" PG[c, t, k], t
+                    exit
+                }
+                if (s[main[t]] == "3" && fails(a[4])) {
+                    print "R", "noprogram", FL[c, t, k], "=" m, t
+                    exit
+                }
+            }
+        }
+        if (report == "yes") {
+            if (mode == "login") {
+                list(use["auth"], "auth", 1, 2)
+                joint()
+                for (x in pairs) print "pair " x
+            } else {
+                list(use["auth"], "auth", 2, 0)
+                walk(1)
+                for (r in fin) print "setcred " r
+            }
+            list(use["account"], "account", 3, 0)
+            walk(0)
+            for (r in fin) print "account " r
+            list(use["password"], "password", 6, 0)
+            walk(0)
+            for (r in fin) if (r + 0 != 0) print "chauthtok " r
+            if (0 in fin) {
+                list(use["password"], "password", 7, 0)
+                walk(0)
+                for (r in fin) print "chauthtok " r
+            }
+            list(use["session"], "session", 4, 0)
+            walk(0)
+            for (r in fin) print "session " r
+            exit
+        }
+        # What greetd calls, in order, each of which has to succeed: for a
+        # login, authenticating, the account, setting credentials and the
+        # session, and for the greeter the same without authenticating.
+        if (mode == "login" && !can("authenticate")) refuse("authenticate", "auth")
+        if (!can("account")) {
+            if (expired) refuse("chauthtok", "password")
+            refuse("account", "account")
+        }
+        if (!can("setcred")) refuse("setcred", "auth")
+        if (!can("session")) refuse("session", "session")
+        print "ok"
+    }
+'
+
+# pam_service_works SERVICE MODE: whether the calls greetd makes on the PAM
+# stack of SERVICE can succeed, for a login, MODE login, or for the
+# greeter, setting why if not. PAM refuses a login through a stack it
+# can't read or load whole, and one whose lines can't all succeed; a line
+# that can't do without a module PAM can't use, or a program pam_exec
+# can't run, fails it too. A type a service has no lines of, PAM takes
+# from its other service. pam_names_trusted has to have read the stack.
+pam_service_works() {
+    _pw_nl='
+'
+    if ! _pw_chain=$(PAM_CHAIN_SERVICE=$1 PAM_CHAIN_DIR=$PAM_DIR PAM_CHAIN_VENDOR=${pam_vendor_root:+$pam_vendor} \
+        PAM_CHAIN_DEBIAN=$PAM_AT_INCLUDE PAM_CHAIN_FILES=$pam_files PAM_CHAIN_FULLPATHS=$pam_fullpaths \
+        PAM_CHAIN_OVERRIDE=$pam_override PAM_CHAIN_TEXT=$pam_override_text LC_ALL=C awk "$CHAIN_AWK" </dev/null) \
+        || ! _pw_plan=$(printf '%s\n' "$_pw_chain" | LC_ALL=C awk -v phase=plan "$SIM_AWK"); then
+        why="couldn't read greetd's PAM stack"
+        return 1
+    fi
+    # What the lines of the files it reads name, which PAM loads or runs.
+    if ! pam_files_trusted "$(printf '%s\n' "$_pw_chain" | sed -n 's/^I	[^	]*	//p')"; then
+        why="greetd's PAM stack isn't root's alone: $why"
+        return 1
+    fi
+    while IFS='	' read -r _pw_kind _pw_name; do
+        _pw_name=${_pw_name#=}
+        case "$_pw_kind" in
+            M)
+                case "$_pw_nl$pam_table$_pw_nl" in
+                    *"${_pw_nl}T	M	=$_pw_name	"*) continue ;;
+                esac
+                # PAM puts a directory of its own in place of $ISA when it
+                # loads one, which setup can't check.
+                case "$_pw_name" in
+                    *\$ISA*)
+                        why="greetd's PAM stack names the module $_pw_name, and setup can't fill in its \$ISA as PAM does"
+                        return 1
+                        ;;
+                esac
+                if pam_module_check "$_pw_name"; then
+                    pam_table="$pam_table${_pw_nl}T	M	=$_pw_name	+$pam_module_exports	="
+                elif test -n "$pam_module_untrusted"; then
+                    why="greetd's PAM stack isn't root's alone: $pam_module_untrusted"
+                    return 1
+                else
+                    pam_table="$pam_table${_pw_nl}T	M	=$_pw_name	-	=$pam_module_why"
+                fi
+                ;;
+            P)
+                _pw_runs=no
+                if pam_program_runs "$_pw_name"; then
+                    # pam_exec returns success for a program that exits 0
+                    # and system_err for one that doesn't, so for true and
+                    # false, always the same. The kernel runs the file a
+                    # link leads to, which is the program, unless it's one
+                    # that runs as the name it's given, busybox's or
+                    # coreutils's.
+                    _pw_as=
+                    if trusted "/${_pw_name#/}"; then
+                        _pw_as=${trusted_to##*/}
+                        case "$_pw_as" in
+                            busybox | coreutils) _pw_as=${_pw_name##*/} ;;
+                        esac
+                    fi
+                    case "$_pw_as" in
+                        true) _pw_runs="yes	0" ;;
+                        false) _pw_runs="yes	4" ;;
+                        *) _pw_runs=yes ;;
+                    esac
+                elif test "$pam_program_status" -eq 2; then
+                    why="greetd's PAM stack isn't root's alone: $why"
+                    return 1
+                fi
+                pam_table="$pam_table${_pw_nl}T	P	=$_pw_name	$_pw_runs"
+                ;;
+        esac
+    done <<EOF
+$_pw_plan
+EOF
+    if ! _pw_verdict=$(printf '%s\n%s\n' "$_pw_chain" "$pam_table" | LC_ALL=C awk -v phase=check -v mode="$2" -v debian="$PAM_AT_INCLUDE" "$SIM_AWK"); then
+        why="couldn't walk greetd's PAM stack"
+        return 1
+    fi
+    test "$_pw_verdict" != ok || return 0
+    IFS='	' read -r _pw_r _pw_kind _pw_a _pw_b _pw_c _pw_d _pw_e _pw_f _pw_g <<EOF
+$_pw_verdict
+EOF
+    _pw_stack="greetd's PAM stack"
+    test "$2" = login || _pw_stack="$_pw_stack for the greeter"
+    _pw_refuse="PAM refuses a login through a stack it can't load whole"
+    case "$_pw_kind" in
+        error)
+            _pw_detail=${_pw_c#=}
+            case "$_pw_b" in
+                missing) _pw_what="includes $_pw_detail, which isn't there" ;;
+                deep) _pw_what="includes $_pw_detail 16 deep, as a loop of includes does" ;;
+                noinclude) _pw_what="has an include that names no file" ;;
+                badtype) _pw_what="has a line of a type PAM doesn't know, $_pw_detail" ;;
+                badcontrol) _pw_what="has a line with a control PAM doesn't know, $_pw_detail" ;;
+                nocontrol) _pw_what="has a line of type $_pw_d that names no control" ;;
+                nomodule) _pw_what="has a line of type $_pw_d that names no module" ;;
+                dangling) _pw_what="ends in a line a backslash carries on, which PAM can't read" ;;
+                badname) _pw_what="names $_pw_detail, which PAM can't name a module or substack after" ;;
+                tab) _pw_what="names a module with a tab in its name, $_pw_detail" ;;
+                long)
+                    why="$_pw_stack, in $_pw_a, has a line longer than PAM before 1.6 reads as one, so setup can't tell what PAM makes of it"
+                    return 1
+                    ;;
+                carried)
+                    why="$_pw_stack, in $_pw_a, carries a line on with a backslash past a blank or comment line, which PAM 1.6 and later end the line at and earlier versions don't, so setup can't tell what PAM makes of it"
+                    return 1
+                    ;;
+                *) _pw_what="has a line PAM can't read" ;;
+            esac
+            why="$_pw_stack, in $_pw_a, $_pw_what, and $_pw_refuse"
+            ;;
+        needs) why="$_pw_stack, in $_pw_a, needs the module ${_pw_b#=}, ${_pw_d#=}, and $_pw_refuse" ;;
+        runs) why="$_pw_stack, in $_pw_a, runs ${_pw_b#=} with pam_exec, which isn't there or can't be run, and $_pw_refuse" ;;
+        noprogram) why="$_pw_stack, in $_pw_a, has a pam_exec line that names no program to run, and $_pw_refuse" ;;
+        empty)
+            why="$_pw_stack, from $_pw_c, has no $_pw_b lines, and nor has its other service, which PAM takes them from, so PAM would refuse every login"
+            test "$2" = login || why="$_pw_stack, from $_pw_c, has no $_pw_b lines, and nor has its other service, which PAM takes them from, so greetd couldn't start the greeter"
+            ;;
+        fail)
+            case "$_pw_a" in
+                authenticate) _pw_what="can't authenticate anyone" ;;
+                account) _pw_what="can't pass anyone's account check" ;;
+                chauthtok) _pw_what="can pass an account check only by changing its password, and can't change one" ;;
+                setcred) _pw_what="can't set the credentials of anyone it authenticates" ;;
+                *) _pw_what="can't open anyone's session" ;;
+            esac
+            if test "$2" != login; then
+                case "$_pw_a" in
+                    setcred) _pw_what="can't set the greeter's credentials" ;;
+                    session) _pw_what="can't open the greeter's session" ;;
+                esac
+            fi
+            _pw_from=$_pw_d
+            test "$_pw_b" = conf || _pw_from="$_pw_d, its other service, which PAM takes its $_pw_c lines from"
+            why="$_pw_stack, from $_pw_from, $_pw_what, whatever the modules it can use return, so PAM would refuse every login"
+            test "$2" = login || why="$_pw_stack, from $_pw_from, $_pw_what, whatever the modules it can use return, so greetd couldn't start the greeter"
+            case "$_pw_e" in
+                module) why="$why; PAM can't use ${_pw_f#=} there, ${_pw_g#=}" ;;
+                program) why="$why; pam_exec can't run ${_pw_f#=} there, which isn't there or can't be run" ;;
+            esac
+            ;;
+        *) why="couldn't walk greetd's PAM stack" ;;
+    esac
+    return 1
+}
+
+# pam_stack_works: whether greetd can log someone in through its PAM
+# stack, and start the greeter through the greeter's, greetd-greeter, or
+# its own when there's none, as pam_service_works checks each, setting why
+# if not.
+pam_stack_works() {
+    pam_table=
+    pam_service_works greetd login || return 1
+    if test -f "$PAM_DIR/greetd-greeter" || { test -n "$pam_vendor_root" && test -f "$pam_vendor/greetd-greeter"; }; then
+        pam_service_works greetd-greeter greeter
+    else
+        pam_service_works greetd greeter
+    fi
+}
+pam_override=
+pam_override_text=
+
+# runnable FILE [USER]: whether the kernel would run FILE for USER, or for
+# root when there's none: root needs an execute bit for anyone, a user one
+# that's theirs, which only asking as them shows.
+runnable() {
+    test -f "$1" || return 1
+    if test -n "${2:-}"; then
+        sudo -u "$2" test -x "$1"
+        return
+    fi
+    _rn_x=$(find "$1" -prune -perm /111) && test -n "$_rn_x"
+}
+
+# program_starts FILE PATH [USER]: whether the kernel can start FILE, a
+# program trusted has followed, run by USER, or by root when there's none,
+# and only root can change what it starts it with,
+# returning 1 if it can't start it and 2 if someone else could change what
+# it runs, setting why either way. The kernel starts an ELF file itself, and
+# a script with the interpreter its #! names, which has to be there, be a
+# program, and be root's alone, with the prefix it's installed in, as
+# command_prefix_trusted says. An interpreter that's env runs the program
+# it names, which env finds on PATH, so each one of that name on PATH has to
+# be root's alone, and the first has to start. An interpreter can be a
+# script itself, four deep at most, as the kernel allows. What a program
+# does once it starts isn't followed: what a script's lines run, or the
+# argument its #! line gives the interpreter, is part of a file only root
+# can change, and an ELF file the checks pass that the kernel still refuses
+# is a broken build, not someone else's code.
+program_starts() {
+    _ps_file=$1
+    _ps_user=${3:-}
+    _ps_depth=0
+    while :; do
+        if ! _ps_magic=$(od -An -tx1 -N4 "$_ps_file" | tr -d ' \n'); then
+            why="couldn't read $_ps_file"
+            return 1
+        fi
+        case "$_ps_magic" in
+            7f454c46)
+                program_elf_starts "$_ps_file" "$_ps_user"
+                return
+                ;;
+            2321*) ;;
+            *)
+                why="$_ps_file isn't a program the kernel can start: it's neither an ELF file nor a script whose #! names what runs it"
+                return 1
+                ;;
+        esac
+        _ps_depth=$((_ps_depth + 1))
+        if test "$_ps_depth" -gt 4; then
+            why="$1 is run by scripts more than four deep, which the kernel won't start"
+            return 1
+        fi
+        # The kernel takes what follows #! up to the first blank as the
+        # interpreter, and the rest of the line as one argument.
+        IFS= read -r _ps_line < "$_ps_file" || test -n "$_ps_line" || {
+            why="couldn't read $_ps_file"
+            return 1
+        }
+        _ps_line=${_ps_line#??}
+        IFS='	 ' read -r _ps_interp _ps_arg <<EOF
+$_ps_line
+EOF
+        case "$_ps_interp" in
+            /*) ;;
+            *)
+                why="$_ps_file names ${_ps_interp:-nothing} to run it with, which isn't a full path"
+                return 1
+                ;;
+        esac
+        if ! trusted "$_ps_interp" missing-ok || ! { test -z "$trusted_to" || command_prefix_trusted "$trusted_to"; }; then
+            why="$_ps_file is run by $_ps_interp: $why"
+            return 2
+        fi
+        if test -z "$trusted_to" || ! runnable "$trusted_to" "$_ps_user"; then
+            why="$_ps_file is run by $_ps_interp, which isn't there or can't be run"
+            return 1
+        fi
+        _ps_next=$trusted_to
+        # The kernel runs the file a link leads to, so that's the
+        # interpreter, unless it's one that runs as the name it's given,
+        # busybox's or coreutils's.
+        _ps_as=${trusted_to##*/}
+        case "$_ps_as" in
+            busybox | coreutils) _ps_as=${_ps_interp##*/} ;;
+        esac
+        if test "$_ps_as" = env; then
+            case "$_ps_arg" in
+                "" | -* | *[[:blank:]]* | [!/]*/* | */)
+                    why="$_ps_file is run by env with ${_ps_arg:-nothing}, which setup can't follow"
+                    return 1
+                    ;;
+                /*)
+                    _ps_rest=${_ps_arg%/*}:
+                    _ps_where="isn't there"
+                    ;;
+                *)
+                    _ps_rest=$2:
+                    _ps_where="isn't on its PATH, $2,"
+                    ;;
+            esac
+            _ps_name=${_ps_arg##*/}
+            _ps_next=
+            while test -n "$_ps_rest"; do
+                _ps_dir=${_ps_rest%%:*}
+                _ps_rest=${_ps_rest#*:}
+                _ps_found=$_ps_dir/$_ps_name
+                test -e "$_ps_found" || test -L "$_ps_found" || continue
+                if ! trusted "$_ps_found" || ! command_prefix_trusted "$trusted_to"; then
+                    why="$_ps_file is run by env's $_ps_arg, $_ps_found: $why"
+                    return 2
+                fi
+                test -n "$_ps_next" || _ps_next=$trusted_to
+            done
+            if test -z "$_ps_next" || ! runnable "$_ps_next" "$_ps_user"; then
+                why="$_ps_file is run by env's $_ps_arg, which $_ps_where as a program it can run"
+                return 1
+            fi
+        fi
+        _ps_file=$_ps_next
+    done
+}
+
+# program_elf_starts FILE [USER]: whether the kernel can start FILE, an ELF
+# file, run by USER, or by root when there's none, and only root can change
+# the loader it starts it with, returning 1 if it
+# can't start it and 2 if someone else could change the loader, setting why
+# either way, as program_starts does. It has to be built for this machine, as
+# a program, with its entry point in code it loads, and with every part the
+# kernel loads within the file, as ELF_EXEC_AWK reads it. One the kernel starts with a
+# loader needs that loader there and root's alone, and the loader has to be
+# able to load it, binding every symbol, with every library it needs, as
+# ldd says without running it, and each of those libraries root's alone.
+program_elf_starts() {
+    _pe_loader=
+    elf_ident_find
+    if ! _pe_size=$(wc -c < "$1") \
+        || ! _pe_verdict=$(od -An -v -tu1 -N 65536 -- "$1" | LC_ALL=C awk -v ident="$pam_elf_ident" -v size="$_pe_size" "$ELF_EXEC_AWK"); then
+        why="couldn't read $1"
+        return 1
+    fi
+    case "$_pe_verdict" in
+        static) return 0 ;;
+        "interp "?*) _pe_loader=${_pe_verdict#interp } ;;
+        arch) why="$1 is built for another kind of machine than this one" ;;
+        noident) why="setup can't tell $1 is built for this machine, since it couldn't read /bin/sh as one" ;;
+        type) why="$1 is an ELF file, but not a program the kernel can start" ;;
+        entry) why="$1 has no code where the kernel would start it" ;;
+        headers) why="$1's program headers aren't whole where the kernel reads them" ;;
+        short) why="$1 is cut short: a part of it the kernel loads runs past its end" ;;
+        interp) why="$1 names a loader setup can't read" ;;
+        *) why="$1 isn't a program the kernel can start" ;;
+    esac
+    test -n "$_pe_loader" || return 1
+    if ! trusted "$_pe_loader" missing-ok; then
+        why="$1 is loaded by $_pe_loader: $why"
+        return 2
+    fi
+    if test -z "$trusted_to" || ! test -f "$trusted_to"; then
+        why="$1 is loaded by $_pe_loader, which isn't there"
+        return 1
+    fi
+    # The kernel runs the loader for the program's user, as it does a
+    # script's interpreter.
+    if ! runnable "$trusted_to" "${2:-}"; then
+        why="$1 is loaded by $_pe_loader, which ${2:-root} can't run"
+        return 1
+    fi
+    # A loader outside the package manager's library directories loads what
+    # it finds beside it, as a command does.
+    case "$trusted_to" in
+        "$SYSTEM_ROOT"/lib/* | "$SYSTEM_ROOT"/lib64/* | "$SYSTEM_ROOT"/usr/lib/* | "$SYSTEM_ROOT"/usr/lib64/*) ;;
+        /lib/* | /lib64/* | /usr/lib/* | /usr/lib64/*) ;;
+        */lib/*) trusted_tree "${trusted_to%/lib/*}" ;;
+        */lib64/*) trusted_tree "${trusted_to%/lib64/*}" ;;
+        *) trusted_tree "${trusted_to%/*}" ;;
+    esac || {
+        why="$1 is loaded by $_pe_loader: $why"
+        return 2
+    }
+    if ! is_command ldd; then
+        why="setup can't check that the loader can load $1 without ldd"
+        return 1
+    fi
+    # And the loader opens its libraries as that user, so ldd asks as them;
+    # sudo drops LD_LIBRARY_PATH and LD_PRELOAD itself.
+    if test -n "${2:-}"; then
+        _pe_out=$(sudo -u "$2" env LC_ALL=C ldd -r -- "$1" 2>&1)
+    else
+        _pe_out=$(unset LD_LIBRARY_PATH LD_PRELOAD; LC_ALL=C ldd -r -- "$1" 2>&1)
+    fi || {
+        why="$1 can't be loaded by the system's loader"
+        return 1
+    }
+    _pe_lib=$(printf '%s\n' "$_pe_out" | sed -n 's/^[[:space:]]*\([^[:space:]]*\) => not found.*/\1/p' | head -n 1)
+    if test -n "$_pe_lib"; then
+        why="$1 needs $_pe_lib, which isn't there"
+        test -z "${2:-}" || why="$why, or $2 can't read it"
+        return 1
+    fi
+    _pe_symbol=$(printf '%s\n' "$_pe_out" | sed -n 's/^undefined symbol: \([^[:space:],]*\).*/\1/p' | head -n 1)
+    if test -n "$_pe_symbol"; then
+        why="$1 needs $_pe_symbol, which nothing it loads defines"
+        return 1
+    fi
+    ldd_libs_trusted "$_pe_out" "$1" || return 2
+}
+
+# command_prefix_trusted FILE: whether only root can change the prefix the
+# command FILE, where a trusted path leads, is installed in, setting why if
+# not. A command loads its libraries from there, so it's checked whole,
+# unless it's the package manager's. /usr/local is any build's, its
+# libraries in /usr/local/lib. One outside a bin or sbin directory can load
+# what's beside it, so the whole directory it's in is checked, and one in /
+# itself fails. trusted_to is left as FILE.
+command_prefix_trusted() {
+    case "$1" in
+        "$SYSTEM_ROOT"/bin/* | "$SYSTEM_ROOT"/sbin/* | "$SYSTEM_ROOT"/usr/bin/* | "$SYSTEM_ROOT"/usr/sbin/*) return 0 ;;
+        /bin/* | /sbin/* | /usr/bin/* | /usr/sbin/*) return 0 ;;
+        */bin/*) trusted_tree "${1%/bin/*}" || return 1 ;;
+        */sbin/*) trusted_tree "${1%/sbin/*}" || return 1 ;;
+        /*/*) trusted_tree "${1%/*}" || return 1 ;;
+        *)
+            why="$1 is installed in /, which setup doesn't check whole"
+            return 1
+            ;;
+    esac
+    trusted_to=$1
+}
+
+# UNIT_AWK reads systemd unit files as systemd does and prints the file and
+# key, with an =, of the first [Service] setting that isn't in allow, or
+# [Unit] one that isn't in unit_allow, a tab between, or nothing. A Type
+# other than simple, exec or idle is printed whole: systemd waits for
+# greetd to fork, or to say it's ready, under any other, which it doesn't.
+# So is a unit a dependency names, or a StartLimitAction, other than the
+# ones greetd's own units name, as each could keep greetd from starting at
+# boot or take the boot down with it: a Conflicts with graphical.target
+# stops one or the other, an After one it comes before makes a cycle
+# systemd breaks by dropping a job, a RequiredBy basic.target fails the
+# boot with greetd, and a StartLimitAction reboots when it keeps failing.
+# An alias has to be display-manager.service too: enabling greetd with
+# --force replaces whatever another name links to, so one for another
+# unit's name, network.service, say, would take that unit's place.
+# A line that is all comment, after leading space, is skipped even
+# inside a line a backslash carries on; an odd run of backslashes at the end
+# carries the line on, as a space, and one carried on past the end of its
+# file is read there.
+# shellcheck disable=SC2016  # $0 and the rest are awk's
+UNIT_AWK='
+    function found(file, key) {
+        print "found\t" file "\t" key
+        done = 1
+        exit
+    }
+    function check(l, file,    key, v, n, a, i) {
+        sub(/^[ \t\n\r]+/, "", l)
+        sub(/[ \t\n\r]+$/, "", l)
+        if (l == "") return
+        # .include, which older systemd read another file for.
+        if (substr(l, 1, 1) == ".") {
+            sub(/[ \t].*/, "", l)
+            found(file, l)
+        }
+        if (substr(l, 1, 1) == "[") {
+            section = substr(l, 2, length(l) - 2)
+            return
+        }
+        if (section != "Service" && section != "Unit" && section != "Install") return
+        key = l
+        sub(/=.*/, "", key)
+        sub(/[ \t]+$/, "", key)
+        if (!((section, key) in allowed)) found(file, key "=")
+        if (section == "Service" && key == "Type") {
+            sub(/^[^=]*=[ \t]*/, "", l)
+            if (l !~ /^(simple|exec|idle|)$/) found(file, key "=" l)
+        }
+        if ((section, key) in units) {
+            v = l
+            sub(/^[^=]*=/, "", v)
+            n = split(v, a, /[ \t]+/)
+            for (i = 1; i <= n; i++) if (a[i] != "" && a[i] !~ units[section, key]) found(file, key "=" a[i])
+        }
+        # Each name enabling it gives it, whose drop-ins systemd reads too.
+        if (section == "Install" && key == "Alias") {
+            sub(/^[^=]*=/, "", l)
+            n = split(l, a, /[ \t]+/)
+            for (i = 1; i <= n; i++) if (a[i] != "") aliases[a[i]] = 1
+        }
+    }
+    BEGIN {
+        n = split(allow, a, " ")
+        for (i = 1; i <= n; i++) allowed["Service", a[i]] = 1
+        n = split(unit_allow, a, " ")
+        for (i = 1; i <= n; i++) allowed["Unit", a[i]] = 1
+        n = split(install_allow, a, " ")
+        for (i = 1; i <= n; i++) allowed["Install", a[i]] = 1
+        # The units each may name, those the units greetd ships with name.
+        # A getty on a VT Linux has, 1 to 63.
+        getty = "getty@tty([1-9]|[1-5][0-9]|6[0-3])"
+        units["Unit", "After"] = "^(systemd-user-sessions|plymouth-quit-wait|" getty ")[.]service$"
+        units["Unit", "Wants"] = "^(systemd-user-sessions|plymouth-quit-wait)[.]service$"
+        units["Unit", "Conflicts"] = "^" getty "[.]service$"
+        units["Install", "WantedBy"] = units["Install", "RequiredBy"] = units["Install", "UpheldBy"] = "^(graphical|multi-user)[.]target$"
+        units["Unit", "StartLimitAction"] = units["Service", "StartLimitAction"] = "^none$"
+        # Enabling with --force replaces what another name links to, so an
+        # alias with the name of another unit would take its place.
+        units["Install", "Alias"] = "^display-manager[.]service$"
+    }
+    FNR == 1 {
+        if (line != "") check(line, file)
+        section = ""
+        line = ""
+        file = FILENAME
+    }
+    {
+        s = $0
+        t = s
+        sub(/^[ \t\n\r]+/, "", t)
+        if (t != "" && (substr(t, 1, 1) == "#" || substr(t, 1, 1) == ";")) next
+        line = line s
+        if (match(line, /\\+$/) && RLENGTH % 2 == 1) {
+            line = substr(line, 1, length(line) - 1) " "
+            next
+        }
+        l = line
+        line = ""
+        check(l, FILENAME)
+    }
+    END {
+        if (!done && line != "") check(line, file)
+        if (!done) for (name in aliases) print "alias\t" name
+    }'
+
+# The [Service] settings greetd's unit may make, Debian's, Arch's and
+# upstream's among them, and Fedora's TimeoutStopFailureMode, which its
+# systemd sets for every service. None changes what greetd runs, or where:
+# one that might, RootDirectory, BindPaths or Environment, say, isn't here,
+# so a unit that makes it isn't trusted. Nor is one that ends greetd once
+# it's running, RuntimeMaxSec or WatchdogSec, which greetd never answers.
+# Its Type has to be one UNIT_AWK allows.
+GREETD_UNIT_SETTINGS="Type ExecStart Restart RestartSec RestartSteps
+RestartMaxDelaySec RestartPreventExitStatus RestartForceExitStatus
+SuccessExitStatus RemainAfterExit TimeoutSec TimeoutStartSec TimeoutStopSec
+TimeoutAbortSec TimeoutStartFailureMode TimeoutStopFailureMode
+KillMode KillSignal RestartKillSignal FinalKillSignal SendSIGHUP
+SendSIGKILL WatchdogSignal IgnoreSIGPIPE StartLimitInterval
+StartLimitIntervalSec StartLimitBurst StartLimitAction KeyringMode"
+
+# The [Unit] settings it may make, those units' own and the limits on
+# restarting it, which a newer systemd reads there. None can stop greetd
+# starting: a condition, an assert, or a unit it requires, which could,
+# isn't here, nor a unit it comes before, and UNIT_AWK checks the units the
+# others name.
+GREETD_UNIT_SECTION="Description Documentation After Wants Conflicts
+StartLimitIntervalSec StartLimitBurst StartLimitAction"
+
+# The [Install] settings it may make, which say what enabling it links it
+# to: Also, which enables other units with it, isn't here, and UNIT_AWK
+# checks the alias and the targets the others name.
+GREETD_UNIT_INSTALL="Alias WantedBy RequiredBy UpheldBy"
+
+# greetd_unit_settings FILE...: whether greetd's unit files, FILE..., make
+# only the settings setup trusts, setting why if not, and
+# greetd_unit_aliases to the names they give greetd when it's enabled.
+greetd_unit_settings() {
+    greetd_unit_aliases=
+    if ! _gs_out=$(LC_ALL=C awk -v allow="$GREETD_UNIT_SETTINGS" -v unit_allow="$GREETD_UNIT_SECTION" \
+        -v install_allow="$GREETD_UNIT_INSTALL" "$UNIT_AWK" "$@"); then
+        greetd_unit_own_why=yes
+        why="couldn't read greetd's unit files"
+        return 1
+    fi
+    while IFS='	' read -r _gs_kind _gs_a _gs_b; do
+        case "$_gs_kind" in
+            alias) greetd_unit_aliases="$greetd_unit_aliases $_gs_a" ;;
+            found)
+                greetd_unit_own_why=yes
+                case "$_gs_b" in
+                    .*) why="greetd's unit has a $_gs_b line in $_gs_a, which setup doesn't follow" ;;
+                    After=?* | Wants=?* | Conflicts=?* | Alias=?* | WantedBy=?* | RequiredBy=?* | UpheldBy=?* | StartLimitAction=?*)
+                        why="greetd's unit sets $_gs_b in $_gs_a, which isn't one setup knows is safe there: only those greetd's own units use are"
+                        ;;
+                    *) why="greetd's unit sets $_gs_b in $_gs_a, which isn't one of the settings setup knows can't change what greetd runs" ;;
+                esac
+                return 1
+                ;;
+        esac
+    done <<EOF
+$_gs_out
+EOF
+}
+
+# greetd_unit_trusted: whether only root can change what systemd starts
+# greetd from, as root, at every boot, setting why if not: its unit file
+# and each drop-in, those of every name it has or enabling it gives it
+# among them, each directory systemd looks for one in, so no one else can
+# add one, each file its environment is read from, and each program it
+# runs, with the prefix one outside the package manager's is installed in.
+# Its unit's [Service] settings have to be ones in GREETD_UNIT_SETTINGS,
+# its [Unit] ones in GREETD_UNIT_SECTION, its [Install] ones in
+# GREETD_UNIT_INSTALL, and greetd has to start with no arguments, since
+# setup would have to read either as systemd and greetd do to know what
+# runs, and whether it does. What systemd won't say, or says in a way
+# setup can't read, fails too, and so does what systemd needs to start
+# greetd that isn't there, an environment file or a program it runs, or a
+# program it can't run, with greetd_unit_own_why set, since why says it
+# all.
+greetd_unit_trusted() {
+    greetd_unit_own_why=
+    greetd_exe=
+    if ! _gu_fragment=$(unit_property greetd.service FragmentPath) || test -z "$_gu_fragment"; then
+        greetd_unit_own_why=yes
+        why="systemd didn't say where greetd's unit is"
+        return 1
+    fi
+    trusted "$_gu_fragment" || return 1
+    # Lists, a space between each: a name with a space in it splits into
+    # one that isn't a full path, or isn't there, which fails.
+    if ! _gu_dropins=$(unit_property greetd.service DropInPaths); then
+        greetd_unit_own_why=yes
+        why="systemd didn't say where greetd's drop-ins are"
+        return 1
+    fi
+    if ! _gu_dirs=$(systemctl show --property=UnitPath --value) || test -z "$_gu_dirs"; then
+        greetd_unit_own_why=yes
+        why="systemd didn't say where it looks for units"
+        return 1
+    fi
+    case "$_gu_dropins$_gu_dirs" in
+        *[*?[]*)
+            greetd_unit_own_why=yes
+            why="systemd named a unit path setup can't read: $_gu_dropins $_gu_dirs"
+            return 1
+            ;;
+    esac
+    for _gu_path in $_gu_dropins; do
+        trusted "$_gu_path" || return 1
+    done
+    if ! _gu_names=$(unit_property greetd.service Names); then
+        greetd_unit_own_why=yes
+        why="systemd didn't say what greetd's names are"
+        return 1
+    fi
+    case "$_gu_names" in
+        *[*?[]*)
+            greetd_unit_own_why=yes
+            why="systemd named greetd in a way setup can't read: $_gu_names"
+            return 1
+            ;;
+    esac
+    # shellcheck disable=SC2086  # the drop-ins are a list
+    greetd_unit_settings "$_gu_fragment" $_gu_dropins || return 1
+    # systemd reads the drop-ins of every name greetd has: those it has
+    # now, and those enabling it gives it, display-manager.service and any
+    # other its unit names, which systemd doesn't count as greetd's until
+    # then. Each name's are in its own directory, and in one for each
+    # prefix of it that ends in a -, display-.service.d, say, and in
+    # service.d, in each directory of systemd's unit path.
+    _gu_names="greetd.service display-manager.service $_gu_names $greetd_unit_aliases"
+    _gu_seen=" "
+    _gu_name_dropins=
+    for _gu_path in $_gu_dirs; do
+        trusted "$_gu_path" missing-ok || return 1
+    done
+    for _gu_name in $_gu_names; do
+        case "$_gu_name" in
+            *[!A-Za-z0-9:_.-]* | .service) _gu_base= ;;
+            ?*.service) _gu_base=${_gu_name%.service} ;;
+            *) _gu_base= ;;
+        esac
+        if test -z "$_gu_base"; then
+            greetd_unit_own_why=yes
+            why="systemd names greetd $_gu_name, which setup can't look for drop-ins of"
+            return 1
+        fi
+        set -- "$_gu_name.d" service.d
+        while case "$_gu_base" in *-*) ;; *) false ;; esac; do
+            _gu_base=${_gu_base%-*}
+            set -- "$@" "$_gu_base-.service.d"
+        done
+        for _gu_sub; do
+            for _gu_path in $_gu_dirs; do
+                case "$_gu_seen" in
+                    *" $_gu_path/$_gu_sub "*) continue ;;
+                esac
+                _gu_seen="$_gu_seen$_gu_path/$_gu_sub "
+                trusted "$_gu_path/$_gu_sub" missing-ok || return 1
+                for _gu_conf in "$_gu_path/$_gu_sub"/*.conf; do
+                    test -e "$_gu_conf" || test -L "$_gu_conf" || continue
+                    trusted "$_gu_conf" || return 1
+                    _gu_name_dropins="$_gu_name_dropins $_gu_conf"
+                done
+            done
+        done
+    done
+    # And none of those may name it another.
+    _gu_known=$greetd_unit_aliases
+    # shellcheck disable=SC2086  # the drop-ins are a list
+    greetd_unit_settings "$_gu_fragment" $_gu_dropins $_gu_name_dropins || return 1
+    for _gu_name in $greetd_unit_aliases; do
+        case " $_gu_known " in
+            *" $_gu_name "*) ;;
+            *)
+                greetd_unit_own_why=yes
+                why="a drop-in for another of greetd's names names it $_gu_name, whose drop-ins setup hasn't looked through"
+                return 1
+                ;;
+        esac
+    done
+    # One a line, a path and whether a missing one is ignored: one that
+    # isn't stops greetd starting.
+    if ! _gu_lines=$(unit_property greetd.service EnvironmentFiles); then
+        greetd_unit_own_why=yes
+        why="systemd didn't say what greetd's environment is read from"
+        return 1
+    fi
+    while IFS= read -r _gu_line; do
+        test -n "$_gu_line" || continue
+        _gu_path=${_gu_line% (ignore_errors=*)}
+        case "$_gu_line" in
+            *" (ignore_errors=yes)") _gu_needed= ;;
+            *" (ignore_errors=no)") _gu_needed=yes ;;
+            *) _gu_path=$_gu_line ;;
+        esac
+        if test "$_gu_path" = "$_gu_line"; then
+            greetd_unit_own_why=yes
+            why="systemd named an environment file for greetd setup can't read: $_gu_line"
+            return 1
+        fi
+        trusted "$_gu_path" missing-ok || return 1
+        if test -n "$_gu_needed" && test -z "$trusted_to"; then
+            greetd_unit_own_why=yes
+            why="greetd's unit reads its environment from $_gu_path, which isn't there, so systemd won't start it"
+            return 1
+        fi
+    done <<EOF
+$_gu_lines
+EOF
+    # One a line, each "{ path=PATH ; argv[]=... }".
+    for _gu_prop in ExecCondition ExecStartPre ExecStart ExecStartPost ExecReload ExecStop ExecStopPost; do
+        if ! _gu_lines=$(unit_property greetd.service "$_gu_prop"); then
+            greetd_unit_own_why=yes
+            why="systemd didn't say what greetd's $_gu_prop runs"
+            return 1
+        fi
+        while IFS= read -r _gu_line; do
+            test -n "$_gu_line" || continue
+            case "$_gu_line" in
+                "{ path=/"*" ; argv[]="*) ;;
+                *)
+                    greetd_unit_own_why=yes
+                    why="systemd named a command for greetd's $_gu_prop setup can't read: $_gu_line"
+                    return 1
+                    ;;
+            esac
+            _gu_path=${_gu_line#"{ path="}
+            _gu_path=${_gu_path%%" ; argv[]="*}
+            # An argument can name a file greetd reads, as --config does,
+            # and setup would have to know which, so there are none.
+            _gu_argv=${_gu_line#*" ; argv[]="}
+            _gu_argv=${_gu_argv%%" ; ignore_errors="*}
+            case "$_gu_prop:$_gu_argv" in
+                ExecStart:*" "*)
+                    greetd_unit_own_why=yes
+                    why="greetd's unit starts it as $_gu_argv, and setup only trusts greetd started with no arguments"
+                    return 1
+                    ;;
+            esac
+            # A command run to start greetd that fails stops it starting,
+            # unless a - before it says that's fine. Without its ExecStart,
+            # there's no greetd to start, whatever a - says.
+            _gu_needed=
+            case "$_gu_prop" in
+                ExecCondition | ExecStartPre | ExecStart | ExecStartPost)
+                    case "${_gu_line##*" ; ignore_errors="}" in
+                        "no ;"*) _gu_needed=yes ;;
+                        "yes ;"*) test "$_gu_prop" != ExecStart || _gu_needed=yes ;;
+                        *)
+                            greetd_unit_own_why=yes
+                            why="systemd named a command for greetd's $_gu_prop setup can't read: $_gu_line"
+                            return 1
+                            ;;
+                    esac
+                    ;;
+            esac
+            trusted "$_gu_path" missing-ok || return 1
+            test -z "$trusted_to" || command_prefix_trusted "$trusted_to" || return 1
+            if test -n "$_gu_needed"; then
+                if test -z "$trusted_to"; then
+                    greetd_unit_own_why=yes
+                    why="greetd's unit runs $_gu_path, which isn't there, so systemd won't start it"
+                    return 1
+                fi
+                if ! test -f "$trusted_to" || ! _gu_x=$(find "$trusted_to" -prune -perm /111) || test -z "$_gu_x"; then
+                    greetd_unit_own_why=yes
+                    why="greetd's unit runs $_gu_path, which isn't a program it can run, so systemd won't start it"
+                    return 1
+                fi
+            fi
+            # What starts it, as root, has to be root's alone too, and
+            # what has to run has to start.
+            if test -n "$trusted_to"; then
+                _gu_target=$trusted_to
+                program_starts "$_gu_target" "$SERVICE_PATH"
+                case $? in
+                    1)
+                        if test -n "$_gu_needed"; then
+                            greetd_unit_own_why=yes
+                            why="greetd's unit runs $_gu_path, and $why, so systemd won't start it"
+                            return 1
+                        fi
+                        ;;
+                    2) return 1 ;;
+                esac
+                trusted_to=$_gu_target
+            fi
+            if test "$_gu_prop" = ExecStart; then
+                # Anything else would start no login screen. What runs is
+                # where a link leads, whatever the link is named.
+                if test "${trusted_to##*/}" != greetd; then
+                    greetd_unit_own_why=yes
+                    if test "$trusted_to" = "$_gu_path"; then
+                        why="greetd's unit starts $_gu_path, which isn't greetd"
+                    else
+                        why="greetd's unit starts $_gu_path, which is $trusted_to, not greetd"
+                    fi
+                    return 1
+                fi
+                test -n "$greetd_exe" || greetd_exe=$trusted_to
+            fi
+        done <<EOF
+$_gu_lines
+EOF
+    done
+    # systemd starts a oneshot unit with no ExecStart, and nothing runs.
+    if test -z "$greetd_exe"; then
+        greetd_unit_own_why=yes
+        why="greetd's unit starts nothing, so it wouldn't start a login screen"
+        return 1
+    fi
+    # greetd is the only login screen once it's the display manager, so
+    # systemd has to start it again whenever it stops, as greetd's own units
+    # have it: no exit status stops that, and nor does staying active after.
+    for _gu_prop in Restart RestartPreventExitStatus RemainAfterExit; do
+        if ! _gu_value=$(unit_property greetd.service "$_gu_prop"); then
+            greetd_unit_own_why=yes
+            why="systemd didn't say greetd's $_gu_prop"
+            return 1
+        fi
+        case "$_gu_prop=$_gu_value" in
+            Restart=always | RestartPreventExitStatus= | RemainAfterExit=no) ;;
+            *)
+                greetd_unit_own_why=yes
+                why="greetd's unit has $_gu_prop=$_gu_value, so systemd wouldn't always start greetd again when it stops, leaving no login screen"
+                return 1
+                ;;
+        esac
+    done
+}
+
 # greeter_ready sets greeter to greetd's user, after checking that the
-# greeter can run: greetd, tide's template, each command the greeter starts,
-# found on the greeter's PATH by greetd's user itself, and a new enough
-# Hyprland and Quickshell among them. Otherwise it sets why to what's
-# missing.
+# greeter can run, and that only root can change what greetd and it run:
+# greetd, tide's template, greetd's config directory, its PAM stack and
+# what that names by its full path, the greeter's PATH, each command the
+# greeter starts, found on that PATH by greetd's user itself, with the build
+# it comes from, tide's greeter files, and a new enough Hyprland. Otherwise
+# it sets why to what's wrong.
 greeter_ready() {
     if test "$(unit_property greetd.service LoadState)" != loaded; then
         why="greetd isn't installed"
+        return 1
+    fi
+    # systemd runs greetd as root, at every boot.
+    if ! greetd_unit_trusted; then
+        test -n "$greetd_unit_own_why" || why="what systemd starts greetd from isn't root's alone: $why"
         return 1
     fi
     if ! test -r "$GREETD_TEMPLATE"; then
         why="tide's greetd config isn't installed at $GREETD_TEMPLATE"
         return 1
     fi
+    # Its command is what greetd runs.
+    if ! trusted "$GREETD_TEMPLATE"; then
+        why="tide's greetd config isn't root's alone: $why"
+        return 1
+    fi
     if ! greeter_user; then
         why="greetd has no system account to run the greeter as (setup looked for$greeter_looked)"
         return 1
     fi
-    # Without it PAM checks greetd's logins with its "other" service, which
-    # can refuse them all: it does on Fedora.
-    if ! test -f "$PAM_DIR/greetd"; then
-        why="greetd has no PAM file at $PAM_DIR/greetd, and PAM's fallback for one can refuse every login"
+    # Where setup writes greetd's config, which names what greetd runs, and
+    # as whom.
+    if ! trusted "$GREETD_DIR" missing-ok; then
+        why="greetd's config directory isn't root's alone: $why"
         return 1
     fi
-    for _cmd in tide-greeter Hyprland qs; do
-        # shellcheck disable=SC2016  # $1 is the inner shell's
-        if ! sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c '_p=$(command -v "$1") && test -x "$_p"' sh "$_cmd"; then
-            why="greetd's user $greeter can't run $_cmd from $GREETER_PATH"
+    # The directory of the PAM stack greetd, which runs as root, checks
+    # passwords with, where anyone who could add a file could add greetd's
+    # own. pam_service_works checks each file greetd's stacks read.
+    if ! trusted "$PAM_DIR" missing-ok; then
+        why="greetd's PAM stack isn't root's alone: $why"
+        return 1
+    fi
+    # Without it, in PAM_DIR or else the vendor's directory, PAM checks
+    # greetd's logins with its "other" service, which can refuse them all:
+    # it does on Fedora.
+    if ! test -f "$PAM_DIR/greetd" && ! test -f "$PAM_VENDOR_DIR/greetd"; then
+        why="greetd has no PAM file at $PAM_DIR/greetd or $PAM_VENDOR_DIR/greetd, and PAM's fallback for one can refuse every login"
+        return 1
+    fi
+    if ! pam_names_trusted; then
+        why="greetd's PAM stack isn't root's alone: $why"
+        return 1
+    fi
+    pam_module_dir_find || return 1
+    pam_stack_works || return 1
+    # A directory on the PATH someone else can write could hold their own
+    # command by any name the greeter runs, ahead of root's.
+    _path_rest=$GREETER_PATH:
+    while test -n "$_path_rest"; do
+        _dir=${_path_rest%%:*}
+        _path_rest=${_path_rest#*:}
+        if test -z "$_dir"; then
+            why="the greeter's PATH, $GREETER_PATH, names the current directory"
+            return 1
+        fi
+        if ! trusted "$_dir" missing-ok; then
+            why="the greeter's PATH isn't root's alone: $why"
             return 1
         fi
     done
+    for _cmd in $GREETER_COMMANDS; do
+        # shellcheck disable=SC2016  # $1 and $_p are the inner shell's
+        if ! _found=$(sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c '_p=$(command -v "$1") && test -x "$_p" && printf "%s\n" "$_p"' sh "$_cmd"); then
+            why="greetd's user $greeter can't run $_cmd from $GREETER_PATH"
+            return 1
+        fi
+        if ! trusted "$_found"; then
+            why="the greeter's $_cmd isn't root's alone: $why"
+            return 1
+        fi
+        case "$_cmd" in
+            Hyprland) _hyprland_dir=${trusted_to%/*} ;;
+            hyprctl) _hyprctl_dir=${trusted_to%/*} ;;
+        esac
+        if ! command_prefix_trusted "$trusted_to"; then
+            why="the greeter's $_cmd isn't root's alone: $why"
+            return 1
+        fi
+        program_starts "$trusted_to" "$GREETER_PATH" "$greeter"
+        case $? in
+            1)
+                why="greetd's user $greeter can't start $_cmd: $why"
+                return 1
+                ;;
+            2)
+                why="the greeter's $_cmd isn't root's alone: $why"
+                return 1
+                ;;
+        esac
+        test "$_cmd" = tide-greeter || continue
+        # tide-greeter runs its Hyprland config and its QML from the share
+        # directory beside the bin directory it's found in, as tide's
+        # make install-session puts them.
+        if ! test -d "${_found%/*}/../share/tide"; then
+            why="tide's greeter files aren't installed beside $_found"
+            return 1
+        fi
+        if ! trusted_tree "${_found%/*}/../share/tide"; then
+            why="tide's greeter files aren't root's alone: $why"
+            return 1
+        fi
+        _share=$trusted_to
+        for _file in greeter/hyprland.lua shell/greeter.qml; do
+            if ! sudo -u "$greeter" test -r "$_share/$_file"; then
+                why="greetd's user $greeter can't read $_share/$_file"
+                return 1
+            fi
+        done
+    done
+    # hyprctl is how the greeter's Hyprland is told to end, so it has to be
+    # that Hyprland's own: one from another install can look for another
+    # socket, or speak another version's protocol, and leave the greeter
+    # running in the way of the session.
+    if test "$_hyprctl_dir" != "$_hyprland_dir"; then
+        why="the greeter's hyprctl, in $_hyprctl_dir, isn't from the same install as its Hyprland, in $_hyprland_dir, so it may not be able to end it"
+        return 1
+    fi
     # The Hyprland the greeter runs, which needn't be the one on this user's
     # PATH.
     # shellcheck disable=SC2016  # the inner shell's
@@ -1547,9 +4150,8 @@ greeter_home() {
 # prints, one a line: auth and session for each line of that type that
 # loads pam_gnome_keyring; for a session one without auto_start, fix and its
 # line's number, or, when a backslash carries it on, carried and its first
-# line's number, since setup leaves that alone; and dangling if the file
-# ends in a line a backslash carries on, which anything added after it
-# would join.
+# line's number, since setup leaves that alone. greeter_ready refuses a
+# file that ends in a line a backslash carries on, which PAM can't read.
 # shellcheck disable=SC2016  # $0 and the rest are awk's
 KEYRING_AWK='
     function flush(    n, w, c, mi, i, type) {
@@ -1590,26 +4192,41 @@ KEYRING_AWK='
         line = line " " s
         flush()
     }
-    END {
-        if (line != "") print "dangling"
-        flush()
-    }'
+    END { flush() }'
+
+# pam_stack_would_work FILE TEXT: whether greetd's PAM stack would work
+# with TEXT in place of FILE, setting why if not, as pam_stack_works checks
+# it. greeter_ready has to have read the stack first.
+pam_stack_would_work() {
+    pam_override=$1
+    pam_override_text=$2
+    pam_stack_works
+    _pw_status=$?
+    pam_override=
+    pam_override_text=
+    return "$_pw_status"
+}
 
 # greeter_keyring has greetd's PAM stack unlock gnome-keyring with the
 # login password, as GDM's does, so the session's apps find their secrets
 # without asking for it again. Debian's file lists the module already; on
 # another distro's, the lines go at the end, after whatever it includes,
-# which is where the module has to come. It reads the file as PAM does.
+# which is where the module has to come. It reads the file as PAM does, and
+# what it would write has to be a stack PAM can load, or nothing changes.
 greeter_keyring() {
     _nl='
 '
     _pam="$PAM_DIR/greetd"
-    if ! _stack=$(cat "$_pam"); then
-        warn "couldn't read $_pam, so logging in may not unlock the keyring"
+    # One only in the vendor's directory is changed as PAM_DIR's copy of
+    # it, which PAM reads in its place.
+    _src=$_pam
+    test -f "$_pam" || ! test -f "$PAM_VENDOR_DIR/greetd" || _src="$PAM_VENDOR_DIR/greetd"
+    if ! _stack=$(cat "$_src"); then
+        warn "couldn't read $_src, so logging in may not unlock the keyring"
         return 0
     fi
     if ! _found=$(printf '%s\n' "$_stack" | awk "$KEYRING_AWK"); then
-        warn "couldn't read $_pam's lines, so logging in may not unlock the keyring"
+        warn "couldn't read $_src's lines, so logging in may not unlock the keyring"
         return 0
     fi
     # A session line without auto_start unlocks a keyring daemon that's
@@ -1641,14 +4258,6 @@ greeter_keyring() {
 " ;;
         esac
     done
-    case "$_nl$_found$_nl" in
-        *"${_nl}dangling$_nl"*)
-            if test -n "$_add"; then
-                warn "$_pam ends in a line a backslash carries on, which lines added after it would join, so setup adds no pam_gnome_keyring lines, and logging in may not unlock the keyring"
-                _add=
-            fi
-            ;;
-    esac
     if test -z "$_add" && test "$_fixed" = "$_stack"; then
         return 0
     fi
@@ -1659,6 +4268,10 @@ greeter_keyring() {
 ${_add%
 }"
     fi
+    if ! pam_stack_would_work "$_pam" "$_fixed"; then
+        warn "not adding pam_gnome_keyring to $_pam, since PAM couldn't load greetd's stack with it: $why"
+        return 0
+    fi
     changed=no
     if install_text "$_pam" "$_fixed"; then
         info "greetd's PAM stack now unlocks the keyring at login"
@@ -1668,11 +4281,15 @@ ${_add%
 }
 
 # replaced_display_manager prints the display manager greetd replaced, as
-# setup noted it, or nothing.
+# setup noted it, or nothing. Root enables what it names, so a note someone
+# else could have changed isn't read.
 replaced_display_manager() {
-    if test -r "$PREVIOUS_DM_FILE"; then
-        cat "$PREVIOUS_DM_FILE" || warn "couldn't read $PREVIOUS_DM_FILE"
+    test -r "$PREVIOUS_DM_FILE" || return 0
+    if ! trusted "$PREVIOUS_DM_FILE"; then
+        warn "not reading $PREVIOUS_DM_FILE, since only root should be able to change it: $why"
+        return 0
     fi
+    cat "$PREVIOUS_DM_FILE" || warn "couldn't read $PREVIOUS_DM_FILE"
 }
 
 # way_back prints the command that puts $1 back as the display manager.
@@ -1692,14 +4309,28 @@ restore_display_manager() {
     fi
     # Enabling the other moves the alias, but greetd's other links, a
     # WantedBy=, say, would start it beside it, so it's disabled too: after,
-    # so a failure leaves greetd rather than neither.
-    case "$1" in
-        none) sudo_or_warn systemctl disable greetd.service ;;
-        *) sudo_or_warn systemctl enable --force "$1" && sudo_or_warn systemctl disable greetd.service ;;
-    esac || {
+    # so a failure leaves greetd rather than neither. Enabling makes only
+    # the links the other's unit names, and disabling greetd takes away an
+    # alias to it, so one whose alias was made by hand leaves greetd until
+    # it's the display manager again, rather than none.
+    if test "$1" != none; then
+        if ! sudo_or_warn systemctl enable --force "$1"; then
+            warn "couldn't put back $1; run '$(way_back "$1")'"
+            return 1
+        fi
+        if ! _rd_dm=$(display_manager); then
+            warn "couldn't ask systemd whether $1 is the display manager again, so greetd stays; once it is, run 'sudo systemctl disable greetd.service'"
+            return 1
+        fi
+        if test "$_rd_dm" != "$1"; then
+            warn "enabling $1 didn't make it the display manager again, as its unit would with Alias=display-manager.service, so greetd stays; make $1 the display manager, then run 'sudo systemctl disable greetd.service'"
+            return 1
+        fi
+    fi
+    if ! sudo_or_warn systemctl disable greetd.service; then
         warn "couldn't put back $1; run '$(way_back "$1")'"
         return 1
-    }
+    fi
     if test "$1" = none; then
         info "greetd is no longer the display manager; from the next boot, log in on a text console"
     else
