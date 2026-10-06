@@ -232,11 +232,14 @@ Options:
   --kde            Accepted for compatibility; KDE Plasma + Krohnkite is
                    always installed on Linux
   --tide     Also install the tide session (Hyprland + uwsm)
-                   beside KDE, via setup-tide (Linux, GUI only). Its
+                   beside KDE, via setup-tide (Linux, GUI only), and from
+                   the next boot log in with greetd and tide's greeter. Its
                    packages are kept out of --purge-obsolete
   --no-build-hyprland
                    With --tide, use the distro's Hyprland even where
                    it's older than tide needs, instead of building it
+  --no-greeter     With --tide, keep the display manager; if setup made
+                   greetd the display manager, put back the one it replaced
   --minimal        Skip heavyweight extras (helix, jj, nushell), installing
                    only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -470,6 +473,9 @@ while test $# -gt 0; do
             ;;
         --no-build-hyprland)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"
+            ;;
+        --no-greeter)
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"
             ;;
         --minimal)
             MINIMAL=yes
