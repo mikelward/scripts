@@ -35,6 +35,30 @@
   build no longer runs; delete it then, with `~/.local/opt/hyprland` and the links
   in `/usr/local/bin` on machines that built it.
 
+## greetd in setup-tide
+
+- [ ] **Take over Debian's display-manager selection, once tested on a real
+      machine.** setup switches to greetd through systemd's
+      `display-manager.service` alias alone, and leaves
+      `/etc/X11/default-display-manager` as it is. On Debian and Ubuntu that
+      file wins: every display manager package's postinst (gdm3, sddm,
+      lightdm, and greetd from 0.10.3-6) re-points the alias at whatever the
+      file names, on each install and upgrade, so the next upgrade of any of
+      them quietly undoes the switch. And greetd from 0.10.3-6 asks which
+      display manager to use when it's installed, and writes
+      `/usr/sbin/greetd` into the file if it's picked; `--no-greeter` or a
+      rollback then brings back GDM or SDDM while their units refuse to
+      start, since the file names greetd. The fix: record the file beside
+      the replaced unit, point it at greetd, and restore it with the unit.
+      Raised in review of mikelward/scripts#288.
+- [ ] **Then fall back on that file when systemd can't say.** When greetd is
+      the display manager, the run starts by putting its config right, so a
+      later step that ends the run can't leave it broken. If systemd can't
+      say which display manager this is, that repair is skipped. Stopping the
+      run instead would break `setup --tide` in containers and chroots, where
+      `systemctl` always fails; the selection file above is the second
+      source to read. Also from review of mikelward/scripts#288.
+
 ## Decisions needing review
 
 - **setup-tide masks waybar and swaync per user, instead of disabling
