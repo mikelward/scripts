@@ -364,7 +364,9 @@ MOCK
     printf '[Service]\nExecStart=%s\n' "$T/usr-sbin/greetd" > "$T/units/greetd.service"
     printf '#!/bin/sh\n' > "$T/usr-sbin/greetd"
     chmod +x "$T/usr-sbin/greetd"
-    for cmd in tide-greeter Hyprland hyprctl qs; do
+    # tide-greetd isn't looked up on the PATH: tide-greeter runs the one
+    # beside it.
+    for cmd in tide-greeter tide-greetd Hyprland hyprctl qs; do
         printf '#!/bin/sh\n' > "$T/usr-bin/$cmd"
         chmod +x "$T/usr-bin/$cmd"
     done
@@ -2971,6 +2973,28 @@ greeter_not_ready "no greeter files" "tide's greeter files aren't installed besi
 teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/share/tide/greeter/hyprland.lua"; run
 greeter_not_ready "no greeter Hyprland config" "greetd's user _greetd can't read $T/share/tide/greeter/hyprland.lua"
+teardown
+# tide-greetd, the greeter's connection to greetd, is the one beside
+# tide-greeter, whatever the PATH holds.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/tide-greetd"; printf '#!/bin/sh\n' > "$T/usr-local-bin/tide-greetd"
+chmod +x "$T/usr-local-bin/tide-greetd"; run
+greeter_not_ready "no tide-greetd beside tide-greeter" "greetd's user _greetd can't run $T/usr-bin/tide-greetd, which tide-greeter talks to greetd through"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_USER_NOEXEC="$T/usr-bin/tide-greetd"
+greeter_not_ready "a tide-greetd greetd's user can't run" "greetd's user _greetd can't run $T/usr-bin/tide-greetd, which tide-greeter talks to greetd through"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'not a program\n' > "$T/usr-bin/tide-greetd"; run
+greeter_not_ready "a tide-greetd that isn't a program" "greetd's user _greetd can't start tide-greetd: $T/usr-bin/tide-greetd isn't a program the kernel can start: it's neither an ELF file nor a script whose #! names what runs it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/libs"
+: > "$T/libs/libx.so.1"; chmod o+w "$T/libs/libx.so.1"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greetd" --interp="$T/loader/ld.so"; run FAKE_LDD_LIBS="$T/usr-bin/tide-greetd:$T/libs/libx.so.1"
+greeter_not_ready "a tide-greetd that loads a library others can write" "the greeter's tide-greetd isn't root's alone: $T/usr-bin/tide-greetd loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
+teardown
+# One that isn't root's is in tide-greeter's install, which is checked
+# whole, and wherever its links lead, before tide-greetd is looked at.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/tide-greetd"
+greeter_not_ready "a tide-greetd that isn't root's" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greetd is uid 1000's, not root's"
 teardown
 # What the greeter runs is checked before any of it runs, even as greetd's
 # user.

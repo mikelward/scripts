@@ -3917,12 +3917,40 @@ EOF
     done
 }
 
+# greeter_program_ready checks that the greeter's $1, at $2, is root's
+# alone, with the build it comes from and everything it loads, and that
+# greetd's user can start it, and sets greeter_program to where $2 leads.
+# Otherwise it sets why to what's wrong.
+greeter_program_ready() {
+    if ! trusted "$2"; then
+        why="the greeter's $1 isn't root's alone: $why"
+        return 1
+    fi
+    if ! command_prefix_trusted "$trusted_to"; then
+        why="the greeter's $1 isn't root's alone: $why"
+        return 1
+    fi
+    greeter_program=$trusted_to
+    program_starts "$greeter_program" "$GREETER_PATH" "$greeter"
+    case $? in
+        1)
+            why="greetd's user $greeter can't start $1: $why"
+            return 1
+            ;;
+        2)
+            why="the greeter's $1 isn't root's alone: $why"
+            return 1
+            ;;
+    esac
+}
+
 # greeter_ready sets greeter to greetd's user, after checking that the
 # greeter can run, and that only root can change what greetd and it run:
 # greetd, tide's template, greetd's config directory, its PAM stack and
 # what that names by its full path, the greeter's PATH, each command the
 # greeter starts, found on that PATH by greetd's user itself, with the build
-# it comes from, tide's greeter files, and a new enough Hyprland. Otherwise
+# it comes from, the tide-greetd beside tide-greeter, tide's greeter files,
+# and a new enough Hyprland. Otherwise
 # it sets why to what's wrong.
 greeter_ready() {
     if test "$(unit_property greetd.service LoadState)" != loaded; then
@@ -3994,30 +4022,21 @@ greeter_ready() {
             why="greetd's user $greeter can't run $_cmd from $GREETER_PATH"
             return 1
         fi
-        if ! trusted "$_found"; then
-            why="the greeter's $_cmd isn't root's alone: $why"
-            return 1
-        fi
+        greeter_program_ready "$_cmd" "$_found" || return 1
         case "$_cmd" in
-            Hyprland) _hyprland_dir=${trusted_to%/*} ;;
-            hyprctl) _hyprctl_dir=${trusted_to%/*} ;;
-        esac
-        if ! command_prefix_trusted "$trusted_to"; then
-            why="the greeter's $_cmd isn't root's alone: $why"
-            return 1
-        fi
-        program_starts "$trusted_to" "$GREETER_PATH" "$greeter"
-        case $? in
-            1)
-                why="greetd's user $greeter can't start $_cmd: $why"
-                return 1
-                ;;
-            2)
-                why="the greeter's $_cmd isn't root's alone: $why"
-                return 1
-                ;;
+            Hyprland) _hyprland_dir=${greeter_program%/*} ;;
+            hyprctl) _hyprctl_dir=${greeter_program%/*} ;;
         esac
         test "$_cmd" = tide-greeter || continue
+        # tide-greeter talks to greetd through tide-greetd, which it runs
+        # from beside itself rather than from the PATH, as tide's make
+        # install-session puts it.
+        _client=${_found%/*}/tide-greetd
+        if ! sudo -u "$greeter" test -x "$_client"; then
+            why="greetd's user $greeter can't run $_client, which tide-greeter talks to greetd through"
+            return 1
+        fi
+        greeter_program_ready tide-greetd "$_client" || return 1
         # tide-greeter runs its Hyprland config and its QML from the share
         # directory beside the bin directory it's found in, as tide's
         # make install-session puts them.
