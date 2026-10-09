@@ -58,9 +58,60 @@
       run instead would break `setup --tide` in containers and chroots, where
       `systemctl` always fails; the selection file above is the second
       source to read. Also from review of mikelward/scripts#288.
+- [ ] **Decide how greetd's profile sourcing is checked.** greetd starts
+      every session, the greeter's included, as `/bin/sh -c '. /etc/profile;
+      . $HOME/.profile; exec tide-greeter'` (`source_profile`, default
+      true). So the greeter's real PATH comes from those files, not the fixed
+      PATH setup checks, and a `~/.profile` in the greeter's home could change
+      what runs. Two options. Set `source_profile = false`: this is global, so
+      users' own sessions would stop getting their profile too, unless tide's
+      session sources it. Or check the PATH the sourcing really produces, and
+      require the greeter's `~/.profile` to be absent or root's alone. Open
+      question from review of mikelward/scripts#288.
+- [ ] **Read only the PAM files greetd's stacks reach.** The pass that
+      collects includes by full path reads every file in `/etc/pam.d` and the
+      vendor directory. So a symlink loop in an unrelated file fails
+      `find -L`, and setup refuses greetd though greetd never reads it.
+      Unreadable files are already skipped. The fix that ends the class:
+      drop the directory-wide pass, and have the stack walker resolve each
+      include as it reaches it. Raised in review of mikelward/scripts#288.
+- [ ] **Bound greetd's start limits and restart delays, or decide not to.**
+      setup requires `Restart=always`, but accepts any start limit, restart
+      delay or timeout. A root-owned unit with `StartLimitBurst=1` over a
+      year would never restart greetd. Open question: bound these, or leave
+      the timing to root. Raised in review of mikelward/scripts#288.
+- [ ] **Read root-run programs as root.** setup reads the programs greetd's
+      unit and `pam_exec` run as the user running setup. So one only root
+      can read, mode 0700 say, fails the check, though systemd and PAM run
+      it as root just fine. Read those with sudo instead. Raised in review of
+      mikelward/scripts#288.
+- [ ] **Disable greetd when enabling it fails partway.** If
+      `display-manager.service` is a plain unit file rather than a link,
+      `systemctl enable --force greetd.service` can add greetd's
+      `graphical.target.wants` link and then fail on the alias. setup then
+      stops switching, but leaves that link, so greetd and the old display
+      manager could both start at the next boot. The fix: disable greetd on
+      every failed enable, and warn if that fails, as the check after a
+      successful enable already does. Raised in review of
+      mikelward/scripts#288.
+- [ ] **Read a script's `#!` line only as far as the kernel does.** setup
+      reads the whole first line, but Linux reads only the first 256 bytes
+      (`BINPRM_BUF_SIZE`) and may cut the argument short. So with a very
+      long `#!/usr/bin/env <name>` line, setup can check a helper that
+      exists while the kernel hands `env` a cut-off name that doesn't.
+      greetd or the greeter would then fail at boot. The fix: parse only the
+      first 256 bytes, with a test for a long `#!` line. Raised in review of
+      mikelward/scripts#288.
 
 ## Decisions needing review
 
+- **mikelward/scripts#288 merges with known gaps in setup-tide's greeter
+  checks.** Review kept finding new edge cases in the root-only checks,
+  round after round. So the PR stops at the happy path. Each finding left
+  over, and any new one before the merge, goes under *greetd in setup-tide*
+  above instead of into code. The alternative was to keep fixing each
+  finding before merging. It's reversible: each entry is a follow-up to
+  pick up.
 - **setup-tide masks waybar and swaync per user, instead of disabling
   every enablement.** Distro packages enable their user units, and
   hypridle's, for every session, so they started under Plasma. Setup first
