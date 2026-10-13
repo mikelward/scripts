@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-06
+last_modified: 2026-10-13
 ---
 
 # AGENTS.md
@@ -319,6 +319,13 @@ reply, no offer to correct it. It is not a finding.
   where it is `dirty` — and merge on the verdict for its current head, a fresh
   one if that moved it, rerunning this check first. Say which lower PR you
   waited on, or passed over as quiet.
+- **A paragraph that orders a new work item after the item before it — "next",
+  "then", "after that", "follow-up" — must be merged in order, after every
+  earlier item this session was given and any other PR the paragraph names.**
+  Its PR may open in parallel but merges only once each of those is finished,
+  with its PRs merged, in any repo, with no time cap; if one won't finish,
+  hold it and ask, autopilot included. Read the list from the session's
+  record, not memory.
 - When a feature has multiple open PRs, list **every** open PR by URL, one per
   line — the "View PR" chip sticks to the first link and hides the rest
   (anthropics/claude-code#46625).
