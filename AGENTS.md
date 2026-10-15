@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-13
+last_modified: 2026-10-15
 ---
 
 # AGENTS.md
@@ -407,6 +407,12 @@ reply, no offer to correct it. It is not a finding.
   that review or rebuttal. Nothing back at all — poke once, five minutes
   after the push. Escalate five minutes after the poke rather than poking a
   second time.
+- **Once Codex has +1'd a PR's head, never make an unnecessary change to it
+  without asking first** (maintainer, 2026-10-13): a to-do, tidy-up or extra
+  fix re-runs CI and Codex for nothing, so it waits for a yes or goes in a
+  follow-up PR. A necessary change goes ahead unasked — a rebase for a `dirty`
+  branch, or a `behind` one where the ruleset requires it up to date, a fix
+  for red CI — and so does drive or autopilot, where in effect.
 - **Skip echo events silently.** Replies posted via the GitHub MCP come back
   moments later as webhook events authored by the same identity; if the body
   matches a comment you just posted, it's your own echo — continue without
