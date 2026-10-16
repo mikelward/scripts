@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-15
+last_modified: 2026-10-16
 ---
 
 # AGENTS.md
@@ -220,7 +220,7 @@ reply, no offer to correct it. It is not a finding.
   failures. It cannot deliver CI *success*, a push, the merge, Codex's clean
   verdict (a reaction), or Codex never answering at all — so keep exactly one
   check armed for as long as the PR is open (each event and each check costs
-  a model turn). Under drive (but never under merge in order), arm auto-merge at PR open too — but only where
+  a model turn). Under drive, arm auto-merge at PR open too — but only where
   the ruleset makes the Codex verdict a required check AND requires
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
@@ -303,28 +303,14 @@ reply, no offer to correct it. It is not a finding.
   review comment — fix it if you agree, reply on the thread saying why if
   you don't — and merge once CI is green and Codex's verdict for the current
   head is in.
-- **"Merge in order"** (or "drive in order") is *drive to merge* that yields
-  to older PRs close to landing. Merge by hand, never auto-merge (disarm any
-  already armed). Just before merging, check every open, non-draft,
-  lower-numbered PR against the same base: if one has ever passed Codex — a
-  "didn't find any major issues" comment, or a green `codex` commit status, on
-  any head — and has had any activity (a push, review, comment, reaction or
-  state change) in the last 30 minutes, wait for it. Keep waiting only while
-  it still meets all of that, and at most 30 minutes in total across every
-  recheck; if it still does at the cap, merge anyway and name the PR you
-  merged over. When a wait ends, rerun the check for the other lower PRs.
-  Waiting holds only the merge: keep driving this PR meanwhile. Then sync —
-  rebase onto the new base where the ruleset requires branches up to date, or
-  where it is `dirty` — and merge on the verdict for its current head, a fresh
-  one if that moved it, rerunning this check first. Say which lower PR you
-  waited on, or passed over as quiet.
 - **A paragraph that orders a new work item after the item before it — "next",
   "then", "after that", "follow-up" — must be merged in order, after every
   earlier item this session was given and any other PR the paragraph names.**
   Its PR may open in parallel but merges only once each of those is finished,
   with its PRs merged, in any repo, with no time cap; if one won't finish,
-  hold it and ask, autopilot included. Read the list from the session's
-  record, not memory.
+  hold it and ask, autopilot included. Arm no auto-merge on it until then:
+  auto-merge cannot see the order. Read the list from the session's record,
+  not memory.
 - When a feature has multiple open PRs, list **every** open PR by URL, one per
   line — the "View PR" chip sticks to the first link and hides the rest
   (anthropics/claude-code#46625).
