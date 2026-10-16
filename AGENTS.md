@@ -253,11 +253,20 @@ reply, no offer to correct it. It is not a finding.
     So at your first turn after one of your PRs merges, by hand or by
     auto-merge, send every other open PR on that base that another session
     drives one message — the session URL ends its body, where your client
-    can message sessions — naming the PR that merged. Send it whatever the
-    PR's state reads: right after a merge GitHub can still be computing
-    mergeability, so a PR about to need a rebase can look clean. It is no
-    merge cue for the receiver, whose own PR is still open: it prompts a
-    read, not an action, and the receiver's own rules decide the rebase.
+    can message sessions — naming that PR and saying only that its base now
+    points at `<sha>`, the base's tip after your merge. Send it whatever
+    the PR's state reads: right after a merge GitHub can still be computing
+    mergeability, so a PR about to need a rebase can look clean. Name no
+    merge and no other PR: a receiver on an older copy of these rules reads
+    either as its own merge cue. Receiving one, fetch the base and your
+    PR's head by refspec, unshallowing a shallow clone, and check that head
+    against the fetched base tip, not `<sha>`, which a later merge may
+    already have passed. Answered from your own clone, neither question can
+    be stale the way `mergeable_state` can: the head is `behind` if it
+    doesn't contain the tip (`git merge-base --is-ancestor`), and `dirty`
+    if it doesn't merge cleanly with it (`git merge-tree --write-tree`, Git
+    2.38 or later, exits 1). Any exit but 0 or 1 from either is a failure
+    to report, not an answer. Your own rules decide the rebase from there.
     Skip a PR with no session URL, and don't retry a failed send; its own
     scheduled check is the fallback.
   - Merged or closed, take one last reply-and-resolve pass — a review can
