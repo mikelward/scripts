@@ -8,8 +8,8 @@ last_modified: 2026-10-17
 
 Conventions for AI agents working in this repository.
 
-`CLAUDE.md` is a symlink to this file, so every agent reads the same
-conventions. Edit `AGENTS.md`.
+`CLAUDE.md` and `GEMINI.md` are symlinks to this file, so every agent reads the
+same conventions. Edit `AGENTS.md`.
 
 **At the start of every session, print the full absolute path of the `AGENTS.md` you
 loaded and its `last_modified` date** (front matter), so a stale or wrong copy is caught
@@ -118,8 +118,8 @@ has stopped biting.
   one. Say the follow-up needs a fresh sandbox or a synced checkout rather than
   branching off a `HEAD` whose commits just landed upstream.
 - **Branch naming.** Feature branches are prefixed with the agent's own short
-  name: `<agent>/<short-topic>` (`claude/...` for Claude Code, `codex/...`
-  for Codex, and so on). The placeholder `<agent>` stands in for whichever
+  name: `<agent>/<short-topic>` (`claude/...` for Claude Code, `gemini/...`
+  for Gemini / Antigravity, `codex/...` for Codex, and so on). The placeholder `<agent>` stands in for whichever
   prefix you use — don't hard-code `claude/` unless you *are* Claude Code.
 - **Workflow.** `<agent>/<short-topic>` branch off `origin/main` → PR → merge.
   One topic per branch. Follow-up work after a merge goes on a new branch.
@@ -155,6 +155,11 @@ has stopped biting.
   **Autonomy**). That's expected either way — never re-author or amend
   already-merged commits to "fix" authorship or signing, and don't narrate it: no note in the
 reply, no offer to correct it. It is not a finding.
+- **No model identifier** — never name the coding agent's model or version
+  (`Opus 4.8`, `Sonnet`, `Gemini …`, `claude-*`, `gemini-*`) in a commit, PR,
+  comment, or pushed artifact; keep it to chat. Generic attribution
+  (`Co-Authored-By: Claude` / `Gemini`, `Claude-Session:`, "Generated with
+  Claude Code") is fine.
 - **Unshallow before answering anything that depends on git history depth.**
   The sandbox clones shallow, so `git rev-list --count`, `git log` past the
   shallow boundary, and blame return wrong answers without warning. If
@@ -214,11 +219,13 @@ reply, no offer to correct it. It is not a finding.
   here, and it doesn't need repeating per branch.
 - **Watch your own PRs by subscription, plus one scheduled check.** Have a
   subscription — Claude Code makes one when you open a PR; where a client
-  doesn't, call `subscribe_pr_activity`. It delivers reviews, comments and CI
-  failures. It cannot deliver CI *success*, a push, the merge, Codex's clean
-  verdict (a reaction), or Codex never answering at all — so keep exactly one
-  check armed for as long as the PR is open (each event and each check costs
-  a model turn). Under drive, arm auto-merge at PR open too — but only where
+  doesn't, call `subscribe_pr_activity` (exposed only in `claude-code-remote`).
+  It delivers reviews, comments and CI failures. It cannot deliver CI
+  *success*, a push, the merge, Codex's clean verdict (a reaction), or Codex
+  never answering at all — so keep exactly one check armed for as long as the
+  PR is open (`send_later` in Claude Code; `schedule` with `DurationSeconds` in
+  Antigravity, canceled via `manage_task` `kill`; each event and each check
+  costs a model turn). Under drive, arm auto-merge at PR open too — but only where
   the ruleset makes the Codex verdict a required check AND requires
   conversations resolved: where CI is the only requirement it merges before
   Codex has answered, and an open review comment holds nothing back on its own.
@@ -265,8 +272,9 @@ reply, no offer to correct it. It is not a finding.
     if it doesn't merge cleanly with it (`git merge-tree --write-tree`, Git
     2.38 or later, exits 1). Any exit but 0 or 1 from either is a failure
     to report, not an answer. Your own rules decide the rebase from there.
-    Skip a PR with no session URL, and don't retry a failed send; its own
-    scheduled check is the fallback.
+    Skip a PR with no session URL, or when your client only has local
+    subagent messaging, and don't retry a failed send; its own scheduled
+    check is the fallback.
   - Merged or closed, take one last reply-and-resolve pass — a review can
     land after the merge. Nothing is holding the PR now, so on a merged one
     anything real goes to a follow-up PR, named on the thread, before you
@@ -308,9 +316,10 @@ reply, no offer to correct it. It is not a finding.
 
 ## Pull requests
 
-- Prefer the `mcp__github__*` MCP tools for GitHub operations; the `gh` CLI is
-  not installed in the sandbox. If your client exposes neither, say so rather
-  than guessing at the outcome of an operation you couldn't perform.
+- Prefer the `mcp__github__*` MCP tools for GitHub operations where they're
+  mounted (Claude Code requires them); otherwise fall back to the `gh` CLI. If
+  your client exposes neither, say so rather than guessing at the outcome of an
+  operation you couldn't perform.
 - Open PRs ready for review (not draft) unless asked otherwise.
 - **Update the PR title and body with the push — body first, then push** — so
   they describe the full, latest state of the branch, not the scope it had
@@ -384,7 +393,8 @@ reply, no offer to correct it. It is not a finding.
   verdict* allows; escalate if the re-review re-raises it.
 - **`resolve_review_thread` works — pass the `PRRT_*` thread node ID** from
   `pull_request_read` / `get_review_comments` (`review_threads[].id`) as
-  `threadId`. A comment's `PRRC_*` node ID fails; they're different objects.
+  `threadId` (or to `gh api graphql` `resolveReviewThread` without the MCP
+  tools). A comment's `PRRC_*` node ID fails; they're different objects.
   Order of operations: push the fix commit first, then reply citing the new
   sha, then resolve.
 - **Report each review in the next message you send, and what it said.** Name
