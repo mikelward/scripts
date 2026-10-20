@@ -24,3 +24,4 @@ test:
 	./dvorak_test
 	./confinst_test
 	./screenshot_test
+	./ci-concurrency_test
