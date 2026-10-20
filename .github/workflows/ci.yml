@@ -35,6 +35,25 @@ permissions:
   # through the workflow token; read-only, and still nothing here can write.
   pull-requests: read
 
+# simmo's shape (mikelward/simmo ci.yml, which says why each half is so). A
+# pull request shares one group and cancels the run in progress when a newer
+# event on it starts one: a push makes it stale, and the body or title edit
+# `edited` reports beside each push duplicates it. Without it every push ran
+# twice, and the older run's checks failed on the head moving. A push to
+# main, or a dispatch aimed at it, gets a group of its own keyed by commit, so
+# no main run is canceled or evicted from the one pending slot a group holds.
+# Keyed on the event, not the ref, so a move to `pull_request_target` can't
+# collapse every pull request into one group.
+#
+# An `edited` run never cancels: it carries the head as of the edit, and the
+# body edit lands just before its push, so GitHub starting it after the push's
+# run (it doesn't promise the order) would cancel the only run on the new head.
+# It queues behind the run in progress instead, and a later push's run
+# replaces it while it waits.
+concurrency:
+  group: ci-${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && format('main-{0}', github.sha) || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) && github.event.action != 'edited' }}
+
 jobs:
   # Decides whether the test job may skip: true only when every changed
   # file in the PR is housekeeping (markdown — see .github/lanes.conf for

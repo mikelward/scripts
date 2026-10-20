@@ -1,0 +1,44 @@
+#!/bin/bash
+# Tests for ci.yml's workflow-level concurrency group. Its failure is silent: a
+# group that cancels the wrong run leaves the required lanes check canceled or
+# missing on a head, and one that cancels nothing doubles every push's runs;
+# neither turns a job red.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKFLOW="$SCRIPT_DIR/.github/workflows/ci.yml"
+MAIN="(github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))"
+FAILED=0
+
+fail() {
+    echo "  FAIL: $1"
+    FAILED=1
+}
+
+if test "$(grep -c '^concurrency:$' "$WORKFLOW")" != 1; then
+    fail "ci.yml should declare exactly one workflow-level concurrency block"
+fi
+
+# A pull request shares one group, keyed by number; a push to main is keyed by
+# commit, so no main run is canceled or evicted.
+if ! grep -qxF "  group: ci-\${{ $MAIN && format('main-{0}', github.sha) || github.event.pull_request.number || github.ref }}" "$WORKFLOW"; then
+    fail "the group should key a pull request by number and main by commit"
+fi
+
+# An `edited` run carries the head as of the edit, and GitHub doesn't promise
+# to start runs in event order, so it queues rather than cancels.
+if ! grep -qxF "  cancel-in-progress: \${{ !$MAIN && github.event.action != 'edited' }}" "$WORKFLOW"; then
+    fail "a push should cancel the stale run, but never main or an edit"
+fi
+
+# A retarget changes the diff without moving the head, so edits still run.
+if ! grep -qF 'types: [opened, synchronize, reopened, edited]' "$WORKFLOW"; then
+    fail "pull_request should still run on edited"
+fi
+
+if test "$FAILED" -ne 0; then
+    echo "ci-concurrency_test: FAILED"
+    exit 1
+fi
+echo "ci-concurrency_test: all tests passed"
