@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-17
+last_modified: 2026-10-22
 ---
 
 # AGENTS.md
@@ -308,12 +308,13 @@ rewrite or trim rather than append, and delete rules that stopped biting.
   count is anonymous); a review is the attributable form, naming the commit it read.
   Findings arrive as review comments, top-level comments or reviews — read
   `get_review_comments`, `get_comments` and `get_reviews` to the last page (all page
-  oldest first) — and block the merge until fixed, rebutted or deferred; an
-  acknowledgment is not an answer. A pending `codex` status is one of three things:
-  findings to address (address them); a clean review with no reaction, or an unanswered
-  rebuttal (poke `@codex review` once, five minutes after it); nothing back at all (poke
-  once, five minutes after the push). Escalate five minutes after a poke rather than
-  poking twice.
+  oldest first) — and block the merge until fixed, rebutted or deferred; an acknowledgment
+  is not an answer. A pending `codex` status is one of three things: findings to address
+  (address them); a clean review with no reaction, or an unanswered rebuttal (poke `@codex
+  review` five minutes after it); a hung review, nothing back five minutes after the push
+  or stuck at running (👀) ten minutes on (poke). A poke that hangs the same way gets a
+  second an hour later; escalate only if that one hangs too, never after one (maintainer,
+  2026-10-22).
 - **Once Codex has +1'd a PR's head, make no unnecessary change without asking**
   (maintainer, 2026-10-13): a to-do, tidy-up or extra fix re-runs CI and Codex for nothing,
   so it waits for a yes or goes in a follow-up PR. A necessary change goes ahead unasked —
