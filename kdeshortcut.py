@@ -31,6 +31,8 @@
 # <keys> is a shortcut in the form KDE writes it -- "Meta+T", "Meta+Shift+F1",
 # and note that KDE records shifted characters as the character produced
 # ("Meta+!", not "Meta+Shift+1"). "none" (or an empty string) unbinds.
+# Several shortcuts for one action go space-separated ("Meta+` Meta+O"), the
+# way kglobalshortcutsrc tab-separates them; no KDE key name has a space.
 #
 # Exit status:
 #     0  every shortcut is live in the running session
@@ -250,6 +252,22 @@ def parse_shortcut(text):
     return [modifiers | keycode(key)]
 
 
+def parse_shortcuts(text):
+    """Parse one or more space-separated shortcuts into a list of keycodes.
+
+    The daemon's flat-int API takes one int per shortcut (kglobalacceld's
+    setForeignShortcut makes each its own QKeySequence), so "Meta+` Meta+O"
+    becomes two ints and binds both.
+    """
+    parts = (text or '').split()
+    if len(parts) > 1 and any(part.lower() == 'none' for part in parts):
+        raise ShortcutError('"none" can\'t be one of several shortcuts: %s' % text)
+    keys = []
+    for part in parts:
+        keys.extend(parse_shortcut(part))
+    return keys
+
+
 # A QKeySequence is four key slots, and the daemon reports all four: a
 # one-key shortcut reads back as the key plus three empty slots. Empty is not
 # always zero -- Qt::Key_unknown shows up too -- so a slot counts as real only
@@ -258,11 +276,8 @@ KEY_UNKNOWN = 0x01FFFFFF
 
 
 def real_keys(keys):
-    """Drop the empty tail slots from a sequence the daemon reported."""
-    trimmed = list(keys)
-    while trimmed and trimmed[-1] in (0, KEY_UNKNOWN):
-        trimmed.pop()
-    return trimmed
+    """Drop the empty slots from what the daemon reported."""
+    return [key for key in keys if key not in (0, KEY_UNKNOWN)]
 
 
 def holds_wanted(live, wanted):
@@ -272,7 +287,9 @@ def holds_wanted(live, wanted):
     doesn't get to predict -- an exact list comparison reported every correctly
     applied shortcut as a failure, which made the whole readback worthless.
     """
-    return real_keys(live) == real_keys(wanted)
+    # The daemon keeps an action's shortcuts in a set, so with more than one
+    # it reports them in no particular order.
+    return sorted(real_keys(live)) == sorted(real_keys(wanted))
 
 
 def format_keys(keys):
@@ -682,7 +699,7 @@ class Journal:
 def apply_shortcut(backend, entry, check_only, registered, journal):
     """Set one shortcut and confirm the daemon holds it. Returns (ok, note)."""
     component, action, keys_text, label = entry
-    wanted = parse_shortcut(keys_text)
+    wanted = parse_shortcuts(keys_text)
 
     # actionId is kglobalaccel's 4-field identity: unique and friendly names
     # for both the component and the action. Only the two unique names are

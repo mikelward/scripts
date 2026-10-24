@@ -595,12 +595,14 @@ record_live_shortcut() {
     printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-$2}" >> "$LIVE_SHORTCUTS"
 }
 
+# Several shortcuts for one action go space-separated ("Meta+\` Meta+O"):
+# kglobalshortcutsrc tab-separates them, and KConfig writes the tab as \t.
 set_shortcut() {
     action="$1"
     shortcut="$2"
     label="${3:-$action}"
     kwriteconfig6 --file kglobalshortcutsrc --group kwin \
-        --key "$action" "$shortcut,none,$label"
+        --key "$action" "$(printf '%s' "$shortcut" | tr ' ' '\t'),none,$label"
     record_live_shortcut kwin "$action" "$shortcut" "$label"
 }
 
@@ -874,7 +876,9 @@ configure_keybindings() {
     # the file as "\\" (KConfig doubles it on write, halves it on read), which
     # is the escape deserializeList needs to keep the comma out of the split.
     # Meta+\ above needs two backslashes for the same round trip.
-    set_shortcut KrohnkiteMonocleLayout "Meta+\`" "Krohnkite: Select Layout - Monocle"
+    # Meta+O ("one window") as well as Meta+`: tico has only Search+O, since
+    # Chrome can't bind a backtick, so O works on every desktop.
+    set_shortcut KrohnkiteMonocleLayout "Meta+\` Meta+O" "Krohnkite: Select Layout - Monocle"
     set_shortcut KrohnkitePreviousLayout "Meta+\\," "Krohnkite: Previous Layout"
     set_shortcut KrohnkiteNextLayout "Meta+." "Krohnkite: Next Layout"
 

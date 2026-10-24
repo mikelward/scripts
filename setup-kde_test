@@ -737,6 +737,17 @@ test_comma_and_backslash_shortcuts_are_escaped() {
     assert_called 'KrohnkitegrowWidth Meta+\\\\,none,Krohnkite: Grow Width'
 }
 
+# Monocle takes Meta+O as well as Meta+`. kglobalshortcutsrc tab-separates an
+# action's shortcuts; the live batch, which is itself tab-separated, carries
+# them space-separated for kdeshortcut.py.
+test_monocle_takes_two_shortcuts() {
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "$(printf 'KrohnkiteMonocleLayout Meta+`\tMeta+O,none,Krohnkite: Select Layout - Monocle')" &&
+    assert_batch_contains 'kwin\tKrohnkiteMonocleLayout\tMeta+` Meta+O\tKrohnkite: Select Layout - Monocle'
+}
+
 # KWin's default for "Walk Through Windows of Current Application" is Alt+`,
 # not Meta+`, so unbinding it never freed the key Krohnkite's Monocle layout
 # wanted -- it just cost the app-window cycling that shortcut does. The other
@@ -1339,6 +1350,7 @@ run_test "a failed DrKonqi mask warns and the run continues" \
     test_failed_drkonqi_mask_warns_and_continues
 run_test "comma and backslash shortcuts are escaped for kglobalaccel" \
     test_comma_and_backslash_shortcuts_are_escaped
+run_test "monocle takes Meta+\` and Meta+O" test_monocle_takes_two_shortcuts
 run_test "leaves Alt+\` app-window cycling alone" \
     test_does_not_unbind_walk_through_current_application
 run_test "Krohnkite sweep survives the config being rewritten mid-sweep" \

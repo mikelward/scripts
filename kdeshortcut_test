@@ -113,6 +113,14 @@ check('an empty string is an unbind', [], kdeshortcut.parse_shortcut(''))
 check('surrounding whitespace is ignored', [META | 0x54],
       kdeshortcut.parse_shortcut('  Meta+T  '))
 
+check('several shortcuts go space-separated, one keycode each',
+      [META | 0x60, META | 0x4F], kdeshortcut.parse_shortcuts('Meta+` Meta+O'))
+check('one shortcut parses as before', [META | 0x54],
+      kdeshortcut.parse_shortcuts('Meta+T'))
+check('"none" is still an unbind', [], kdeshortcut.parse_shortcuts('none'))
+check_raises('"none" among several shortcuts is refused',
+             kdeshortcut.ShortcutError,
+             lambda: kdeshortcut.parse_shortcuts('Meta+T none'))
 check_raises('an unknown key name is refused, not guessed',
              kdeshortcut.ShortcutError,
              lambda: kdeshortcut.parse_shortcut('Meta+Nonsense'))
@@ -255,6 +263,18 @@ try:
     status, out, err, calls = run(['kwin', 'Window Close', 'Meta+T'],
                                   keys='999, 0, 0, 0')
     check('padding does not excuse a different key', 1, status)
+
+    # Two shortcuts: one int each on the wire, and the daemon keeps them in a
+    # set, so it may read them back in either order.
+    META_GRAVE, META_O = str(META | 0x60), str(META | 0x4F)
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+` Meta+O'],
+                                  keys='%s, %s' % (META_O, META_GRAVE))
+    check('two shortcuts read back in the other order count as live', 0, status)
+    check('two shortcuts marshal as two ints', True,
+          '[%s, %s]' % (META_GRAVE, META_O) in calls)
+    status, out, err, calls = run(['kwin', 'Window Close', 'Meta+` Meta+O'],
+                                  keys=META_GRAVE)
+    check('a daemon holding only one of two shortcuts is a failure', 1, status)
 
     status, out, err, calls = run(['kwin', 'Grid View', 'none'],
                                   keys='0, 33554431, 33554431, 0')

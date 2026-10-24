@@ -205,7 +205,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Move window to adjacent desktop | `Win+Shift+Left`/`Right` | `Win+Shift+Left`/`Right` ‡ | Karabiner rule + Amethyst `throw-space-left`/`right` |
 | Grow main pane | `Win+\` | `Win+\` | Amethyst `expand-main` |
 | Shrink main pane | `Win+/` | `Win+/` | Amethyst `shrink-main` |
-| Monocle / fullscreen layout | ``Win+` `` | ``Win+` `` | Amethyst `select-fullscreen-layout` |
+| Monocle / fullscreen layout | ``Win+` ``, `Win+O` | ``Win+` `` | Amethyst `select-fullscreen-layout` (one key per command, so no `Win+O`) |
 | Previous layout | `Win+,` | `Win+,` | Amethyst `cycle-layout-backward` |
 | Next layout | `Win+.` | `Win+.` | Amethyst `cycle-layout` |
 | Set master window | `Win+Return` | `Win+Return` | Amethyst `swap-main` |
