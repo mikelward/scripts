@@ -9,6 +9,7 @@ test:
 	./detachsession_test
 	./makesession_test
 	./mdf_test
+	./chrome_test
 	./pa_test
 	./package_test
 	./homepkg_test

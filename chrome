@@ -1,8 +1,28 @@
 #!/bin/bash
+# In ChromeOS's Linux container (Crostini), plain URLs open in ChromeOS's own
+# browser, the one tico tiles, through garcon. Anything with a flag, such as
+# browser2's --user-data-dir, still needs a Linux Chrome.
+if command -v garcon-url-handler >/dev/null 2>&1 && test $# -gt 0; then
+	plain=yes
+	for arg in "$@"; do
+		case "$arg" in
+			-*) plain=no ;;
+		esac
+	done
+	if test "$plain" = yes; then
+		for url in "$@"; do
+			garcon-url-handler "$url" || exit
+		done
+		exit 0
+	fi
+fi
 # Fall back to the beta only when stable isn't installed, not whenever it
 # exits non-zero (a crash or bad flag shouldn't relaunch everything in beta).
 if command -v google-chrome >/dev/null 2>&1; then
 	exec google-chrome "$@"
-else
+elif command -v google-chrome-beta >/dev/null 2>&1; then
 	exec google-chrome-beta "$@"
+else
+	echo "chrome: no Linux Chrome installed (google-chrome or google-chrome-beta)" >&2
+	exit 127
 fi

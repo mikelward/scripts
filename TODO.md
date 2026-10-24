@@ -112,8 +112,8 @@
 The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
 `setup` learned to detect it and skip the desktop:
 
-- Set `BROWSER` to `garcon-url-handler`, and teach `chrome` to hand plain
-  URLs to the ChromeOS browser.
+- Set `BROWSER` to `garcon-url-handler`, if the container doesn't already
+  *(unverified)*. `chrome` hands plain URLs to it already.
 - Warn on Baguette (the newer VM container) that kitty renders on the CPU.
   Telling it apart from Crostini is unverified, so it waits for a device.
 - Check the detection markers (`/dev/.cros_milestone`,
