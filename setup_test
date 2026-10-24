@@ -893,6 +893,91 @@ test_go_is_installed_for_everything() {
     fi
 }
 
+# --- Crostini ---
+
+run_is_crostini() {
+    cros_root="$(mktemp -d)"
+    case "$1" in
+        milestone) mkdir -p "$cros_root/dev" && touch "$cros_root/dev/.cros_milestone" ;;
+        containers) mkdir -p "$cros_root/opt/google/cros-containers" ;;
+    esac
+    set +e
+    output="$(CROS_ROOT="$cros_root" OS="${2:-debian}" sh -c "$(extract_functions "info is_crostini resolve_crostini")
+resolve_crostini
+echo CROSTINI=\$CROSTINI" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$cros_root"
+}
+
+test_crostini_detected_by_its_markers() {
+    run_is_crostini milestone && assert_output_contains "CROSTINI=1" &&
+        assert_output_contains "ChromeOS Linux (Crostini)" || return 1
+    run_is_crostini containers && assert_output_contains "CROSTINI=1"
+}
+
+test_crostini_not_detected_elsewhere() {
+    run_is_crostini none && assert_output_contains "CROSTINI=0" &&
+        assert_output_lacks "Crostini" || return 1
+    # Only the Debian container counts, whatever else a tree holds.
+    run_is_crostini milestone redhat && assert_output_contains "CROSTINI=0"
+}
+
+test_crostini_skips_the_keyboard() {
+    set +e
+    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn configure_keyboard")
+sudo_or_warn() { echo SUDO \"\$*\"; }
+configure_keyboard" 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "Skipping keyboard configuration (Crostini" &&
+    assert_output_lacks "SUDO"
+}
+
+test_crostini_skips_the_display_card() {
+    export CROSTINI=1
+    run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto"
+    unset CROSTINI
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$gpu_controls" "0000:61:00.0=auto" &&
+    assert_no_display_gpu_rule
+}
+
+test_crostini_minimal_profile_says_how_to_grow_the_disk() {
+    set +e
+    output="$(CROSTINI=1 MINIMAL=auto MIN_DISK_GB=15 sh -c "$(extract_functions "info resolve_minimal")
+available_disk_gb() { echo 8; }
+resolve_minimal" 2>&1)"
+    status=$?
+    set -e
+    assert_output_contains "Install profile: minimal (8GB free < 15GB" &&
+    assert_output_contains "Settings > About ChromeOS > Linux development environment > Disk size"
+}
+
+test_crostini_skips_kde_tide_and_the_root_group() {
+    # KDE's packages, setup-kde and tide, and the root group each stand aside.
+    assert_source_contains 'info "Skipping KDE graphical packages (Crostini)"' &&
+    assert_source_contains 'info "Skipping the KDE and tide desktop (Crostini)"' &&
+    assert_source_contains 'info "Skipping root-group membership (Crostini)"' &&
+    assert_source_contains '^resolve_crostini$'
+    # kitty is still installed, ahead of the KDE skip.
+    kitty=$(grep -n 'info "Installing kitty"' "$SETUP" | head -1 | cut -d: -f1)
+    skip=$(grep -n 'Skipping KDE graphical packages (Crostini)' "$SETUP" | cut -d: -f1)
+    if test -z "$kitty" || test -z "$skip" || test "$kitty" -ge "$skip"; then
+        echo "  FAIL: kitty isn't installed before the Crostini KDE skip"
+        TEST_FAILED=1
+    fi
+}
+
+test_crostini_settings_point_at_chromeos() {
+    output="$(sh -c "$(extract_functions "info crostini_settings")
+crostini_settings" 2>&1)"
+    assert_output_contains "Settings > Device > Keyboard and inputs" &&
+    assert_output_contains "tico's options page has the full checklist"
+}
+
 run_test() {
     name="$1"
     func="$2"
@@ -3187,6 +3272,21 @@ run_test "zsh-autosuggestions is only cloned on Linux" \
     test_zsh_autosuggestions_clone_linux_only
 run_test "zsh-autosuggestions is cloned on the --no-root path" \
     test_zsh_autosuggestions_clone_on_no_root_path
+
+run_test "Crostini is detected by its markers" \
+    test_crostini_detected_by_its_markers
+run_test "Crostini isn't detected elsewhere" \
+    test_crostini_not_detected_elsewhere
+run_test "Crostini skips the keyboard configuration" \
+    test_crostini_skips_the_keyboard
+run_test "Crostini skips holding a display card powered" \
+    test_crostini_skips_the_display_card
+run_test "Crostini's minimal profile says how to grow the disk" \
+    test_crostini_minimal_profile_says_how_to_grow_the_disk
+run_test "Crostini skips KDE, tide and the root group, keeping kitty" \
+    test_crostini_skips_kde_tide_and_the_root_group
+run_test "Crostini says what to set in ChromeOS" \
+    test_crostini_settings_point_at_chromeos
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
