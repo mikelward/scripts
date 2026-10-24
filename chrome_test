@@ -1,0 +1,108 @@
+#!/bin/bash
+# Tests for chrome
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CHROME="$SCRIPT_DIR/chrome"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_chrome <commands> [args...]: run chrome with only the named stub
+# commands on PATH, each recording its name and arguments to $calls.
+run_chrome() {
+    stubs="$1"
+    shift
+    bin="$(mktemp -d)"
+    log="$bin/calls"
+    : > "$log"
+    for name in $stubs; do
+        printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$name" "$log" > "$bin/$name"
+        chmod +x "$bin/$name"
+    done
+    set +e
+    # Only the stubs, so a Chrome on this machine never answers for them.
+    output="$(PATH="$bin" "$CHROME" "$@" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$bin"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_calls() {
+    if test "$calls" != "$1"; then
+        echo "  FAIL: calls mismatch"
+        echo "  expected: $1"
+        echo "  actual:   $calls"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_stable_chrome_gets_everything() {
+    run_chrome "google-chrome google-chrome-beta" --new-window https://example.com
+    assert_status 0 && assert_calls "google-chrome --new-window https://example.com"
+}
+
+test_beta_when_stable_is_missing() {
+    run_chrome "google-chrome-beta" https://example.com
+    assert_status 0 && assert_calls "google-chrome-beta https://example.com"
+}
+
+test_crostini_hands_plain_urls_to_chromeos() {
+    run_chrome "garcon-url-handler google-chrome" https://example.com https://example.org
+    assert_status 0 && assert_calls "garcon-url-handler https://example.com
+garcon-url-handler https://example.org"
+}
+
+test_crostini_keeps_flags_for_linux_chrome() {
+    run_chrome "garcon-url-handler google-chrome" --user-data-dir=/tmp/p2 https://example.com
+    assert_status 0 && assert_calls "google-chrome --user-data-dir=/tmp/p2 https://example.com"
+}
+
+test_crostini_with_no_arguments_opens_linux_chrome() {
+    run_chrome "garcon-url-handler google-chrome"
+    assert_status 0 && assert_calls "google-chrome "
+}
+
+test_no_chrome_says_so() {
+    run_chrome ""
+    assert_status 127 &&
+    case "$output" in
+        *"no Linux Chrome installed"*) ;;
+        *) echo "  FAIL: output: $output"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+run_test() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=
+    if "$2" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $1"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $1"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+run_test "stable Chrome gets every argument" test_stable_chrome_gets_everything
+run_test "the beta runs when stable is missing" test_beta_when_stable_is_missing
+run_test "Crostini hands plain URLs to ChromeOS's browser" test_crostini_hands_plain_urls_to_chromeos
+run_test "Crostini keeps flags for Linux Chrome" test_crostini_keeps_flags_for_linux_chrome
+run_test "Crostini with no arguments opens Linux Chrome" test_crostini_with_no_arguments_opens_linux_chrome
+run_test "no Chrome at all says so" test_no_chrome_says_so
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
