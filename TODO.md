@@ -140,7 +140,3 @@ The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
-- **Crostini is detected automatically, with no flag to force it either
-  way.** Detection is one marker file or directory, on Debian only. The
-  alternative is `--crostini` / `--no-crostini`, worth adding if detection
-  misfires on a device. It's reversible: one more option in the parser.
