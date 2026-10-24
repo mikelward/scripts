@@ -107,6 +107,18 @@
       first 256 bytes, with a test for a long `#!` line. Raised in review of
       mikelward/scripts#288.
 
+## Crostini
+
+The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
+`setup` learned to detect it and skip the desktop:
+
+- Set `BROWSER` to `garcon-url-handler`, and teach `chrome` to hand plain
+  URLs to the ChromeOS browser.
+- Warn on Baguette (the newer VM container) that kitty renders on the CPU.
+  Telling it apart from Crostini is unverified, so it waits for a device.
+- Check the detection markers (`/dev/.cros_milestone`,
+  `/opt/google/cros-containers`) on a Chromebook, Baguette included.
+
 ## Decisions needing review
 
 - **mikelward/scripts#288 merges with known gaps in setup-tide's greeter
@@ -128,3 +140,7 @@
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
+- **Crostini is detected automatically, with no flag to force it either
+  way.** Detection is one marker file or directory, on Debian only. The
+  alternative is `--crostini` / `--no-crostini`, worth adding if detection
+  misfires on a device. It's reversible: one more option in the parser.

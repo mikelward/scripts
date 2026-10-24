@@ -712,6 +712,35 @@ detect_os() {
     esac
 }
 
+# --- Detect Crostini ---
+
+# ChromeOS's Linux container (Crostini). It looks like Debian with a display,
+# but ChromeOS owns the desktop, keyboard and power, so setup keeps to the
+# shell, kitty and fonts there. CROS_ROOT points the checks at a test tree.
+is_crostini() {
+    test -e "${CROS_ROOT:-}/dev/.cros_milestone" && return 0
+    test -d "${CROS_ROOT:-}/opt/google/cros-containers" && return 0
+    return 1
+}
+
+# Sets CROSTINI (1/0). Must run after detect_os.
+resolve_crostini() {
+    CROSTINI=0
+    if test "$OS" = debian && is_crostini; then
+        CROSTINI=1
+        info "ChromeOS Linux (Crostini): skipping the desktop, keyboard and power setup ChromeOS owns"
+    fi
+}
+
+# What setup leaves to ChromeOS, and where to set it instead.
+crostini_settings() {
+    info "Set these in ChromeOS rather than here:"
+    info "  keyboard layout and Caps Lock: Settings > Device > Keyboard and inputs"
+    info "  sleep and lock: Settings > Device > Power, and Privacy > Lock screen"
+    info "  more disk for Linux: Settings > About ChromeOS > Linux development environment > Disk size"
+    info "tico's options page has the full checklist."
+}
+
 # --- Detect GUI ---
 
 # True if a graphical session appears to be available. Checks the usual
@@ -779,6 +808,10 @@ resolve_minimal() {
             if test -n "$avail" && test "$avail" -lt "$MIN_DISK_GB"; then
                 MINIMAL_ENABLED=1
                 info "Install profile: minimal (${avail}GB free < ${MIN_DISK_GB}GB; use --full to override)"
+                # Crostini's default disk is about 10GB, so say how to grow it.
+                if test "${CROSTINI:-0}" -eq 1; then
+                    info "Linux's disk can grow in Settings > About ChromeOS > Linux development environment > Disk size"
+                fi
             elif test -n "$avail"; then
                 MINIMAL_ENABLED=0
                 info "Install profile: full (${avail}GB free)"
@@ -979,6 +1012,12 @@ install_packages() {
                 info "Installing kitty"
                 sudo_or_warn apt-get install -y --install-recommends kitty \
                     || warn "skipping kitty installation"
+                if test "$CROSTINI" -eq 1; then
+                    # Gigabytes the container's small disk can't spare, for a
+                    # desktop ChromeOS already is.
+                    info "Skipping KDE graphical packages (Crostini)"
+                    return 0
+                fi
                 info "Installing KDE graphical packages"
                 sudo_or_warn apt-get install -y --install-recommends \
                     kde-standard \
@@ -2167,6 +2206,11 @@ set_default_terminal() {
 # session-level config is setup-kde's configure_keyboard_layout -- change both
 # or the two drift apart.
 configure_keyboard() {
+    # No VT for the console keymap, and setxkbmap would reach X apps only.
+    if test "${CROSTINI:-0}" -eq 1; then
+        info "Skipping keyboard configuration (Crostini; ChromeOS sets the layout)"
+        return 0
+    fi
     case "$OS" in
         debian)
             info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
@@ -2285,6 +2329,8 @@ keep_display_gpu_awake() {
         debian|redhat) ;;
         *) return 0 ;;
     esac
+    # The container sees no display card of its own.
+    test "${CROSTINI:-0}" -eq 1 && return 0
     gpu_drivers="amdgpu|radeon|nouveau|nvidia"
     gpu_rule="${SETUP_UDEV_RULES:-/etc/udev/rules.d}/80-display-gpu-awake.rules"
     # The rule's first words, which tell a later run the rule is setup's own.
@@ -2336,6 +2382,7 @@ RULE
 # --- Main ---
 
 detect_os
+resolve_crostini
 resolve_gui
 resolve_minimal
 resolve_extras
@@ -2428,6 +2475,10 @@ if test "$GUI_ENABLED" -eq 1; then
         info "Configuring macOS desktop environment"
         # shellcheck disable=SC2086  # $DESKTOP_SETUP_FLAGS expands to zero or more flags
         "$SCRIPTS_DIR/setup-macos" $DESKTOP_SETUP_FLAGS
+    elif test "$CROSTINI" -eq 1; then
+        # No KDE session to configure, and tide needs its own OS.
+        info "Skipping the KDE and tide desktop (Crostini)"
+        crostini_settings
     else
         info "Configuring KDE desktop environment"
         # shellcheck disable=SC2086  # both expand to zero or more flags
@@ -2482,7 +2533,10 @@ offer_ssh_remotes
 
 # Group membership is configuration, not an install, so apply it regardless
 # of --no-install.
-if test "$OS" = "macos"; then
+if test "$CROSTINI" -eq 1; then
+    # The container's user already has sudo.
+    info "Skipping root-group membership (Crostini)"
+elif test "$OS" = "macos"; then
     # macOS: the admin group (GID 80) already has sudo access; the wheel/admin
     # group membership is managed by Directory Services, not /etc/group.
     info "On macOS, use System Settings to manage admin group membership"
