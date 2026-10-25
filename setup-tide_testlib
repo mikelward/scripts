@@ -1,0 +1,712 @@
+#!/bin/bash
+# The harness the setup-tide_*_test files share, sourced, not run.
+#
+# Runs setup-tide against a throwaway HOME, logind dir and tide
+# checkout, with sudo, the package managers, git, make, systemctl and
+# Hyprland mocked. Each mock logs its argv to $CALLS.
+
+# shellcheck disable=SC2034  # what it sets, the tests that source it read
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/setup-tide"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+# The fixtures' modes, which setup's checks of what the greeter runs read,
+# don't depend on the caller's umask.
+umask 022
+
+setup() {
+    T="$(mktemp -d)"
+    CALLS="$T/calls"
+    # What the installs would create.
+    mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
+    printf '#!/bin/sh\nprintf "%%s\\n" "make $*" >> "%s"\n' "$CALLS" > "$T/bin/make"
+    # dnf copr enable fails with \$FAKE_DNF_COPR_FAILS, and installing the
+    # copr plugin with \$FAKE_DNF_PLUGIN_FAILS. repoquery knows every package
+    # but those in \$FAKE_MISSING, and fails with \$FAKE_DNF_QUERY_FAILS; like
+    # dnf, install refuses the whole command when it names one of them.
+    cat > "$T/bin/dnf" <<MOCK
+#!/bin/sh
+if test "\$1" = repoquery; then
+    test -z "\$FAKE_DNF_QUERY_FAILS" || exit 1
+    shift 3
+    for pkg; do
+        case " \$FAKE_MISSING " in *" \$pkg "*) continue ;; esac
+        printf "%s\\n" "\$pkg"
+    done
+    exit 0
+fi
+printf "%s\\n" "dnf \$*" >> "$CALLS"
+test "\$1" != copr || test -z "\$FAKE_DNF_COPR_FAILS" || exit 1
+test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
+test "\$1" != install || for arg; do
+    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+done
+MOCK
+    # pacman refuses the whole command when it names a package in
+    # \$FAKE_MISSING. -Si describes every other package, failing, as pacman
+    # does, when it names one of them, or answering nothing with
+    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED.
+    cat > "$T/bin/pacman" <<MOCK
+#!/bin/sh
+case "\$1" in
+    -Si)
+        test -z "\$FAKE_PACMAN_QUERY_FAILS" || exit 1
+        shift 2
+        status=0
+        for pkg; do
+            case " \$FAKE_MISSING " in *" \$pkg "*) status=1; continue ;; esac
+            printf "Repository      : extra\\nName            : %s\\n\\n" "\$pkg"
+        done
+        exit \$status
+        ;;
+    -Qq)
+        shift 2
+        status=0
+        for pkg; do
+            case " \$FAKE_INSTALLED " in *" \$pkg "*) printf "%s\\n" "\$pkg" ;; *) status=1 ;; esac
+        done
+        exit \$status
+        ;;
+esac
+printf "%s\\n" "pacman \$*" >> "$CALLS"
+for arg; do
+    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+done
+MOCK
+    # dpkg-query reports Qt base's private headers as \$FAKE_QT_VERSION and
+    # Qt Declarative's as \$FAKE_QTDECL_VERSION, or Ubuntu 26.04's.
+    cat > "$T/bin/dpkg-query" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dpkg-query \$*" >> "$CALLS"
+shift 2
+for pkg; do
+    case "\$pkg" in
+        qt6-base-private-dev) echo "\$pkg \${FAKE_QT_VERSION:-6.10.2+dfsg-7}" ;;
+        qt6-declarative-private-dev) echo "\$pkg \${FAKE_QTDECL_VERSION:-6.10.2+dfsg-3}" ;;
+        *) echo "\$pkg 6.10.2-4" ;;
+    esac
+done
+MOCK
+    # meson setup also logs the compilers it was given.
+    cat > "$T/bin/meson" <<MOCK
+#!/bin/sh
+printf "%s\\n" "meson \$*" >> "$CALLS"
+test "\$1" != setup || printf "%s\\n" "meson compilers CC=\$CC CXX=\$CXX" >> "$CALLS"
+MOCK
+    # apt-get refuses the whole command when it names a package in
+    # \$FAKE_MISSING, as apt does. Installing greetd installs its unit, which
+    # with \$FAKE_GREETD_TAKES becomes the display manager on a machine with
+    # none, as Debian's package does.
+    cat > "$T/bin/apt-get" <<MOCK
+#!/bin/sh
+printf "%s\\n" "apt-get \$*" >> "$CALLS"
+test -z "\$FAKE_APT_GET_FAILS" || exit 100
+for arg; do
+    case " \$FAKE_MISSING " in *" \$arg "*) exit 100 ;; esac
+done
+case " \$* " in
+    *" greetd "*)
+        : > "$T/greetd-installed"
+        if test -n "\$FAKE_GREETD_TAKES" && ! test -s "$T/dm"; then
+            echo greetd.service > "$T/dm"
+        fi
+        ;;
+esac
+MOCK
+    # apt-cache policy knows every package but those in \$FAKE_MISSING,
+    # offering Hyprland \$FAKE_APT_HYPRLAND (or a new enough one), g++-16
+    # \$FAKE_APT_GXX and libxkbcommon-dev \$FAKE_APT_XKB (or Ubuntu 26.04's),
+    # Quickshell \$FAKE_APT_QS (or 0.3.0, new enough), and 1.0 of the rest.
+    # \$FAKE_APT_CACHE_FAILS makes it fail.
+    cat > "$T/bin/apt-cache" <<MOCK
+#!/bin/sh
+test -z "\$FAKE_APT_CACHE_FAILS" || exit 100
+shift
+for pkg; do
+    case " \$FAKE_MISSING " in *" \$pkg "*) continue ;; esac
+    case "\$pkg" in
+        hyprland) version="\${FAKE_APT_HYPRLAND:-0.56.2-1}" ;;
+        g++-16) version="\${FAKE_APT_GXX:-16-20260322-1ubuntu1}" ;;
+        libxkbcommon-dev) version="\${FAKE_APT_XKB:-1.13.1-1}" ;;
+        qt6-base-dev) version="\${FAKE_APT_QT:-6.10.2+dfsg-7}" ;;
+        quickshell) version="\${FAKE_APT_QS:-0.3.0-1build1}" ;;
+        *) version=1.0-1 ;;
+    esac
+    printf "%s:\\n  Installed: (none)\\n  Candidate: %s\\n  Version table:\\n" "\$pkg" "\$version"
+done
+MOCK
+    # cmake configuring into a prefix creates the commands the build would
+    # install there, and logs which hyprwayland-scanner it would run.
+    # Configuring anything named in \$FAKE_CMAKE_FAILS fails.
+    cat > "$T/bin/cmake" <<MOCK
+#!/bin/sh
+printf "%s\\n" "cmake \$*" >> "$CALLS"
+for arg; do
+    case "\$arg" in
+        -DCMAKE_INSTALL_PREFIX=*)
+            prefix=\${arg#*=}
+            mkdir -p "\$prefix/bin"
+            for cmd in Hyprland hyprctl start-hyprland hyprwayland-scanner qs quickshell; do
+                printf "#!/bin/sh\\n" > "\$prefix/bin/\$cmd"
+                chmod +x "\$prefix/bin/\$cmd"
+            done
+            ;;
+    esac
+done
+printf "%s\\n" "cmake finds \$(command -v hyprwayland-scanner)" >> "$CALLS"
+if test -n "\$FAKE_CMAKE_FAILS"; then
+    case "\$*" in *"/\$FAKE_CMAKE_FAILS "*) exit 1 ;; esac
+fi
+exit 0
+MOCK
+    # sudo runs the command, so rm and the rest really happen (on $T paths).
+    # \$FAKE_LN_FAILS makes linking a command onto PATH fail. \$FAKE_RM_KEEPS
+    # makes rm remove everything but the file it names, then fail.
+    # \$FAKE_INSTALL_FAILS makes installing to the path it names fail.
+    # Another user can't run the files in \$FAKE_USER_NOEXEC, or read those in
+    # \$FAKE_USER_NOREAD, as the loader would for them.
+    cat > "$T/bin/sudo" <<MOCK
+#!/bin/sh
+printf "%s\\n" "sudo \$*" >> "$CALLS"
+# -u USER runs the command as this user.
+if test "\$1" = -u; then
+    shift 2
+    if test "\$1" = test && test "\$2" = -x; then
+        case " \$FAKE_USER_NOEXEC " in *" \$3 "*) exit 1 ;; esac
+    fi
+    FAKE_AS_USER=yes
+    export FAKE_AS_USER
+    exec "\$@"
+fi
+if test "\$1" = ln && test -n "\$FAKE_LN_FAILS"; then
+    case "\$*" in *"$T/usr-local-bin/"*) exit 1 ;; esac
+fi
+if test "\$1" = install && test -n "\$FAKE_INSTALL_FAILS"; then
+    case "\$*" in *" \$FAKE_INSTALL_FAILS") exit 1 ;; esac
+fi
+if test "\$1" = rm && test -n "\$FAKE_RM_KEEPS"; then
+    shift
+    for f; do
+        case "\$f" in -*|*/"\$FAKE_RM_KEEPS") ;; *) rm -f "\$f" ;; esac
+    done
+    exit 1
+fi
+"\$@"
+MOCK
+    # git clone creates the checkout, its last argument; pull just logs, or
+    # fails with \$FAKE_PULL_FAILS.
+    cat > "$T/bin/git" <<MOCK
+#!/bin/sh
+printf "%s\\n" "git \$*" >> "$CALLS"
+if test "\$1" = clone; then
+    for last; do :; done
+    mkdir -p "\$last/.git"
+    # wayland-protocols generates its headers with a strict scanner.
+    case "\$last" in
+        */wayland-protocols) printf "%s\\n" "command: [scanner, '--strict', 'enum-header']" > "\$last/meson.build" ;;
+    esac
+fi
+if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
+# rev-parse names the commit a Hyprland pin's checkout was pinned at, or
+# another for the one named in \$FAKE_MOVED_PIN; Quickshell's is its pinned
+# commit, or \$FAKE_QS_COMMIT.
+if test "\$3" = rev-parse; then
+    name=\${2##*/}
+    pinned=\$(awk -v name="\$name" '\$1 == name { print \$2 }' "$T/pins")
+    if test "\$name" = "\$FAKE_MOVED_PIN"; then
+        echo 0000000000000000000000000000000000000000
+    elif test -n "\$pinned"; then
+        echo "\$pinned"
+    else
+        echo "\${FAKE_QS_COMMIT:-1a4716cde794a59928d9d9fc15f2afc7a95de360}"
+    fi
+fi
+MOCK
+    # Each Hyprland pin's name and commit, for git rev-parse.
+    sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+    # systemctl answers show from the display manager in $T/dm (none while
+    # it's empty or missing), and from greetd's unit: installed once
+    # $T/greetd-installed exists, keeping getty off the VTs in
+    # \$FAKE_GREETD_CONFLICTS, or Debian's (or failing to say, with
+    # \$FAKE_CONFLICTS_FAILS). Enabling greetd with \$FAKE_ENABLE_FAILS_AFTER
+    # takes the alias and still fails. With \$FAKE_DM_QUERY_FAILS_AFTER_INSTALL, it
+    # can't say which display manager there is once greetd is installed, and
+    # with \$FAKE_DM_QUERY_FAILS_FROM, from that query of a run on.
+    # greetd's unit is $T/units/greetd.service, or \$FAKE_GREETD_UNIT, with
+    # the drop-ins in \$FAKE_GREETD_DROPINS and the environment file in
+    # \$FAKE_GREETD_ENVFILES, one a missing one of is an error for unless
+    # \$FAKE_GREETD_ENVFILES_IGNORED is yes, and runs $T/usr-sbin/greetd, or
+    # \$FAKE_GREETD_EXEC, after \$FAKE_GREETD_EXEC_PRE and stopping with
+    # \$FAKE_GREETD_EXEC_STOP, each - before it if
+    # \$FAKE_GREETD_EXEC_IGNORED is yes, greetd with the arguments
+    # \$FAKE_GREETD_ARGS, from systemd's unit path, $T/units
+    # and $T/units-etc, and has the names \$FAKE_GREETD_NAMES, or its own.
+    # greetd restarts with \$FAKE_GREETD_RESTART, or always, except on
+    # \$FAKE_GREETD_RESTART_PREVENT, and stays active after exiting with
+    # \$FAKE_GREETD_REMAIN, or no.
+    # \$FAKE_UNIT_QUERY_FAILS names a property it won't say.
+    # enable --force and disable move
+    # display-manager.service as systemd's alias does. Enabling fails with
+    # \$FAKE_ENABLE_FAILS, and leaves the alias for greetd with
+    # \$FAKE_ENABLE_NO_ALIAS, and for the unit \$FAKE_ENABLE_NO_ALIAS_FOR.
+    # Disabling greetd fails with \$FAKE_DISABLE_FAILS.
+    cat > "$T/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+test "\$2" != show-environment || exit \${FAKE_NO_USER_MANAGER:-0}
+if test "\$1" = show; then
+    case "\$4:\${2#--property=}" in
+        display-manager.service:LoadState)
+            if test -n "\$FAKE_DM_QUERY_FAILS_AFTER_INSTALL" && test -e "$T/greetd-installed"; then exit 1; fi
+            if test -n "\$FAKE_DM_QUERY_FAILS_FROM"; then
+                n=\$((\$(cat "$T/dm-queries" 2>/dev/null || echo 0) + 1))
+                echo "\$n" > "$T/dm-queries"
+                test "\$n" -lt "\$FAKE_DM_QUERY_FAILS_FROM" || exit 1
+            fi
+            if test -s "$T/dm"; then echo loaded; else echo not-found; fi
+            ;;
+        display-manager.service:Id) cat "$T/dm" ;;
+        greetd.service:LoadState) if test -e "$T/greetd-installed"; then echo loaded; else echo not-found; fi ;;
+        greetd.service:Conflicts)
+            test -z "\$FAKE_CONFLICTS_FAILS" || exit 1
+            echo "\${FAKE_GREETD_CONFLICTS-getty@tty7.service shutdown.target}"
+            ;;
+        greetd.service:Restart | greetd.service:RestartPreventExitStatus | greetd.service:RemainAfterExit)
+            test "\${2#--property=}" != "\$FAKE_UNIT_QUERY_FAILS" || exit 1
+            case "\${2#--property=}" in
+                Restart) echo "\${FAKE_GREETD_RESTART-always}" ;;
+                RestartPreventExitStatus) echo "\${FAKE_GREETD_RESTART_PREVENT-}" ;;
+                RemainAfterExit) echo "\${FAKE_GREETD_REMAIN-no}" ;;
+            esac
+            ;;
+        greetd.service:FragmentPath | greetd.service:DropInPaths | greetd.service:Names | :UnitPath | greetd.service:EnvironmentFiles | greetd.service:Exec*)
+            test "\${2#--property=}" != "\$FAKE_UNIT_QUERY_FAILS" || exit 1
+            case "\${2#--property=}" in
+                FragmentPath) echo "\${FAKE_GREETD_UNIT-$T/units/greetd.service}" ;;
+                DropInPaths) echo "\${FAKE_GREETD_DROPINS-}" ;;
+                Names) echo "\${FAKE_GREETD_NAMES-greetd.service}" ;;
+                UnitPath) echo "$T/units $T/units-etc" ;;
+                EnvironmentFiles) test -z "\$FAKE_GREETD_ENVFILES" || echo "\$FAKE_GREETD_ENVFILES (ignore_errors=\${FAKE_GREETD_ENVFILES_IGNORED:-no})" ;;
+                Exec*)
+                    case "\${2#--property=}" in
+                        ExecStart) exe=\${FAKE_GREETD_EXEC-$T/usr-sbin/greetd} ;;
+                        ExecStartPre) exe=\${FAKE_GREETD_EXEC_PRE-} ;;
+                        ExecStop) exe=\${FAKE_GREETD_EXEC_STOP-} ;;
+                        *) exe= ;;
+                    esac
+                    test -z "\$exe" || echo "{ path=\$exe ; argv[]=\$exe\${FAKE_GREETD_ARGS:+ \$FAKE_GREETD_ARGS} ; ignore_errors=\${FAKE_GREETD_EXEC_IGNORED:-no} ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+                    ;;
+                *) echo ;;
+            esac
+            ;;
+    esac
+fi
+case "\$*" in
+    "enable --force "*.service)
+        test -z "\$FAKE_ENABLE_FAILS" || exit 1
+        # A unit without Alias=display-manager.service doesn't take it.
+        if test -n "\$FAKE_ENABLE_NO_ALIAS" && test "\$3" = greetd.service; then :
+        elif test -n "\$FAKE_ENABLE_NO_ALIAS_FOR" && test "\$3" = "\$FAKE_ENABLE_NO_ALIAS_FOR"; then :
+        else echo "\$3" > "$T/dm"
+        fi
+        # Replaces the alias, then fails to reload.
+        if test -n "\$FAKE_ENABLE_FAILS_AFTER" && test "\$3" = greetd.service; then exit 1; fi
+        ;;
+    "disable greetd.service")
+        test -z "\$FAKE_DISABLE_FAILS" || exit 1
+        if test -s "$T/dm" && test "\$(cat "$T/dm")" = greetd.service; then : > "$T/dm"; fi
+        ;;
+esac
+exit 0
+MOCK
+    # getent reads $T/passwd.
+    cat > "$T/bin/getent" <<MOCK
+#!/bin/sh
+grep "^\$2:" "$T/passwd" || exit 2
+MOCK
+    # ldd answers for the loader. A module in \$FAKE_LDD_FAILS won't load,
+    # one named with a library in \$FAKE_LDD_MISSING, as PATH:LIB, needs a
+    # library that isn't there, one named with a file in \$FAKE_LDD_LIBS, as
+    # PATH:FILE, loads that file, and one with a symbol in \$FAKE_LDD_UNDEFINED,
+    # as PATH:SYMBOL, uses one nothing defines, unless what it's told to
+    # preload has \$FAKE_LDD_PROVIDER. greetd links \$FAKE_GREETD_LIBS, or
+    # libpam and libc. The real one answers for the file \$FAKE_LDD_REAL.
+    # With \$FAKE_LDD_LOCALE, it says so in other words unless LC_ALL is C.
+    # Asked as another user, a library in \$FAKE_USER_NOREAD isn't found.
+    cat > "$T/bin/ldd" <<MOCK
+#!/bin/sh
+printf "%s\\n" "ldd\${LD_PRELOAD:+ LD_PRELOAD=\$LD_PRELOAD} \$*" >> "$CALLS"
+for file; do :; done
+test -z "\$FAKE_LDD_REAL" || test "\$file" != "\$FAKE_LDD_REAL" || exec /usr/bin/ldd "\$@"
+case " \$FAKE_LDD_FAILS " in *" \$file "*) echo "	not a dynamic executable" >&2; exit 1 ;; esac
+if test "\$1" != -r; then
+    for lib in \${FAKE_GREETD_LIBS:-$T/libpam.so.0 /lib/libc.so.6}; do
+        printf '\\t%s => %s (0x00007f0000000000)\\n' "\${lib##*/}" "\$lib"
+    done
+    exit 0
+fi
+echo "	statically linked"
+not_found="not found"
+undefined="undefined symbol"
+if test -n "\$FAKE_LDD_LOCALE" && test "\${LC_ALL:-}" != C; then
+    not_found="introuvable"
+    undefined="symbole indefini"
+fi
+for entry in \$FAKE_LDD_MISSING; do
+    test "\${entry%:*}" != "\$file" || printf '\\t%s => %s\\n' "\${entry##*:}" "\$not_found"
+done
+for entry in \$FAKE_LDD_LIBS; do
+    test "\${entry%:*}" = "\$file" || continue
+    case " \${FAKE_AS_USER:+\$FAKE_USER_NOREAD} " in
+        *" \${entry##*:} "*) printf '\\t%s => %s\\n' "\${entry##*/}" "\$not_found" ;;
+        *) printf '\\t%s => %s (0x00007f0000000000)\\n' "\${entry##*/}" "\${entry##*:}" ;;
+    esac
+done
+for entry in \$FAKE_LDD_UNDEFINED; do
+    test "\${entry%:*}" = "\$file" || continue
+    case " \$LD_PRELOAD " in *" \$FAKE_LDD_PROVIDER "*) test -n "\$FAKE_LDD_PROVIDER" && continue ;; esac
+    printf '%s: %s\\t(%s)\\n' "\$undefined" "\${entry##*:}" "\$file"
+done
+MOCK
+    # usermod -d HOME USER changes USER's home in $T/passwd, or fails with
+    # \$FAKE_USERMOD_FAILS.
+    cat > "$T/bin/usermod" <<MOCK
+#!/bin/sh
+printf "%s\\n" "usermod \$*" >> "$CALLS"
+test -z "\$FAKE_USERMOD_FAILS" || exit 1
+awk -F: -v OFS=: -v home="\$2" -v user="\$3" '\$1 == user { \$6 = home } { print }' "$T/passwd" > "$T/passwd.new" \\
+    && mv "$T/passwd.new" "$T/passwd"
+MOCK
+    # install drops -o and -g, which only root can give to another user.
+    cat > "$T/bin/install" <<'MOCK'
+#!/bin/sh
+skip=
+for arg; do
+    shift
+    if test -n "$skip"; then
+        skip=
+        continue
+    fi
+    case "$arg" in
+        -o | -g) skip=1; continue ;;
+    esac
+    set -- "$@" "$arg"
+done
+exec /usr/bin/install "$@"
+MOCK
+    # What the greeter runs, on the greeter's PATH, and greetd's user,
+    # with Debian's home: greetd's config directory.
+    mkdir -p "$T/usr-bin" "$T/etc/greetd" "$T/units" "$T/usr-sbin"
+    printf '[Service]\nExecStart=%s\n' "$T/usr-sbin/greetd" > "$T/units/greetd.service"
+    printf '#!/bin/sh\n' > "$T/usr-sbin/greetd"
+    chmod +x "$T/usr-sbin/greetd"
+    # tide-greetd isn't looked up on the PATH: tide-greeter runs the one
+    # beside it.
+    for cmd in tide-greeter tide-greetd Hyprland hyprctl qs; do
+        printf '#!/bin/sh\n' > "$T/usr-bin/$cmd"
+        chmod +x "$T/usr-bin/$cmd"
+    done
+    # tide's greeter files, beside the bin directory tide-greeter is in.
+    mkdir -p "$T/share/tide/greeter" "$T/share/tide/shell"
+    : > "$T/share/tide/greeter/hyprland.lua"
+    : > "$T/share/tide/shell/greeter.qml"
+    # The greeter's Hyprland is \$FAKE_GREETER_HYPRLAND_VERSION, or new enough,
+    # and its qs answers \$FAKE_GREETER_QS_VERSION, or Quickshell 0.3.1.
+    printf '#!/bin/sh\necho "Hyprland ${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"\n' > "$T/usr-bin/Hyprland"
+    printf '#!/bin/sh\necho "${FAKE_GREETER_QS_VERSION:-Quickshell 0.3.1 (revision 1a4716c, distributed by test)}" >&2\n' > "$T/usr-bin/qs"
+    printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/etc/greetd" > "$T/passwd"
+    # Debian's greetd PAM file, which lists the keyring already, and the one
+    # it includes, with a line of each type for a module that's there.
+    mkdir -p "$T/pam.d" "$T/security"
+    pam_module "$T/security/pam_test.so"
+    pam_module_dir_is "$T/security/"
+    for type in auth account password session; do
+        printf '%-10s required     %s\n' "$type" "$T/security/pam_test.so"
+    done > "$T/pam.d/login"
+    cat > "$T/pam.d/greetd" <<'PAM'
+#%PAM-1.0
+@include login
+
+-auth        optional        pam_gnome_keyring.so
+-auth        optional        pam_kwallet5.so
+
+-session     optional        pam_gnome_keyring.so auto_start
+-session     optional        pam_kwallet5.so auto_start
+PAM
+    # tide's greeter/greetd.toml, comments aside.
+    cat > "$T/greetd.toml" <<'TOML'
+# greetd's config for the tide greeter.
+
+[terminal]
+# The VT greetd runs on, and the session it starts.
+vt = 1
+
+[default_session]
+command = "tide-greeter"
+user = "greeter"
+TOML
+    # go answers GOVERSION with \$FAKE_GO_VERSION, or a new enough one.
+    cat > "$T/bin/go" <<MOCK
+#!/bin/sh
+printf "%s\\n" "go \$*" >> "$CALLS"
+test "\$*" != "env GOVERSION" || echo "\${FAKE_GO_VERSION:-go1.22.2}"
+MOCK
+    # chown logs, since handing a build to root needs root, and fails with
+    # \$FAKE_CHOWN_FAILS.
+    cat > "$T/bin/chown" <<MOCK
+#!/bin/sh
+printf "%s\\n" "chown \$*" >> "$CALLS"
+test -z "\$FAKE_CHOWN_FAILS"
+MOCK
+    # stat reports the files a test makes as root's, as the files they
+    # stand in for are, and the directories above $T, /tmp among them, as
+    # root's and closed, as / and /usr are. A file at or under a path in
+    # \$FAKE_OWNER's UID:PATH entries is UID's instead. Every format setup
+    # asks for starts with %u.
+    real_stat=$(command -v stat)
+    cat > "$T/bin/stat" <<MOCK
+#!/bin/sh
+fmt=\$2
+shift 2
+test "\$1" != -- || shift
+me=\$(id -u)
+status=0
+for f; do
+    if test "\$f" != "$T"; then
+        case "$T/" in
+            "\${f%/}/"*)
+                printf "%s\\n" "\$fmt" | sed -e "s/%u/0/" -e "s/%a/755/" -e "s/%F/directory/" -e "s|%n|\$f|"
+                continue
+                ;;
+        esac
+    fi
+    if ! line=\$($real_stat -c "\$fmt" -- "\$f"); then
+        status=1
+        continue
+    fi
+    uid=\${line%% *}
+    case "\$line" in
+        *" "*) rest=" \${line#* }" ;;
+        *) rest= ;;
+    esac
+    test "\$uid" != "\$me" || uid=0
+    for entry in \$FAKE_OWNER; do
+        case "\$f" in
+            "\${entry#*:}" | "\${entry#*:}"/*) uid=\${entry%%:*} ;;
+        esac
+    done
+    printf "%s%s\\n" "\$uid" "\$rest"
+done
+exit \$status
+MOCK
+    cat > "$T/bin/dconf" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dconf \$*" >> "$CALLS"
+MOCK
+    cat > "$T/bin/Hyprland" <<MOCK
+#!/bin/sh
+echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
+MOCK
+    chmod +x "$T"/bin/*
+}
+
+teardown() {
+    rm -rf "$T"
+}
+
+run() {
+    set +e
+    output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
+        SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
+        SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
+        TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
+        HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
+        QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
+        SETUP_GREETD_DIR="$T/etc/greetd" SETUP_GREETD_TEMPLATE="$T/greetd.toml" \
+        SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" \
+        SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \
+        SETUP_PAM_VENDOR_DIR="$T/vendor-pam.d" SETUP_PAM_AT_INCLUDE=yes \
+        "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
+    status=$?
+    set -e
+    calls=
+    if test -f "$CALLS"; then
+        calls=$(cat "$CALLS")
+    fi
+}
+
+check() {
+    name=$1
+    shift
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if "$@"; then
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+        echo "FAIL: $name"
+        echo "  output: $output"
+        echo "  calls: $calls"
+    fi
+}
+# The directory this run's pins install into.
+inst() { printf '%s\n' "$T"/opt/hyprland/v0.56.2-*; }
+has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+lacks() { ! has "$1" "$2"; }
+# N bytes of VALUE, least significant first, as printf escapes.
+elf_le() {
+    local v=$1 n=$2 out=
+    while test "$n" -gt 0; do
+        out+=$(printf '\\x%02x' $((v & 255)))
+        v=$((v >> 8))
+        n=$((n - 1))
+    done
+    printf '%s' "$out"
+}
+# PAM_MODULE FILE [--machine=N] [--stripped] [NAME[:hidden]]...: a PAM
+# module as setup reads one, a 64-bit little-endian ELF shared object for
+# this machine, with a segment to map and a dynamic table naming its
+# symbols, exporting each function named, or every one PAM calls when none
+# is. :hidden puts one in its symbols without exporting it, --machine
+# builds it for another machine, and --stripped leaves out the section
+# headers its symbols are found by. Whether the loader can load it is the
+# ldd mock's to say.
+# pam_module_dir_is DIR has greetd's libpam load a module named without a
+# full path from DIR, among the other strings a library holds.
+pam_module_dir_is() {
+    printf '\177ELF\0GLIBC_2.34\0/etc/pam.d/\0%s\0/etc/security/\0../lib64/security/\0' "$1" > "$T/libpam.so.0"
+}
+pam_module() {
+    local file=$1 machine stripped='' name vis nsym strs='\x00' syms at=1 out size
+    shift
+    machine=$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')
+    while :; do
+        case "${1:-}" in
+            --machine=*) machine=${1#--machine=} ;;
+            --stripped) stripped=yes ;;
+            *) break ;;
+        esac
+        shift
+    done
+    test $# -gt 0 || set -- pam_sm_authenticate pam_sm_setcred pam_sm_acct_mgmt \
+        pam_sm_open_session pam_sm_close_session pam_sm_chauthtok
+    nsym=$(($# + 1))
+    syms=$(elf_le 0 24)
+    for name; do
+        vis=0
+        case "$name" in *:hidden) vis=2 name=${name%:hidden} ;; esac
+        # GLOBAL FUNC, defined in section 1.
+        syms+=$(elf_le "$at" 4)$(elf_le 18 1)$(elf_le "$vis" 1)$(elf_le 1 2)$(elf_le 0 16)
+        strs+="$name\\x00"
+        at=$((at + ${#name} + 1))
+    done
+    # The program headers at 64, the section headers at 176, the dynamic
+    # table at 368, and the symbols and their names at 416.
+    size=$((416 + 24 * nsym + at))
+    out='\x7fELF'$(elf_le 2 1)$(elf_le 1 1)$(elf_le 1 1)$(elf_le 0 9)
+    out+=$(elf_le 3 2)$(elf_le "$machine" 2)$(elf_le 1 4)$(elf_le 0 8)
+    out+=$(elf_le 64 8)
+    if test -n "$stripped"; then out+=$(elf_le 0 8); else out+=$(elf_le 176 8); fi
+    out+=$(elf_le 0 4)$(elf_le 64 2)
+    out+=$(elf_le 56 2)$(elf_le 2 2)
+    if test -n "$stripped"; then out+=$(elf_le 0 6); else out+=$(elf_le 64 2)$(elf_le 3 2)$(elf_le 0 2); fi
+    # PT_LOAD, the whole file, and PT_DYNAMIC, its table.
+    out+=$(elf_le 1 4)$(elf_le 5 4)$(elf_le 0 24)$(elf_le "$size" 8)$(elf_le "$size" 8)$(elf_le 4096 8)
+    out+=$(elf_le 2 4)$(elf_le 6 4)$(elf_le 368 8)$(elf_le 368 8)$(elf_le 368 8)$(elf_le 48 8)$(elf_le 48 8)$(elf_le 8 8)
+    # The null section, the symbols, and their names.
+    out+=$(elf_le 0 64)
+    out+=$(elf_le 0 4)$(elf_le 11 4)$(elf_le 0 16)$(elf_le 416 8)$(elf_le $((24 * nsym)) 8)$(elf_le 2 4)$(elf_le 1 4)$(elf_le 8 8)$(elf_le 24 8)
+    out+=$(elf_le 0 4)$(elf_le 3 4)$(elf_le 0 16)$(elf_le $((416 + 24 * nsym)) 8)$(elf_le "$at" 8)$(elf_le 0 8)$(elf_le 1 8)$(elf_le 0 8)
+    # DT_STRTAB, DT_SYMTAB and DT_NULL.
+    out+=$(elf_le 5 8)$(elf_le $((416 + 24 * nsym)) 8)$(elf_le 6 8)$(elf_le 416 8)$(elf_le 0 16)
+    # shellcheck disable=SC2059  # the format is the bytes
+    printf "$out$syms$strs" > "$file"
+}
+# elf_program FILE [--machine=N] [--type=N] [--entry=N] [--flags=N]
+# [--interp=PATH] [--short]: a 64-bit little-endian ELF program for this
+# machine, or MACHINE, of TYPE, executable by default, starting at ENTRY,
+# within its code by default, loaded by the loader PATH, or by none, with a
+# PT_LOAD of the whole file, mapped as FLAGS, readable and executable by
+# default, that runs past its end when --short. Executable.
+elf_program() {
+    local file=$1 machine type=2 entry=64 flags=5 interp='' short='' phnum=1 size filesz out
+    shift
+    machine=$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')
+    for arg; do
+        case "$arg" in
+            --machine=*) machine=${arg#--machine=} ;;
+            --type=*) type=${arg#--type=} ;;
+            --entry=*) entry=${arg#--entry=} ;;
+            --flags=*) flags=${arg#--flags=} ;;
+            --interp=*) interp=${arg#--interp=} ;;
+            --short) short=yes ;;
+        esac
+    done
+    test -z "$interp" || phnum=2
+    size=$((64 + 56 * phnum))
+    test -z "$interp" || size=$((size + ${#interp} + 1))
+    filesz=$size
+    test -z "$short" || filesz=$((size + 4096))
+    out='\x7fELF'$(elf_le 2 1)$(elf_le 1 1)$(elf_le 1 1)$(elf_le 0 9)
+    out+=$(elf_le "$type" 2)$(elf_le "$machine" 2)$(elf_le 1 4)$(elf_le "$entry" 8)
+    out+=$(elf_le 64 8)$(elf_le 0 8)$(elf_le 0 4)$(elf_le 64 2)$(elf_le 56 2)$(elf_le "$phnum" 2)$(elf_le 0 6)
+    # PT_INTERP, the name after the headers, and PT_LOAD, the whole file.
+    test -z "$interp" || out+=$(elf_le 3 4)$(elf_le 4 4)$(elf_le $((64 + 56 * phnum)) 8)$(elf_le 0 16)$(elf_le $((${#interp} + 1)) 8)$(elf_le $((${#interp} + 1)) 8)$(elf_le 1 8)
+    out+=$(elf_le 1 4)$(elf_le "$flags" 4)$(elf_le 0 24)$(elf_le "$filesz" 8)$(elf_le "$filesz" 8)$(elf_le 4096 8)
+    test -z "$interp" || out+="$interp\\x00"
+    # shellcheck disable=SC2059  # the format is the bytes
+    printf "$out" > "$file"
+    chmod +x "$file"
+}
+# Real git, for the fixtures and for replaying the options setup-tide gave a
+# clone, with a config of its own: the caller's global and system config never
+# reach it, so a signing setup or a silenced advice can't fail a fixture or
+# pass a check that should fail. The advice is on, as in git's default.
+G_HOME="$(mktemp -d)"
+trap 'rm -rf "$G_HOME"' EXIT
+cat > "$G_HOME/.gitconfig" <<'CONFIG'
+[user]
+	name = t
+	email = t@example.com
+[commit]
+	gpgSign = false
+[tag]
+	gpgSign = false
+[advice]
+	detachedHead = true
+[protocol "file"]
+	allow = always
+CONFIG
+g() {
+    HOME="$G_HOME" XDG_CONFIG_HOME="$G_HOME/.config" GIT_CONFIG_GLOBAL="$G_HOME/.gitconfig" \
+        GIT_CONFIG_NOSYSTEM=1 git "$@"
+}
+# replay_clone NAME TAG: clone a local repo tagged TAG with the options the
+# logged clone of NAME.git used, setting clone_output and clone_status.
+replay_clone() {
+    opts=$(printf '%s\n' "$calls" | sed -n "s/^git clone \(.*\) https:[^ ]*\/$1\.git .*/\1/p")
+    g -C "$T/git/$1" tag "$2"
+    clone_status=0
+    # shellcheck disable=SC2086  # word-split the logged options
+    clone_output=$(g clone $opts "file://$T/git/$1" "$T/git/$1-clone" 2>&1) || clone_status=$?
+}
+
+# The real awk, for a mock that fails one of setup's programs and runs the
+# rest.
+real_awk=$(command -v awk)
+
+# greeter_not_ready WHAT WHY: greetd doesn't take over for WHAT, which is
+# named with WHY, and the display manager stays.
+greeter_not_ready() {
+    check "greetd: $1 doesn't switch" lacks "$calls" "enable --force greetd"
+    check "greetd: $1 writes no config" test ! -e "$T/etc/greetd/config.toml"
+    check "greetd: $1 is named" has "$output" "not making greetd the display manager, so gdm3.service stays: $2"
+    check "greetd: $1 isn't fatal" test "$status" -eq 0
+}
+
+# Prints the tally, and fails if any check did.
+finish() {
+    echo
+    echo "$(basename "$0"): $TESTS_PASSED/$TESTS_RUN passed"
+    test "$TESTS_FAILED" -eq 0
+}

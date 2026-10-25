@@ -1,0 +1,445 @@
+#!/bin/bash
+# Tests for setup-tide: the Hyprland build
+#
+# The harness, its fixtures and mocks are in setup-tide_testlib.
+
+# shellcheck source=setup-tide_testlib
+. "$(dirname "$0")/setup-tide_testlib"
+
+set -e
+
+# apt's Hyprland is new enough: no build.
+setup; ARGS=(); run
+check "a new enough apt Hyprland is installed" has "$calls" "apt-get install -y hyprland hypridle"
+check "a new enough apt Hyprland isn't built" lacks "$calls" "cmake"
+teardown
+
+# apt's Hyprland is too old (Ubuntu 26.04's 0.53): build it.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "an old apt Hyprland builds from source" test "$status" -eq 0
+check "the build doesn't install apt's Hyprland" lacks "$calls" "apt-get install -y hyprland"
+check "the build installs its dependencies, with GCC 16" has "$calls" "apt-get install -y build-essential gcc-16 g++-16 cmake meson"
+check "the build needs Lua 5.5" has "$calls" "liblua5.5-dev"
+check "the build clones pinned tags" has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v0.56.2 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
+# Real git, given the Hyprland clone's own options, skips Tracy but still
+# fetches udis86, a fallback Hyprland builds when pkg-config lacks it, and
+# checks out the tag without a word about detached HEADs.
+for sub in udis86 tracy; do
+    g init -q "$T/git/$sub" && g -C "$T/git/$sub" commit -q --allow-empty -m "$sub"
+done
+g init -q "$T/git/Hyprland"
+for sub in udis86 tracy; do
+    g -C "$T/git/Hyprland" submodule add -q "file://$T/git/$sub" "subprojects/$sub"
+done
+g -C "$T/git/Hyprland" commit -q -m Hyprland
+replay_clone Hyprland v0.56.2
+check "the Hyprland clone's options work with real git" test "$clone_status" -eq 0
+check "the Hyprland clone is quiet" test -z "$clone_output"
+check "the Hyprland clone fetches udis86" test -e "$T/git/Hyprland-clone/subprojects/udis86/.git"
+check "the Hyprland clone skips Tracy" test ! -e "$T/git/Hyprland-clone/subprojects/tracy/.git"
+check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
+check "wayland-protocols' headers skip the strict check" \
+    test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
+check "the build installs under its prefix, by version" has "$calls" "-DCMAKE_INSTALL_PREFIX=$T/opt/hyprland/v0.56.2-"
+check "the build sets the run path" has "$calls" "-DCMAKE_INSTALL_RPATH=$(inst)/lib"
+check "the build uses GCC 16" has "$calls" "-DCMAKE_C_COMPILER=gcc-16 -DCMAKE_CXX_COMPILER=g++-16"
+check "meson builds use GCC 16" has "$calls" "meson compilers CC=gcc-16 CXX=g++-16"
+check "the pins record the compiler" has "$(cat "$(inst)/quickspace-pins")" "gcc 16"
+check "the build puts its own tools on PATH" has "$calls" "cmake finds $(inst)/bin/hyprwayland-scanner"
+check "the build installs without sudo" has "$calls" "cmake --install $T/src/hyprland-build/Hyprland/build"
+check "the build never uses sudo to install" lacks "$calls" "sudo cmake"
+check "the build builds hyprutils before Hyprland" \
+    test "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/hyprutils ' | cut -d: -f1)" -lt \
+        "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/Hyprland ' | cut -d: -f1)"
+check "the build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
+check "the build links Hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "the build links hyprctl onto PATH, through current" test "$(readlink "$T/usr-local-bin/hyprctl")" = "$T/opt/hyprland/current/bin/hyprctl"
+check "the build links start-hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
+check "the pins record Hyprland's commit" grep -q "Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 efb50993780079460b0cbed1363e2166a2de1d9f cmake" "$(inst)/quickspace-pins"
+check "the build checks Hyprland's commit" has "$calls" "git -C $T/src/hyprland-build/Hyprland rev-parse HEAD"
+# A second run with the same pins doesn't rebuild.
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the same pins don't rebuild" lacks "$calls" "cmake"
+check "the same pins say so" has "$output" "already built from these pins"
+# A new commit for the same tag is a new build, checked and built afresh.
+sed 's/ a21e87b878e72ee5dfd375899e8b2ad0d0c4c0e1 / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
+chmod +x "$T/setup-repinned"
+sed -n '/^HYPRLAND_PINS="/,/^"/p' "$T/setup-repinned" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+: > "$CALLS"
+SCRIPT="$T/setup-repinned" run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a new pinned commit alone rebuilds Hyprland" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a new pinned commit's build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
+teardown
+
+# A new compiler checksums differently, so what an older one built, such as
+# a GCC 15 build that stopped partway, isn't resumed or reused.
+setup; ARGS=()
+# The checksum before the compiler was part of it: the pins alone.
+eval "$(sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT")"
+old_sum=$(printf '%s\n' "$HYPRLAND_PINS" | cksum | cut -d' ' -f1)
+mkdir -p "$T/opt/hyprland/v0.56.2-$old_sum"
+: > "$T/opt/hyprland/v0.56.2-$old_sum/.built-hyprutils"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build from another compiler isn't resumed" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a build from another compiler is cleaned up" test ! -e "$T/opt/hyprland/v0.56.2-$old_sum"
+teardown
+
+# The links are made again on a rerun, in case something removed them.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+rm "$T/usr-local-bin/Hyprland"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a rerun restores a removed link" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+teardown
+
+# Links that can't be made are loud, but don't stop setup.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_LN_FAILS=1
+check "a failed link doesn't fail setup" test "$status" -eq 0
+check "a failed link is loud" has "$output" "COULDN'T LINK Hyprland INTO $T/usr-local-bin"
+check "a failed link still marks the build complete" test -f "$(inst)/quickspace-pins"
+teardown
+
+# An older build, current, with the commands linked through it.
+old_build() {
+    old="$T/opt/hyprland/v0.55.0-1"
+    mkdir -p "$old/bin"
+    for cmd in Hyprland hyprctl start-hyprland; do
+        printf '#!/bin/sh\n' > "$old/bin/$cmd"
+        chmod +x "$old/bin/$cmd"
+        ln -s "$T/opt/hyprland/current/bin/$cmd" "$T/usr-local-bin/$cmd"
+    done
+    echo "old pins" > "$old/quickspace-pins"
+    ln -s v0.55.0-1 "$T/opt/hyprland/current"
+}
+
+# The commands switch together, through current, even when a link can't
+# be made.
+setup; old_build
+mkdir -p "$T/opt/hyprland/v0.55.0-2/lib"
+: > "$T/opt/hyprland/v0.55.0-2/.built-wayland-protocols"
+ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_LN_FAILS=1
+check "an upgrade switches current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
+check "an upgrade switches Hyprland and hyprctl together" \
+    test "$(readlink -f "$T/usr-local-bin/Hyprland")" = "$(inst)/bin/Hyprland" -a \
+        "$(readlink -f "$T/usr-local-bin/hyprctl")" = "$(inst)/bin/hyprctl"
+check "an upgrade needs no new links" lacks "$calls" "sudo ln -sfn $T/opt/hyprland/current/bin"
+check "an upgrade removes the older build" test ! -e "$old"
+check "an upgrade removes an unfinished older build" test ! -e "$T/opt/hyprland/v0.55.0-2"
+teardown
+
+# A build from before start-hyprland was linked gets that link on the next
+# run, with nothing rebuilt.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+rm "$T/usr-local-bin/start-hyprland"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a rerun links start-hyprland onto an existing build" \
+    test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
+check "a rerun that only links rebuilds nothing" lacks "$calls" "cmake"
+teardown
+
+# The greeter runs the build as greetd's own user, which can't read a home
+# directory, so it goes in /opt, and is root's once it's built.
+setup; ARGS=()
+check "Hyprland builds into /opt by default" \
+    grep -qxF 'HYPRLAND_PREFIX="${HYPRLAND_PREFIX:-/opt/hyprland}"' "$SCRIPT"
+check "Quickshell builds into /opt by default" \
+    grep -qxF 'QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-/opt/quickshell}"' "$SCRIPT"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the prefix is root's" has "$calls" "sudo install -d -m 755 -o 0 -g 0 $T/opt/hyprland
+"
+check "and so it stays, with the build sealed" has "$calls" "sudo chown 0:0 $T/opt/hyprland
+"
+check "the build's directory is this user's, to build into" \
+    has "$calls" "sudo install -d -m 755 -o $(id -u) -g $(id -g) $(inst)"
+check "the finished build is handed to root" has "$calls" "sudo chown -R 0:0 $(inst)"
+check "it's handed over before current points at it" \
+    test "$(printf '%s\n' "$calls" | grep -n "chown -R 0:0 $(inst)" | head -n1 | cut -d: -f1)" -lt \
+        "$(printf '%s\n' "$calls" | grep -n "ln -sfn $(basename "$(inst)")" | head -n1 | cut -d: -f1)"
+check "current, in root's prefix, is switched with sudo" has "$calls" "sudo mv -Tf $T/opt/hyprland/current.new $T/opt/hyprland/current"
+teardown
+
+# Handing a build to root takes others' write access too, which chown keeps.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+chmod 777 "$(inst)/bin/Hyprland"; chmod 775 "$(inst)/bin"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the seal takes others' write access" has "$calls" "sudo chmod -R a+rX,go-w $(inst)"
+check "from a world-writable file" test "$(stat -c %a "$(inst)/bin/Hyprland")" = 755
+check "and a group-writable directory" test "$(stat -c %a "$(inst)/bin")" = 755
+check "then links it" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+teardown
+
+# A build made under a restrictive umask is everyone's to read and run once
+# it's root's, or neither this user nor the greeter could.
+setup; ARGS=(); (umask 077 && run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1)
+check "a umask 077 build's directories start as the owner's alone" test "$(stat -c %a "$(inst)/bin")" = 700
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the seal opens its directories to all" test "$(stat -c %a "$(inst)/bin")" = 755
+check "and its commands" test "$(stat -c %a "$(inst)/bin/Hyprland")" = 755
+teardown
+
+# A command that can't be run once sealed isn't linked.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+printf '#!/bin/sh\nprintf "%%s\\n" "chmod $*" >> "%s"\n/bin/chmod "$@" && /bin/chmod a-x "%s/bin/hyprctl"\n' "$CALLS" "$(inst)" > "$T/bin/chmod"
+chmod +x "$T/bin/chmod"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a command that can't run once sealed isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+check "and is named" has "$output" "$(inst)/bin/hyprctl can't be run once it's root's, so $(inst) isn't linked onto PATH"
+teardown
+
+# A prefix others can write, where current is, is sealed too.
+setup; ARGS=(); mkdir -p "$T/opt/hyprland"; chmod 777 "$T/opt/hyprland"; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a prefix others could write is sealed" test "$(stat -c %a "$T/opt/hyprland")" = 755
+check "with a sudo chmod" has "$calls" "sudo chmod a+rX,go-w $T/opt/hyprland"
+teardown
+
+# A build others could still write isn't linked.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+chmod 777 "$(inst)/bin/Hyprland"
+printf '#!/bin/sh\nprintf "%%s\\n" "chmod $*" >> "%s"\n' "$CALLS" > "$T/bin/chmod"; chmod +x "$T/bin/chmod"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build others can write isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+check "and says which file" has "$output" "others can still write $(inst)/bin/Hyprland, so $(inst) isn't linked onto PATH"
+teardown
+
+# A build that couldn't be handed to root isn't linked, and the next run
+# hands it over and links it without building it again.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHOWN_FAILS=1
+check "an unsealed build says why it isn't linked" has "$output" "couldn't hand $(inst) to root, so it isn't linked onto PATH"
+check "an unsealed build isn't current" test ! -e "$T/opt/hyprland/current"
+check "an unsealed build isn't linked" test ! -e "$T/usr-local-bin/Hyprland"
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "the next run hands it over" has "$calls" "sudo chown -R 0:0 $(inst)"
+check "and links it" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "without building it again" lacks "$calls" "cmake"
+teardown
+
+# What earlier versions built in $HOME is setup's own: its links are
+# replaced, and its builds removed once the new one is linked.
+legacy_hyprland() {
+    legacy="$T/home/.local/opt/hyprland"
+    mkdir -p "$legacy/v0.56.2-1/bin" "$legacy/v0.56.1-2"
+    : > "$legacy/v0.56.2-1/quickspace-pins"
+    : > "$legacy/v0.56.1-2/.built-hyprutils"
+    ln -s v0.56.2-1 "$legacy/current"
+    for cmd in Hyprland hyprctl start-hyprland; do
+        printf '#!/bin/sh\n' > "$legacy/v0.56.2-1/bin/$cmd"
+        chmod +x "$legacy/v0.56.2-1/bin/$cmd"
+        ln -s "$legacy/current/bin/$cmd" "$T/usr-local-bin/$cmd"
+    done
+}
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a link into the old prefix is replaced" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "and isn't taken for someone else's" lacks "$output" "NOT LINKING"
+check "the old prefix's builds are removed" test ! -e "$legacy/v0.56.2-1" -a ! -e "$legacy/v0.56.1-2"
+check "and with them the empty prefix" test ! -e "$legacy"
+teardown
+
+setup; ARGS=(); legacy_hyprland; mkdir "$legacy/mine"; run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "what setup didn't make in the old prefix stays" test -d "$legacy/mine"
+check "and so does the prefix" test -d "$legacy"
+check "but not the old current" test ! -L "$legacy/current"
+teardown
+
+# A link that couldn't be replaced keeps the old build it points to.
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_LN_FAILS=1
+check "an old link that couldn't be replaced keeps its build" test -e "$T/usr-local-bin/Hyprland"
+teardown
+
+# A failed build leaves the old one in use.
+setup; ARGS=(); legacy_hyprland; run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=Hyprland
+check "a failed build keeps the old prefix's build" test -d "$legacy/v0.56.2-1"
+check "and its links" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$legacy/current/bin/Hyprland"
+teardown
+
+# apt's Hyprland takes over from the old prefix's links too.
+setup; ARGS=(); legacy_hyprland; run
+check "apt's Hyprland removes links into the old prefix" test ! -L "$T/usr-local-bin/Hyprland"
+teardown
+
+# A rerun after a failure resumes from the step that failed.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a resumed build skips what it finished" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a resumed build says so" has "$output" "Already built hyprutils v0.14.2"
+check "a resumed build redoes the failed step" has "$calls" "cmake -S $T/src/hyprland-build/hyprlang "
+check "a resumed build finishes" has "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
+check "a resumed build marks itself complete" test -f "$(inst)/quickspace-pins"
+check "a resumed build isn't removed" lacks "$calls" "sudo rm -rf $(inst)"
+teardown
+# Another account's partial build in the shared prefix can't be written,
+# and what it built would be sealed as root's, so it's started afresh.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+real_id=$(command -v id)
+cat > "$T/bin/id" <<MOCK
+#!/bin/sh
+test "\$*" != -u || { echo 4242; exit 0; }
+exec $real_id "\$@"
+MOCK
+chmod +x "$T/bin/id"; : > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "another account's partial build is removed" has "$calls" "sudo rm -rf $(inst)"
+check "another account's partial build says so" has "$output" "$(inst) is another account's partial build, so it's started afresh"
+check "another account's partial build is rebuilt from the start" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "another account's partial build is rebuilt to the end" test -f "$(inst)/quickspace-pins"
+teardown
+# A finished build whose marker was removed, as link_hyprland says to, is
+# rebuilt: resumed, it would rebuild nothing, and sealed it's root's, so its
+# marker couldn't be written again.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+rm "$(inst)/quickspace-pins"; : > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a build that lost its marker is removed" has "$calls" "sudo rm -rf $(inst)"
+check "a build that lost its marker is rebuilt" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a build that lost its marker says so" has "$output" "has lost its marker, so it's rebuilt"
+check "a rebuilt build marks itself complete" test -f "$(inst)/quickspace-pins"
+check "a rebuilt build is linked" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+teardown
+
+# New pins build beside the working Hyprland, which a failure leaves alone
+# and a success replaces.
+setup; old_build
+ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+check "a failed rebuild keeps the working build" test -x "$old/bin/Hyprland"
+check "a failed rebuild keeps it current" test "$(readlink "$T/opt/hyprland/current")" = v0.55.0-1
+check "a failed rebuild isn't marked complete" test ! -e "$(inst)/quickspace-pins"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a rebuild makes the new build current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
+check "a rebuild removes the old build" test ! -e "$old"
+teardown
+
+# Opting out of the build, after one, uses apt's Hyprland again.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ln -s /usr/bin/true "$T/usr-local-bin/hyprctl.keep"
+ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "--no-build-hyprland removes the build's links" test ! -e "$T/usr-local-bin/Hyprland" -a ! -L "$T/usr-local-bin/hyprctl"
+check "--no-build-hyprland leaves other links" test -L "$T/usr-local-bin/hyprctl.keep"
+check "--no-build-hyprland says so" has "$output" "which point to a source build"
+teardown
+
+# A switch back to apt that removes one link but not the other puts the
+# first back, so the two commands never come from different builds.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_RM_KEEPS=hyprctl
+check "a half-failed unlink restores the other link" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+check "a half-failed unlink keeps the one it couldn't remove" test -L "$T/usr-local-bin/hyprctl"
+check "a half-failed unlink removes them all in one command" has "$calls" "sudo rm -f $T/usr-local-bin/Hyprland $T/usr-local-bin/hyprctl $T/usr-local-bin/start-hyprland"
+teardown
+
+# If apt's Hyprland doesn't install, the build's links are all there is.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_APT_GET_FAILS=1
+check "a failed apt install keeps the build's links" test "$(readlink -f "$T/usr-local-bin/Hyprland")" = "$(inst)/bin/Hyprland"
+teardown
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MISSING=hyprland
+check "a missing apt Hyprland keeps the build's links" test -L "$T/usr-local-bin/Hyprland"
+teardown
+
+# A build that a command link still points into directly isn't removed,
+# even when the link can't be moved to current.
+setup
+legacy="$T/opt/hyprland/v0.55.0-1"
+mkdir -p "$legacy/bin"
+for cmd in Hyprland hyprctl; do
+    printf '#!/bin/sh\n' > "$legacy/bin/$cmd"
+    chmod +x "$legacy/bin/$cmd"
+    ln -s "$legacy/bin/$cmd" "$T/usr-local-bin/$cmd"
+done
+echo "old pins" > "$legacy/quickspace-pins"
+ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_LN_FAILS=1
+check "a build a link points into is kept" test -x "$legacy/bin/Hyprland"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "once relinked, that build is removed" test ! -e "$legacy"
+check "and the link goes through current" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
+teardown
+
+# A command setup didn't make isn't replaced, and something else under the
+# prefix isn't cleaned up.
+setup
+printf '#!/bin/sh\n' > "$T/usr-local-bin/Hyprland"
+mkdir -p "$T/opt/hyprland/my-hyprland/bin" "$T/opt/hyprland/v0.50.0-1"
+touch "$T/opt/hyprland/v0.50.0-1/notes"
+ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "an existing command isn't replaced" test ! -L "$T/usr-local-bin/Hyprland"
+check "an existing command is named" has "$output" "NOT LINKING Hyprland: $T/usr-local-bin/Hyprland is already there"
+check "the other command is still linked" test "$(readlink "$T/usr-local-bin/hyprctl")" = "$T/opt/hyprland/current/bin/hyprctl"
+check "cleanup leaves other directories alone" test -d "$T/opt/hyprland/my-hyprland/bin"
+check "cleanup leaves unmarked lookalikes alone" test -f "$T/opt/hyprland/v0.50.0-1/notes"
+teardown
+
+# A link that isn't the build's stays.
+setup; ln -s /usr/bin/true "$T/usr-local-bin/Hyprland"
+ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "--no-build-hyprland keeps someone else's link" test -L "$T/usr-local-bin/Hyprland"
+teardown
+
+# Debian 13 has neither g++-16 nor xkbcommon 1.11: keep apt's Hyprland.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.49.0+ds-1 FAKE_MISSING=g++-16 FAKE_APT_XKB=1.7.0-2
+check "without g++-16 there's no build" lacks "$calls" "cmake"
+check "without g++-16 apt's Hyprland installs" has "$calls" "apt-get install -y hyprland hypridle"
+check "without g++-16 says what's missing" has "$output" "it has g++-16 none, libxkbcommon 1.7.0"
+teardown
+
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MISSING=liblua5.5-dev
+check "without Lua 5.5 there's no build" lacks "$calls" "cmake"
+teardown
+
+# A finished build outlives the toolchain that built it.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+: > "$CALLS"
+run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_APT_GXX=4:14.2.0-1
+check "a finished build without the toolchain isn't rebuilt" lacks "$calls" "cmake"
+check "a finished build without the toolchain keeps its links" test "$(readlink -f "$T/usr-local-bin/Hyprland")" = "$(inst)/bin/Hyprland"
+check "a finished build without the toolchain skips apt's Hyprland" lacks "$calls" "apt-get install -y hyprland"
+teardown
+
+# An apt-cache that can't answer isn't taken for "no Hyprland".
+setup; ARGS=(); run FAKE_APT_CACHE_FAILS=1
+check "an apt-cache failure doesn't build" lacks "$calls" "cmake"
+check "an apt-cache failure says so" has "$output" "couldn't ask apt for its Hyprland version"
+check "an apt-cache failure installs everything" has "$calls" "apt-get install -y hyprland hypridle"
+teardown
+
+setup; ARGS=(); run FAKE_APT_HYPRLAND="(none)"
+check "no apt Hyprland builds from source" has "$calls" "cmake -S $T/src/hyprland-build/Hyprland"
+teardown
+
+setup; ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "--no-build-hyprland doesn't build" lacks "$calls" "cmake"
+check "--no-build-hyprland installs apt's Hyprland" has "$calls" "apt-get install -y hyprland hypridle"
+teardown
+
+setup; ARGS=(--no-install); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "--no-install doesn't build" lacks "$calls" "cmake"
+teardown
+
+# A pin whose tag was moved to another commit isn't built: its build files
+# never run, and nothing after it is built either.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MOVED_PIN=hyprutils
+check "a moved pin is named" has "$output" "hyprutils's v0.14.2 tag is commit 0000000000000000000000000000000000000000, not the pinned "
+check "a moved pin is fatal" test "$status" -ne 0
+check "a moved pin runs no build" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a moved pin stops the build" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
+check "a moved pin's clone is removed" test ! -e "$T/src/hyprland-build/hyprutils"
+check "a moved pin isn't stamped built" test ! -e "$(inst)/.built-hyprutils"
+check "a moved pin isn't marked complete" test ! -e "$(inst)/quickspace-pins"
+teardown
+
+# A failed step stops the build before anything is linked or recorded.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+check "a failed build step is reported" has "$output" "building Hyprland failed; the sources are in $T/src/hyprland-build"
+check "a failed build is fatal" test "$status" -ne 0
+check "a failed build doesn't claim success" lacks "$output" "tide installed"
+check "a failed build stops before Hyprland" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland"
+check "a failed build isn't marked complete" test ! -e "$(inst)/quickspace-pins"
+check "a failed build says a rerun resumes" has "$output" "a rerun resumes from the step that failed"
+check "a failed build links nothing" test ! -e "$T/usr-local-bin/Hyprland"
+ARGS=(--ignore-errors); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+check "--ignore-errors carries on past a failed build" has "$output" "tide installed"
+teardown
+
+finish
