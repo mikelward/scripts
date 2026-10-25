@@ -21,12 +21,26 @@ setup() {
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
     printf '#!/bin/sh\nprintf "%%s\\n" "make $*" >> "%s"\n' "$CALLS" > "$T/bin/make"
     # dnf copr enable fails with \$FAKE_DNF_COPR_FAILS, and installing the
-    # copr plugin with \$FAKE_DNF_PLUGIN_FAILS.
+    # copr plugin with \$FAKE_DNF_PLUGIN_FAILS. repoquery knows every package
+    # but those in \$FAKE_MISSING, and fails with \$FAKE_DNF_QUERY_FAILS; like
+    # dnf, install refuses the whole command when it names one of them.
     cat > "$T/bin/dnf" <<MOCK
 #!/bin/sh
+if test "\$1" = repoquery; then
+    test -z "\$FAKE_DNF_QUERY_FAILS" || exit 1
+    shift 3
+    for pkg; do
+        case " \$FAKE_MISSING " in *" \$pkg "*) continue ;; esac
+        printf "%s\\n" "\$pkg"
+    done
+    exit 0
+fi
 printf "%s\\n" "dnf \$*" >> "$CALLS"
 test "\$1" != copr || test -z "\$FAKE_DNF_COPR_FAILS" || exit 1
 test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
+test "\$1" != install || for arg; do
+    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+done
 MOCK
     # pacman refuses the whole command when it names a package in
     # \$FAKE_MISSING.
@@ -697,6 +711,19 @@ teardown
 setup; ARGS=(); run SETUP_OS=redhat
 check "Fedora installs Hyprland and Go with dnf" has "$calls" "dnf install -y hyprland hypridle"
 check "Fedora installs its swaync, notify-send, Go and python3" has "$calls" "SwayNotificationCenter libnotify golang python3"
+teardown
+
+# Fedora has no swww, and dnf refuses the lot over one unknown name, so dnf
+# is asked first and the rest, Hyprland too, install together.
+setup; ARGS=(); run SETUP_OS=redhat FAKE_MISSING=swww
+check "Fedora: a missing package isn't fatal" test "$status" -eq 0
+check "Fedora: a missing package is named" has "$output" "could not install: swww"
+check "Fedora: the rest install in one go" has "$calls" "dnf install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+teardown
+
+setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_QUERY_FAILS=1
+check "Fedora: a dnf query failure says so" has "$output" "couldn't ask dnf which packages exist"
+check "Fedora: a dnf query failure installs everything" has "$calls" "dnf install -y hyprland hypridle"
 teardown
 
 setup; ARGS=(); run SETUP_OS=redhat

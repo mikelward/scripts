@@ -381,27 +381,51 @@ version_at_least() {
     test "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -n1)" = "$2"
 }
 
+# dnf_known prints the name of each of its arguments dnf has a package for,
+# failing when dnf does. The format ends in a real newline: dnf 5 needs one,
+# and dnf 4 adds its own, leaving a blank line.
+dnf_known() {
+    dnf repoquery -q --queryformat '%{name}
+' "$@"
+}
+
 # install_all installs the packages it can and prints the ones it couldn't,
 # failing if there are any. apt, dnf and pacman all refuse the lot over one
-# name they don't know (swww isn't in Ubuntu 26.04), so on Debian and Ubuntu
-# it asks apt which exist first, and installs those in one go. The package
-# manager's own output goes to stderr, so stdout carries only the list.
+# name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so on Debian,
+# Ubuntu and Fedora it asks which exist first, and installs those in one go.
+# The package manager's own output goes to stderr, so stdout carries only the
+# list.
 install_all() {
     _install="$*"
     _missing=
-    if test "$(detect_os)" = debian; then
-        if _known=$(apt_candidates "$@"); then
-            _install=
-            for _pkg in "$@"; do
-                if printf '%s\n' "$_known" | awk -v p="$_pkg" '$1 == p && $2 != "(none)" { found = 1 } END { exit !found }'; then
-                    _install="$_install $_pkg"
-                else
-                    _missing="$_missing $_pkg"
-                fi
-            done
-        else
-            warn "couldn't ask apt which packages exist; installing them all"
-        fi
+    _known=
+    _filter=no
+    case "$(detect_os)" in
+        debian)
+            if _apt=$(apt_candidates "$@"); then
+                _known=$(printf '%s\n' "$_apt" | awk '$2 != "(none)" { print $1 }')
+                _filter=yes
+            else
+                warn "couldn't ask apt which packages exist; installing them all"
+            fi
+            ;;
+        redhat)
+            if _known=$(dnf_known "$@"); then
+                _filter=yes
+            else
+                warn "couldn't ask dnf which packages exist; installing them all"
+            fi
+            ;;
+    esac
+    if test "$_filter" = yes; then
+        _install=
+        for _pkg in "$@"; do
+            if printf '%s\n' "$_known" | grep -qxF -e "$_pkg"; then
+                _install="$_install $_pkg"
+            else
+                _missing="$_missing $_pkg"
+            fi
+        done
     fi
     if test -n "$_install"; then
         # shellcheck disable=SC2086  # word-split the package list
