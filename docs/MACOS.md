@@ -22,6 +22,7 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
   - [Desktop configuration on its own](#desktop-configuration-on-its-own)
   - [What `setup-macos` requires](#what-setup-macos-requires)
   - [Install backends for Amethyst](#install-backends-for-amethyst)
+  - [timo instead of Amethyst](#timo-instead-of-amethyst)
 - [Do these by hand first](#do-these-by-hand-first)
   - [And afterwards](#and-afterwards)
 - [Key mapping](#key-mapping)
@@ -108,10 +109,12 @@ missed step.
 | `--ignore-errors` | Keep going past failures instead of aborting on the first |
 | `--yes` | Skip the preflight pause |
 | `--no-sudo` | Skip anything needing administrator rights — only Karabiner's installer does |
+| `--wm amethyst\|timo` | The tiling window manager; `amethyst` by default. See [timo instead of Amethyst](#timo-instead-of-amethyst) |
 | `--help` | Usage |
 
 `setup` forwards `--no-install`, `--no-sudo` and `--ignore-errors` when it
-dispatches here. The preflight pause is skipped automatically when stdin isn't
+dispatches here, but not `--wm`: for timo, run `setup-macos --wm timo` again
+after `setup`. The preflight pause is skipped automatically when stdin isn't
 a terminal, so an unattended bootstrap doesn't block on an Enter that can
 never arrive.
 
@@ -158,6 +161,47 @@ manager's own layouts and keybindings are missing.
 
 There's no third backend. If Amethyst is already installed in either location,
 both are skipped.
+
+### timo instead of Amethyst
+
+`setup-macos --wm timo` sets up [timo](https://github.com/mikelward/timo)
+instead: a Hammerspoon config with tide's tiling, nine workspaces done by
+minimizing windows rather than with Spaces, focus follows mouse, and a
+launcher. It's opt-in while timo grows; without `--wm` nothing changes. timo's
+`SPEC.md` (sections 6.4 and 7.3) says what it needs from here, and the run does
+that:
+
+- **Keys.** timo registers its keys with `RegisterEventHotKey`, which fails
+  silently on a key the system holds, so the hotkeys the Amethyst setup moved
+  onto Option go back to stock: Spotlight on Cmd+Space (physical Ctrl+Space),
+  Finder search on Cmd+Option+Space and enabled, and Switch to Desktop 1–9 and
+  move-a-Space turned off at their stock Ctrl bindings.
+- **Mission Control.** timo uses one Space per display, so there's no
+  nine-Spaces step; extra Spaces can be removed in Mission Control.
+  `mru-spaces` stays off. Stage Manager, Sequoia's edge and Option-drag
+  tiling, and click-wallpaper-to-show-desktop are turned off in
+  `com.apple.WindowManager`, taking effect at the next login. Those keys are
+  unverified on the newest macOS.
+- **Install.** Hammerspoon from Homebrew (`brew install --cask hammerspoon`;
+  no administrator rights, so `--no-sudo` doesn't skip it). timo is cloned to
+  `$TIMO_DIR` (default `~/timo`) if it isn't there, and `make -C "$TIMO_DIR"
+  install` copies it into `~/.hammerspoon/timo`. An existing checkout is used
+  as it stands, not pulled. `--no-install` skips Hammerspoon and the clone.
+- **`~/.hammerspoon/init.lua`** is written with `timo = require("timo")` and
+  `timo.start({})` only when there's no file; an existing one is never
+  overwritten, and if it doesn't load timo the run says what to add.
+- **Other tilers.** Amethyst installed or running, or Rectangle installed
+  (its defaults sit on Ctrl+Option+arrows), gets a warning to quit it and
+  remove it from Login Items. Nothing is uninstalled.
+- **Karabiner.** The conf repo's `timo.json` rule, whose name starts `timo:`,
+  makes the physical Win key timo's Super (Ctrl+Option+Command). Enable it
+  above the arrow rule. Without it, timo falls back to Option.
+
+Hammerspoon then needs Accessibility access granted by hand, as Amethyst does.
+Hammerspoon and timo are free and open source, and nothing here touches the
+network after the install. If Hammerspoon is missing or not granted
+Accessibility, nothing tiles and the workspace keys do nothing; the rest of the
+setup still applies.
 
 ## Do these by hand first
 
