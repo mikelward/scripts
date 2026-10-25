@@ -1853,6 +1853,19 @@ test_timo_turns_off_stage_manager_and_tiling() {
     assert_output_contains "take effect at the next login"
 }
 
+test_timo_hides_the_menu_bar_for_its_bar() {
+    run_macos --wm timo
+    assert_status 0 &&
+    assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool true" &&
+    assert_output_contains "The menu bar hides for timo's bar"
+}
+
+test_amethyst_leaves_the_menu_bar_alone() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "_HIHideMenuBar"
+}
+
 test_timo_installs_hammerspoon_when_missing() {
     run_macos --wm timo
     assert_status 0 &&
@@ -2327,6 +2340,10 @@ run_test "timo: the shortcuts are applied to this session" \
 run_test "timo: no nine-Spaces check" test_timo_does_not_ask_for_nine_spaces
 run_test "timo: Stage Manager and Sequoia tiling are turned off" \
     test_timo_turns_off_stage_manager_and_tiling
+run_test "timo: hides the menu bar for its bar" \
+    test_timo_hides_the_menu_bar_for_its_bar
+run_test "Amethyst runs leave the menu bar alone" \
+    test_amethyst_leaves_the_menu_bar_alone
 run_test "timo: installs Hammerspoon when missing" \
     test_timo_installs_hammerspoon_when_missing
 run_test "timo: does not reinstall Hammerspoon" \

@@ -20,8 +20,9 @@
 #   rather than with Spaces. It needs the keys the Amethyst setup binds, so
 #   that mode hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
-#   tiling features that would fight it. See configure_timo and timo's SPEC.md
-#   (sections 6.4 and 7.3), which say what it needs from here.
+#   tiling features that would fight it. It also hides the menu bar for
+#   timo's own bar. See configure_timo and timo's SPEC.md (sections 6.4, 7.3
+#   and 8), which say what it needs from here.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -1320,6 +1321,12 @@ configure_timo() {
     # Rectangle's default shortcuts sit on Ctrl+Option+arrows (timo's
     # SPEC.md, section 7.3, unverified there), the chord timo takes.
     warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which timo needs"
+
+    # timo draws its own bar along the top (timo's SPEC.md, section 8), so
+    # the menu bar hides until the pointer reaches the top edge. Apps read it
+    # at launch, so it shows everywhere after the next login.
+    try defaults write NSGlobalDomain _HIHideMenuBar -bool true
+    info "The menu bar hides for timo's bar after the next login"
 
     # Same as Amethyst's: no defaults key grants it, so say so rather than
     # leave timo looking configured but inert.
