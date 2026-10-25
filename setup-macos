@@ -15,6 +15,13 @@
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Alt+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching and
 #   Win+Shift+Left/Right moving the window a Space (with Amethyst). Its rules are symlinked out of the conf repo too.
+# - Or, with --wm timo, timo instead of Amethyst: a Hammerspoon config with
+#   tide's tiling and nine workspaces of its own, done by minimizing windows
+#   rather than with Spaces. It needs the keys the Amethyst setup binds, so
+#   that mode hands Spotlight back Cmd+Space, turns the Switch to Desktop and
+#   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
+#   tiling features that would fight it. See configure_timo and timo's SPEC.md
+#   (sections 6.4 and 7.3), which say what it needs from here.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -62,7 +69,7 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [-h | --help]
+#                 [--wm amethyst|timo] [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
 # --no-install skips installing Amethyst and Karabiner-Elements and configures
@@ -70,7 +77,9 @@
 # step here that needs administrator rights -- its cask is a .pkg and Homebrew
 # hands those to the system installer. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
-# pause.
+# pause. --wm picks the tiling window manager: amethyst, the default, or timo.
+# setup doesn't forward --wm, so a timo machine runs this a second time on its
+# own.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -80,6 +89,17 @@ IGNORE_ERRORS=no
 # already there, matching setup-kde, which installs its own tiling window
 # manager (Krohnkite) under the same flag.
 INSTALL=yes
+
+# Which tiling window manager to set up (--wm): amethyst or timo. Amethyst is
+# the default so a run that doesn't ask keeps doing what it always has; timo
+# is opt-in while it grows (its SPEC.md, question 4).
+WM=amethyst
+
+# Where timo's checkout lives, or will once cloned. A checkout rather than a
+# package because timo is a Hammerspoon config with no release to install:
+# `make install` copies its Lua out of the checkout into ~/.hammerspoon.
+TIMO_DIR="${TIMO_DIR:-$HOME/timo}"
+TIMO_REPO="https://github.com/mikelward/timo.git"
 
 # Whether to skip the preflight pause (--yes). A stdin that isn't a terminal
 # skips it too; see preflight.
@@ -256,7 +276,20 @@ restart_app() {
 # keybinding. Each one is genuinely out of reach: there is no API to create a
 # Space, System Settings owns the shortcut registry while it's open, and
 # Accessibility access can only be granted by a human in the GUI.
+#
+# Split by window manager, since the two want different hands-on steps: timo
+# uses one Space per display, so the nine-Spaces step is Amethyst's alone, and
+# the app needing Accessibility is Hammerspoon. The closing notes are shared.
 preflight_notes() {
+    if test "$WM" = timo; then
+        preflight_notes_timo
+    else
+        preflight_notes_amethyst
+    fi
+    preflight_notes_common
+}
+
+preflight_notes_amethyst() {
     cat <<'NOTES'
 
 Before continuing, do these by hand -- this script can't:
@@ -295,7 +328,54 @@ Then once this run has finished:
      Win+Shift+Left/Right to selecting by word. A macOS upgrade can also
      require approving the extension again.
 
+NOTES
+}
 
+preflight_notes_timo() {
+    cat <<'NOTES'
+
+Before continuing, do this by hand -- this script can't:
+
+  1. Quit System Settings. Left open, it can write its cached copy of the
+     keyboard shortcuts back over the ones written here, and timo can't
+     register a key the system still holds.
+
+Then once this run has finished:
+
+  2. Grant Hammerspoon Accessibility access, under System Settings > Privacy &
+     Security > Accessibility. timo runs inside Hammerspoon and can't move,
+     resize or minimize a window without it. This run installs Hammerspoon if
+     it isn't already there, so the permission can only be granted afterwards
+     -- the run says so again when it gets there.
+  3. Approve Karabiner-Elements' driver extension and Input Monitoring
+     permission when it first launches, then enable "Alt+Tab switches
+     applications", the rule whose name starts "timo:", and "Ctrl+Left/Right
+     moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves
+     the window a Space" under Complex Modifications > Add rule, keeping the
+     timo rule above the arrow rule. The timo rule makes the physical Win key
+     timo's Super (Ctrl+Option+Command); without it timo falls back to Option,
+     which takes Option's own text shortcuts.
+
+     Karabiner is free and open source, so no cost beyond the disk it takes.
+     It is a bigger commitment than an ordinary app, though: it installs a
+     driver extension that loads at boot and runs a background service, and a
+     managed Mac may refuse the extension outright. If it is blocked, fails,
+     or is removed, the keyboard keeps working -- the modifier rotation is
+     separate and does not depend on it -- and the effect is that Alt+Tab
+     goes back to switching tabs, Ctrl+Left/Right to the line ends, and timo
+     to Option for its Super key. A macOS upgrade can also require approving
+     the extension again.
+
+     Hammerspoon and timo are free and open source too, and neither touches
+     the network once installed. If Hammerspoon is missing, blocked, or not
+     granted Accessibility, nothing tiles and the workspace keys do nothing;
+     the rest of this setup still applies.
+
+NOTES
+}
+
+preflight_notes_common() {
+    cat <<'NOTES'
 
 Optional: macOS has no equivalent of KDE's dim-inactive effect. JankyBorders
 (`brew install borders`, free) outlines the focused window; HazeOver (around
@@ -331,17 +411,21 @@ preflight() {
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [-h | --help]
+                   [--wm amethyst|timo] [-h | --help]
 
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Don't install Amethyst or Karabiner-Elements; configure
-                   whatever is already there
+  --no-install     Don't install Amethyst or Karabiner-Elements (or, with
+                   --wm timo, Hammerspoon and timo); configure whatever is
+                   already there
   --no-sudo        Don't run anything needing administrator rights. Only
                    Karabiner-Elements' installer does, so only that is skipped
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Skip the preflight pause and start configuring right away
+  --wm WM          The tiling window manager: amethyst (the default) or timo,
+                   which takes over Option+1..9 and Option+Space and needs
+                   Hammerspoon
   -h, --help       Show this help and exit
 USAGE
 }
@@ -376,6 +460,18 @@ while test $# -gt 0; do
         -y|--yes)
             ASSUME_YES=yes
             ;;
+        --wm)
+            if test $# -lt 2; then
+                warn "--wm needs a value: amethyst or timo"
+                usage >&2
+                exit 1
+            fi
+            shift
+            WM="$1"
+            ;;
+        --wm=*)
+            WM="${1#--wm=}"
+            ;;
         -h|--help)
             usage
             exit 0
@@ -388,6 +484,15 @@ while test $# -gt 0; do
     esac
     shift
 done
+
+case "$WM" in
+    amethyst|timo) ;;
+    *)
+        warn "Unknown window manager for --wm: '$WM' (expected amethyst or timo)"
+        usage >&2
+        exit 1
+        ;;
+esac
 
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the script pushes through failing steps.
@@ -532,7 +637,11 @@ warn_if_settings_app_running() {
         fi
         case "$_settings_running" in
             0)
-                warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
+                if test "$WM" = timo; then
+                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if timo's keys don't register"
+                else
+                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
+                fi
                 ;;
             1) ;;
             *)
@@ -542,7 +651,78 @@ warn_if_settings_app_running() {
     done
 }
 
+# Write one symbolic hotkey: ID, enabled (true or false), then its three
+# parameters (ASCII code, virtual keycode, modifier flags). Always the whole
+# entry, for the reason given at 65 below: -dict-add replaces it outright, so
+# a disabled hotkey written without its parameters loses its binding.
+write_symbolic_hotkey() {
+    try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$1" '
+        <dict>
+            <key>enabled</key><'"$2"'/>
+            <key>value</key><dict>
+                <key>parameters</key><array>
+                    <integer>'"$3"'</integer>
+                    <integer>'"$4"'</integer>
+                    <integer>'"$5"'</integer>
+                </array>
+                <key>type</key><string>standard</string>
+            </dict>
+        </dict>'
+}
+
+# timo registers its keys with RegisterEventHotKey, which fails silently on a
+# key someone else already holds (timo's SPEC.md, section 7.3), so the system
+# hotkeys the Amethyst setup moved onto Option -- and the move-a-Space chord --
+# have to be let go first. Each goes back to its stock binding rather than
+# merely off, so the shortcut still reads sensibly in System Settings and
+# turning it back on there gets the macOS default, not a blank.
+configure_shortcuts_timo() {
+    # Spotlight back on Cmd+Space (1048576 is Command), which is physical
+    # Ctrl+Space under the rotation. That leaves Option+Space free: timo's
+    # Super is Ctrl+Option+Command with the Karabiner timo rule, but falls back
+    # to Option without it.
+    write_symbolic_hotkey 64 true 32 49 1048576
+
+    # Finder search back on, at its stock Cmd+Option+Space: the Amethyst
+    # setup only turned it off because Option+Space was Spotlight's, and with
+    # Spotlight back on Cmd+Space nothing collides with it.
+    write_symbolic_hotkey 65 true 32 49 1572864
+
+    # Switch to Desktop 1-9 (118-126) off, at their stock Ctrl+1..9 (262144 is
+    # Control): timo's workspaces are its own, on Super+1..9, and don't use
+    # Spaces at all. Same non-sequential keycodes as configure_shortcuts.
+    set -- \
+        118 49 18 \
+        119 50 19 \
+        120 51 20 \
+        121 52 21 \
+        122 53 23 \
+        123 54 22 \
+        124 55 26 \
+        125 56 28 \
+        126 57 25
+    while test $# -ge 3; do
+        write_symbolic_hotkey "$1" false "$2" "$3" 262144
+        shift 3
+    done
+
+    # Move left/right a Space (79 and 81) off, at their stock Ctrl+arrows
+    # (8650752 is Control plus the arrow keys' function-key flag). The
+    # Karabiner arrow rule sends Ctrl+Option+arrow for physical Win+arrow, and
+    # timo takes that chord for itself.
+    write_symbolic_hotkey 79 false 65535 123 8650752
+    write_symbolic_hotkey 81 false 65535 124 8650752
+}
+
 configure_shortcuts() {
+    if test "$WM" = timo; then
+        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for timo)"
+        warn_if_settings_app_running
+        configure_shortcuts_timo
+        activate_shortcuts
+        return 0
+    fi
+
     info "Configuring keyboard shortcuts (Mission Control and Spotlight on Option)"
 
     warn_if_settings_app_running
@@ -644,7 +824,11 @@ configure_shortcuts() {
             </dict>'
     done
 
-    # Apply changes
+    activate_shortcuts
+}
+
+# Make the symbolic hotkey writes take effect in this session.
+activate_shortcuts() {
     if test -x "$ACTIVATE_SETTINGS"; then
         "$ACTIVATE_SETTINGS" -u \
             || warn "could not apply the shortcut settings to this session; log out and back in for the shortcut changes to take effect"
@@ -720,15 +904,55 @@ configure_spaces() {
     # default, and it reorders the Spaces behind the Option+1..9 bindings
     # above -- so the shortcut that switched to a given desktop a moment ago
     # switches somewhere else now. Numbered shortcuts only mean anything with
-    # a fixed order.
+    # a fixed order. timo's spec (section 6.4) keeps it off too.
     try defaults write com.apple.dock mru-spaces -bool false
 
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
 
+    if test "$WM" = timo; then
+        configure_window_manager_for_timo
+        return 0
+    fi
+
     # After the restart: the Dock rewrites com.apple.spaces as it goes, so
     # counting before it has settled can read the pre-restart layout.
     check_spaces_count
+}
+
+# The Mission Control side of timo's SPEC.md, section 6.4. timo does its
+# workspaces by minimizing windows on one Space per display, so the nine
+# Spaces the Amethyst setup asks for are dead weight rather than missing --
+# but there is no API to delete a Space any more than to create one, so the
+# run only says so.
+#
+# The rest turns off the macOS features that move windows on their own and
+# would fight a tiler: Stage Manager groups windows itself, Sequoia's tiling
+# snaps a window dragged to an edge -- and, with Option held, on any drag,
+# which collides with timo's Super+drag whenever Super falls back to Option --
+# and clicking the wallpaper sweeps every window aside to show the desktop.
+# The last is false rather than absent: false is "Only in Stage Manager",
+# which with Stage Manager off means never.
+#
+# These four keys are the ones System Settings is reported to write (Stage
+# Manager since macOS 13, click-to-show-desktop since 14, tiling since 15).
+# They're unverified here, and on the newest macOS especially, where Apple
+# has renamed preference keys before; a key it no longer reads is written
+# harmlessly and simply does nothing, so check the switches in Desktop & Dock
+# if a window still snaps.
+#
+# WindowManager reads them at launch, and restarting it from here isn't known
+# to be safe -- it owns every window on screen -- so they take effect at the
+# next login.
+configure_window_manager_for_timo() {
+    info "timo uses one Space per display; any extra Spaces can be removed in Mission Control (Ctrl-Up, then hover a Space and click its x)"
+
+    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind timo's back)"
+    try defaults write com.apple.WindowManager GloballyEnabled -bool false
+    try defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false
+    try defaults write com.apple.WindowManager EnableTilingOptionAccelerator -bool false
+    try defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false
+    info "The Stage Manager and tiling settings take effect at the next login"
 }
 
 # --- Configure Amethyst tiling window manager ---
@@ -939,6 +1163,169 @@ configure_amethyst() {
     info "Grant Amethyst Accessibility access in System Settings > Privacy & Security"
 }
 
+# --- Configure timo (Hammerspoon) ---
+
+# Where NAME.app is, or empty if it isn't installed, by the same rule as
+# amethyst_path: either Applications directory, and only a usable bundle.
+app_path() {
+    for _dir in "$APPLICATIONS_DIR" "$USER_APPLICATIONS_DIR"; do
+        if is_usable_app "$_dir/$1.app"; then
+            printf '%s' "$_dir/$1.app"
+            return 0
+        fi
+    done
+    return 1
+}
+
+hammerspoon_path() {
+    app_path Hammerspoon
+}
+
+# What a machine without Hammerspoon or timo loses, for the warnings below.
+TIMO_MISSING_EFFECT="nothing will tile and timo's workspace keys will do nothing"
+
+# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: timo
+# itself comes from a git clone, so a machine with no network can't get it
+# either way. The cask installs into /Applications without an administrator
+# prompt, so --no-sudo doesn't skip it.
+install_hammerspoon() {
+    if _installed=$(hammerspoon_path); then
+        info "Hammerspoon is already installed at $_installed"
+        return 0
+    fi
+    if test "$INSTALL" = no; then
+        warn "Hammerspoon is not installed and --no-install was given; $TIMO_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if ! is_command brew; then
+        warn "Homebrew not found, so Hammerspoon can't be installed; $TIMO_MISSING_EFFECT until it is"
+        return 0
+    fi
+    info "Installing Hammerspoon"
+    brew install --cask hammerspoon \
+        || warn "could not install Hammerspoon; $TIMO_MISSING_EFFECT until it is"
+}
+
+# Clone timo if there's no checkout, then copy its modules into
+# ~/.hammerspoon/timo with its own `make install`, so what lands there is
+# whatever its Makefile says belongs there rather than a list kept here.
+#
+# An existing checkout is installed as it stands, not pulled: it may be a
+# working copy with changes in it, and updating it is its owner's call.
+# --no-install skips only the clone -- copying an existing checkout's files is
+# configuring what's already there.
+install_timo() {
+    if ! test -d "$TIMO_DIR"; then
+        if test "$INSTALL" = no; then
+            warn "$TIMO_DIR not found and --no-install was given; clone $TIMO_REPO there and re-run, or $TIMO_MISSING_EFFECT"
+            return 0
+        fi
+        if ! is_command git; then
+            warn "git not found, so timo can't be cloned into $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+            return 0
+        fi
+        info "Cloning timo into $TIMO_DIR"
+        # git removes the directory it created when a clone fails, so a failure
+        # here leaves nothing for the next run to mistake for a checkout.
+        if ! git clone "$TIMO_REPO" "$TIMO_DIR"; then
+            warn "could not clone $TIMO_REPO into $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+            return 0
+        fi
+    fi
+    if ! is_command make; then
+        warn "make not found, so timo can't be installed from $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+        return 0
+    fi
+    info "Installing timo from $TIMO_DIR"
+    make -C "$TIMO_DIR" install \
+        || warn "could not install timo from $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+}
+
+# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so timo only
+# starts if that file loads it. Written only when there's no file at all: an
+# existing init.lua is someone's own Hammerspoon config, and overwriting it
+# would lose it. One that doesn't load timo gets the lines to add instead.
+configure_hammerspoon_init() {
+    _hs_dir="$HOME/.hammerspoon"
+    _hs_init="$_hs_dir/init.lua"
+    # -L as well as -e, so a dangling symlink (say, into a conf checkout that
+    # moved) counts as someone's file rather than being replaced by ours.
+    if test -e "$_hs_init" || test -L "$_hs_init"; then
+        # require("timo"), require 'timo' and require "timo" all load it; one
+        # after a -- is commented out and doesn't.
+        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"']timo[\"']" "$_hs_init"; then
+            _hs_status=0
+        else
+            _hs_status=$?
+        fi
+        case "$_hs_status" in
+            0)
+                info "$_hs_init already loads timo"
+                ;;
+            1)
+                warn "$_hs_init exists and doesn't load timo, so it was left alone; add these two lines to it, or $TIMO_MISSING_EFFECT: timo = require(\"timo\") and timo.start({})"
+                ;;
+            *)
+                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads timo with timo = require(\"timo\") and timo.start({})"
+                ;;
+        esac
+        return 0
+    fi
+    info "Writing $_hs_init to start timo"
+    try mkdir -p "$_hs_dir"
+    try write_file "$_hs_init" <<'LUA'
+timo = require("timo")
+timo.start({})
+LUA
+}
+
+# Warn about another tiler, NAME, being installed or running: two tilers
+# fight over the same windows, each undoing the other's layout. Warned rather
+# than removed -- uninstalling an app is a bigger step than this run should
+# take on its own, and switching back to Amethyst is a re-run away.
+warn_if_other_tiler() {
+    _tiler="$1"
+    _tiler_why="$2"
+    if _tiler_path=$(app_path "$_tiler"); then
+        warn "$_tiler is installed at $_tiler_path; quit it and remove it from System Settings > General > Login Items, since $_tiler_why"
+        return 0
+    fi
+    # Not installed where this looks, but it could still be running from
+    # somewhere else.
+    is_command pgrep || return 0
+    if app_running "$_tiler"; then
+        _tiler_running=0
+    else
+        _tiler_running=$?
+    fi
+    case "$_tiler_running" in
+        0)
+            warn "$_tiler is running; quit it and remove it from System Settings > General > Login Items, since $_tiler_why"
+            ;;
+        1) ;;
+        *)
+            warn "could not tell whether $_tiler is running (pgrep exited $_tiler_running); quit it if it is, since $_tiler_why"
+            ;;
+    esac
+}
+
+configure_timo() {
+    info "Configuring timo"
+
+    install_hammerspoon
+    install_timo
+    configure_hammerspoon_init
+
+    warn_if_other_tiler Amethyst "it and timo would both tile the same windows"
+    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (timo's
+    # SPEC.md, section 7.3, unverified there), the chord timo takes.
+    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which timo needs"
+
+    # Same as Amethyst's: no defaults key grants it, so say so rather than
+    # leave timo looking configured but inert.
+    info "Grant Hammerspoon Accessibility access in System Settings > Privacy & Security"
+}
+
 # --- Configure Karabiner-Elements ---
 
 # Where Karabiner reads add-on rules from. confinst creates the directory for
@@ -955,6 +1342,9 @@ KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-ar
 # The part of that rule's name that a checkout from before Win+Shift+arrow
 # lacks, so a stale rule can be told apart from a current one.
 KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
+# The rule that makes the physical Win key timo's Super (Ctrl+Option+Command),
+# for --wm timo. Its name starts "timo:".
+KARABINER_TIMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/timo.json"
 
 # Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
 # as amethyst_path, and for the same reason: an interrupted install leaves a
@@ -1028,6 +1418,17 @@ configure_karabiner() {
     else
         warn "$KARABINER_ARROW_RULE not found; update the conf repo and run confinst, or Win+Left/Right won't switch Spaces, Win+Shift+Left/Right won't move the window a Space, and Ctrl+Left/Right keeps jumping to the line ends"
     fi
+    # Above the arrow rule because Karabiner applies the first rule that
+    # matches a key, and both want the physical Win key.
+    _karabiner_timo_note=""
+    if test "$WM" = timo; then
+        if test -f "$KARABINER_TIMO_RULE"; then
+            _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }the rule whose name starts \"timo:\""
+            _karabiner_timo_note="; keep the timo rule above the arrow rule"
+        else
+            warn "$KARABINER_TIMO_RULE not found; run confinst after updating the conf repo, or timo falls back to Option for its Super key"
+        fi
+    fi
     test -n "$_karabiner_rules" || return 0
 
     # Karabiner lists an asset under "Add rule" but doesn't enable it, and
@@ -1035,7 +1436,7 @@ configure_karabiner() {
     # rewritten by the app, so editing it here would be racing the GUI.
     # Enabling copies the rule into karabiner.json, and Karabiner runs that
     # copy, so an updated asset only takes effect once the rule is re-added.
-    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule; remove and add again any already enabled, to pick up changes to it"
+    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_timo_note; remove and add again any already enabled, to pick up changes to it"
 }
 
 # --- Configure application launch shortcuts ---
@@ -1306,7 +1707,11 @@ configure_keyboard
 configure_modifier_keys
 configure_shortcuts
 configure_spaces
-configure_amethyst
+if test "$WM" = timo; then
+    configure_timo
+else
+    configure_amethyst
+fi
 configure_karabiner
 configure_app_shortcuts
 configure_finder
