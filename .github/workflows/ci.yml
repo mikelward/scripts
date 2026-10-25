@@ -87,7 +87,10 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - run: make test
+      # Each test is its own target, so -j runs them side by side; -O keeps
+      # each one's output together. Here, not in the Makefile: macOS's make
+      # 3.81 has no -O.
+      - run: make -j"$(nproc)" --output-sync=target test
 
   # The one check the ruleset should require. Always runs, always reports —
   # green only when the test job succeeded, or when it was skipped and the
