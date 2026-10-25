@@ -13,6 +13,9 @@ TESTS = \
 	makesession_test \
 	mdf_test \
 	chrome_test \
+	home_test \
+	irc_test \
+	notepad_test \
 	pa_test \
 	package_test \
 	homepkg_test \

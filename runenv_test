@@ -157,6 +157,56 @@ test_no_arguments_is_a_usage_error() {
   assert_output_contains "usage: runenv"
 }
 
+# A fake Homebrew prefix holding a command that logs its call, and a uname
+# answering <os> (Darwin by default).
+mac_brew() {
+  mkdir -p "$TEST_TMPDIR/brew/bin"
+  printf '#!/bin/bash\necho "brew %s $*" >> "%s"\n' "$1" "$CALLS" > "$TEST_TMPDIR/brew/bin/$1"
+  chmod +x "$TEST_TMPDIR/brew/bin/$1"
+  printf '#!/bin/sh\necho %s\n' "${2:-Darwin}" > "$BIN/uname"
+  chmod +x "$BIN/uname"
+}
+
+run_with_brew() {
+  local script="$1"; shift
+  set +e
+  output="$(env -i PATH="$BIN" HOME="$TEST_TMPDIR" HOMEBREW_PREFIX="$TEST_TMPDIR/brew" "$BIN/$script" "$@" 2>&1)"
+  status=$?
+  set -e
+}
+
+test_macos_finds_homebrew_commands() {
+  setup
+  install_script runenv
+  mac_brew kitty
+  run_with_brew runenv kitty -e yazi
+  assert_status 0
+  assert_called "brew kitty -e yazi"
+  teardown
+}
+
+test_env_beats_homebrew() {
+  setup
+  install_script runenv
+  mac_brew tool
+  env_fake tool
+  run_with_brew runenv tool
+  assert_status 0
+  assert_called "tool "
+  teardown
+}
+
+test_linux_leaves_homebrew_alone() {
+  setup
+  install_script runenv
+  mac_brew kitty Linux
+  run_with_brew runenv kitty
+  if test "$status" -eq 0; then
+    echo "  FAIL: kitty ran from the Homebrew prefix on Linux"; TEST_FAILED=1
+  fi
+  teardown
+}
+
 run_test "runs a command found via ~/.env's PATH" test_runs_command_via_env_path
 run_test "passes arguments through" test_passes_arguments_through
 # shellcheck disable=SC2088  # the tildes are literal display text in this test label, not paths to expand
@@ -165,6 +215,9 @@ run_test "plain assignments are exported to the command" test_plain_assignments_
 run_test "DOTENV_SOURCED skips re-sourcing" test_dotenv_sourced_skips_the_files
 run_test "propagates the command's exit status" test_propagates_exit_status
 run_test "no arguments is a usage error" test_no_arguments_is_a_usage_error
+run_test "macOS finds Homebrew's commands" test_macos_finds_homebrew_commands
+run_test "~/.env's PATH beats Homebrew's" test_env_beats_homebrew
+run_test "Linux leaves the Homebrew prefix alone" test_linux_leaves_homebrew_alone
 
 echo "$TESTS_PASSED/$TESTS_RUN tests passed"
 test "$TESTS_FAILED" -eq 0

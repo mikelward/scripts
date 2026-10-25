@@ -16,6 +16,20 @@ if command -v garcon-url-handler >/dev/null 2>&1 && test $# -gt 0; then
 		exit 0
 	fi
 fi
+# On macOS Chrome is an app bundle, started through open. -n starts a new
+# instance so its flags (--user-data-dir, --app) apply; Chrome hands the
+# request to a running one with the same profile. $MACOS_APP_DIRS is for tests.
+if command -v uname >/dev/null 2>&1 && test "$(uname -s)" = Darwin; then
+	for app in "Google Chrome" "Google Chrome Beta"; do
+		for dir in ${MACOS_APP_DIRS:-/Applications "$HOME/Applications"}; do
+			if test -d "$dir/$app.app"; then
+				exec open -na "$app" --args "$@"
+			fi
+		done
+	done
+	echo "chrome: no Google Chrome or Google Chrome Beta in /Applications or ~/Applications" >&2
+	exit 127
+fi
 # Fall back to the beta only when stable isn't installed, not whenever it
 # exits non-zero (a crash or bad flag shouldn't relaunch everything in beta).
 if command -v google-chrome >/dev/null 2>&1; then

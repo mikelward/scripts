@@ -140,3 +140,15 @@ The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
+- **On macOS, timo's app keys open apps through `open`.** `chrome` runs
+  `open -na "Google Chrome" --args …` (the beta if stable isn't in
+  `/Applications` or `~/Applications`), so `browser1`–`3`, the Google web
+  apps and `youtube-music` keep their Linux flags: the same
+  `--user-data-dir`s and `--app=` windows, not Chrome's installed web apps
+  (an installed app's id differs per machine). `home` opens Finder, `irc`
+  the HexChat app, and `notepad` TextEdit, since SciTE has no Mac build.
+  `terminal` and `terminal_on_workstation` need no change once kitty is on
+  `PATH`: `runenv` now puts Homebrew's prefix (`/opt/homebrew`) ahead of
+  launchd's bare `PATH` on macOS, behind `~/.env`'s own entries. The alternative for the web apps is
+  opening each installed app by its bundle id. It's reversible: one branch
+  per script on `uname -s`.

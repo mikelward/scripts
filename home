@@ -1,2 +1,6 @@
 #!/bin/bash
+# Open the home folder in the file manager: Finder on macOS.
+if command -v uname >/dev/null 2>&1 && test "$(uname -s)" = Darwin; then
+    exec open ~
+fi
 xdg-open ~
