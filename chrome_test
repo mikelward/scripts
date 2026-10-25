@@ -18,7 +18,12 @@ run_chrome() {
     log="$bin/calls"
     : > "$log"
     for name in $stubs; do
-        printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$name" "$log" > "$bin/$name"
+        if test "$name" = uname; then
+            # Answers like a Mac, and isn't logged.
+            printf '#!/bin/sh\necho Darwin\n' > "$bin/$name"
+        else
+            printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$name" "$log" > "$bin/$name"
+        fi
         chmod +x "$bin/$name"
     done
     set +e
@@ -84,6 +89,43 @@ test_no_chrome_says_so() {
     esac
 }
 
+# run_mac <apps> [args...]: run chrome as on macOS, with an Applications
+# folder holding the named app bundles (comma-separated).
+run_mac() {
+    apps_dir="$(mktemp -d)"
+    IFS=, read -r -a apps <<< "$1"
+    for app in "${apps[@]}"; do
+        test -n "$app" && mkdir -p "$apps_dir/$app.app"
+    done
+    shift
+    MACOS_APP_DIRS="$apps_dir" run_chrome "uname open google-chrome" "$@"
+    rm -rf "$apps_dir"
+}
+
+test_mac_opens_chrome_with_its_flags() {
+    run_mac "Google Chrome,Google Chrome Beta" --user-data-dir=/tmp/p2 https://example.com
+    assert_status 0 && assert_calls "open -na Google Chrome --args --user-data-dir=/tmp/p2 https://example.com"
+}
+
+test_mac_app_mode() {
+    run_mac "Google Chrome" --app=https://calendar.example.com
+    assert_status 0 && assert_calls "open -na Google Chrome --args --app=https://calendar.example.com"
+}
+
+test_mac_beta_when_stable_is_missing() {
+    run_mac "Google Chrome Beta" https://example.com
+    assert_status 0 && assert_calls "open -na Google Chrome Beta --args https://example.com"
+}
+
+test_mac_no_chrome_says_so() {
+    run_mac ""
+    assert_status 127 && assert_calls "" &&
+    case "$output" in
+        *"no Google Chrome"*) ;;
+        *) echo "  FAIL: output: $output"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
 run_test() {
     TESTS_RUN=$((TESTS_RUN + 1))
     TEST_FAILED=
@@ -102,6 +144,10 @@ run_test "Crostini hands plain URLs to ChromeOS's browser" test_crostini_hands_p
 run_test "Crostini keeps flags for Linux Chrome" test_crostini_keeps_flags_for_linux_chrome
 run_test "Crostini with no arguments opens Linux Chrome" test_crostini_with_no_arguments_opens_linux_chrome
 run_test "no Chrome at all says so" test_no_chrome_says_so
+run_test "macOS opens Chrome with its flags" test_mac_opens_chrome_with_its_flags
+run_test "macOS keeps --app for web apps" test_mac_app_mode
+run_test "macOS falls back to the beta" test_mac_beta_when_stable_is_missing
+run_test "macOS with no Chrome says so" test_mac_no_chrome_says_so
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

@@ -17,6 +17,18 @@ if test $# -eq 0; then
     exit 2
 fi
 if test -z "${DOTENV_SOURCED:-}"; then
+    # Apps launchd starts on macOS (Hammerspoon, so timo's keys) get only
+    # /usr/bin:/bin:/usr/sbin:/sbin, without Homebrew's prefix on Apple
+    # silicon, where casks such as kitty link their commands. It goes first,
+    # so ~/.env's own prepends still win.
+    if command -v uname >/dev/null 2>&1 && test "$(uname -s)" = Darwin; then
+        _brew="${HOMEBREW_PREFIX:-/opt/homebrew}"
+        case ":$PATH:" in
+            *":$_brew/bin:"*) ;;
+            *) test -d "$_brew/bin" && PATH="$_brew/bin:$_brew/sbin:$PATH" ;;
+        esac
+        unset _brew
+    fi
     set -a
     for _dotenv in "$HOME/.env" "$HOME/.env.local"; do
         # shellcheck source=/dev/null

@@ -1,2 +1,6 @@
 #!/bin/bash
+# HexChat, Linux's IRC client, also has a macOS build; open it as an app there.
+if command -v uname >/dev/null 2>&1 && test "$(uname -s)" = Darwin; then
+    exec open -a HexChat
+fi
 hexchat
