@@ -1,0 +1,294 @@
+#!/bin/bash
+# Tests for setup-tide: greetd's config and systemd unit
+#
+# The harness, its fixtures and mocks are in setup-tide_testlib.
+
+# shellcheck source=setup-tide_testlib
+. "$(dirname "$0")/setup-tide_testlib"
+
+set -e
+
+# A config that already says the right thing is replaced when it isn't
+# root's, since greetd, which runs as root, starts what it names.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/etc/greetd/config.toml"
+check "greetd: a matching config that isn't root's is reinstalled" \
+    grep -q "^sudo install -D -m 644 .* $T/etc/greetd/config.toml\$" <<<"$calls"
+check "greetd: and greetd stays" test "$(cat "$T/dm")" = greetd.service
+# One that can't be, isn't kept.
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/etc/greetd/config.toml" FAKE_INSTALL_FAILS="$T/etc/greetd/config.toml"
+check "greetd: a config that isn't root's and can't be replaced puts GDM back" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "couldn't write $T/etc/greetd/config.toml; greetd isn't kept with a config this run couldn't put right, so putting back gdm3.service for the next boot"
+teardown
+# The note of what greetd replaced is what root enables to undo it, so it
+# isn't written where someone else could swap it, nor read once they could.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/var/lib/setup-tide"; chmod o+w "$T/var/lib/setup-tide"; run
+check "greetd: a state directory others can write doesn't switch" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and gets no note" test ! -e "$T/var/lib/setup-tide/previous-display-manager"
+check "greetd: and says why" has "$output" "not writing $T/var/lib/setup-tide/previous-display-manager: users other than root can write $T/var/lib/setup-tide"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+ARGS=(--no-greeter); run FAKE_OWNER="1000:$T/var/lib/setup-tide/previous-display-manager"
+check "--no-greeter: a note that isn't root's isn't used" lacks "$calls" "enable --force"
+check "--no-greeter: and says why" has "$output" "not reading $T/var/lib/setup-tide/previous-display-manager, since only root should be able to change it: $T/var/lib/setup-tide/previous-display-manager is uid 1000's, not root's"
+teardown
+# The template is root's too, since its command is what greetd runs.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/greetd.toml"
+greeter_not_ready "a template that isn't root's" "tide's greetd config isn't root's alone: $T/greetd.toml is uid 1000's, not root's"
+teardown
+# systemd runs greetd as root at every boot, so its unit, its drop-ins and
+# where they could go, its environment files, and what it runs, with the
+# prefix that's installed in, are root's alone too.
+unit_why="what systemd starts greetd from isn't root's alone"
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/units/greetd.service"
+greeter_not_ready "a greetd unit that isn't root's" "$unit_why: $T/units/greetd.service is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"; : > "$T/units/greetd.service.d/override.conf"
+chmod o+w "$T/units/greetd.service.d/override.conf"; run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/override.conf"
+greeter_not_ready "a greetd drop-in others can write" "$unit_why: users other than root can write $T/units/greetd.service.d/override.conf"
+teardown
+for dir in units-etc units-etc/greetd.service.d units/service.d units/display-manager.service.d units-etc/display-.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"; chmod o+w "$T/$dir"; run
+    greeter_not_ready "a directory others can write a greetd drop-in into, $dir" "$unit_why: users other than root can write $T/$dir"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/greetd.env"; chmod o+w "$T/greetd.env"; run FAKE_GREETD_ENVFILES="$T/greetd.env"
+greeter_not_ready "a greetd environment file others can write" "$unit_why: users other than root can write $T/greetd.env"
+teardown
+# systemd won't start a unit whose environment file isn't there, unless a
+# - before it says that's fine.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ENVFILES="$T/greetd.env"
+greeter_not_ready "a greetd environment file that isn't there" "greetd's unit reads its environment from $T/greetd.env, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ENVFILES="$T/greetd.env" FAKE_GREETD_ENVFILES_IGNORED=yes
+check "greetd: a greetd environment file that may be missing, and is, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/bin" "$T/opt/greetd/lib"; : > "$T/opt/greetd/bin/greetd"
+chmod o+w "$T/opt/greetd/lib"; run FAKE_GREETD_EXEC="$T/opt/greetd/bin/greetd"
+greeter_not_ready "a greetd installed where others can write its libraries" "$unit_why: users other than root can write $T/opt/greetd/lib"
+teardown
+# One outside a bin directory can load what's beside it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/plugins"; printf '#!/bin/sh\n' > "$T/opt/greetd/greetd"
+chmod +x "$T/opt/greetd/greetd"; run FAKE_GREETD_EXEC="$T/opt/greetd/greetd"
+check "greetd: a greetd installed outside a bin directory, all root's, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/greetd/plugins"; printf '#!/bin/sh\n' > "$T/opt/greetd/greetd"
+chmod +x "$T/opt/greetd/greetd"; chmod o+w "$T/opt/greetd/plugins"; run FAKE_GREETD_EXEC="$T/opt/greetd/greetd"
+greeter_not_ready "a greetd installed outside a bin directory, beside a directory others can write" "$unit_why: users other than root can write $T/opt/greetd/plugins"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-sbin/greetd"
+greeter_not_ready "a greetd that isn't root's" "$unit_why: $T/usr-sbin/greetd is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=DropInPaths
+greeter_not_ready "a greetd unit systemd won't say the drop-ins of" "systemd didn't say where greetd's drop-ins are"
+teardown
+# systemd won't start greetd without the programs its start runs, unless
+# a - before one says that's fine, and never without greetd itself.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin/gone"
+greeter_not_ready "a greetd that isn't there" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin/gone" FAKE_GREETD_EXEC_IGNORED=yes
+greeter_not_ready "a greetd that isn't there, after a -" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod a-x "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd that can't be run" "greetd's unit runs $T/usr-sbin/greetd, which isn't a program it can run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC="$T/usr-sbin"
+greeter_not_ready "a greetd that's a directory" "greetd's unit runs $T/usr-sbin, which isn't a program it can run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_PRE="$T/usr-sbin/gone"
+greeter_not_ready "a program greetd's start runs first that isn't there" "greetd's unit runs $T/usr-sbin/gone, which isn't there, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_PRE="$T/usr-sbin/gone" FAKE_GREETD_EXEC_IGNORED=yes
+check "greetd: a program greetd's start may do without, and does, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_STOP="$T/usr-sbin/gone"
+check "greetd: a program only stopping greetd runs, which isn't there, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# What starts a program greetd's unit runs has to be root's alone, and
+# greetd has to be one the kernel can start.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/nonexistent/sh\n' > "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd whose interpreter isn't there" "greetd's unit runs $T/usr-sbin/greetd, and $T/usr-sbin/greetd is run by /nonexistent/sh, which isn't there or can't be run, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod +x "$T/interp/sh"
+chmod o+w "$T/interp/sh"; printf '#!%s\n' "$T/interp/sh" > "$T/usr-sbin/stop"; chmod +x "$T/usr-sbin/stop"; run FAKE_GREETD_EXEC_STOP="$T/usr-sbin/stop"
+greeter_not_ready "a program stopping greetd run by an interpreter others can write" "$unit_why: $T/usr-sbin/stop is run by $T/interp/sh: users other than root can write $T/interp/sh"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=greetd
+greeter_not_ready "a greetd command setup can't read" "systemd named a command for greetd's ExecStart setup can't read: { path=greetd ; argv[]=greetd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+teardown
+# greetd's unit may only make settings setup knows can't change what
+# greetd runs, as its packages' units do, and start greetd with no
+# arguments.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Unit]\nDescription=Greeter daemon\nAfter=systemd-user-sessions.service plymouth-quit-wait.service\nAfter=getty@tty7.service\nConflicts=getty@tty7.service\n\n[Service]\nType=simple\nExecStart=greetd\nIgnoreSIGPIPE=no\nSendSIGHUP=yes\nTimeoutStopSec=30s\nKeyringMode=shared\nRestart=always\nRestartSec=1\nStartLimitBurst=5\nStartLimitInterval=30\n\n[Install]\nAlias=display-manager.service\n' > "$T/units/greetd.service"
+mkdir -p "$T/units-etc/service.d"; printf '[Service]\nTimeoutStopFailureMode=abort\n' > "$T/units-etc/service.d/10-timeout-abort.conf"
+run FAKE_GREETD_DROPINS="$T/units-etc/service.d/10-timeout-abort.conf"
+check "greetd: Debian's unit, with Fedora's drop-in for every service, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service.d/root.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/root.conf"
+greeter_not_ready "a greetd unit that runs it in another root" "greetd's unit sets RootDirectory= in $T/units/greetd.service.d/root.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'Environment=LD_PRELOAD=/tmp/x.so\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that sets its environment" "greetd's unit sets Environment= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '.include /tmp/more.service\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that includes another file" "greetd's unit has a .include line in $T/units/greetd.service, which setup doesn't follow"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Unit]\nConditionPathExists=/missing\n' > "$T/units/greetd.service.d/cond.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/cond.conf"
+greeter_not_ready "a greetd unit with a condition that can stop it starting" "greetd's unit sets ConditionPathExists= in $T/units/greetd.service.d/cond.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/units/greetd.service.d/pre.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/pre.conf"
+greeter_not_ready "a greetd unit that runs something before it" "greetd's unit sets ExecStartPre= in $T/units/greetd.service.d/pre.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+# Enabling greetd names it display-manager.service, whose drop-ins systemd
+# reads for it from then on.
+for dir in display-manager.service.d display-.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units-etc/$dir"
+    printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/units-etc/$dir/hook.conf"; run
+    greeter_not_ready "a $dir drop-in greetd would take when it's the display manager" "greetd's unit sets ExecStartPre= in $T/units-etc/$dir/hook.conf, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+printf '[Service]\nTimeoutStopSec=30s\n' > "$T/units/display-manager.service.d/ok.conf"; run
+check "greetd: a display-manager.service drop-in setup knows can't change it is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+: > "$T/units/display-manager.service.d/open.conf"; chmod o+w "$T/units/display-manager.service.d/open.conf"; run
+greeter_not_ready "a display-manager.service drop-in others can write" "$unit_why: users other than root can write $T/units/display-manager.service.d/open.conf"
+teardown
+# So does every other name greetd has, and each of their prefixes.
+for dir in units-etc/x-greeter.service.d units/x-.service.d units/other.service.d; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"
+    printf '[Service]\nExecStartPre=/bin/sh /opt/hook\n' > "$T/$dir/hook.conf"
+    run FAKE_GREETD_NAMES="greetd.service other.service x-greeter.service"
+    greeter_not_ready "a drop-in of another of greetd's names, in $dir" "greetd's unit sets ExecStartPre= in $T/$dir/hook.conf, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/$dir"; chmod o+w "$T/$dir"
+    run FAKE_GREETD_NAMES="greetd.service other.service x-greeter.service"
+    greeter_not_ready "a directory others can write a drop-in of another of greetd's names into, $dir" "$unit_why: users other than root can write $T/$dir"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/x-greeter.service.d"
+printf '[Service]\nTimeoutStopSec=30s\n' > "$T/units/x-greeter.service.d/ok.conf"
+printf '[Install]\nAlias=display-manager.service\nWantedBy=graphical.target\n' >> "$T/units/greetd.service"
+run FAKE_GREETD_NAMES="greetd.service x-greeter.service"
+check "greetd: a unit with another name, whose drop-ins setup knows can't change it, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# Enabling greetd with --force replaces what another name links to, so its
+# unit may name no alias but display-manager.service: another would take
+# that unit's place.
+for alias in network.service x-greeter.service %p-x.service; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"
+    printf '[Install]\nAlias=display-manager.service %s\n' "$alias" >> "$T/units/greetd.service"; run
+    greeter_not_ready "a greetd unit with the alias $alias" "greetd's unit sets Alias=$alias in $T/units/greetd.service, which isn't one setup knows is safe there: only those greetd's own units use are"
+    check "greetd: a greetd unit with the alias $alias enables nothing" lacks "$calls" "systemctl enable"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '[Install]\nAlso=other.service\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that enables another with it" "greetd's unit sets Also= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/display-manager.service.d"
+printf '[Install]\nAlias=more.service\n' > "$T/units/display-manager.service.d/more.conf"; run
+greeter_not_ready "a drop-in of another of greetd's names that names it yet another" "greetd's unit sets Alias=more.service in $T/units/display-manager.service.d/more.conf, which isn't one setup knows is safe there: only those greetd's own units use are"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_NAMES="greetd.service other@x.service"
+greeter_not_ready "a name of greetd's setup can't look for drop-ins of" "systemd names greetd other@x.service, which setup can't look for drop-ins of"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=Names
+greeter_not_ready "greetd's names unsaid" "systemd didn't say what greetd's names are"
+teardown
+# Nor may it end greetd once it's running, or wait for it to fork or say
+# it's ready, which it doesn't.
+for setting in RuntimeMaxSec=1s WatchdogSec=1s Type=notify Type=forking; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '%s\n' "$setting" >> "$T/units/greetd.service"; run
+    case "$setting" in
+        Type=*) shown=$setting ;;
+        *) shown=${setting%%=*}= ;;
+    esac
+    greeter_not_ready "a greetd unit with $setting" "greetd's unit sets $shown in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'Type=idle\n' >> "$T/units/greetd.service"; run
+check "greetd: a greetd unit of Type=idle, as Arch's is, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# Nor may it name a unit, or set a StartLimitAction, other than those its
+# packages' units do: one can keep greetd from starting at boot, or take
+# the boot down with it.
+for setting in '[Unit]\nConflicts=getty@tty1.service graphical.target' '[Unit]\nAfter=graphical.target' \
+    '[Unit]\nWants=gdm.service' '[Unit]\nConflicts=getty@tty%I.service' '[Install]\nRequiredBy=basic.target' \
+    '[Install]\nWantedBy=sysinit.target' '[Unit]\nStartLimitAction=reboot' '[Service]\nStartLimitAction=poweroff' \
+    '[Unit]\nConflicts=getty@tty0.service' '[Unit]\nConflicts=getty@tty64.service' '[Unit]\nAfter=getty@tty07.service'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '%b\n' "$setting" >> "$T/units/greetd.service"; run
+    shown=${setting#*\\n}
+    case "$shown" in
+        *' '*) shown=${shown%%=*}=${shown##* } ;;
+    esac
+    greeter_not_ready "a greetd unit with $shown" "greetd's unit sets $shown in $T/units/greetd.service, which isn't one setup knows is safe there: only those greetd's own units use are"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '[Unit]\nBefore=multi-user.target\n' >> "$T/units/greetd.service"; run
+greeter_not_ready "a greetd unit that comes before another" "greetd's unit sets Before= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Unit]\nAfter=\nWants=plymouth-quit-wait.service\nStartLimitAction=none\n[Install]\nWantedBy=graphical.target multi-user.target\nRequiredBy=graphical.target\n' >> "$T/units/greetd.service"; run
+check "greetd: a greetd unit naming only what its packages' units name is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# systemd carries a line ending in a backslash on, past a comment line, and
+# reads the rest as part of it, not a setting of its own; one ending in two
+# doesn't carry on.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Service]\nTimeoutStopSec=30s \\\n# a comment\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service"; run
+check "greetd: a setting carried on into another isn't one" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '[Service]\nTimeoutStopSec=30s \\\\\nRootDirectory=/srv/greetd\n' > "$T/units/greetd.service"; run
+greeter_not_ready "a setting after a line ending in an escaped backslash" "greetd's unit sets RootDirectory= in $T/units/greetd.service, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+# systemd reads a line still carried on at the end of its file, too.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
+printf '[Service]\nRestartSec=1 \\\n' > "$T/units/greetd.service.d/a.conf"
+printf '[Service]\nRootDirectory=/srv/greetd \\' > "$T/units/greetd.service.d/b.conf"
+run FAKE_GREETD_DROPINS="$T/units/greetd.service.d/a.conf $T/units/greetd.service.d/b.conf"
+greeter_not_ready "a setting carried on past the end of its file" "greetd's unit sets RootDirectory= in $T/units/greetd.service.d/b.conf, which isn't one of the settings setup knows can't change what greetd runs"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-sbin/true"; chmod +x "$T/usr-sbin/true"
+run FAKE_GREETD_EXEC="$T/usr-sbin/true"
+greeter_not_ready "a greetd unit that starts something else" "greetd's unit starts $T/usr-sbin/true, which isn't greetd"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-sbin/true"; chmod +x "$T/usr-sbin/true"
+rm "$T/usr-sbin/greetd"; ln -s true "$T/usr-sbin/greetd"; run
+greeter_not_ready "a greetd that's a link to something else" "greetd's unit starts $T/usr-sbin/greetd, which is $T/usr-sbin/true, not greetd"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; ln -s greetd "$T/usr-sbin/display-daemon"; run FAKE_GREETD_EXEC="$T/usr-sbin/display-daemon"
+check "greetd: a link to greetd, by another name, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A oneshot unit can have no ExecStart, and then starts nothing.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=
+greeter_not_ready "a greetd unit that starts nothing" "greetd's unit starts nothing, so it wouldn't start a login screen"
+teardown
+# greetd is the only login screen once it's the display manager, so a unit
+# systemd wouldn't always start again when greetd stops isn't switched to.
+for policy in FAKE_GREETD_RESTART=no:Restart=no FAKE_GREETD_RESTART=on-failure:Restart=on-failure \
+    FAKE_GREETD_RESTART_PREVENT=1:RestartPreventExitStatus=1 FAKE_GREETD_REMAIN=yes:RemainAfterExit=yes; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; run "${policy%%:*}"
+    greeter_not_ready "a greetd unit with ${policy#*:}" "greetd's unit has ${policy#*:}, so systemd wouldn't always start greetd again when it stops, leaving no login screen"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_UNIT_QUERY_FAILS=Restart
+greeter_not_ready "a greetd restart policy systemd won't say" "systemd didn't say greetd's Restart"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_ARGS="--config /tmp/greetd.toml"
+greeter_not_ready "a greetd started with arguments" "greetd's unit starts it as $T/usr-sbin/greetd --config /tmp/greetd.toml, and setup only trusts greetd started with no arguments"
+teardown
+
+finish

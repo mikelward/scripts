@@ -1,0 +1,434 @@
+#!/bin/bash
+# Tests for setup-tide: the greeter's files, the way back, greetd's account and VT, and the keyring
+#
+# The harness, its fixtures and mocks are in setup-tide_testlib.
+
+# shellcheck source=setup-tide_testlib
+. "$(dirname "$0")/setup-tide_testlib"
+
+set -e
+
+# tide-greeter's Hyprland config and QML, which the greeter runs as code.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/share/tide/shell/greeter.qml"
+greeter_not_ready "greeter QML that isn't root's" "tide's greeter files aren't root's alone: $T/share/tide/shell/greeter.qml is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm -r "$T/share/tide"; run
+greeter_not_ready "no greeter files" "tide's greeter files aren't installed beside $T/usr-bin/tide-greeter"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/share/tide/greeter/hyprland.lua"; run
+greeter_not_ready "no greeter Hyprland config" "greetd's user _greetd can't read $T/share/tide/greeter/hyprland.lua"
+teardown
+# tide-greetd, the greeter's connection to greetd, is the one beside
+# tide-greeter, whatever the PATH holds.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/tide-greetd"; printf '#!/bin/sh\n' > "$T/usr-local-bin/tide-greetd"
+chmod +x "$T/usr-local-bin/tide-greetd"; run
+greeter_not_ready "no tide-greetd beside tide-greeter" "greetd's user _greetd can't run $T/usr-bin/tide-greetd, which tide-greeter talks to greetd through"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_USER_NOEXEC="$T/usr-bin/tide-greetd"
+greeter_not_ready "a tide-greetd greetd's user can't run" "greetd's user _greetd can't run $T/usr-bin/tide-greetd, which tide-greeter talks to greetd through"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'not a program\n' > "$T/usr-bin/tide-greetd"; run
+greeter_not_ready "a tide-greetd that isn't a program" "greetd's user _greetd can't start tide-greetd: $T/usr-bin/tide-greetd isn't a program the kernel can start: it's neither an ELF file nor a script whose #! names what runs it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/libs"
+: > "$T/libs/libx.so.1"; chmod o+w "$T/libs/libx.so.1"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-bin/tide-greetd" --interp="$T/loader/ld.so"; run FAKE_LDD_LIBS="$T/usr-bin/tide-greetd:$T/libs/libx.so.1"
+greeter_not_ready "a tide-greetd that loads a library others can write" "the greeter's tide-greetd isn't root's alone: $T/usr-bin/tide-greetd loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
+teardown
+# One that isn't root's is in tide-greeter's install, which is checked
+# whole, and wherever its links lead, before tide-greetd is looked at.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/tide-greetd"
+greeter_not_ready "a tide-greetd that isn't root's" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greetd is uid 1000's, not root's"
+teardown
+# What the greeter runs is checked before any of it runs, even as greetd's
+# user.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/Hyprland"
+check "greetd: an untrusted Hyprland isn't run" lacks "$calls" "Hyprland --version"
+teardown
+
+setup; ARGS=(); echo gdm3.service > "$T/dm"; sed -i '/^user = /d' "$T/greetd.toml"; run
+check "greetd: a template without a user line doesn't switch" lacks "$calls" "enable --force greetd"
+check "greetd: a template without a user line is named" has "$output" "has no user or vt line for setup to set"
+teardown
+# Nor one that runs something else, or that TOML would read another way.
+for broken in "another command" "a key twice" "another section"; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"
+    case "$broken" in
+        "another command") sed -i 's|^command = .*|command = "agreety --cmd /bin/sh"|' "$T/greetd.toml" ;;
+        "a key twice") sed -i '/^command = /p' "$T/greetd.toml" ;;
+        "another section") printf '[general]\nservice = "login"\n' >> "$T/greetd.toml" ;;
+    esac
+    run
+    check "greetd: a template with $broken doesn't switch" lacks "$calls" "enable --force greetd"
+    check "greetd: a template with $broken writes no config" test ! -e "$T/etc/greetd/config.toml"
+    check "greetd: a template with $broken is named" has "$output" "isn't the config setup knows how to write"
+    teardown
+done
+
+# A greeter that's broken since greetd took over puts the noted display
+# manager back, so the next boot has a login screen.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+rm "$T/usr-bin/qs"
+: > "$CALLS"
+run
+check "greetd: a greeter that can't run any more puts GDM back" has "$calls" "sudo systemctl enable --force gdm3.service"
+check "greetd: and says why" has "$output" "greetd's greeter can't run, so putting back gdm3.service for the next boot: greetd's user _greetd can't run qs"
+check "greetd: GDM is the display manager again" test "$(cat "$T/dm")" = gdm3.service
+teardown
+
+# And so does one someone else has since been able to change.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+run FAKE_OWNER="1000:$T/usr-bin/qs"
+check "greetd: a greeter that's no longer root's alone puts GDM back" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "so putting back gdm3.service for the next boot: the greeter's tide-greeter isn't root's alone: $T/usr-bin/qs is uid 1000's, not root's"
+teardown
+
+# The way back runs before anything that can end the run, so a failure
+# there can't keep greetd: --no-greeter puts GDM back even when a later
+# step fails, and so does a greeter that can't run.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+: > "$CALLS"
+ARGS=(--no-greeter); run FAKE_GO_VERSION=go1.19.8
+check "--no-greeter: a run that fails later still puts GDM back" test "$(cat "$T/dm")" = gdm3.service
+check "--no-greeter: and the failure still ends it" test "$status" -ne 0
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+rm "$T/usr-bin/qs"
+: > "$CALLS"
+run FAKE_GO_VERSION=go1.19.8
+check "greetd: a broken greeter puts GDM back even when a later step fails" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "greetd's greeter can't run, so putting back gdm3.service for the next boot: greetd's user _greetd can't run qs"
+teardown
+# greetd's config is put right before then too, so a later failure can't
+# leave greetd, which runs as root, booting a config that's gone or isn't
+# tide's.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+cp "$T/etc/greetd/config.toml" "$T/config.want"
+rm "$T/etc/greetd/config.toml"
+run FAKE_GO_VERSION=go1.19.8
+check "greetd: a missing config is put back even when a later step fails" cmp -s "$T/etc/greetd/config.toml" "$T/config.want"
+check "greetd: and the failure still ends it" test "$status" -ne 0
+check "greetd: greetd stays the display manager" test "$(cat "$T/dm")" = greetd.service
+printf '[default_session]\ncommand = "/bin/sh"\nuser = "_greetd"\n' > "$T/etc/greetd/config.toml"
+run FAKE_GO_VERSION=go1.19.8
+check "greetd: a config that isn't tide's is rewritten even when a later step fails" cmp -s "$T/etc/greetd/config.toml" "$T/config.want"
+# Nor does a second query of the display manager that fails skip it: the
+# first pass already knows it's greetd.
+rm -f "$T/dm-queries"
+printf 'garbage\n' > "$T/etc/greetd/config.toml"
+run FAKE_GO_VERSION=go1.19.8 FAKE_DM_QUERY_FAILS_FROM=2
+check "greetd: a config is put right even when asking again which display manager this is fails" cmp -s "$T/etc/greetd/config.toml" "$T/config.want"
+# Nor one someone else could change.
+: > "$CALLS"
+run FAKE_GO_VERSION=go1.19.8 FAKE_OWNER="1000:$T/etc/greetd/config.toml"
+check "greetd: a config someone else could change is rewritten even when a later step fails" \
+    grep -q "^sudo install -D -m 644 .* $T/etc/greetd/config.toml\$" <<<"$calls"
+teardown
+# And a config this run can't make tide's at all isn't kept: one setup
+# can't check could be anything, and greetd runs it as root.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+printf 'garbage\n' > "$T/etc/greetd/config.toml"
+run FAKE_GO_VERSION=go1.19.8 FAKE_GREETD_CONFLICTS="shutdown.target"
+check "greetd: a config this run can't write puts GDM back even when a later step fails" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "greetd's unit keeps getty off no VT, so the greeter would share one with a login prompt; greetd isn't kept with a config this run couldn't put right, so putting back gdm3.service for the next boot"
+teardown
+# One this run makes runnable again takes over again at the end.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+mv "$T/usr-bin/qs" "$T/qs"
+cat > "$T/bin/make" <<MOCK
+#!/bin/sh
+printf "%s\\n" "make \$*" >> "$CALLS"
+case "\$*" in *install-session*) mv "$T/qs" "$T/usr-bin/qs" ;; esac
+MOCK
+chmod +x "$T/bin/make"
+: > "$CALLS"
+run
+check "greetd: a greeter the run repairs is put back first" has "$calls" "sudo systemctl enable --force gdm3.service"
+check "greetd: then takes over again" test "$(cat "$T/dm")" = greetd.service
+check "greetd: noting GDM still" test "$(cat "$T/var/lib/setup-tide/previous-display-manager")" = gdm3.service
+teardown
+
+# Installing greetd can make it the display manager on a machine with none;
+# when the greeter can't run, that's undone.
+setup; ARGS=(); rm "$T/usr-bin/qs"; run FAKE_GREETD_TAKES=1
+check "greetd: a package's switch is undone when the greeter can't run" has "$calls" "sudo systemctl disable greetd.service"
+check "greetd: leaving the text console" test ! -s "$T/dm"
+teardown
+
+# greetd is installed after everything that can end the run, so a failure
+# there can't leave the package's switch behind, unnoted.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=Hyprland FAKE_GREETD_TAKES=1
+check "greetd: a fatal failure earlier ends the run" test "$status" -ne 0
+check "greetd: before greetd is installed" lacks "$calls" "install -y greetd"
+check "greetd: so it isn't the display manager" test ! -s "$T/dm"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+check "greetd: is installed after tide's session" \
+    test "$(printf '%s\n' "$calls" | grep -n 'install-session' | head -n1 | cut -d: -f1)" -lt \
+        "$(printf '%s\n' "$calls" | grep -n 'install -y greetd' | head -n1 | cut -d: -f1)"
+teardown
+
+# Every other way of not switching undoes the package's switch too: here,
+# a note of the way back that can't be written.
+setup; ARGS=(); mkdir -p "$T/var/lib"; : > "$T/var/lib/setup-tide"; run FAKE_GREETD_TAKES=1
+check "greetd: an unwritable note doesn't switch" has "$output" "not making greetd the display manager, so the text console login stays: couldn't note it in $T/var/lib/setup-tide/previous-display-manager, which is the way back"
+check "greetd: and undoes the package's switch" has "$calls" "sudo systemctl disable greetd.service"
+check "greetd: leaving no display manager" test ! -s "$T/dm"
+teardown
+
+# And a display manager systemd can't name once greetd is installed: the
+# package may have switched, so the one before is put back.
+setup; ARGS=(); run FAKE_GREETD_TAKES=1 FAKE_DM_QUERY_FAILS_AFTER_INSTALL=1
+check "greetd: an unnamed display manager after the install is named" has "$output" "not making greetd the display manager, so the text console login stays: couldn't tell which display manager this is after installing greetd"
+check "greetd: and the one before is put back" has "$calls" "sudo systemctl disable greetd.service"
+check "greetd: leaving none" test ! -s "$T/dm"
+teardown
+
+# And a config that can't be written.
+setup; ARGS=(); rm -r "$T/etc/greetd"; : > "$T/etc/greetd"; run FAKE_GREETD_TAKES=1
+check "greetd: an unwritable config is named" has "$output" "not making greetd the display manager, so the text console login stays: couldn't write $T/etc/greetd/config.toml"
+check "greetd: and that undoes the package's switch too" test ! -s "$T/dm"
+teardown
+
+# The user greetd's own config names comes first.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'greeter:x:998:998::/nonexistent:/usr/sbin/nologin\n' >> "$T/passwd"
+printf '[terminal]\nvt = 7\n\n[default_session]\ncommand = "agreety --cmd /bin/sh"\nuser = "_greetd" # the package'"'"'s\n' > "$T/etc/greetd/config.toml"
+run
+check "greetd: uses the user greetd's config names" has "$(cat "$T/etc/greetd/config.toml")" 'user = "_greetd"'
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'greeter:x:998:998::/nonexistent:/usr/sbin/nologin\n' >> "$T/passwd"
+run
+check "greetd: without a config, greetd's own default user comes first" has "$(cat "$T/etc/greetd/config.toml")" 'user = "greeter"'
+check "greetd: a home that doesn't exist is replaced" has "$calls" "sudo usermod -d $T/var/lib/tide-greeter greeter"
+teardown
+
+# The greeter runs only as one of greetd's own system accounts: not root,
+# a person's account, or another service's, whatever greetd's config names.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\npostgres:x:120:120::/nonexistent:/bin/sh\n' >> "$T/passwd"
+for name in root alice postgres; do
+    printf '[default_session]\ncommand = "agreety"\nuser = "%s"\n' "$name" > "$T/etc/greetd/config.toml"
+    : > "$CALLS"
+    run
+    check "greetd: a config naming $name isn't followed" has "$(cat "$T/etc/greetd/config.toml")" 'user = "_greetd"'
+    check "greetd: nor is $name's home changed" lacks "$calls" "usermod -d $T/var/lib/tide-greeter $name"
+done
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'root:x:0:0::/root:/bin/sh\n' > "$T/passwd"
+printf '[default_session]\ncommand = "agreety"\nuser = "root"\n' > "$T/etc/greetd/config.toml"
+run
+greeter_not_ready_config() {
+    check "greetd: $1 doesn't switch" lacks "$calls" "enable --force greetd"
+    check "greetd: $1 is named" has "$output" "$2"
+}
+greeter_not_ready_config "only root" "greetd has no system account to run the greeter as (setup looked for greeter _greetd greetd)"
+teardown
+# Nor another service's, when greetd has none of its own.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'postgres:x:120:120::/nonexistent:/bin/sh\n' > "$T/passwd"
+printf '[default_session]\ncommand = "agreety"\nuser = "postgres"\n' > "$T/etc/greetd/config.toml"
+run
+greeter_not_ready_config "only another service's account" "greetd has no system account to run the greeter as (setup looked for greeter _greetd greetd)"
+check "greetd: and leaves that account's home" lacks "$calls" "usermod"
+teardown
+# UID_MIN comes from login.defs.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'UID_MIN\t\t\t 500\n' > "$T/login.defs"; run
+check "greetd: a UID at login.defs' UID_MIN is a person's" has "$output" "greetd has no system account to run the greeter as"
+teardown
+
+# The VT is the one greetd's unit keeps getty off.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_CONFLICTS="getty@tty1.service shutdown.target"
+check "greetd: upstream's unit gets VT 1" has "$(cat "$T/etc/greetd/config.toml")" "vt = 1"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_CONFLICTS="getty@tty63.service shutdown.target"
+check "greetd: a unit keeping getty off VT 63, Linux's last, gets it" has "$(cat "$T/etc/greetd/config.toml")" "vt = 63"
+teardown
+# Linux has VTs 1 to 63, and greetd would fail to start on any other at
+# every boot.
+for tty in 0 64 07; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_CONFLICTS="getty@tty$tty.service shutdown.target"
+    greeter_not_ready "a unit keeping getty off tty$tty" "greetd's unit keeps getty off tty$tty, which isn't one of Linux's VTs, 1 to 63, so greetd couldn't start there"
+    teardown
+done
+# A unit that keeps getty off no VT, or a VT systemd won't say, isn't
+# switched to: the greeter would share its VT with a login prompt.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_CONFLICTS="shutdown.target"
+check "greetd: a unit naming no getty doesn't switch" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "not making greetd the display manager, so gdm3.service stays: greetd's unit keeps getty off no VT, so the greeter would share one with a login prompt"
+check "greetd: and writes no config" test ! -e "$T/etc/greetd/config.toml"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_CONFLICTS_FAILS=1
+check "greetd: an unreadable unit doesn't switch" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "couldn't ask systemd which VT greetd's unit keeps for it"
+teardown
+
+# A home greetd's user owns, outside /etc, is kept.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir "$T/greeter-home"
+printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/greeter-home" > "$T/passwd"
+run FAKE_OWNER="999:$T/greeter-home"
+check "greetd: a home of its own is kept" lacks "$calls" "usermod"
+check "greetd: and nothing is made for it" test ! -e "$T/var/lib/tide-greeter"
+teardown
+
+# Without a home, the greeter only forgets the last login: still switch.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_USERMOD_FAILS=1
+check "greetd: a failed usermod is named" has "$output" "couldn't give _greetd the home $T/var/lib/tide-greeter, so the greeter won't remember the last login"
+check "greetd: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+
+# An enable that took the alias before it failed is undone too.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS_AFTER=1
+check "greetd: an enable that fails after taking the alias is undone" has "$calls" "sudo systemctl enable --force gdm3.service"
+check "greetd: GDM is the display manager again" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and says why" has "$output" "not making greetd the display manager, so gdm3.service stays: systemctl couldn't enable greetd"
+teardown
+
+# A failed switch leaves GDM, and says so.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS=1
+check "greetd: a failed switch is named" has "$output" "not making greetd the display manager, so gdm3.service stays: systemctl couldn't enable greetd"
+check "greetd: a failed switch isn't fatal" test "$status" -eq 0
+check "greetd: a failed switch leaves the old greeting" has "$output" "Log out and pick the \"tide\" session"
+teardown
+# A greetd unit without Alias=display-manager.service, enabled, would start
+# beside the display manager, so it's disabled again.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_NO_ALIAS=1
+check "greetd: a unit that doesn't take the alias is named" has "$output" "not making greetd the display manager, so gdm3.service stays: enabling greetd didn't make it the display manager, as its unit would with Alias=display-manager.service"
+check "greetd: and is disabled again" has "$calls" "systemctl disable greetd.service"
+check "greetd: and GDM stays" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and isn't said to replace it" lacks "$output" "greetd's greeter replaces"
+teardown
+# When disabling it again fails too, greetd's other links may start it
+# beside the display manager, and setup says so.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_NO_ALIAS=1 FAKE_DISABLE_FAILS=1
+check "greetd: a failed disable after the alias isn't taken is named" has "$output" "couldn't disable greetd again, so it may start beside gdm3.service from the next boot; run 'sudo systemctl disable greetd.service'"
+check "greetd: and GDM keeps the alias" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: and the run still says why it didn't switch" has "$output" "not making greetd the display manager, so gdm3.service stays: enabling greetd didn't make it the display manager"
+teardown
+
+# --no-install sets up the greetd that's there, without installing one.
+setup; ARGS=(--no-install); echo gdm3.service > "$T/dm"; : > "$T/greetd-installed"; run
+check "--no-install: installs no greetd" lacks "$calls" "install -y greetd"
+check "--no-install: still makes greetd the display manager" test "$(cat "$T/dm")" = greetd.service
+teardown
+
+setup; ARGS=(--no-sudo); echo gdm3.service > "$T/dm"; : > "$T/greetd-installed"; run
+check "--no-sudo leaves the display manager alone" test "$(cat "$T/dm")" = gdm3.service
+check "--no-sudo writes no greetd config" test ! -e "$T/etc/greetd/config.toml"
+teardown
+
+# Logging in at the greeter unlocks gnome-keyring, as GDM's login does.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; cp "$T/pam.d/greetd" "$T/debian-pam"; run
+check "keyring: installs PAM's gnome-keyring module" has "$calls" "sudo apt-get install -y gnome-keyring libpam-gnome-keyring"
+check "keyring: leaves Debian's file, which lists it" cmp -s "$T/pam.d/greetd" "$T/debian-pam"
+teardown
+
+setup; ARGS=(); run SETUP_OS=redhat
+check "keyring: Fedora's module is gnome-keyring-pam" has "$calls" "dnf install -y gnome-keyring gnome-keyring-pam"
+teardown
+setup; ARGS=(); run SETUP_OS=arch
+check "keyring: Arch's is in gnome-keyring" has "$calls" "pacman -S --needed --noconfirm gnome-keyring"
+teardown
+setup; ARGS=(); run FAKE_MISSING=libpam-gnome-keyring
+check "keyring: a missing module is named" has "$output" "couldn't install libpam-gnome-keyring, so logging in won't unlock the keyring"
+check "keyring: and greetd still installs" has "$calls" "apt-get install -y greetd"
+teardown
+
+# A file without it gets both lines, after everything it includes; a
+# commented-out line doesn't count.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth       substack     system-auth\n#auth optional pam_gnome_keyring.so\naccount    include      system-auth\nsession    include      system-auth\n' > "$T/pam.d/greetd"; cp "$T/pam.d/login" "$T/pam.d/system-auth"
+cp "$T/pam.d/greetd" "$T/original-pam"
+run
+check "keyring: a stack without it gains it" \
+    test "$(cat "$T/pam.d/greetd")" = "$(cat "$T/original-pam"; printf '\n# Unlock gnome-keyring with the login password (setup-tide).\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start')"
+check "keyring: and says so" has "$output" "greetd's PAM stack now unlocks the keyring at login"
+cp "$T/pam.d/greetd" "$T/once-pam"
+run
+check "keyring: a rerun adds nothing" cmp -s "$T/pam.d/greetd" "$T/once-pam"
+teardown
+
+# Only the missing one is added.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+run
+check "keyring: a stack with auth gains only session" \
+    test "$(grep -c pam_gnome_keyring "$T/pam.d/greetd")" -eq 2 -a "$(grep -c '^session.*auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+
+# A session line without auto_start starts no keyring daemon at login, so
+# it gains auto_start, and nothing is added.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so\n-session optional pam_gnome_keyring.so  \n' > "$T/pam.d/greetd"
+run
+check "keyring: a session line without auto_start gains it" \
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\n@include login\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start\n-session optional pam_gnome_keyring.so auto_start')"
+check "keyring: and says so" has "$output" "greetd's PAM stack now unlocks the keyring at login"
+teardown
+# PAM ignores everything from a # on, so the module or auto_start named
+# only in a comment doesn't count, and auto_start goes before one.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so # auto_start\n' > "$T/pam.d/greetd"
+run
+check "keyring: auto_start goes before a comment" \
+    test "$(cat "$T/pam.d/greetd")" = "$(printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so # unlock\nsession optional pam_gnome_keyring.so auto_start # auto_start')"
+cp "$T/pam.d/greetd" "$T/once-pam"
+run
+check "keyring: and a rerun leaves it" cmp -s "$T/pam.d/greetd" "$T/once-pam"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\nauth optional pam_unix.so # pam_gnome_keyring.so\naccount include system-auth\nsession include system-auth # pam_gnome_keyring.so\n' > "$T/pam.d/greetd"; cp "$T/pam.d/login" "$T/pam.d/system-auth"
+pam_module "$T/security/pam_unix.so"; run
+check "keyring: a module named only in comments is added" \
+    test "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+# Lines are read as PAM reads them, joined where a backslash carries one
+# on. One that's carried on already has auto_start or is left alone, since
+# text added at its end would follow the backslash.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional pam_gnome_keyring.so \\\n    auto_start\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: a session line carried on to its auto_start is left" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and greetd takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_gnome_keyring.so\nsession optional \\\n    pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: a carried session line without auto_start is left" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and says so" has "$output" "$T/pam.d/greetd carries a pam_gnome_keyring session line on with a backslash, so setup leaves it, and logging in may not unlock the keyring unless it has auto_start"
+check "keyring: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+# A line that only looks like one, as the rest of a line carried on, isn't.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nauth optional pam_permit.so \\\n    session optional pam_gnome_keyring.so\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+check "keyring: the rest of a carried line isn't a keyring line" \
+    test "$(head -n 4 "$T/pam.d/greetd")" = "$(cat "$T/original-pam")" -a "$(grep -c '^auth  *optional  *pam_gnome_keyring.so$' "$T/pam.d/greetd")" -eq 1 -a "$(grep -c '^session  *optional  *pam_gnome_keyring.so auto_start$' "$T/pam.d/greetd")" -eq 1
+teardown
+# PAM can't read a file that ends in a line a backslash carries on, so
+# greetd doesn't take over, and nothing is added after it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\nsession optional pam_permit.so \\\n' > "$T/pam.d/greetd"
+cp "$T/pam.d/greetd" "$T/original-pam"; run
+greeter_not_ready "a PAM file that ends in a carried line" "greetd's PAM stack, in $T/pam.d/greetd, ends in a line a backslash carries on, which PAM can't read, and PAM refuses a login through a stack it can't load whole"
+check "keyring: nothing is added after a carried last line" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+teardown
+# What setup would write is checked as PAM would load it, before it's
+# written, and isn't written if it can't be checked.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf '#%%PAM-1.0\n@include login\n' > "$T/pam.d/greetd"; cp "$T/pam.d/greetd" "$T/original-pam"
+cat > "$T/bin/awk" <<MOCK
+#!/bin/sh
+test -z "\$PAM_CHAIN_OVERRIDE" || exit 2
+exec $real_awk "\$@"
+MOCK
+chmod +x "$T/bin/awk"; run
+check "keyring: a change that can't be checked isn't written" cmp -s "$T/pam.d/greetd" "$T/original-pam"
+check "keyring: and says why" has "$output" "not adding pam_gnome_keyring to $T/pam.d/greetd, since PAM couldn't load greetd's stack with it: couldn't read greetd's PAM stack"
+check "keyring: and greetd still takes over" test "$(cat "$T/dm")" = greetd.service
+teardown
+
+finish

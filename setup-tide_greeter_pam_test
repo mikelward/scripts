@@ -1,0 +1,273 @@
+#!/bin/bash
+# Tests for setup-tide: greetd's PAM stack: its files, and how PAM runs its lines
+#
+# The harness, its fixtures and mocks are in setup-tide_testlib.
+
+# shellcheck source=setup-tide_testlib
+. "$(dirname "$0")/setup-tide_testlib"
+
+set -e
+
+# So is the directory setup writes greetd's config in.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod o+w "$T/etc/greetd"; run
+greeter_not_ready "a greetd config directory others can write" "greetd's config directory isn't root's alone: users other than root can write $T/etc/greetd"
+teardown
+# So is greetd's PAM stack, its own file and what it includes from the same
+# directory, since anyone who could change one could let any password in.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+sed -i '/pam_gnome_keyring/d' "$T/pam.d/greetd"; chmod o+w "$T/pam.d/greetd"; run
+greeter_not_ready "a greetd PAM file others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/pam.d/greetd"
+check "greetd: and setup adds nothing to it" lacks "$(cat "$T/pam.d/greetd")" pam_gnome_keyring
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/pam.d/login"; run FAKE_OWNER="1000:$T/pam.d/login"
+greeter_not_ready "an included PAM file that isn't root's" "greetd's PAM stack isn't root's alone: $T/pam.d/login is uid 1000's, not root's"
+teardown
+# Another service's file isn't greetd's, in either directory, so only the
+# directories themselves count there.
+for unrelated in pam.d/cups:o+w pam.d/cups:1000 vendor-pam.d/cups:g+w; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; f=$T/${unrelated%%:*}
+    printf 'auth required pam_permit.so\n' > "$f"
+    case "$unrelated" in
+        *:1000) run FAKE_OWNER="1000:$f" ;;
+        *) chmod "${unrelated##*:}" "$f"; run ;;
+    esac
+    check "greetd: another service's PAM file, $unrelated, doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; chmod o+w "$T/vendor-pam.d"; run
+greeter_not_ready "a vendor's PAM directory others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/vendor-pam.d"
+teardown
+# One setup can't read is skipped while finding what greetd's stacks read,
+# so another service's doesn't stop the switch, and one greetd's do read
+# still does. Root reads any file, so as root the run gives that up.
+run_unprivileged() {
+    if test "$(id -u)" = 0; then
+        run setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all
+    else
+        run
+    fi
+}
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'auth required pam_permit.so\n' > "$T/pam.d/cups"; chmod 000 "$T/pam.d/cups"; run_unprivileged
+check "greetd: another service's PAM file setup can't read doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod 000 "$T/pam.d/login"; run_unprivileged
+greeter_not_ready "a PAM file greetd's stack reads that setup can't" "greetd's PAM stack isn't root's alone: couldn't read $T/pam.d/login"
+teardown
+# So is what it names by its full path, which loads or runs as root too: a
+# module, a program pam_exec runs, a file a module reads, and the prefix each
+# is installed in, wherever on a line the name is.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; : > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+printf 'auth optional %s\n' "$T/mods/pam_evil.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/hooks"; printf '#!/bin/sh\n' > "$T/hooks/on-login"
+printf 'session optional pam_exec.so quiet %s\n' "$T/hooks/on-login" > "$T/pam.d/login"; run FAKE_OWNER="1000:$T/hooks/on-login"
+greeter_not_ready "a program a PAM module runs that isn't root's" "greetd's PAM stack isn't root's alone: $T/pam.d/login names $T/hooks/on-login: $T/hooks/on-login is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/env"; chmod o+w "$T/env"
+printf 'session optional pam_env.so [envfile=%s]\n' "$T/env/locale" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a file a PAM module reads, in a directory others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/env/locale: users other than root can write $T/env"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; : > "$T/opt/pam/lib/security/pam_x.so"
+: > "$T/opt/pam/lib/libdep.so"; chmod g+w "$T/opt/pam/lib/libdep.so"
+printf 'auth optional %s\n' "$T/opt/pam/lib/security/pam_x.so" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a library beside a PAM module others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $T/opt/pam/lib/security/pam_x.so: users other than root can write $T/opt/pam/lib/libdep.so"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional ../../../mods/pam_x.so\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM module that climbs out of PAM's directory" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names ../../../mods/pam_x.so, which climbs out of where PAM looks"
+teardown
+# A file included by its full path from outside the PAM directory isn't
+# looked through, so it fails, even where a backslash carries the line on
+# past a comment.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/elsewhere"; : > "$T/elsewhere/common"
+printf 'auth \\\n# carried on\n    include %s\n' "$T/elsewhere/common" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM file included from elsewhere" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd includes $T/elsewhere/common, outside $T/pam.d and $T/vendor-pam.d, which setup doesn't look through"
+teardown
+# Another service's lines aren't greetd's: what they name or include fails
+# only a stack that reads them, its other service's included, whose
+# modules PAM loads for greetd too.
+for reads in none include other; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods" "$T/elsewhere"; : > "$T/elsewhere/common"
+    : > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+    printf 'auth optional %s\nsession optional pam_exec.so %s\nauth include %s\n' \
+        "$T/mods/pam_evil.so" "$T/mods/pam_evil.so" "$T/elsewhere/common" > "$T/pam.d/cups"
+    case "$reads" in
+        include) printf 'auth include cups\n' >> "$T/pam.d/greetd" ;;
+        other) cp "$T/pam.d/cups" "$T/pam.d/other" ;;
+    esac
+    run
+    case "$reads" in
+        none) check "greetd: another service's lines naming what others can write don't stop the switch" test "$(cat "$T/dm")" = greetd.service ;;
+        include) greeter_not_ready "a PAM file greetd includes that names what others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/cups names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so" ;;
+        other) greeter_not_ready "greetd's other service naming what others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/other names $T/mods/pam_evil.so: users other than root can write $T/mods/pam_evil.so" ;;
+    esac
+    teardown
+done
+# One from inside it, a name in a comment, and one that isn't there, which
+# only root could make, all pass.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+: > "$T/mods/pam_evil.so"; chmod o+w "$T/mods/pam_evil.so"
+printf '@include %s\n# auth optional %s\nauth optional pam_unix.so # %s\nsession optional pam_env.so envfile=%s\n' \
+    "$T/pam.d/login" "$T/mods/pam_evil.so" "$T/mods/pam_evil.so" "$T/nowhere/env" >> "$T/pam.d/greetd"; run
+check "greetd: a PAM stack naming only root's is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+cat > "$T/bin/awk" <<MOCK
+#!/bin/sh
+case "\$*" in *'print "climbs"'*) exit 2 ;; esac
+exec $real_awk "\$@"
+MOCK
+chmod +x "$T/bin/awk"; run
+greeter_not_ready "a failed PAM scan" "greetd's PAM stack isn't root's alone: couldn't read the files in $T/pam.d"
+teardown
+# PAM refuses a login through a stack it can't load whole, so each file
+# greetd's stack includes has to be there, however far down, by its full
+# path or not.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '@include %s\n' "$T/pam.d/gone" >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing PAM include" "greetd's PAM stack, in $T/pam.d/greetd, includes $T/pam.d/gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include common-gone\n' > "$T/pam.d/login"; run
+greeter_not_ready "a missing PAM include further down" "greetd's PAM stack, in $T/pam.d/login, includes common-gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth substack common-gone\n' > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a missing include in the greeter's PAM file" "greetd's PAM stack for the greeter, in $T/pam.d/greetd-greeter, includes common-gone, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+# So does a loop of them, which PAM stops following 16 deep.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '@include greetd\n' > "$T/pam.d/login"; run
+greeter_not_ready "a loop of PAM includes" "greetd's PAM stack, in $T/pam.d/login, includes greetd 16 deep, as a loop of includes does, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a PAM include that names no file" "greetd's PAM stack, in $T/pam.d/greetd, has an include that names no file, and PAM refuses a login through a stack it can't load whole"
+teardown
+# Another service's isn't greetd's, one named by its full path in PAM's
+# directory but a link out of it is there, and so is one only the vendor's
+# /usr/lib/pam.d has, where PAM looks next.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/alt" "$T/vendor-pam.d"
+: > "$T/alt/common"; ln -s "$T/alt/common" "$T/pam.d/common"; cp "$T/pam.d/login" "$T/vendor-pam.d/common-vendor"
+printf 'auth include gone\n' > "$T/pam.d/cups"
+printf '@include %s\n@include common-vendor\n' "$T/pam.d/common" >> "$T/pam.d/greetd"
+run
+check "greetd: a PAM stack whose includes are all there is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# What a vendor's file has is held to the same rules as PAM's own.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; printf 'auth required pam_gone.so\n' > "$T/vendor-pam.d/common-vendor"
+printf '@include common-vendor\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a missing module in a vendor's PAM file" "greetd's PAM stack, in $T/vendor-pam.d/common-vendor, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/vendor-pam.d"; cp "$T/pam.d/login" "$T/vendor-pam.d/common-vendor"
+chmod g+w "$T/vendor-pam.d/common-vendor"; printf '@include common-vendor\n' >> "$T/pam.d/greetd"; run
+greeter_not_ready "a vendor's PAM file others can write" "greetd's PAM stack isn't root's alone: users other than root can write $T/vendor-pam.d/common-vendor"
+teardown
+# Only the lines PAM loads count: an include reads the lines of its own
+# type, and @include, which only Debian's PAM reads, those of the type the
+# file it's in is read for.
+setup; ARGS=(); echo gdm3.service > "$T/dm"
+printf 'session required pam_gone.so\nautth required pam_gone.so\n' > "$T/pam.d/common-misc"
+cp "$T/pam.d/login" "$T/pam.d/common-misc-ok"; printf 'session required pam_gone.so\n' >> "$T/pam.d/common-misc-ok"
+printf 'auth include common-misc-ok\n' >> "$T/pam.d/greetd"; run
+check "greetd: a line an include doesn't read doesn't count" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include common-misc\n' >> "$T/pam.d/greetd"
+printf 'session required pam_gone.so\nautth required pam_gone.so\n' > "$T/pam.d/common-misc"; run
+greeter_not_ready "a line of a type PAM doesn't know, wherever it's included" "greetd's PAM stack, in $T/pam.d/common-misc, has a line of a type PAM doesn't know, autth, and PAM refuses a login through a stack it can't load whole"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_PAM_AT_INCLUDE=no
+greeter_not_ready "an @include where PAM isn't Debian's" "greetd's PAM stack, in $T/pam.d/greetd, has a line of a type PAM doesn't know, @include, and PAM refuses a login through a stack it can't load whole"
+teardown
+# PAM takes a type a service's file has no lines for from its other
+# service, and with none there either, refuses every call on it.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/pam.d/greetd"; run
+greeter_not_ready "an empty greetd PAM file" "greetd's PAM stack, from $T/pam.d/greetd, has no auth lines, and nor has its other service, which PAM takes them from, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'account include login\nsession include login\n' > "$T/pam.d/greetd"; run
+greeter_not_ready "a greetd PAM file that only includes another's account and session lines" "greetd's PAM stack, from $T/pam.d/greetd, has no auth lines, and nor has its other service, which PAM takes them from, so PAM would refuse every login"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^session' "$T/pam.d/login" > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a greeter PAM file with no session lines" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, has no session lines, and nor has its other service, which PAM takes them from, so greetd couldn't start the greeter"
+teardown
+# Its other service's lines are as good as its own when they let a login
+# through, and refuse it when they don't, as Fedora's do.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth include login\nsession include login\n' > "$T/pam.d/greetd"
+printf 'account required %s\n' "$T/security/pam_test.so" > "$T/pam.d/other"; run
+check "greetd: a stack whose account lines are its other service's is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+printf 'auth include login\nsession include login\n' > "$T/pam.d/greetd"; printf 'account required %s\n' "$T/mods/pam_deny.so" > "$T/pam.d/other"; run
+greeter_not_ready "a stack whose account lines are a denying other service's" "greetd's PAM stack, from $T/pam.d/other, its other service, which PAM takes its account lines from, can't pass anyone's account check, whatever the modules it can use return, so PAM would refuse every login"
+teardown
+# PAM runs the lines of a type in order, each counting as its control says,
+# and fails what none of them can let through, whatever their modules
+# return: a module it can't load returns module_unknown, pam_deny fails,
+# a jump only skips lines, and greetd sets credentials, too, on the lines
+# that authenticated.
+# Each with @ for where the test's files are, and | between lines.
+for auth in 'optional pam_gone.so' '-auth sufficient pam_gone.so' '[success=ignore default=ignore] @/security/pam_test.so' \
+    '[success=1 default=ignore] @/security/pam_test.so' '[default=bad] @/security/pam_test.so' 'optional @/mods/pam_half.so' \
+    'required @/mods/pam_deny.so' 'sufficient @/mods/pam_deny.so' 'required @/security/pam_test.so|auth required @/mods/pam_deny.so' \
+    'substack sub|auth required @/mods/pam_deny.so' 'required @/security/pam_test.so|auth [default=reset] @/security/pam_test.so' \
+    'required @/mods/pam_faildelay.so' 'sufficient @/mods/pam_warn.so|auth required @/mods/pam_nologin.so' \
+    'required @/mods/pam_wheel.so group=wheel' '[default=ok] @/mods/pam_env.so|auth required @/mods/pam_canonicalize_user.so'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+    # It authenticates, but sets no credentials, which greetd also asks of
+    # an auth line.
+    pam_module "$T/mods/pam_half.so" pam_sm_authenticate
+    # It refuses whatever it's asked.
+    pam_module "$T/mods/pam_deny.so"
+    # Linux-PAM's own, which never authenticate anyone: they set a delay,
+    # log, or check something only to refuse or step aside.
+    for m in faildelay warn nologin wheel env canonicalize_user; do pam_module "$T/mods/pam_$m.so"; done
+    # A substack's sufficient line ends only the substack.
+    printf 'auth sufficient %s\n' "$T/security/pam_test.so" > "$T/pam.d/sub"
+    case "$auth" in
+        -auth*) printf '%s\n' "${auth//@/$T}" ;;
+        *) printf 'auth %s\n' "${auth//@/$T}" ;;
+    esac | tr '|' '\n' > "$T/pam.d/greetd"
+    printf 'account include login\nsession include login\n' >> "$T/pam.d/greetd"; run
+    why="can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login"
+    case "$auth" in
+        *pam_gone*) why="$why; PAM can't use pam_gone.so there, which isn't there" ;;
+        *pam_half*) why="can't set the credentials of anyone it authenticates, whatever the modules it can use return, so PAM would refuse every login; PAM can't use $T/mods/pam_half.so there, which has no pam_sm_setcred" ;;
+    esac
+    greeter_not_ready "a stack whose auth lines are $auth" "greetd's PAM stack, from $T/pam.d/greetd, $why"
+    teardown
+done
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_gone.so\naccount include login\nsession include login\n' > "$T/pam.d/greetd-greeter"; run
+greeter_not_ready "a greeter stack whose auth lines can't pass, which greetd sets credentials with" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, can't set the greeter's credentials, whatever the modules it can use return, so greetd couldn't start the greeter; PAM can't use pam_gone.so there, which isn't there"
+teardown
+# Each with @ for where the test's files are, and | between lines.
+for auth in 'sufficient @/security/pam_test.so' '[success=done default=die] @/security/pam_test.so' \
+    '[success=ok default=bad] @/security/pam_test.so' '[default=ok] @/security/pam_test.so' \
+    'include sub|auth required @/mods/pam_deny.so' \
+    '[success=1 default=ignore] @/security/pam_test.so|auth requisite @/mods/pam_deny.so|auth required @/mods/pam_permit.so' \
+    'optional @/mods/pam_faildelay.so delay=3000000|auth requisite @/mods/pam_nologin.so|auth required @/security/pam_test.so' \
+    'required @/mods/pam_nologin.so successok' 'sufficient @/mods/pam_wheel.so trust'; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"; pam_module "$T/mods/pam_permit.so"
+    # Linux-PAM's own, which pass a login only with an option that says to.
+    for m in faildelay nologin wheel; do pam_module "$T/mods/pam_$m.so"; done
+    # An included sufficient line ends the stack.
+    printf 'auth sufficient %s\n' "$T/security/pam_test.so" > "$T/pam.d/sub"
+    printf 'auth %s\n' "${auth//@/$T}" | tr '|' '\n' > "$T/pam.d/greetd"
+    printf 'auth optional pam_gone.so\naccount include login\nsession include login\n' >> "$T/pam.d/greetd"; run
+    check "greetd: a stack whose auth lines can pass, through $auth, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+    teardown
+done
+# Debian's PAM ignores a line that jumps when it sets credentials, and
+# upstream PAM counts it as ok, which matters for the greeter, whose
+# credentials it sets without authenticating it first.
+for debian in yes no; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+    printf 'auth [success=1 default=ignore] %s\nauth requisite %s\naccount include login\nsession include login\n' \
+        "$T/security/pam_test.so" "$T/mods/pam_deny.so" > "$T/pam.d/greetd-greeter"
+    if test "$debian" = yes; then
+        run SETUP_PAM_AT_INCLUDE=yes
+        greeter_not_ready "a greeter stack that only jumps to set credentials, on Debian" "greetd's PAM stack for the greeter, from $T/pam.d/greetd-greeter, can't set the greeter's credentials, whatever the modules it can use return, so greetd couldn't start the greeter"
+    else
+        sed -i 's/^@include login/auth include login\naccount include login\nsession include login\npassword include login/' "$T/pam.d/greetd"
+        run SETUP_PAM_AT_INCLUDE=no
+        check "greetd: a greeter stack that only jumps to set credentials, upstream, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+    fi
+    teardown
+done
+
+finish
