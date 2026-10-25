@@ -389,16 +389,31 @@ dnf_known() {
 ' "$@"
 }
 
+# pacman_known prints the name of each of its arguments in pacman's sync
+# databases. pacman -Si fails when any name is unknown, so its status can't
+# tell that from a failed query; only an answer naming nothing is taken as
+# one. Asked in the C locale, whose labels it parses.
+pacman_known() {
+    # Unknown names are expected here, and pacman says so on stderr; the
+    # names it found are the answer, whatever its status.
+    _info=$(LC_ALL=C pacman -Si -- "$@" 2>/dev/null) || :
+    _names=$(printf '%s\n' "$_info" | awk '$1 == "Name" && $2 == ":" { print $3 }')
+    test -n "$_names" || return 1
+    printf '%s\n' "$_names"
+}
+
 # install_all installs the packages it can and prints the ones it couldn't,
 # failing if there are any. apt, dnf and pacman all refuse the lot over one
-# name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so on Debian,
-# Ubuntu and Fedora it asks which exist first, and installs those in one go.
-# The package manager's own output goes to stderr, so stdout carries only the
-# list.
+# name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so it asks
+# which exist first, and installs those in one go. On Arch a package
+# installed from outside the repositories (the AUR) is left as it is:
+# pacman -S would refuse it too. The package manager's own output goes to
+# stderr, so stdout carries only the list.
 install_all() {
     _install="$*"
     _missing=
     _known=
+    _local=
     _filter=no
     case "$(detect_os)" in
         debian)
@@ -416,12 +431,24 @@ install_all() {
                 warn "couldn't ask dnf which packages exist; installing them all"
             fi
             ;;
+        arch)
+            if _known=$(pacman_known "$@"); then
+                _filter=yes
+                # pacman -Q fails over each name that isn't installed, which
+                # is most of them.
+                _local=$(pacman -Qq -- "$@" 2>/dev/null) || :
+            else
+                warn "couldn't ask pacman which packages exist; installing them all"
+            fi
+            ;;
     esac
     if test "$_filter" = yes; then
         _install=
         for _pkg in "$@"; do
             if printf '%s\n' "$_known" | grep -qxF -e "$_pkg"; then
                 _install="$_install $_pkg"
+            elif printf '%s\n' "$_local" | grep -qxF -e "$_pkg"; then
+                :
             else
                 _missing="$_missing $_pkg"
             fi
