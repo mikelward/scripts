@@ -2,7 +2,7 @@
 # Tests for ci.yml's workflow-level concurrency group. Its failure is silent: a
 # group that cancels the wrong run leaves the required lanes check canceled or
 # missing on a head, and one that cancels nothing doubles every push's runs;
-# neither turns a job red.
+# neither turns a job red. Also that the test job runs the tests side by side.
 
 set -e
 
@@ -35,6 +35,13 @@ fi
 # A retarget changes the diff without moving the head, so edits still run.
 if ! grep -qF 'types: [opened, synchronize, reopened, edited]' "$WORKFLOW"; then
     fail "pull_request should still run on edited"
+fi
+
+# Each test is its own make target; without -j CI runs them one at a time,
+# and without -O their output interleaves. Neither fails a job.
+# shellcheck disable=SC2016  # the shell in ci.yml expands it
+if ! grep -qxF '      - run: make -j"$(nproc)" --output-sync=target test' "$WORKFLOW"; then
+    fail "the test job should run make test in parallel, with each test's output kept together"
 fi
 
 if test "$FAILED" -ne 0; then
