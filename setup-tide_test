@@ -43,9 +43,31 @@ test "\$1" != install || for arg; do
 done
 MOCK
     # pacman refuses the whole command when it names a package in
-    # \$FAKE_MISSING.
+    # \$FAKE_MISSING. -Si describes every other package, failing, as pacman
+    # does, when it names one of them, or answering nothing with
+    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED.
     cat > "$T/bin/pacman" <<MOCK
 #!/bin/sh
+case "\$1" in
+    -Si)
+        test -z "\$FAKE_PACMAN_QUERY_FAILS" || exit 1
+        shift 2
+        status=0
+        for pkg; do
+            case " \$FAKE_MISSING " in *" \$pkg "*) status=1; continue ;; esac
+            printf "Repository      : extra\\nName            : %s\\n\\n" "\$pkg"
+        done
+        exit \$status
+        ;;
+    -Qq)
+        shift 2
+        status=0
+        for pkg; do
+            case " \$FAKE_INSTALLED " in *" \$pkg "*) printf "%s\\n" "\$pkg" ;; *) status=1 ;; esac
+        done
+        exit \$status
+        ;;
+esac
 printf "%s\\n" "pacman \$*" >> "$CALLS"
 for arg; do
     case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
@@ -1046,6 +1068,25 @@ check "a missing satty leaves the rest installed" has "$calls" "pacman -S --need
 main=$(printf '%s\n' "$calls" | grep 'hypridle')
 check "satty isn't in the main transaction" lacks "$main" "satty"
 check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfirm satty"
+teardown
+
+# Arch, like Fedora, refuses the lot over one unknown name, so pacman is
+# asked first and the rest install together.
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww
+check "Arch: a missing package isn't fatal" test "$status" -eq 0
+check "Arch: a missing package is named" has "$output" "could not install: swww"
+check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+teardown
+
+# An AUR package isn't in the sync databases, and pacman -S refuses it too.
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww FAKE_INSTALLED=swww
+check "Arch: an AUR-installed package isn't named as missing" lacks "$output" "could not install"
+check "Arch: an AUR-installed package isn't asked for" lacks "$calls" " swww "
+teardown
+
+setup; ARGS=(); run SETUP_OS=arch FAKE_PACMAN_QUERY_FAILS=1
+check "Arch: a pacman query failure says so" has "$output" "couldn't ask pacman which packages exist"
+check "Arch: a pacman query failure installs everything" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
 teardown
 
 setup; ARGS=(); run SETUP_OS=unknown
