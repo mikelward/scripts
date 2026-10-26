@@ -1,6 +1,6 @@
 #!/bin/bash
 # In ChromeOS's Linux container (Crostini), plain URLs open in ChromeOS's own
-# browser, the one tico tiles, through garcon. Anything with a flag, such as
+# browser, the one tileco tiles, through garcon. Anything with a flag, such as
 # browser2's --user-data-dir, still needs a Linux Chrome.
 if command -v garcon-url-handler >/dev/null 2>&1 && test $# -gt 0; then
 	plain=yes

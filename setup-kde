@@ -876,7 +876,7 @@ configure_keybindings() {
     # the file as "\\" (KConfig doubles it on write, halves it on read), which
     # is the escape deserializeList needs to keep the comma out of the split.
     # Meta+\ above needs two backslashes for the same round trip.
-    # Meta+O ("one window") as well as Meta+`: tico has only Search+O, since
+    # Meta+O ("one window") as well as Meta+`: tileco has only Search+O, since
     # Chrome can't bind a backtick, so O works on every desktop.
     set_shortcut KrohnkiteMonocleLayout "Meta+\` Meta+O" "Krohnkite: Select Layout - Monocle"
     set_shortcut KrohnkitePreviousLayout "Meta+\\," "Krohnkite: Previous Layout"
