@@ -8,7 +8,8 @@
 #   and GTK portals, Go (to build tide-grant), and, until the
 #   Quickshell shell lands, the transitional owners (waybar, swaync) and the
 #   tools conf's Hyprland config calls. A package the distro doesn't have
-#   (swww on Ubuntu 26.04) is reported and the rest still install;
+#   (swww on Ubuntu 26.04) is reported and the rest still install. Fedora
+#   gets Hyprland and uwsm from the lionheartp/Hyprland COPR;
 # - installs Quickshell, which draws tide's own shell (the bar so far),
 #   where the distro packages it: apt and pacman, and on Fedora the
 #   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), or
@@ -79,6 +80,9 @@ TIDE_DIR="${TIDE_DIR:-$HOME/src/tide}"
 # Fedora packages Quickshell only in this COPR, which Quickshell's own
 # BUILD.md names as a packager.
 QUICKSHELL_COPR=errornointernet/quickshell
+# Fedora 43 and 44 package neither Hyprland nor uwsm. This COPR, a
+# continuation of the abandoned solopasha/hyprland, has both.
+HYPRLAND_COPR=lionheartp/Hyprland
 # Hyprland reads only hyprland.lua from 0.56 on.
 MIN_HYPRLAND=0.56
 
@@ -402,6 +406,15 @@ pacman_known() {
     printf '%s\n' "$_names"
 }
 
+# enable_copr enables a COPR, failing with 1 when dnf's copr command can't
+# be installed and 2 when the COPR can't be enabled. The command is a
+# plugin: dnf-plugins-core for dnf 4, dnf5-plugins for dnf 5. Both provide
+# dnf-command(copr), and installing it again is a no-op.
+enable_copr() {
+    pkg_install 'dnf-command(copr)' || return 1
+    sudo_or_warn dnf copr enable -y "$1" || return 2
+}
+
 # install_all installs the packages it can and prints the ones it couldn't,
 # failing if there are any. apt, dnf and pacman all refuse the lot over one
 # name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so it asks
@@ -535,7 +548,16 @@ install_packages() {
     fi
     case "$(detect_os)" in
         debian) extra="sway-notification-center libnotify-bin golang python3" ;;
-        redhat) extra="SwayNotificationCenter libnotify golang python3" ;;
+        redhat)
+            extra="SwayNotificationCenter libnotify golang python3"
+            copr_status=0
+            enable_copr "$HYPRLAND_COPR" || copr_status=$?
+            case $copr_status in
+                0) ;;
+                1) warn "couldn't install dnf's copr plugin, so Hyprland and uwsm may not install; the tide session won't start without them" ;;
+                *) warn "couldn't enable the $HYPRLAND_COPR COPR, so Hyprland and uwsm may not install; the tide session won't start without them" ;;
+            esac
+            ;;
         arch) extra="swaync libnotify go python" ;;
         *)
             # shellcheck disable=SC2086  # word-split the package list
@@ -595,16 +617,19 @@ install_or_build_quickshell() {
         debian) effects=qml6-module-qtquick-effects ;;
         arch) ;;
         redhat)
-            # dnf's copr command is a plugin: dnf-plugins-core for dnf 4,
-            # dnf5-plugins for dnf 5. Both provide dnf-command(copr).
-            if ! pkg_install 'dnf-command(copr)'; then
-                warn "couldn't install dnf's copr plugin, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
-                return 0
-            fi
-            if ! sudo_or_warn dnf copr enable -y "$QUICKSHELL_COPR"; then
-                warn "couldn't enable the $QUICKSHELL_COPR COPR, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
-                return 0
-            fi
+            copr_status=0
+            enable_copr "$QUICKSHELL_COPR" || copr_status=$?
+            case $copr_status in
+                0) ;;
+                1)
+                    warn "couldn't install dnf's copr plugin, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
+                    return 0
+                    ;;
+                *)
+                    warn "couldn't enable the $QUICKSHELL_COPR COPR, so Quickshell isn't installed; tide's bar won't run, and waybar stays the bar"
+                    return 0
+                    ;;
+            esac
             ;;
         *) return 0 ;;
     esac
