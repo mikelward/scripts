@@ -107,9 +107,11 @@ esac
 exit 0
 MOCK
 
-    # git and make, for timo's checkout. A clone creates the target directory,
+    # git and make, for tilemo's checkout. A clone creates the target directory,
     # as the real one does, so the make that follows has something to run in;
-    # git_fails and make_fails stage a failure.
+    # git_fails and make_fails stage a failure. make install writes
+    # ~/.hammerspoon/tilemo as tilemo's does, or ~/.hammerspoon/timo where
+    # make_installs_timo stages a checkout from before the rename.
     cat > "$TEST_TMPDIR/bin/git" <<MOCK
 #!/bin/sh
 printf "%s\\n" "git \$*" >> "$CALLS"
@@ -123,6 +125,13 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "make \$*" >> "$CALLS"
 test -f "$TEST_TMPDIR/make_fails" && exit 2
+if test "\$3" = install; then
+    if test -f "$TEST_TMPDIR/make_installs_timo"; then
+        mkdir -p "$TEST_TMPDIR/home/.hammerspoon/timo"
+    else
+        mkdir -p "$TEST_TMPDIR/home/.hammerspoon/tilemo"
+    fi
+fi
 exit 0
 MOCK
 
@@ -296,15 +305,15 @@ stage_not_running() {
     touch "$TEST_TMPDIR/not_running.$1"
 }
 
-# A machine set up for timo: no Amethyst installed or running, no Rectangle
-# running, and the conf repo's timo Karabiner rule symlinked. Hammerspoon and
-# the timo checkout are left missing, so the run installs them.
-stage_timo_machine() {
+# A machine set up for tilemo: no Amethyst installed or running, no Rectangle
+# running, and the conf repo's tilemo Karabiner rule symlinked. Hammerspoon and
+# the tilemo checkout are left missing, so the run installs them.
+stage_tilemo_machine() {
     remove_amethyst
     stage_not_running Amethyst
     stage_not_running Rectangle
-    printf '%s\n' '"description": "timo: Win is Super (Ctrl+Option+Command)"' \
-        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/timo.json"
+    printf '%s\n' '"description": "tilemo: Win is Super (Ctrl+Option+Command)"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/tilemo.json"
 }
 
 # Install a fake NAME.app in the sandboxed /Applications.
@@ -348,6 +357,7 @@ run_macos() {
         APPLICATIONS_DIR="$APPLICATIONS_DIR" \
         USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
+        TILEMO_DIR="${TILEMO_DIR:-}" \
         TIMO_DIR="${TIMO_DIR:-}" \
         PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
@@ -376,6 +386,7 @@ run_macos_without() {
         APPLICATIONS_DIR="$APPLICATIONS_DIR" \
         USER_APPLICATIONS_DIR="$USER_APPLICATIONS_DIR" \
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
+        TILEMO_DIR="${TILEMO_DIR:-}" \
         TIMO_DIR="${TIMO_DIR:-}" \
         PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
@@ -1729,10 +1740,10 @@ test_reports_problems_instead_of_success() {
 
 # --- Test runner ---
 
-# --- --wm timo ---
+# --- --wm tilemo ---
 
 # Without --wm nothing changes: the Amethyst-era bindings, Amethyst itself,
-# and none of timo's Mission Control writes.
+# and none of tilemo's Mission Control writes.
 test_default_wm_keeps_amethyst_bindings() {
     run_macos
     assert_status 0 &&
@@ -1757,10 +1768,26 @@ test_wm_amethyst_is_the_default() {
 }
 
 test_wm_equals_syntax() {
-    run_macos --wm=timo
+    run_macos --wm=tilemo
     assert_status 0 &&
     assert_hotkey 64 true 32 49 1048576 &&
-    assert_output_contains "Configuring timo"
+    assert_output_contains "Configuring tilemo"
+}
+
+# timo is tilemo's name from before its repo was renamed, kept so an old
+# command line or note still sets tilemo up.
+test_wm_timo_is_an_alias_for_tilemo() {
+    run_macos --wm timo
+    assert_status 0 &&
+    assert_hotkey 64 true 32 49 1048576 &&
+    assert_output_contains "Configuring tilemo" &&
+    assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/home/tilemo"
+}
+
+test_wm_equals_timo_is_an_alias_for_tilemo() {
+    run_macos --wm=timo
+    assert_status 0 &&
+    assert_output_contains "Configuring tilemo"
 }
 
 test_wm_invalid_value_is_a_usage_error() {
@@ -1782,14 +1809,14 @@ test_help_documents_wm() {
     run_macos --help
     assert_status 0 &&
     assert_output_contains "--wm WM" &&
-    assert_output_contains "amethyst (the default) or timo"
+    assert_output_contains "amethyst (the default) or tilemo"
 }
 
-# timo registers its keys with RegisterEventHotKey, which fails
+# tilemo registers its keys with RegisterEventHotKey, which fails
 # silently on a key the system holds. Spotlight goes back to Cmd+Space, and
 # Finder search back to its stock binding, enabled, now nothing collides.
-test_timo_moves_spotlight_back_to_command_space() {
-    run_macos --wm timo
+test_tilemo_moves_spotlight_back_to_command_space() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_hotkey 64 true 32 49 1048576 &&
     assert_hotkey 65 true 32 49 1572864
@@ -1797,8 +1824,8 @@ test_timo_moves_spotlight_back_to_command_space() {
 
 # Off, at the stock Ctrl+N, so re-enabling one in System Settings gets the
 # macOS default rather than a blank -- and nothing is left on Option+1..9.
-test_timo_disables_desktop_switching_at_stock_bindings() {
-    run_macos --wm timo
+test_tilemo_disables_desktop_switching_at_stock_bindings() {
+    run_macos --wm tilemo
     assert_status 0 || return 1
     set -- \
         118 49 18 \
@@ -1817,34 +1844,34 @@ test_timo_disables_desktop_switching_at_stock_bindings() {
     assert_not_called "<integer>524288</integer>"
 }
 
-test_timo_disables_move_a_space_at_stock_bindings() {
-    run_macos --wm timo
+test_tilemo_disables_move_a_space_at_stock_bindings() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_hotkey 79 false 65535 123 8650752 &&
     assert_hotkey 81 false 65535 124 8650752 &&
     assert_not_called "<integer>9175040</integer>"
 }
 
-test_timo_still_applies_the_shortcuts() {
-    run_macos --wm timo
+test_tilemo_still_applies_the_shortcuts() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_called "activateSettings -u"
 }
 
-# timo uses one Space per display, so a machine with fewer than nine has
+# tilemo uses one Space per display, so a machine with fewer than nine has
 # nothing missing; the count isn't taken or warned about.
-test_timo_does_not_ask_for_nine_spaces() {
+test_tilemo_does_not_ask_for_nine_spaces() {
     stage_spaces 1
-    run_macos --wm timo
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_called "defaults write com.apple.dock mru-spaces -bool false" &&
-    assert_output_contains "timo uses one Space per display" &&
+    assert_output_contains "tilemo uses one Space per display" &&
     assert_output_lacks "Spaces per display:" &&
     assert_output_lacks "will do nothing there"
 }
 
-test_timo_turns_off_stage_manager_and_tiling() {
-    run_macos --wm timo
+test_tilemo_turns_off_stage_manager_and_tiling() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_called "defaults write com.apple.WindowManager GloballyEnabled -bool false" &&
     assert_called "defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false" &&
@@ -1853,11 +1880,11 @@ test_timo_turns_off_stage_manager_and_tiling() {
     assert_output_contains "take effect at the next login"
 }
 
-test_timo_hides_the_menu_bar_for_its_bar() {
-    run_macos --wm timo
+test_tilemo_hides_the_menu_bar_for_its_bar() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool true" &&
-    assert_output_contains "The menu bar hides for timo's bar"
+    assert_output_contains "The menu bar hides for tilemo's bar"
 }
 
 test_amethyst_leaves_the_menu_bar_alone() {
@@ -1866,160 +1893,215 @@ test_amethyst_leaves_the_menu_bar_alone() {
     assert_not_called "_HIHideMenuBar"
 }
 
-test_timo_installs_hammerspoon_when_missing() {
-    run_macos --wm timo
+test_tilemo_installs_hammerspoon_when_missing() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_called "brew install --cask hammerspoon"
 }
 
-test_timo_does_not_reinstall_hammerspoon() {
+test_tilemo_does_not_reinstall_hammerspoon() {
     add_app Hammerspoon
-    run_macos --wm timo
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install --cask hammerspoon" &&
     assert_output_contains "Hammerspoon is already installed"
 }
 
-test_timo_no_install_skips_hammerspoon() {
-    run_macos --wm timo --no-install --ignore-errors
+test_tilemo_no_install_skips_hammerspoon() {
+    run_macos --wm tilemo --no-install --ignore-errors
     assert_status 0 &&
     assert_not_called "brew install --cask hammerspoon" &&
     assert_output_contains "Hammerspoon is not installed and --no-install was given"
 }
 
-test_timo_missing_brew_warns_about_hammerspoon() {
-    run_macos_without brew --wm timo --ignore-errors
+test_tilemo_missing_brew_warns_about_hammerspoon() {
+    run_macos_without brew --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "Homebrew not found, so Hammerspoon can't be installed" &&
     assert_output_lacks "macOS configured successfully"
 }
 
 # Hammerspoon's cask is an app, not a .pkg, so --no-sudo has nothing to skip.
-test_timo_no_sudo_still_installs_hammerspoon() {
-    run_macos --wm timo --no-sudo
+test_tilemo_no_sudo_still_installs_hammerspoon() {
+    run_macos --wm tilemo --no-sudo
     assert_status 0 &&
     assert_called "brew install --cask hammerspoon"
 }
 
-test_timo_failed_hammerspoon_install_is_counted() {
+test_tilemo_failed_hammerspoon_install_is_counted() {
     cat > "$TEST_TMPDIR/bin/brew" <<MOCK
 #!/bin/sh
 printf "%s\\n" "brew \$*" >> "$CALLS"
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/brew"
-    stage_timo_machine
-    run_macos --wm timo --ignore-errors
+    stage_tilemo_machine
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not install Hammerspoon; nothing will tile" &&
     assert_output_lacks "macOS configured successfully"
 }
 
-test_timo_clones_and_installs_timo() {
-    run_macos --wm timo
+test_tilemo_clones_and_installs_tilemo() {
+    run_macos --wm tilemo
     assert_status 0 &&
-    assert_called "git clone https://github.com/mikelward/timo.git $TEST_TMPDIR/home/timo" &&
-    assert_called "make -C $TEST_TMPDIR/home/timo install"
+    assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/home/tilemo" &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
 # An existing checkout may hold work of its own, so it's installed as it
 # stands rather than cloned over or pulled.
-test_timo_uses_an_existing_checkout() {
-    mkdir -p "$TEST_TMPDIR/home/timo"
-    run_macos --wm timo
+test_tilemo_uses_an_existing_checkout() {
+    mkdir -p "$TEST_TMPDIR/home/tilemo"
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_not_called "git " &&
-    assert_called "make -C $TEST_TMPDIR/home/timo install"
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
-test_timo_dir_overrides_the_checkout() {
+test_tilemo_dir_overrides_the_checkout() {
+    TILEMO_DIR="$TEST_TMPDIR/src/tilemo"
+    run_macos --wm tilemo
+    TILEMO_DIR=
+    assert_status 0 &&
+    assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/src/tilemo" &&
+    assert_called "make -C $TEST_TMPDIR/src/tilemo install"
+}
+
+# Earlier runs cloned into ~/timo. That checkout is used, not cloned beside.
+test_tilemo_uses_a_checkout_from_before_the_rename() {
+    mkdir -p "$TEST_TMPDIR/home/timo"
+    stage_tilemo_machine
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_not_called "git " &&
+    assert_called "make -C $TEST_TMPDIR/home/timo install" &&
+    assert_output_contains "Using the checkout in $TEST_TMPDIR/home/timo, cloned before timo was renamed tilemo" &&
+    assert_output_contains "macOS configured successfully"
+}
+
+test_tilemo_prefers_its_own_checkout_to_the_old_one() {
+    mkdir -p "$TEST_TMPDIR/home/tilemo" "$TEST_TMPDIR/home/timo"
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install" &&
+    assert_not_called "make -C $TEST_TMPDIR/home/timo install" &&
+    assert_output_lacks "cloned before timo was renamed"
+}
+
+test_old_timo_dir_still_overrides_the_checkout() {
     TIMO_DIR="$TEST_TMPDIR/src/timo"
-    run_macos --wm timo
+    run_macos --wm tilemo
     TIMO_DIR=
     assert_status 0 &&
-    assert_called "git clone https://github.com/mikelward/timo.git $TEST_TMPDIR/src/timo" &&
+    assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/src/timo" &&
     assert_called "make -C $TEST_TMPDIR/src/timo install"
 }
 
-test_timo_no_install_skips_the_clone() {
-    run_macos --wm timo --no-install --ignore-errors
+# A checkout from before the rename installs ~/.hammerspoon/timo, which the
+# init.lua written here doesn't load; say to update it rather than finish
+# looking configured.
+test_tilemo_flags_a_checkout_that_installs_no_tilemo() {
+    mkdir -p "$TEST_TMPDIR/home/timo"
+    touch "$TEST_TMPDIR/make_installs_timo"
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "$TEST_TMPDIR/home/timo installed no $TEST_TMPDIR/home/.hammerspoon/tilemo, so it predates the rename from timo; update it (git -C $TEST_TMPDIR/home/timo pull)" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+test_tilemo_no_install_skips_the_clone() {
+    run_macos --wm tilemo --no-install --ignore-errors
     assert_status 0 &&
     assert_not_called "git clone" &&
     assert_not_called "make -C" &&
-    assert_output_contains "--no-install was given; clone https://github.com/mikelward/timo.git there"
+    assert_output_contains "--no-install was given; clone https://github.com/mikelward/tilemo.git there"
 }
 
-test_timo_failed_clone_is_counted() {
+test_tilemo_failed_clone_is_counted() {
     touch "$TEST_TMPDIR/git_fails"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not clone https://github.com/mikelward/timo.git" &&
+    assert_output_contains "could not clone https://github.com/mikelward/tilemo.git" &&
     assert_not_called "make -C" &&
     assert_output_lacks "macOS configured successfully"
 }
 
-test_timo_failed_make_install_is_counted() {
+test_tilemo_failed_make_install_is_counted() {
     touch "$TEST_TMPDIR/make_fails"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not install timo from $TEST_TMPDIR/home/timo" &&
+    assert_output_contains "could not install tilemo from $TEST_TMPDIR/home/tilemo" &&
     assert_output_lacks "macOS configured successfully"
 }
 
-test_timo_missing_git_is_reported() {
-    run_macos_without git --wm timo --ignore-errors
+test_tilemo_missing_git_is_reported() {
+    run_macos_without git --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "git not found, so timo can't be cloned" &&
+    assert_output_contains "git not found, so tilemo can't be cloned" &&
     assert_not_called "make -C"
 }
 
-test_timo_writes_hammerspoon_init() {
-    run_macos --wm timo
+test_tilemo_writes_hammerspoon_init() {
+    run_macos --wm tilemo
     assert_status 0 &&
-    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'timo = require("timo")' &&
-    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'timo.start({})'
+    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo = require("tilemo")' &&
+    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo.start({})'
 }
 
 # Someone's own Hammerspoon config is theirs: say what to add, never
 # overwrite it.
-test_timo_leaves_an_existing_init_alone() {
+test_tilemo_leaves_an_existing_init_alone() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' 'hs.alert.show("mine")' > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'hs.alert.show("mine")' &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'require("timo")' &&
-    assert_output_contains "doesn't load timo, so it was left alone" &&
-    assert_output_contains 'timo = require("timo")'
+    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'require("tilemo")' &&
+    assert_output_contains "doesn't load tilemo, so it was left alone" &&
+    assert_output_contains 'tilemo = require("tilemo")'
 }
 
-test_timo_accepts_an_init_that_loads_timo() {
+test_tilemo_accepts_an_init_that_loads_tilemo() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' "local t = require 'timo'" 't.start({})' \
+    printf '%s\n' "local t = require 'tilemo'" 't.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm timo
+    run_macos --wm tilemo
     assert_status 0 &&
-    assert_output_contains "already loads timo" &&
-    assert_output_lacks "doesn't load timo" &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'timo.start({})'
+    assert_output_contains "already loads tilemo" &&
+    assert_output_lacks "doesn't load tilemo" &&
+    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo.start({})'
 }
 
-# Commented out, it doesn't load timo, so the run still says what to add.
-test_timo_does_not_count_a_commented_out_require() {
+# tilemo keeps require("timo") working as a shim, so an init.lua from before
+# the rename already loads it.
+test_tilemo_accepts_an_init_that_loads_it_by_its_old_name() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' '-- timo = require("timo")' '  -- timo.start({})' \
+    printf '%s\n' 'timo = require("timo")' 'timo.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo
     assert_status 0 &&
-    assert_output_lacks "already loads timo" &&
-    assert_output_contains "doesn't load timo, so it was left alone"
+    assert_output_contains "already loads tilemo" &&
+    assert_output_lacks "doesn't load tilemo" &&
+    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo.start({})'
+}
+
+# Commented out, it doesn't load tilemo, so the run still says what to add.
+test_tilemo_does_not_count_a_commented_out_require() {
+    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
+    printf '%s\n' '-- tilemo = require("tilemo")' '  -- tilemo.start({})' \
+        > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_lacks "already loads tilemo" &&
+    assert_output_contains "doesn't load tilemo, so it was left alone"
 }
 
 # A dangling symlink is someone's file too, not a gap to write into.
-test_timo_does_not_replace_a_dangling_init_symlink() {
+test_tilemo_does_not_replace_a_dangling_init_symlink() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     ln -s "$TEST_TMPDIR/nowhere/init.lua" "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not read $TEST_TMPDIR/home/.hammerspoon/init.lua" || return 1
     if ! test -L "$TEST_TMPDIR/home/.hammerspoon/init.lua"; then
@@ -2029,42 +2111,42 @@ test_timo_does_not_replace_a_dangling_init_symlink() {
     fi
 }
 
-test_timo_says_hammerspoon_needs_accessibility() {
-    run_macos --wm timo
+test_tilemo_says_hammerspoon_needs_accessibility() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_output_contains "Grant Hammerspoon Accessibility access" &&
     assert_output_lacks "Grant Amethyst Accessibility access in System Settings"
 }
 
 # Two tilers fight over the same windows. Amethyst is warned about, not
-# uninstalled, and isn't installed or configured under timo.
-test_timo_warns_about_an_installed_amethyst() {
-    run_macos --wm timo --ignore-errors
+# uninstalled, and isn't installed or configured under tilemo.
+test_tilemo_warns_about_an_installed_amethyst() {
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "Amethyst is installed at $APPLICATIONS_DIR/Amethyst.app; quit it and remove it from System Settings > General > Login Items" &&
     test -d "$APPLICATIONS_DIR/Amethyst.app" &&
     assert_not_called "com.amethyst.Amethyst"
 }
 
-test_timo_warns_about_a_running_amethyst() {
+test_tilemo_warns_about_a_running_amethyst() {
     remove_amethyst
     stage_not_running Rectangle
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "Amethyst is running; quit it" &&
     assert_not_called "brew install --cask amethyst"
 }
 
-test_timo_warns_about_rectangle() {
-    stage_timo_machine
+test_tilemo_warns_about_rectangle() {
+    stage_tilemo_machine
     add_app Rectangle
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "Rectangle is installed at $APPLICATIONS_DIR/Rectangle.app" &&
     assert_output_contains "Ctrl+Option+arrows"
 }
 
-test_timo_unknown_tiler_state_is_reported() {
+test_tilemo_unknown_tiler_state_is_reported() {
     remove_amethyst
     cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
 #!/bin/sh
@@ -2075,48 +2157,65 @@ esac
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos --wm timo --ignore-errors
+    run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not tell whether Amethyst is running (pgrep exited 3)"
 }
 
-test_timo_names_the_karabiner_rule() {
-    stage_timo_machine
-    run_macos --wm timo
+test_tilemo_names_the_karabiner_rule() {
+    stage_tilemo_machine
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_output_contains 'the rule whose name starts "tilemo:"' &&
+    assert_output_contains "keep the tilemo rule above the arrow rule"
+}
+
+test_tilemo_missing_karabiner_rule_warns() {
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "tilemo.json not found; run confinst after updating the conf repo, or tilemo falls back to Option"
+}
+
+# A conf checkout from before the rename has timo.json, named "timo:", which
+# tilemo still accepts: name that rule rather than warn it's missing.
+test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
+    remove_amethyst
+    stage_not_running Amethyst
+    stage_not_running Rectangle
+    printf '%s\n' '"description": "timo: Win is Super (Ctrl+Option+Command)"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/timo.json"
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_output_contains 'the rule whose name starts "timo:"' &&
-    assert_output_contains "keep the timo rule above the arrow rule"
+    assert_output_contains "keep the timo rule above the arrow rule" &&
+    assert_output_contains "timo.json predates the rename to tilemo and still works" &&
+    assert_output_lacks "tilemo.json not found" &&
+    assert_output_contains "macOS configured successfully"
 }
 
-test_timo_missing_karabiner_rule_warns() {
-    run_macos --wm timo --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "timo.json not found; run confinst after updating the conf repo, or timo falls back to Option"
-}
-
-test_amethyst_does_not_mention_the_timo_rule() {
+test_amethyst_does_not_mention_the_tilemo_rule() {
     run_macos
     assert_status 0 &&
-    assert_output_lacks "timo.json" &&
-    assert_output_lacks '"timo:"'
+    assert_output_lacks "tilemo.json" &&
+    assert_output_lacks '"tilemo:"'
 }
 
-test_timo_preflight() {
-    run_macos --wm timo
+test_tilemo_preflight() {
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_output_lacks "Create nine Spaces" &&
     assert_output_contains "Quit System Settings" &&
     assert_output_contains "Grant Hammerspoon Accessibility access, under System Settings" &&
     assert_output_lacks "Grant Amethyst Accessibility access, under System Settings" &&
-    assert_output_contains 'the rule whose name starts "timo:"' &&
+    assert_output_contains 'the rule whose name starts "tilemo:"' &&
     assert_output_contains "falls back to Option" &&
-    assert_output_contains "Hammerspoon and timo are free and open source"
+    assert_output_contains "Hammerspoon and tilemo are free and open source"
 }
 
-# The configured timo machine: nothing to warn about.
-test_timo_reports_success_on_a_clean_run() {
-    stage_timo_machine
-    run_macos --wm timo
+# The configured tilemo machine: nothing to warn about.
+test_tilemo_reports_success_on_a_clean_run() {
+    stage_tilemo_machine
+    run_macos --wm tilemo
     assert_status 0 &&
     assert_output_contains "macOS configured successfully"
 }
@@ -2323,79 +2422,95 @@ run_test "reports the problem count instead of success" \
 run_test "no --wm keeps the Amethyst bindings" \
     test_default_wm_keeps_amethyst_bindings
 run_test "--wm amethyst is the default" test_wm_amethyst_is_the_default
-run_test "--wm=timo is accepted" test_wm_equals_syntax
+run_test "--wm=tilemo is accepted" test_wm_equals_syntax
+run_test "--wm timo, the old name, sets up tilemo" \
+    test_wm_timo_is_an_alias_for_tilemo
+run_test "--wm=timo, the old name, sets up tilemo" \
+    test_wm_equals_timo_is_an_alias_for_tilemo
 run_test "an unknown --wm is a usage error" \
     test_wm_invalid_value_is_a_usage_error
 run_test "--wm without a value is a usage error" \
     test_wm_without_a_value_is_a_usage_error
 run_test "--help documents --wm" test_help_documents_wm
-run_test "timo: Spotlight goes back to Cmd+Space" \
-    test_timo_moves_spotlight_back_to_command_space
-run_test "timo: desktop switching is off, at its stock binding" \
-    test_timo_disables_desktop_switching_at_stock_bindings
-run_test "timo: moving a Space is off, at its stock binding" \
-    test_timo_disables_move_a_space_at_stock_bindings
-run_test "timo: the shortcuts are applied to this session" \
-    test_timo_still_applies_the_shortcuts
-run_test "timo: no nine-Spaces check" test_timo_does_not_ask_for_nine_spaces
-run_test "timo: Stage Manager and Sequoia tiling are turned off" \
-    test_timo_turns_off_stage_manager_and_tiling
-run_test "timo: hides the menu bar for its bar" \
-    test_timo_hides_the_menu_bar_for_its_bar
+run_test "tilemo: Spotlight goes back to Cmd+Space" \
+    test_tilemo_moves_spotlight_back_to_command_space
+run_test "tilemo: desktop switching is off, at its stock binding" \
+    test_tilemo_disables_desktop_switching_at_stock_bindings
+run_test "tilemo: moving a Space is off, at its stock binding" \
+    test_tilemo_disables_move_a_space_at_stock_bindings
+run_test "tilemo: the shortcuts are applied to this session" \
+    test_tilemo_still_applies_the_shortcuts
+run_test "tilemo: no nine-Spaces check" test_tilemo_does_not_ask_for_nine_spaces
+run_test "tilemo: Stage Manager and Sequoia tiling are turned off" \
+    test_tilemo_turns_off_stage_manager_and_tiling
+run_test "tilemo: hides the menu bar for its bar" \
+    test_tilemo_hides_the_menu_bar_for_its_bar
 run_test "Amethyst runs leave the menu bar alone" \
     test_amethyst_leaves_the_menu_bar_alone
-run_test "timo: installs Hammerspoon when missing" \
-    test_timo_installs_hammerspoon_when_missing
-run_test "timo: does not reinstall Hammerspoon" \
-    test_timo_does_not_reinstall_hammerspoon
-run_test "timo: --no-install skips Hammerspoon" \
-    test_timo_no_install_skips_hammerspoon
-run_test "timo: missing brew is reported" \
-    test_timo_missing_brew_warns_about_hammerspoon
-run_test "timo: --no-sudo still installs Hammerspoon" \
-    test_timo_no_sudo_still_installs_hammerspoon
-run_test "timo: a failed Hammerspoon install is counted" \
-    test_timo_failed_hammerspoon_install_is_counted
-run_test "timo: clones and installs timo" test_timo_clones_and_installs_timo
-run_test "timo: an existing checkout is used as it stands" \
-    test_timo_uses_an_existing_checkout
-run_test "timo: \$TIMO_DIR overrides the checkout" \
-    test_timo_dir_overrides_the_checkout
-run_test "timo: --no-install skips the clone" \
-    test_timo_no_install_skips_the_clone
-run_test "timo: a failed clone is counted" test_timo_failed_clone_is_counted
-run_test "timo: a failed make install is counted" \
-    test_timo_failed_make_install_is_counted
-run_test "timo: missing git is reported" test_timo_missing_git_is_reported
-run_test "timo: writes a Hammerspoon init.lua" \
-    test_timo_writes_hammerspoon_init
-run_test "timo: an existing init.lua is left alone" \
-    test_timo_leaves_an_existing_init_alone
-run_test "timo: an init.lua that loads timo is accepted" \
-    test_timo_accepts_an_init_that_loads_timo
-run_test "timo: a commented-out require doesn't count as loading timo" \
-    test_timo_does_not_count_a_commented_out_require
-run_test "timo: a dangling init.lua symlink is not replaced" \
-    test_timo_does_not_replace_a_dangling_init_symlink
-run_test "timo: says Hammerspoon needs Accessibility access" \
-    test_timo_says_hammerspoon_needs_accessibility
-run_test "timo: an installed Amethyst is warned about, not removed" \
-    test_timo_warns_about_an_installed_amethyst
-run_test "timo: a running Amethyst is warned about" \
-    test_timo_warns_about_a_running_amethyst
-run_test "timo: an installed Rectangle is warned about" \
-    test_timo_warns_about_rectangle
-run_test "timo: an unknown tiler state is reported" \
-    test_timo_unknown_tiler_state_is_reported
-run_test "timo: names the timo Karabiner rule" \
-    test_timo_names_the_karabiner_rule
-run_test "timo: a missing timo Karabiner rule warns" \
-    test_timo_missing_karabiner_rule_warns
-run_test "Amethyst runs don't mention the timo rule" \
-    test_amethyst_does_not_mention_the_timo_rule
-run_test "timo: the preflight names timo's manual steps" test_timo_preflight
-run_test "timo: a configured machine reports success" \
-    test_timo_reports_success_on_a_clean_run
+run_test "tilemo: installs Hammerspoon when missing" \
+    test_tilemo_installs_hammerspoon_when_missing
+run_test "tilemo: does not reinstall Hammerspoon" \
+    test_tilemo_does_not_reinstall_hammerspoon
+run_test "tilemo: --no-install skips Hammerspoon" \
+    test_tilemo_no_install_skips_hammerspoon
+run_test "tilemo: missing brew is reported" \
+    test_tilemo_missing_brew_warns_about_hammerspoon
+run_test "tilemo: --no-sudo still installs Hammerspoon" \
+    test_tilemo_no_sudo_still_installs_hammerspoon
+run_test "tilemo: a failed Hammerspoon install is counted" \
+    test_tilemo_failed_hammerspoon_install_is_counted
+run_test "tilemo: clones and installs tilemo" test_tilemo_clones_and_installs_tilemo
+run_test "tilemo: an existing checkout is used as it stands" \
+    test_tilemo_uses_an_existing_checkout
+run_test "tilemo: a ~/timo checkout from before the rename is used" \
+    test_tilemo_uses_a_checkout_from_before_the_rename
+run_test "tilemo: ~/tilemo wins over an old ~/timo" \
+    test_tilemo_prefers_its_own_checkout_to_the_old_one
+run_test "tilemo: the old \$TIMO_DIR still overrides the checkout" \
+    test_old_timo_dir_still_overrides_the_checkout
+run_test "tilemo: a checkout that installs no tilemo is flagged" \
+    test_tilemo_flags_a_checkout_that_installs_no_tilemo
+run_test "tilemo: \$TILEMO_DIR overrides the checkout" \
+    test_tilemo_dir_overrides_the_checkout
+run_test "tilemo: --no-install skips the clone" \
+    test_tilemo_no_install_skips_the_clone
+run_test "tilemo: a failed clone is counted" test_tilemo_failed_clone_is_counted
+run_test "tilemo: a failed make install is counted" \
+    test_tilemo_failed_make_install_is_counted
+run_test "tilemo: missing git is reported" test_tilemo_missing_git_is_reported
+run_test "tilemo: writes a Hammerspoon init.lua" \
+    test_tilemo_writes_hammerspoon_init
+run_test "tilemo: an existing init.lua is left alone" \
+    test_tilemo_leaves_an_existing_init_alone
+run_test "tilemo: an init.lua that loads tilemo is accepted" \
+    test_tilemo_accepts_an_init_that_loads_tilemo
+run_test "tilemo: an init.lua that loads it as timo is accepted" \
+    test_tilemo_accepts_an_init_that_loads_it_by_its_old_name
+run_test "tilemo: a commented-out require doesn't count as loading tilemo" \
+    test_tilemo_does_not_count_a_commented_out_require
+run_test "tilemo: a dangling init.lua symlink is not replaced" \
+    test_tilemo_does_not_replace_a_dangling_init_symlink
+run_test "tilemo: says Hammerspoon needs Accessibility access" \
+    test_tilemo_says_hammerspoon_needs_accessibility
+run_test "tilemo: an installed Amethyst is warned about, not removed" \
+    test_tilemo_warns_about_an_installed_amethyst
+run_test "tilemo: a running Amethyst is warned about" \
+    test_tilemo_warns_about_a_running_amethyst
+run_test "tilemo: an installed Rectangle is warned about" \
+    test_tilemo_warns_about_rectangle
+run_test "tilemo: an unknown tiler state is reported" \
+    test_tilemo_unknown_tiler_state_is_reported
+run_test "tilemo: names the tilemo Karabiner rule" \
+    test_tilemo_names_the_karabiner_rule
+run_test "tilemo: a missing tilemo Karabiner rule warns" \
+    test_tilemo_missing_karabiner_rule_warns
+run_test "tilemo: names a Karabiner rule from before the rename" \
+    test_tilemo_names_the_karabiner_rule_from_before_the_rename
+run_test "Amethyst runs don't mention the tilemo rule" \
+    test_amethyst_does_not_mention_the_tilemo_rule
+run_test "tilemo: the preflight names tilemo's manual steps" test_tilemo_preflight
+run_test "tilemo: a configured machine reports success" \
+    test_tilemo_reports_success_on_a_clean_run
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

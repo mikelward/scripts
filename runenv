@@ -17,7 +17,7 @@ if test $# -eq 0; then
     exit 2
 fi
 if test -z "${DOTENV_SOURCED:-}"; then
-    # Apps launchd starts on macOS (Hammerspoon, so timo's keys) get only
+    # Apps launchd starts on macOS (Hammerspoon, so tilemo's keys) get only
     # /usr/bin:/bin:/usr/sbin:/sbin, without Homebrew's prefix on Apple
     # silicon, where casks such as kitty link their commands. It goes first,
     # so ~/.env's own prepends still win.
