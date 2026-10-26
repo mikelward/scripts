@@ -15,14 +15,15 @@
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Alt+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching and
 #   Win+Shift+Left/Right moving the window a Space (with Amethyst). Its rules are symlinked out of the conf repo too.
-# - Or, with --wm timo, timo instead of Amethyst: a Hammerspoon config with
+# - Or, with --wm tilemo, tilemo instead of Amethyst: a Hammerspoon config with
 #   tide's tiling and nine workspaces of its own, done by minimizing windows
 #   rather than with Spaces. It needs the keys the Amethyst setup binds, so
 #   that mode hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
 #   tiling features that would fight it. It also hides the menu bar for
-#   timo's own bar. See configure_timo and timo's SPEC.md (sections 6.4, 7.3
-#   and 8), which say what it needs from here.
+#   tilemo's own bar. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
+#   7.3 and 8), which say what it needs from here. --wm timo, its old name,
+#   still works.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -70,7 +71,7 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [--wm amethyst|timo] [-h | --help]
+#                 [--wm amethyst|tilemo] [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
 # --no-install skips installing Amethyst and Karabiner-Elements and configures
@@ -78,9 +79,9 @@
 # step here that needs administrator rights -- its cask is a .pkg and Homebrew
 # hands those to the system installer. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
-# pause. --wm picks the tiling window manager: amethyst, the default, or timo.
-# setup doesn't forward --wm, so a timo machine runs this a second time on its
-# own.
+# pause. --wm picks the tiling window manager: amethyst, the default, or tilemo
+# (or timo, its old name). setup doesn't forward --wm, so a tilemo machine runs
+# this a second time on its own.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -91,16 +92,27 @@ IGNORE_ERRORS=no
 # manager (Krohnkite) under the same flag.
 INSTALL=yes
 
-# Which tiling window manager to set up (--wm): amethyst or timo. Amethyst is
-# the default so a run that doesn't ask keeps doing what it always has; timo
+# Which tiling window manager to set up (--wm): amethyst or tilemo. Amethyst is
+# the default so a run that doesn't ask keeps doing what it always has; tilemo
 # is opt-in while it grows (its SPEC.md, question 4).
 WM=amethyst
 
-# Where timo's checkout lives, or will once cloned. A checkout rather than a
-# package because timo is a Hammerspoon config with no release to install:
+# Where tilemo's checkout lives, or will once cloned. A checkout rather than a
+# package because tilemo is a Hammerspoon config with no release to install:
 # `make install` copies its Lua out of the checkout into ~/.hammerspoon.
-TIMO_DIR="${TIMO_DIR:-$HOME/timo}"
-TIMO_REPO="https://github.com/mikelward/timo.git"
+#
+# tilemo was called timo, and earlier runs cloned it into ~/timo (or took
+# $TIMO_DIR). Either is still honored, so a machine set up then reuses its
+# checkout rather than cloning a second copy beside it; see install_tilemo.
+TILEMO_OLD_DIR="$HOME/timo"
+TILEMO_DIR="${TILEMO_DIR:-${TIMO_DIR:-}}"
+if test -z "$TILEMO_DIR"; then
+    TILEMO_DIR="$HOME/tilemo"
+    if ! test -e "$TILEMO_DIR" && test -d "$TILEMO_OLD_DIR"; then
+        TILEMO_DIR="$TILEMO_OLD_DIR"
+    fi
+fi
+TILEMO_REPO="https://github.com/mikelward/tilemo.git"
 
 # Whether to skip the preflight pause (--yes). A stdin that isn't a terminal
 # skips it too; see preflight.
@@ -278,12 +290,12 @@ restart_app() {
 # Space, System Settings owns the shortcut registry while it's open, and
 # Accessibility access can only be granted by a human in the GUI.
 #
-# Split by window manager, since the two want different hands-on steps: timo
+# Split by window manager, since the two want different hands-on steps: tilemo
 # uses one Space per display, so the nine-Spaces step is Amethyst's alone, and
 # the app needing Accessibility is Hammerspoon. The closing notes are shared.
 preflight_notes() {
-    if test "$WM" = timo; then
-        preflight_notes_timo
+    if test "$WM" = tilemo; then
+        preflight_notes_tilemo
     else
         preflight_notes_amethyst
     fi
@@ -332,30 +344,30 @@ Then once this run has finished:
 NOTES
 }
 
-preflight_notes_timo() {
+preflight_notes_tilemo() {
     cat <<'NOTES'
 
 Before continuing, do this by hand -- this script can't:
 
   1. Quit System Settings. Left open, it can write its cached copy of the
-     keyboard shortcuts back over the ones written here, and timo can't
+     keyboard shortcuts back over the ones written here, and tilemo can't
      register a key the system still holds.
 
 Then once this run has finished:
 
   2. Grant Hammerspoon Accessibility access, under System Settings > Privacy &
-     Security > Accessibility. timo runs inside Hammerspoon and can't move,
+     Security > Accessibility. tilemo runs inside Hammerspoon and can't move,
      resize or minimize a window without it. This run installs Hammerspoon if
      it isn't already there, so the permission can only be granted afterwards
      -- the run says so again when it gets there.
   3. Approve Karabiner-Elements' driver extension and Input Monitoring
      permission when it first launches, then enable "Alt+Tab switches
-     applications", the rule whose name starts "timo:", and "Ctrl+Left/Right
+     applications", the rule whose name starts "tilemo:", and "Ctrl+Left/Right
      moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves
      the window a Space" under Complex Modifications > Add rule, keeping the
-     timo rule above the arrow rule. The timo rule makes the physical Win key
-     timo's Super (Ctrl+Option+Command); without it timo falls back to Option,
-     which takes Option's own text shortcuts.
+     tilemo rule above the arrow rule. The tilemo rule makes the physical Win
+     key tilemo's Super (Ctrl+Option+Command); without it tilemo falls back to
+     Option, which takes Option's own text shortcuts.
 
      Karabiner is free and open source, so no cost beyond the disk it takes.
      It is a bigger commitment than an ordinary app, though: it installs a
@@ -363,11 +375,11 @@ Then once this run has finished:
      managed Mac may refuse the extension outright. If it is blocked, fails,
      or is removed, the keyboard keeps working -- the modifier rotation is
      separate and does not depend on it -- and the effect is that Alt+Tab
-     goes back to switching tabs, Ctrl+Left/Right to the line ends, and timo
+     goes back to switching tabs, Ctrl+Left/Right to the line ends, and tilemo
      to Option for its Super key. A macOS upgrade can also require approving
      the extension again.
 
-     Hammerspoon and timo are free and open source too, and neither touches
+     Hammerspoon and tilemo are free and open source too, and neither touches
      the network once installed. If Hammerspoon is missing, blocked, or not
      granted Accessibility, nothing tiles and the workspace keys do nothing;
      the rest of this setup still applies.
@@ -412,21 +424,21 @@ preflight() {
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [--wm amethyst|timo] [-h | --help]
+                   [--wm amethyst|tilemo] [-h | --help]
 
 Configure the macOS desktop environment.
 
 Options:
   --no-install     Don't install Amethyst or Karabiner-Elements (or, with
-                   --wm timo, Hammerspoon and timo); configure whatever is
+                   --wm tilemo, Hammerspoon and tilemo); configure whatever is
                    already there
   --no-sudo        Don't run anything needing administrator rights. Only
                    Karabiner-Elements' installer does, so only that is skipped
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Skip the preflight pause and start configuring right away
-  --wm WM          The tiling window manager: amethyst (the default) or timo,
-                   which takes over Option+1..9 and Option+Space and needs
-                   Hammerspoon
+  --wm WM          The tiling window manager: amethyst (the default) or tilemo
+                   (timo, its old name, works too), which takes over
+                   Option+1..9 and Option+Space and needs Hammerspoon
   -h, --help       Show this help and exit
 USAGE
 }
@@ -463,7 +475,7 @@ while test $# -gt 0; do
             ;;
         --wm)
             if test $# -lt 2; then
-                warn "--wm needs a value: amethyst or timo"
+                warn "--wm needs a value: amethyst or tilemo"
                 usage >&2
                 exit 1
             fi
@@ -487,9 +499,14 @@ while test $# -gt 0; do
 done
 
 case "$WM" in
-    amethyst|timo) ;;
+    amethyst|tilemo) ;;
+    # tilemo's name before its repo was renamed, so a command line or note
+    # from then still works.
+    timo)
+        WM=tilemo
+        ;;
     *)
-        warn "Unknown window manager for --wm: '$WM' (expected amethyst or timo)"
+        warn "Unknown window manager for --wm: '$WM' (expected amethyst or tilemo)"
         usage >&2
         exit 1
         ;;
@@ -638,8 +655,8 @@ warn_if_settings_app_running() {
         fi
         case "$_settings_running" in
             0)
-                if test "$WM" = timo; then
-                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if timo's keys don't register"
+                if test "$WM" = tilemo; then
+                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if tilemo's keys don't register"
                 else
                     warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
                 fi
@@ -671,16 +688,16 @@ write_symbolic_hotkey() {
         </dict>'
 }
 
-# timo registers its keys with RegisterEventHotKey, which fails silently on a
-# key someone else already holds (timo's SPEC.md, section 7.3), so the system
+# tilemo registers its keys with RegisterEventHotKey, which fails silently on a
+# key someone else already holds (tilemo's SPEC.md, section 7.3), so the system
 # hotkeys the Amethyst setup moved onto Option -- and the move-a-Space chord --
 # have to be let go first. Each goes back to its stock binding rather than
 # merely off, so the shortcut still reads sensibly in System Settings and
 # turning it back on there gets the macOS default, not a blank.
-configure_shortcuts_timo() {
+configure_shortcuts_tilemo() {
     # Spotlight back on Cmd+Space (1048576 is Command), which is physical
-    # Ctrl+Space under the rotation. That leaves Option+Space free: timo's
-    # Super is Ctrl+Option+Command with the Karabiner timo rule, but falls back
+    # Ctrl+Space under the rotation. That leaves Option+Space free: tilemo's
+    # Super is Ctrl+Option+Command with the Karabiner tilemo rule, but falls back
     # to Option without it.
     write_symbolic_hotkey 64 true 32 49 1048576
 
@@ -690,7 +707,7 @@ configure_shortcuts_timo() {
     write_symbolic_hotkey 65 true 32 49 1572864
 
     # Switch to Desktop 1-9 (118-126) off, at their stock Ctrl+1..9 (262144 is
-    # Control): timo's workspaces are its own, on Super+1..9, and don't use
+    # Control): tilemo's workspaces are its own, on Super+1..9, and don't use
     # Spaces at all. Same non-sequential keycodes as configure_shortcuts.
     set -- \
         118 49 18 \
@@ -710,16 +727,16 @@ configure_shortcuts_timo() {
     # Move left/right a Space (79 and 81) off, at their stock Ctrl+arrows
     # (8650752 is Control plus the arrow keys' function-key flag). The
     # Karabiner arrow rule sends Ctrl+Option+arrow for physical Win+arrow, and
-    # timo takes that chord for itself.
+    # tilemo takes that chord for itself.
     write_symbolic_hotkey 79 false 65535 123 8650752
     write_symbolic_hotkey 81 false 65535 124 8650752
 }
 
 configure_shortcuts() {
-    if test "$WM" = timo; then
-        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for timo)"
+    if test "$WM" = tilemo; then
+        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for tilemo)"
         warn_if_settings_app_running
-        configure_shortcuts_timo
+        configure_shortcuts_tilemo
         activate_shortcuts
         return 0
     fi
@@ -905,14 +922,14 @@ configure_spaces() {
     # default, and it reorders the Spaces behind the Option+1..9 bindings
     # above -- so the shortcut that switched to a given desktop a moment ago
     # switches somewhere else now. Numbered shortcuts only mean anything with
-    # a fixed order. timo's spec (section 6.4) keeps it off too.
+    # a fixed order. tilemo's spec (section 6.4) keeps it off too.
     try defaults write com.apple.dock mru-spaces -bool false
 
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
 
-    if test "$WM" = timo; then
-        configure_window_manager_for_timo
+    if test "$WM" = tilemo; then
+        configure_window_manager_for_tilemo
         return 0
     fi
 
@@ -921,7 +938,7 @@ configure_spaces() {
     check_spaces_count
 }
 
-# The Mission Control side of timo's SPEC.md, section 6.4. timo does its
+# The Mission Control side of tilemo's SPEC.md, section 6.4. tilemo does its
 # workspaces by minimizing windows on one Space per display, so the nine
 # Spaces the Amethyst setup asks for are dead weight rather than missing --
 # but there is no API to delete a Space any more than to create one, so the
@@ -930,7 +947,7 @@ configure_spaces() {
 # The rest turns off the macOS features that move windows on their own and
 # would fight a tiler: Stage Manager groups windows itself, Sequoia's tiling
 # snaps a window dragged to an edge -- and, with Option held, on any drag,
-# which collides with timo's Super+drag whenever Super falls back to Option --
+# which collides with tilemo's Super+drag whenever Super falls back to Option --
 # and clicking the wallpaper sweeps every window aside to show the desktop.
 # The last is false rather than absent: false is "Only in Stage Manager",
 # which with Stage Manager off means never.
@@ -945,10 +962,10 @@ configure_spaces() {
 # WindowManager reads them at launch, and restarting it from here isn't known
 # to be safe -- it owns every window on screen -- so they take effect at the
 # next login.
-configure_window_manager_for_timo() {
-    info "timo uses one Space per display; any extra Spaces can be removed in Mission Control (Ctrl-Up, then hover a Space and click its x)"
+configure_window_manager_for_tilemo() {
+    info "tilemo uses one Space per display; any extra Spaces can be removed in Mission Control (Ctrl-Up, then hover a Space and click its x)"
 
-    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind timo's back)"
+    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind tilemo's back)"
     try defaults write com.apple.WindowManager GloballyEnabled -bool false
     try defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false
     try defaults write com.apple.WindowManager EnableTilingOptionAccelerator -bool false
@@ -1164,7 +1181,7 @@ configure_amethyst() {
     info "Grant Amethyst Accessibility access in System Settings > Privacy & Security"
 }
 
-# --- Configure timo (Hammerspoon) ---
+# --- Configure tilemo (Hammerspoon) ---
 
 # Where NAME.app is, or empty if it isn't installed, by the same rule as
 # amethyst_path: either Applications directory, and only a usable bundle.
@@ -1182,10 +1199,10 @@ hammerspoon_path() {
     app_path Hammerspoon
 }
 
-# What a machine without Hammerspoon or timo loses, for the warnings below.
-TIMO_MISSING_EFFECT="nothing will tile and timo's workspace keys will do nothing"
+# What a machine without Hammerspoon or tilemo loses, for the warnings below.
+TILEMO_MISSING_EFFECT="nothing will tile and tilemo's workspace keys will do nothing"
 
-# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: timo
+# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: tilemo
 # itself comes from a git clone, so a machine with no network can't get it
 # either way. The cask installs into /Applications without an administrator
 # prompt, so --no-sudo doesn't skip it.
@@ -1195,88 +1212,100 @@ install_hammerspoon() {
         return 0
     fi
     if test "$INSTALL" = no; then
-        warn "Hammerspoon is not installed and --no-install was given; $TIMO_MISSING_EFFECT until it is"
+        warn "Hammerspoon is not installed and --no-install was given; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
     if ! is_command brew; then
-        warn "Homebrew not found, so Hammerspoon can't be installed; $TIMO_MISSING_EFFECT until it is"
+        warn "Homebrew not found, so Hammerspoon can't be installed; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
     info "Installing Hammerspoon"
     brew install --cask hammerspoon \
-        || warn "could not install Hammerspoon; $TIMO_MISSING_EFFECT until it is"
+        || warn "could not install Hammerspoon; $TILEMO_MISSING_EFFECT until it is"
 }
 
-# Clone timo if there's no checkout, then copy its modules into
-# ~/.hammerspoon/timo with its own `make install`, so what lands there is
+# Clone tilemo if there's no checkout, then copy its modules into
+# ~/.hammerspoon/tilemo with its own `make install`, so what lands there is
 # whatever its Makefile says belongs there rather than a list kept here.
 #
 # An existing checkout is installed as it stands, not pulled: it may be a
 # working copy with changes in it, and updating it is its owner's call.
 # --no-install skips only the clone -- copying an existing checkout's files is
-# configuring what's already there.
-install_timo() {
-    if ! test -d "$TIMO_DIR"; then
+# configuring what's already there. That includes one from before the rename,
+# whose `make install` writes ~/.hammerspoon/timo instead; the init.lua written
+# below loads tilemo, so that's checked for afterwards and a stale checkout
+# gets told to update.
+install_tilemo() {
+    if test "$TILEMO_DIR" = "$TILEMO_OLD_DIR"; then
+        info "Using the checkout in $TILEMO_DIR, cloned before timo was renamed tilemo; rename it to $HOME/tilemo whenever suits"
+    fi
+    if ! test -d "$TILEMO_DIR"; then
         if test "$INSTALL" = no; then
-            warn "$TIMO_DIR not found and --no-install was given; clone $TIMO_REPO there and re-run, or $TIMO_MISSING_EFFECT"
+            warn "$TILEMO_DIR not found and --no-install was given; clone $TILEMO_REPO there and re-run, or $TILEMO_MISSING_EFFECT"
             return 0
         fi
         if ! is_command git; then
-            warn "git not found, so timo can't be cloned into $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+            warn "git not found, so tilemo can't be cloned into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
             return 0
         fi
-        info "Cloning timo into $TIMO_DIR"
+        info "Cloning tilemo into $TILEMO_DIR"
         # git removes the directory it created when a clone fails, so a failure
         # here leaves nothing for the next run to mistake for a checkout.
-        if ! git clone "$TIMO_REPO" "$TIMO_DIR"; then
-            warn "could not clone $TIMO_REPO into $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+        if ! git clone "$TILEMO_REPO" "$TILEMO_DIR"; then
+            warn "could not clone $TILEMO_REPO into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
             return 0
         fi
     fi
     if ! is_command make; then
-        warn "make not found, so timo can't be installed from $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+        warn "make not found, so tilemo can't be installed from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
-    info "Installing timo from $TIMO_DIR"
-    make -C "$TIMO_DIR" install \
-        || warn "could not install timo from $TIMO_DIR; $TIMO_MISSING_EFFECT until it is"
+    info "Installing tilemo from $TILEMO_DIR"
+    if ! make -C "$TILEMO_DIR" install; then
+        warn "could not install tilemo from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if ! test -d "$HOME/.hammerspoon/tilemo"; then
+        warn "$TILEMO_DIR installed no $HOME/.hammerspoon/tilemo, so it predates the rename from timo; update it (git -C $TILEMO_DIR pull) and re-run, or require(\"tilemo\") will fail"
+    fi
 }
 
-# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so timo only
+# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so tilemo only
 # starts if that file loads it. Written only when there's no file at all: an
 # existing init.lua is someone's own Hammerspoon config, and overwriting it
-# would lose it. One that doesn't load timo gets the lines to add instead.
+# would lose it. One that doesn't load tilemo gets the lines to add instead.
 configure_hammerspoon_init() {
     _hs_dir="$HOME/.hammerspoon"
     _hs_init="$_hs_dir/init.lua"
     # -L as well as -e, so a dangling symlink (say, into a conf checkout that
     # moved) counts as someone's file rather than being replaced by ours.
     if test -e "$_hs_init" || test -L "$_hs_init"; then
-        # require("timo"), require 'timo' and require "timo" all load it; one
-        # after a -- is commented out and doesn't.
-        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"']timo[\"']" "$_hs_init"; then
+        # require("tilemo"), require 'tilemo' and require "tilemo" all load it,
+        # as does require("timo"), its old name, which tilemo keeps as a shim;
+        # one after a -- is commented out and doesn't.
+        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"'](tilemo|timo)[\"']" "$_hs_init"; then
             _hs_status=0
         else
             _hs_status=$?
         fi
         case "$_hs_status" in
             0)
-                info "$_hs_init already loads timo"
+                info "$_hs_init already loads tilemo"
                 ;;
             1)
-                warn "$_hs_init exists and doesn't load timo, so it was left alone; add these two lines to it, or $TIMO_MISSING_EFFECT: timo = require(\"timo\") and timo.start({})"
+                warn "$_hs_init exists and doesn't load tilemo, so it was left alone; add these two lines to it, or $TILEMO_MISSING_EFFECT: tilemo = require(\"tilemo\") and tilemo.start({})"
                 ;;
             *)
-                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads timo with timo = require(\"timo\") and timo.start({})"
+                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads tilemo with tilemo = require(\"tilemo\") and tilemo.start({})"
                 ;;
         esac
         return 0
     fi
-    info "Writing $_hs_init to start timo"
+    info "Writing $_hs_init to start tilemo"
     try mkdir -p "$_hs_dir"
     try write_file "$_hs_init" <<'LUA'
-timo = require("timo")
-timo.start({})
+tilemo = require("tilemo")
+tilemo.start({})
 LUA
 }
 
@@ -1310,26 +1339,26 @@ warn_if_other_tiler() {
     esac
 }
 
-configure_timo() {
-    info "Configuring timo"
+configure_tilemo() {
+    info "Configuring tilemo"
 
     install_hammerspoon
-    install_timo
+    install_tilemo
     configure_hammerspoon_init
 
-    warn_if_other_tiler Amethyst "it and timo would both tile the same windows"
-    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (timo's
-    # SPEC.md, section 7.3, unverified there), the chord timo takes.
-    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which timo needs"
+    warn_if_other_tiler Amethyst "it and tilemo would both tile the same windows"
+    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (tilemo's
+    # SPEC.md, section 7.3, unverified there), the chord tilemo takes.
+    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which tilemo needs"
 
-    # timo draws its own bar along the top (timo's SPEC.md, section 8), so
+    # tilemo draws its own bar along the top (tilemo's SPEC.md, section 8), so
     # the menu bar hides until the pointer reaches the top edge. Apps read it
     # at launch, so it shows everywhere after the next login.
     try defaults write NSGlobalDomain _HIHideMenuBar -bool true
-    info "The menu bar hides for timo's bar after the next login"
+    info "The menu bar hides for tilemo's bar after the next login"
 
     # Same as Amethyst's: no defaults key grants it, so say so rather than
-    # leave timo looking configured but inert.
+    # leave tilemo looking configured but inert.
     info "Grant Hammerspoon Accessibility access in System Settings > Privacy & Security"
 }
 
@@ -1349,8 +1378,11 @@ KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-ar
 # The part of that rule's name that a checkout from before Win+Shift+arrow
 # lacks, so a stale rule can be told apart from a current one.
 KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
-# The rule that makes the physical Win key timo's Super (Ctrl+Option+Command),
-# for --wm timo. Its name starts "timo:".
+# The rule that makes the physical Win key tilemo's Super (Ctrl+Option+Command),
+# for --wm tilemo. Its name starts "tilemo:".
+KARABINER_TILEMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/tilemo.json"
+# The same rule from a conf checkout older than the rename, named "timo:".
+# tilemo accepts that prefix too, so it still works.
 KARABINER_TIMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/timo.json"
 
 # Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
@@ -1427,13 +1459,17 @@ configure_karabiner() {
     fi
     # Above the arrow rule because Karabiner applies the first rule that
     # matches a key, and both want the physical Win key.
-    _karabiner_timo_note=""
-    if test "$WM" = timo; then
-        if test -f "$KARABINER_TIMO_RULE"; then
+    _karabiner_tilemo_note=""
+    if test "$WM" = tilemo; then
+        if test -f "$KARABINER_TILEMO_RULE"; then
+            _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }the rule whose name starts \"tilemo:\""
+            _karabiner_tilemo_note="; keep the tilemo rule above the arrow rule"
+        elif test -f "$KARABINER_TIMO_RULE"; then
+            info "$KARABINER_TIMO_RULE predates the rename to tilemo and still works; update the conf repo and run confinst to get the \"tilemo:\" rule"
             _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }the rule whose name starts \"timo:\""
-            _karabiner_timo_note="; keep the timo rule above the arrow rule"
+            _karabiner_tilemo_note="; keep the timo rule above the arrow rule"
         else
-            warn "$KARABINER_TIMO_RULE not found; run confinst after updating the conf repo, or timo falls back to Option for its Super key"
+            warn "$KARABINER_TILEMO_RULE not found; run confinst after updating the conf repo, or tilemo falls back to Option for its Super key"
         fi
     fi
     test -n "$_karabiner_rules" || return 0
@@ -1443,7 +1479,7 @@ configure_karabiner() {
     # rewritten by the app, so editing it here would be racing the GUI.
     # Enabling copies the rule into karabiner.json, and Karabiner runs that
     # copy, so an updated asset only takes effect once the rule is re-added.
-    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_timo_note; remove and add again any already enabled, to pick up changes to it"
+    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_tilemo_note; remove and add again any already enabled, to pick up changes to it"
 }
 
 # --- Configure application launch shortcuts ---
@@ -1714,8 +1750,8 @@ configure_keyboard
 configure_modifier_keys
 configure_shortcuts
 configure_spaces
-if test "$WM" = timo; then
-    configure_timo
+if test "$WM" = tilemo; then
+    configure_tilemo
 else
     configure_amethyst
 fi

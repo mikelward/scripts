@@ -109,7 +109,7 @@
 
 ## Crostini
 
-The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
+The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 `setup` learned to detect it and skip the desktop:
 
 - Set `BROWSER` to `garcon-url-handler`, if the container doesn't already
@@ -140,7 +140,7 @@ The rest of the Crostini mode in mikelward/tico's SPEC.md A.5, after
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
-- **On macOS, timo's app keys open apps through `open`.** `chrome` runs
+- **On macOS, tilemo's app keys open apps through `open`.** `chrome` runs
   `open -na "Google Chrome" --args …` (the beta if stable isn't in
   `/Applications` or `~/Applications`), so `browser1`–`3`, the Google web
   apps and `youtube-music` keep their Linux flags: the same
