@@ -37,11 +37,18 @@ TESTS = \
 	dvorak_test \
 	confinst_test \
 	screenshot_test \
-	ci-concurrency_test
+	ci-concurrency_test \
+	ci-test-target_test
+
+# setup-tide's tests take most of the run; CI skips them on a pull request
+# that can't affect them (ci-test-target).
+TIDE_TESTS = $(filter setup-tide_%,$(TESTS))
 
 test: $(TESTS)
+
+test-no-tide: $(filter-out $(TIDE_TESTS),$(TESTS))
 
 $(TESTS):
 	./$@
 
-.PHONY: test $(TESTS)
+.PHONY: test test-no-tide $(TESTS)

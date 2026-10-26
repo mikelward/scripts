@@ -1,0 +1,80 @@
+#!/bin/bash
+# Tests for ci-test-target
+#
+# These build a throwaway git repository with a base commit and a branch,
+# then check which make target each change picks.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TARGET="$SCRIPT_DIR/ci-test-target"
+TESTS_RUN=0
+TESTS_FAILED=0
+
+REPO="$(mktemp -d)"
+trap 'rm -rf "$REPO"' EXIT
+git -C "$REPO" init -q
+git -C "$REPO" config user.email test@example.com
+git -C "$REPO" config user.name test
+mkdir -p "$REPO/.github/workflows"
+for f in setup-tide setup-tide_test setup-tide_testlib Makefile chrome README.md .github/workflows/ci.yml .github/workflows/zizmor.yml; do
+    echo base > "$REPO/$f"
+done
+git -C "$REPO" add -A
+git -C "$REPO" commit -qm base
+BASE="$(git -C "$REPO" rev-parse HEAD)"
+
+# target_for FILE...: the target picked for a branch off BASE changing FILEs.
+target_for() {
+    git -C "$REPO" checkout -q --detach "$BASE"
+    for f in "$@"; do
+        echo change >> "$REPO/$f"
+    done
+    git -C "$REPO" commit -qam change
+    (cd "$REPO" && "$TARGET" "$BASE" "$(git rev-parse HEAD)")
+}
+
+check() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if test "$2" != "$3"; then
+        echo "  FAIL: $1: expected $3, got $2"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+check "an unrelated script skips setup-tide's tests" "$(target_for chrome)" test-no-tide
+check "docs skip setup-tide's tests" "$(target_for README.md)" test-no-tide
+check "another workflow skips setup-tide's tests" "$(target_for .github/workflows/zizmor.yml)" test-no-tide
+check "setup-tide runs them" "$(target_for setup-tide)" test
+check "a setup-tide test runs them" "$(target_for setup-tide_test)" test
+check "the shared test lib runs them" "$(target_for setup-tide_testlib)" test
+check "the Makefile runs them" "$(target_for Makefile)" test
+check "ci.yml runs them" "$(target_for .github/workflows/ci.yml)" test
+check "one tide file among others runs them" "$(target_for chrome setup-tide)" test
+# rename_for OLD NEW: the target picked for a branch off BASE renaming OLD to NEW.
+rename_for() {
+    git -C "$REPO" checkout -q --detach "$BASE"
+    git -C "$REPO" mv "$1" "$2"
+    git -C "$REPO" commit -qm rename
+    (cd "$REPO" && "$TARGET" "$BASE" "$(git rev-parse HEAD)")
+}
+
+check "renaming setup-tide away runs them" "$(rename_for setup-tide renamed-script)" test
+check "a push runs them" "$(cd "$REPO" && "$TARGET")" test
+
+# A commit the clone doesn't have can't be diffed; that runs everything, and says so.
+MISSING=0000000000000000000000000000000000000000
+check "a diff that fails runs them" "$(cd "$REPO" && "$TARGET" "$MISSING" "$BASE" 2>/dev/null)" test
+check "a diff that fails says so" "$(cd "$REPO" && "$TARGET" "$MISSING" "$BASE" 2>&1 >/dev/null | grep -c "can't diff")" 1
+
+TESTS_RUN=$((TESTS_RUN + 1))
+if (cd "$REPO" && "$TARGET" "$BASE" >/dev/null 2>&1); then
+    echo "  FAIL: one argument should be a usage error"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+fi
+
+if test "$TESTS_FAILED" -ne 0; then
+    echo "ci-test-target: $TESTS_FAILED of $TESTS_RUN failed"
+    exit 1
+fi
+echo "ci-test-target: $TESTS_RUN/$TESTS_RUN passed"
