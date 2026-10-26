@@ -1,0 +1,42 @@
+#!/bin/bash
+# ci-test-target - name the make target CI's test job should run.
+#
+# setup-tide's tests take most of CI's time, and setup-tide runs nothing
+# else in this repo, so a pull request that leaves it, its tests and the
+# build alone skips them.
+#
+# Usage:
+#     ci-test-target [BASE HEAD]
+#
+# With BASE and HEAD (a pull request), prints test-no-tide when nothing
+# between them touches setup-tide, its tests, the Makefile or ci.yml, else
+# test. With no arguments (a push to main), prints test.
+
+scriptname=ci-test-target
+
+warn() {
+    printf "%s: %s\n" "$scriptname" "$*" >&2
+}
+
+if test $# -eq 0; then
+    echo test
+    exit 0
+fi
+if test $# -ne 2; then
+    warn "usage: $scriptname [BASE HEAD]"
+    exit 2
+fi
+
+# --no-renames, so a file renamed away from setup-tide still counts.
+if ! changed=$(git diff --name-only --no-renames "$1...$2"); then
+    # Running everything is slow but never wrong.
+    warn "can't diff $1...$2, so running every test"
+    echo test
+    exit 0
+fi
+
+if printf '%s\n' "$changed" | grep -qE '^(setup-tide|setup-tide_.*|Makefile|\.github/workflows/ci\.yml)$'; then
+    echo test
+else
+    echo test-no-tide
+fi
