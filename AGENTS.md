@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-25
+last_modified: 2026-10-26
 ---
 
 # AGENTS.md
@@ -38,11 +38,12 @@ rewrite or trim rather than append, and delete rules that stopped biting.
 
 - **Any change to executable behavior adds or updates a test**: new behavior gets a test,
   a bug fix a regression test that fails before and passes after. Docs, comments and this
-  file need no test and no `make test` — don't manufacture test churn.
-- Tests live beside the script as `<script>_test`, listed in the `Makefile`'s `test`
-  target in the same commit — an unlisted test never runs.
-- Run `make test` after any change to executable behavior and before committing; skip it
-  on a docs-only change and say that's why.
+  file need no test and no test run — don't manufacture test churn.
+- Tests live beside the script as `<script>_test`, listed in the `Makefile`'s `TESTS` in
+  the same commit — an unlisted test never runs.
+- Run tests after any change to executable behavior and before committing:
+  `make -j test-no-tide`, or `make -j test` if it touches `setup-tide*` or the
+  `Makefile` (setup-tide's take minutes). Skip them on a docs-only change and say why.
 - **Fix preexisting test failures as the first commit** — don't stack work on a red
   baseline; if one is genuinely unrelated and out of scope, say so up front and confirm
   before skipping it.
