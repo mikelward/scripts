@@ -72,10 +72,26 @@ check "Fedora's Qt has the effects module already" lacks "$calls" "qml6-module-q
 check "so Fedora warns of nothing missing" lacks "$output" "won't load"
 teardown
 
+# Fedora 43 and 44 don't package Hyprland or uwsm, so their COPR is enabled
+# before the main install asks dnf for them.
+setup; ARGS=(); run SETUP_OS=redhat
+check "Fedora enables Hyprland's COPR" has "$calls" "sudo dnf copr enable -y lionheartp/Hyprland"
+first=$(printf '%s\n' "$calls" | grep -n -e 'copr enable -y lionheartp/Hyprland' -e 'install -y hyprland' | cut -d: -f2- | head -n 1)
+check "before it installs Hyprland" has "$first" "copr enable"
+teardown
+
+setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_COPR_FAILS=lionheartp/Hyprland
+check "a failed Hyprland COPR isn't fatal" test "$status" -eq 0
+check "a failed Hyprland COPR says the session won't start" has "$output" "couldn't enable the lionheartp/Hyprland COPR"
+check "a failed Hyprland COPR still installs the rest" has "$calls" "dnf install -y hyprland hypridle"
+check "a failed Hyprland COPR still enables Quickshell's" has "$calls" "dnf copr enable -y errornointernet/quickshell"
+teardown
+
 # Without the copr plugin there's no COPR, and that costs only the bar.
 setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_PLUGIN_FAILS=1
 check "a missing copr plugin isn't fatal" test "$status" -eq 0
 check "a missing copr plugin says the bar won't run" has "$output" "couldn't install dnf's copr plugin"
+check "a missing copr plugin says the session won't start" has "$output" "couldn't install dnf's copr plugin, so Hyprland and uwsm"
 check "a missing copr plugin doesn't try the COPR" lacks "$calls" "dnf copr enable"
 teardown
 

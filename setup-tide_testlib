@@ -21,7 +21,8 @@ setup() {
     # What the installs would create.
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
     printf '#!/bin/sh\nprintf "%%s\\n" "make $*" >> "%s"\n' "$CALLS" > "$T/bin/make"
-    # dnf copr enable fails with \$FAKE_DNF_COPR_FAILS, and installing the
+    # dnf copr enable fails for the COPR \$FAKE_DNF_COPR_FAILS names, or for
+    # any with 1, and installing the
     # copr plugin with \$FAKE_DNF_PLUGIN_FAILS. repoquery knows every package
     # but those in \$FAKE_MISSING, and fails with \$FAKE_DNF_QUERY_FAILS; like
     # dnf, install refuses the whole command when it names one of them.
@@ -37,7 +38,9 @@ if test "\$1" = repoquery; then
     exit 0
 fi
 printf "%s\\n" "dnf \$*" >> "$CALLS"
-test "\$1" != copr || test -z "\$FAKE_DNF_COPR_FAILS" || exit 1
+if test "\$1" = copr; then
+    case "\$FAKE_DNF_COPR_FAILS" in 1|"\$4") exit 1 ;; esac
+fi
 test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
 test "\$1" != install || for arg; do
     case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
