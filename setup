@@ -738,7 +738,7 @@ crostini_settings() {
     info "  keyboard layout and Caps Lock: Settings > Device > Keyboard and inputs"
     info "  sleep and lock: Settings > Device > Power, and Privacy > Lock screen"
     info "  more disk for Linux: Settings > About ChromeOS > Linux development environment > Disk size"
-    info "tico's options page has the full checklist."
+    info "tileco's options page has the full checklist."
 }
 
 # --- Detect GUI ---

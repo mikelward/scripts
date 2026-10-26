@@ -975,7 +975,7 @@ test_crostini_settings_point_at_chromeos() {
     output="$(sh -c "$(extract_functions "info crostini_settings")
 crostini_settings" 2>&1)"
     assert_output_contains "Settings > Device > Keyboard and inputs" &&
-    assert_output_contains "tico's options page has the full checklist"
+    assert_output_contains "tileco's options page has the full checklist"
 }
 
 run_test() {
