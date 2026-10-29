@@ -272,6 +272,8 @@ match on all but two rows, which is the muscle memory being preserved.
 | Switch applications | `Alt+Tab` | `Alt+Tab` † | Karabiner rule |
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
 | Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right` ‡ | Karabiner rule |
+| Shell keys in kitty | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … § | Karabiner rule |
+| Copy / paste in kitty | `Ctrl+C` / `Ctrl+V` | `Ctrl+C` / `Ctrl+V` § | conf's `kitty.conf` |
 
 ‡ These rows come from the conf repo's second Karabiner rule (see
 `config/karabiner/README.md` there). Physical `Ctrl+arrow` becomes
@@ -284,6 +286,13 @@ its own, Control+Option+Shift+arrow, which `amethyst.yml` binds to
 `throw-space-left`/`right` (as `mod3`); left to the rotation it would be
 Option+Shift+arrow, select-by-word. Without the rule, `Win+arrow` moves by word,
 `Win+Shift+arrow` selects by word, and `Ctrl+arrow` jumps to the line ends.
+
+§ In kitty only, the conf repo's terminal rule makes physical `Ctrl` Control
+and `Alt` Option, which kitty takes as Alt (Meta), so the shell's keys work
+as on Linux; everywhere else `Ctrl` stays Command. Copy and paste are
+kitty's own `Ctrl+C` and `Ctrl+V` maps, from the same `kitty.conf` as Linux;
+`Ctrl+C` with nothing selected sends the interrupt. Without the rule,
+`Ctrl+U` is Cmd+U and never reaches the shell.
 
 † Without Karabiner the two Tab rows swap round — `Ctrl+Tab` switches
 applications and `Alt+Tab` goes to the next tab. Its driver extension is the

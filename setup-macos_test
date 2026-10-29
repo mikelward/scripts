@@ -193,6 +193,7 @@ MOCK
     # one that predates Win+Shift+arrow.
     printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-terminal.json"
 
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
@@ -837,6 +838,27 @@ test_names_arrow_karabiner_rule() {
     assert_output_contains "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"
 }
 
+# The kitty rule, which gives Ctrl back to Control there, is named too, with
+# where it goes: above the arrow rule, since both match Ctrl+Left/Right.
+test_names_terminal_karabiner_rule() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "and \"Ctrl is Control and Alt is Meta in kitty\" in Karabiner" &&
+    assert_output_contains "keep the kitty rule above the arrow rule"
+}
+
+# A conf checkout from before the kitty rule: say it's missing, and name only
+# the rules there are.
+test_stale_conf_without_terminal_rule_warns() {
+    rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-terminal.json"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "pc-terminal.json not found" &&
+    assert_output_contains "Ctrl in kitty stays Command" &&
+    assert_output_lacks "Meta in kitty\" in Karabiner" &&
+    assert_output_lacks "keep the kitty rule"
+}
+
 # A conf checkout from before the arrow rule has pc-alt-tab.json and nothing
 # else. The run must say the arrow rule is missing rather than name a rule
 # there is nothing to enable -- while still naming the Alt+Tab one that is.
@@ -846,8 +868,8 @@ test_stale_conf_without_arrow_rule_warns() {
     assert_status 0 &&
     assert_output_contains "pc-arrows.json not found" &&
     assert_output_contains "Win+Shift+Left/Right won't move the window a Space" &&
-    assert_output_contains "Enable \"Alt+Tab switches applications\" in Karabiner" &&
-    assert_output_lacks "Win+Left/Right switches Spaces\" in Karabiner"
+    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl is Control and Alt is Meta in kitty\" in Karabiner" &&
+    assert_output_lacks "Win+Left/Right switches Spaces\" and"
 }
 
 # A conf checkout from before Win+Shift+arrow has the arrow rule without it.
@@ -859,7 +881,7 @@ test_stale_arrow_rule_warns() {
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "predates Win+Shift+Left/Right; update the conf repo" &&
-    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\" in Karabiner"
+    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\" and \"Ctrl is Control"
 }
 
 test_applies_shortcut_settings() {
@@ -2254,6 +2276,10 @@ run_test "names the arrow-key Karabiner rule to enable" \
     test_names_arrow_karabiner_rule
 run_test "a conf checkout without the arrow rule is reported" \
     test_stale_conf_without_arrow_rule_warns
+run_test "names the kitty Karabiner rule, above the arrow rule" \
+    test_names_terminal_karabiner_rule
+run_test "a conf checkout without the kitty rule warns" \
+    test_stale_conf_without_terminal_rule_warns
 run_test "an arrow rule from before Win+Shift+arrow is reported" \
     test_stale_arrow_rule_warns
 run_test "applies the shortcut settings to this session" \

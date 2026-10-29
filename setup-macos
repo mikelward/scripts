@@ -13,8 +13,9 @@
 #   which confinst symlinks out of the conf repo. Focus follows mouse is turned
 #   off -- see configure_amethyst for why it can't carry over from KDE.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
-#   Alt+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching and
-#   Win+Shift+Left/Right moving the window a Space (with Amethyst). Its rules are symlinked out of the conf repo too.
+#   Alt+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
+#   Win+Shift+Left/Right moving the window a Space (with Amethyst), and Ctrl
+#   as Control in kitty. Its rules are symlinked out of the conf repo too.
 # - Or, with --wm tilemo, tilemo instead of Amethyst: a Hammerspoon config with
 #   tide's tiling and nine workspaces of its own, done by minimizing windows
 #   rather than with Spaces. It needs the keys the Amethyst setup binds, so
@@ -1370,7 +1371,7 @@ configure_tilemo() {
 # every UI change but never touches an asset.
 KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
 # What a machine without working Karabiner loses, for the install warnings.
-KARABINER_MISSING_EFFECT="Alt+Tab will switch tabs rather than applications, Ctrl+Left/Right will jump to the line ends, Win+Left/Right will move by word rather than switching Spaces, and Win+Shift+Left/Right will select by word rather than moving the window a Space"
+KARABINER_MISSING_EFFECT="Alt+Tab will switch tabs rather than applications, Ctrl+Left/Right will jump to the line ends, Win+Left/Right will move by word rather than switching Spaces, Win+Shift+Left/Right will select by word rather than moving the window a Space, and Ctrl in kitty will be Command rather than Control"
 # The second rule, alongside it: Ctrl+arrow word movement, Win+arrow Space
 # switching and Win+Shift+arrow moving the window a Space. Checked separately, since a conf checkout older than the rule has
 # the first without the second.
@@ -1378,6 +1379,9 @@ KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-ar
 # The part of that rule's name that a checkout from before Win+Shift+arrow
 # lacks, so a stale rule can be told apart from a current one.
 KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
+# The rule that gives kitty Ctrl as Control and Alt as Meta, so Ctrl+U and
+# the like reach the shell. Checked separately, for older conf checkouts.
+KARABINER_TERMINAL_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-terminal.json"
 # The rule that makes the physical Win key tilemo's Super (Ctrl+Option+Command),
 # for --wm tilemo. Its name starts "tilemo:".
 KARABINER_TILEMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/tilemo.json"
@@ -1457,17 +1461,25 @@ configure_karabiner() {
     else
         warn "$KARABINER_ARROW_RULE not found; update the conf repo and run confinst, or Win+Left/Right won't switch Spaces, Win+Shift+Left/Right won't move the window a Space, and Ctrl+Left/Right keeps jumping to the line ends"
     fi
-    # Above the arrow rule because Karabiner applies the first rule that
-    # matches a key, and both want the physical Win key.
-    _karabiner_tilemo_note=""
+    # The rules below go above the arrow rule, because Karabiner applies the
+    # first rule that matches a key: the kitty rule and the arrow rule both
+    # want Ctrl+Left/Right, and the tilemo rule and the arrow rule both want
+    # the physical Win key.
+    _karabiner_order_note=""
+    if test -f "$KARABINER_TERMINAL_RULE"; then
+        _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }\"Ctrl is Control and Alt is Meta in kitty\""
+        _karabiner_order_note="; keep the kitty rule above the arrow rule"
+    else
+        warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
+    fi
     if test "$WM" = tilemo; then
         if test -f "$KARABINER_TILEMO_RULE"; then
             _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }the rule whose name starts \"tilemo:\""
-            _karabiner_tilemo_note="; keep the tilemo rule above the arrow rule"
+            _karabiner_order_note="$_karabiner_order_note; keep the tilemo rule above the arrow rule"
         elif test -f "$KARABINER_TIMO_RULE"; then
             info "$KARABINER_TIMO_RULE predates the rename to tilemo and still works; update the conf repo and run confinst to get the \"tilemo:\" rule"
             _karabiner_rules="${_karabiner_rules:+$_karabiner_rules and }the rule whose name starts \"timo:\""
-            _karabiner_tilemo_note="; keep the timo rule above the arrow rule"
+            _karabiner_order_note="$_karabiner_order_note; keep the timo rule above the arrow rule"
         else
             warn "$KARABINER_TILEMO_RULE not found; run confinst after updating the conf repo, or tilemo falls back to Option for its Super key"
         fi
@@ -1479,7 +1491,7 @@ configure_karabiner() {
     # rewritten by the app, so editing it here would be racing the GUI.
     # Enabling copies the rule into karabiner.json, and Karabiner runs that
     # copy, so an updated asset only takes effect once the rule is re-added.
-    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_tilemo_note; remove and add again any already enabled, to pick up changes to it"
+    info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_order_note; remove and add again any already enabled, to pick up changes to it"
 }
 
 # --- Configure application launch shortcuts ---
