@@ -240,6 +240,16 @@ This one can only be done *after* the run, not before it: on a first run
 Amethyst isn't installed yet, so there's nothing to grant the permission to.
 The run repeats the instruction when it gets there.
 
+**Grant LinearMouse Accessibility too, and turn on its Start at login.**
+macOS can't say how far a mouse wheel notch scrolls (System Settings' speed
+only changes the acceleration), so a notch barely moves a page. The run
+installs LinearMouse (free, open source), writes
+`~/.config/linearmouse/linearmouse.json` with ten lines a notch for a mouse
+and nothing for a trackpad, and starts it. The config is written only when
+there's none: LinearMouse rewrites it whenever its settings change, so its
+Scrolling settings are where to tune the number. Without LinearMouse, or
+without the permission, the wheel scrolls as stock macOS does.
+
 ## Key mapping
 
 Both columns are the **physical keys you press** on a PC keyboard — not the
