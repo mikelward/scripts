@@ -281,13 +281,16 @@ match on all but two rows, which is the muscle memory being preserved.
 | Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
 | Switch applications | `Alt+Tab` | `Alt+Tab` † | Karabiner rule |
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
-| Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right` ‡ | Karabiner rule |
+| Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right`, `Alt+Left`/`Right` ‡ | Karabiner rule |
 | Shell keys in kitty | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … § | Karabiner rule |
 | Copy / paste in kitty | `Ctrl+C` / `Ctrl+V` | `Ctrl+C` / `Ctrl+V` § | conf's `kitty.conf` |
 
 ‡ These rows come from the conf repo's second Karabiner rule (see
 `config/karabiner/README.md` there). Physical `Ctrl+arrow` becomes
-Option+arrow, macOS's move-by-word, and physical `Win+arrow` becomes
+Option+arrow, macOS's move-by-word, as does physical `Alt+arrow`. Left to
+the rotation, `Alt+arrow` is Control+arrow, which Cocoa's standard key
+bindings map to `moveToLeftEndOfLine:` and `moveToRightEndOfLine:`, the line
+ends. Physical `Win+arrow` becomes
 Control+Option+arrow, which `setup-macos` binds to switching Spaces. The Space
 shortcut can't be plain Option+arrow, although that's what `Win+arrow` sends
 after the rotation: the hotkey would also catch the Option+arrow the rule
