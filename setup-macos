@@ -25,6 +25,8 @@
 #   tilemo's own bar. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
 #   7.3 and 8), which say what it needs from here. --wm timo, its old name,
 #   still works.
+# - LinearMouse, so a mouse wheel notch scrolls ten lines rather than one: its
+#   config is written only where there's none, since the app rewrites it.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -430,9 +432,9 @@ Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Don't install Amethyst or Karabiner-Elements (or, with
-                   --wm tilemo, Hammerspoon and tilemo); configure whatever is
-                   already there
+  --no-install     Don't install Amethyst, Karabiner-Elements or LinearMouse
+                   (or, with --wm tilemo, Hammerspoon and tilemo); configure
+                   whatever is already there
   --no-sudo        Don't run anything needing administrator rights. Only
                    Karabiner-Elements' installer does, so only that is skipped
   --ignore-errors  Keep going past failures instead of aborting on the first
@@ -1494,6 +1496,81 @@ configure_karabiner() {
     info "Enable $_karabiner_rules in Karabiner-Elements > Complex Modifications > Add rule$_karabiner_order_note; remove and add again any already enabled, to pick up changes to it"
 }
 
+# --- Configure LinearMouse ---
+
+# macOS can't say how far a mouse wheel notch scrolls: System Settings'
+# scrolling speed only changes the acceleration, and a notch at a time
+# barely moves a page. LinearMouse (free, open source) sets it per device.
+LINEARMOUSE_CONFIG="$HOME/.config/linearmouse/linearmouse.json"
+# Lines per notch for a mouse, in the config written below. A trackpad is
+# left as macOS has it.
+LINEARMOUSE_LINES=10
+LINEARMOUSE_MISSING_EFFECT="a mouse wheel notch will keep scrolling a line or so"
+
+linearmouse_path() {
+    app_path LinearMouse
+}
+
+# Homebrew only, like Hammerspoon: the cask is an app, so --no-sudo has
+# nothing to skip.
+install_linearmouse() {
+    if _installed=$(linearmouse_path); then
+        info "LinearMouse is already installed at $_installed"
+        return 0
+    fi
+    if test "$INSTALL" = no; then
+        warn "LinearMouse is not installed and --no-install was given; $LINEARMOUSE_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if ! is_command brew; then
+        warn "Homebrew not found, so LinearMouse can't be installed; $LINEARMOUSE_MISSING_EFFECT until it is"
+        return 0
+    fi
+    info "Installing LinearMouse"
+    brew install --cask linearmouse \
+        || warn "could not install LinearMouse; $LINEARMOUSE_MISSING_EFFECT until it is"
+}
+
+# The config is written only where there's none. LinearMouse rewrites the
+# file whenever its settings change, so one that's there is the user's, and a
+# symlink into the conf repo would be replaced or edited behind its back.
+configure_linearmouse() {
+    info "Configuring LinearMouse"
+
+    install_linearmouse
+
+    if test -e "$LINEARMOUSE_CONFIG" || test -L "$LINEARMOUSE_CONFIG"; then
+        info "$LINEARMOUSE_CONFIG exists; leaving LinearMouse's settings as they are"
+    else
+        try mkdir -p "$(dirname "$LINEARMOUSE_CONFIG")"
+        info "Writing $LINEARMOUSE_CONFIG: $LINEARMOUSE_LINES lines per mouse wheel notch"
+        try write_file "$LINEARMOUSE_CONFIG" <<CONFIG
+{
+    "schemes": [
+        {
+            "if": {
+                "device": {
+                    "category": "mouse"
+                }
+            },
+            "scrolling": {
+                "distance": {
+                    "vertical": $LINEARMOUSE_LINES
+                }
+            }
+        }
+    ]
+}
+CONFIG
+    fi
+
+    _linearmouse=$(linearmouse_path) || return 0
+    # Started in the background so it reads the config now. It asks for
+    # Accessibility the first time, which only a person can grant.
+    try open -g "$_linearmouse"
+    info "Grant LinearMouse Accessibility when it asks, and turn on its Start at login; its Scrolling settings change the lines per notch"
+}
+
 # --- Configure application launch shortcuts ---
 
 # Print the path to a launcher helper, or fail if there isn't one. PATH first,
@@ -1768,6 +1845,7 @@ else
     configure_amethyst
 fi
 configure_karabiner
+configure_linearmouse
 configure_app_shortcuts
 configure_finder
 

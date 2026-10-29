@@ -61,7 +61,7 @@ MOCK
 
     # pgrep exits 0 by default, i.e. the app is running and restart_app should
     # go on to killall it.
-    for cmd in hidutil launchctl killall; do
+    for cmd in hidutil launchctl killall open; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
@@ -189,6 +189,9 @@ MOCK
     printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
     mkdir -p "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    # LinearMouse installed, with no config of its own yet.
+    mkdir -p "$APPLICATIONS_DIR/LinearMouse.app/Contents/MacOS"
+    printf 'app\n' > "$APPLICATIONS_DIR/LinearMouse.app/Contents/Info.plist"
     # The rule's description, which is how the run tells a current rule from
     # one that predates Win+Shift+arrow.
     printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"' \
@@ -1033,6 +1036,70 @@ test_yes_skips_the_preflight_pause() {
     assert_output_lacks "stdin is not a terminal"
 }
 
+# --- LinearMouse ---
+
+remove_linearmouse() {
+    rm -rf "$APPLICATIONS_DIR/LinearMouse.app"
+}
+
+test_installs_linearmouse_when_missing() {
+    remove_linearmouse
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask linearmouse"
+}
+
+test_does_not_reinstall_linearmouse() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "brew install --cask linearmouse" &&
+    assert_output_contains "LinearMouse is already installed"
+}
+
+test_no_install_skips_linearmouse() {
+    remove_linearmouse
+    run_macos --no-install --ignore-errors
+    assert_status 0 &&
+    assert_not_called "brew install --cask linearmouse" &&
+    assert_output_contains "LinearMouse is not installed and --no-install was given"
+}
+
+# A wheel notch barely moves a page on macOS; the config makes a mouse's
+# notch ten lines, and leaves trackpads alone.
+test_writes_linearmouse_config() {
+    run_macos
+    _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
+    assert_status 0 &&
+    assert_file_contains "$_config" '"category": "mouse"' &&
+    assert_file_contains "$_config" '"vertical": 10' &&
+    assert_file_lacks "$_config" 'trackpad'
+}
+
+# LinearMouse rewrites its config whenever its settings change, so one
+# that's there is the user's own.
+test_keeps_existing_linearmouse_config() {
+    mkdir -p "$TEST_TMPDIR/home/.config/linearmouse"
+    printf '%s\n' '{"schemes": []}' > "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
+    run_macos
+    assert_status 0 &&
+    assert_file_contains "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" '{"schemes": []}' &&
+    assert_output_contains "leaving LinearMouse's settings as they are"
+}
+
+test_starts_linearmouse() {
+    run_macos
+    assert_status 0 &&
+    assert_called "open -g $APPLICATIONS_DIR/LinearMouse.app" &&
+    assert_output_contains "Grant LinearMouse Accessibility"
+}
+
+test_missing_brew_warns_about_linearmouse() {
+    remove_linearmouse
+    run_macos_without brew --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Homebrew not found, so LinearMouse can't be installed"
+}
+
 # --- Karabiner-Elements ---
 
 # Remove the pre-installed Karabiner, i.e. pretend a fresh machine.
@@ -1183,7 +1250,7 @@ test_preflight_states_karabiner_cost_and_reliability() {
 test_help_names_both_installs() {
     run_macos --help
     assert_status 0 &&
-    assert_output_contains "Amethyst or Karabiner-Elements"
+    assert_output_contains "Amethyst, Karabiner-Elements or LinearMouse"
 }
 
 # --- Amethyst ---
@@ -1497,6 +1564,7 @@ test_staged_bundle_falls_back_to_user_applications() {
     # Root can't be kept out by permissions, so this makes the directory
     # genuinely absent instead -- which needs everything else out of it too.
     remove_karabiner
+    remove_linearmouse
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
     if test "$(id -u)" -eq 0; then
         rmdir "$APPLICATIONS_DIR"
@@ -2324,6 +2392,13 @@ run_test "no preflight pause without a terminal" \
     test_preflight_does_not_pause_without_a_terminal
 run_test "--yes skips the preflight pause" \
     test_yes_skips_the_preflight_pause
+run_test "installs LinearMouse when missing" test_installs_linearmouse_when_missing
+run_test "does not reinstall LinearMouse" test_does_not_reinstall_linearmouse
+run_test "--no-install skips installing LinearMouse" test_no_install_skips_linearmouse
+run_test "writes a LinearMouse config: ten lines a notch for a mouse" test_writes_linearmouse_config
+run_test "keeps a LinearMouse config that's already there" test_keeps_existing_linearmouse_config
+run_test "starts LinearMouse and says to grant it Accessibility" test_starts_linearmouse
+run_test "missing brew warns about LinearMouse" test_missing_brew_warns_about_linearmouse
 run_test "installs Karabiner-Elements when missing" \
     test_installs_karabiner_when_missing
 run_test "does not reinstall Karabiner-Elements" \
@@ -2350,7 +2425,7 @@ run_test "the preflight names the Karabiner permissions" \
     test_preflight_names_karabiner_permissions
 run_test "the preflight states Karabiner's cost and reliability" \
     test_preflight_states_karabiner_cost_and_reliability
-run_test "--help names both applications --no-install skips" \
+run_test "--help names the applications --no-install skips" \
     test_help_names_both_installs
 run_test "disables focus follows mouse" test_disables_focus_follows_mouse
 run_test "does not leave focus follows mouse enabled" \
