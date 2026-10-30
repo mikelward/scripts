@@ -285,6 +285,20 @@ setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS_AFTER=1
 check "greetd: an enable that fails after taking the alias is undone" has "$calls" "sudo systemctl enable --force gdm3.service"
 check "greetd: GDM is the display manager again" test "$(cat "$T/dm")" = gdm3.service
 check "greetd: and says why" has "$output" "not making greetd the display manager, so gdm3.service stays: systemctl couldn't enable greetd"
+check "greetd: and greetd won't start beside it" test ! -e "$T/greetd-wanted"
+teardown
+
+# An enable that made greetd's WantedBy= link, then failed on the alias,
+# takes the link away again, so greetd won't start beside GDM.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS_PARTWAY=1
+check "greetd: an enable that fails partway is named" has "$output" "not making greetd the display manager, so gdm3.service stays: systemctl couldn't enable greetd"
+check "greetd: an enable that fails partway leaves GDM" test "$(cat "$T/dm")" = gdm3.service
+check "greetd: an enable that fails partway leaves greetd disabled" test ! -e "$T/greetd-wanted"
+check "greetd: an enable that fails partway isn't fatal" test "$status" -eq 0
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS_PARTWAY=1 FAKE_DISABLE_FAILS=1
+check "greetd: a failed disable after a partway enable says greetd may start too" \
+    has "$output" "couldn't disable greetd again, so it may start beside gdm3.service from the next boot; run 'sudo systemctl disable greetd.service'"
 teardown
 
 # A failed switch leaves GDM, and says so.

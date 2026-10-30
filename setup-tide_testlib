@@ -270,7 +270,10 @@ MOCK
     # display-manager.service as systemd's alias does. Enabling fails with
     # \$FAKE_ENABLE_FAILS, and leaves the alias for greetd with
     # \$FAKE_ENABLE_NO_ALIAS, and for the unit \$FAKE_ENABLE_NO_ALIAS_FOR.
-    # Disabling greetd fails with \$FAKE_DISABLE_FAILS.
+    # Disabling greetd fails with \$FAKE_DISABLE_FAILS. Enabling greetd makes
+    # its WantedBy= link, $T/greetd-wanted, before the alias, and with
+    # \$FAKE_ENABLE_FAILS_PARTWAY fails between the two; disabling it
+    # removes the link.
     cat > "$T/bin/systemctl" <<MOCK
 #!/bin/sh
 printf "%s\\n" "systemctl \$*" >> "$CALLS"
@@ -325,6 +328,10 @@ fi
 case "\$*" in
     "enable --force "*.service)
         test -z "\$FAKE_ENABLE_FAILS" || exit 1
+        if test "\$3" = greetd.service; then
+            : > "$T/greetd-wanted"
+            test -z "\$FAKE_ENABLE_FAILS_PARTWAY" || exit 1
+        fi
         # A unit without Alias=display-manager.service doesn't take it.
         if test -n "\$FAKE_ENABLE_NO_ALIAS" && test "\$3" = greetd.service; then :
         elif test -n "\$FAKE_ENABLE_NO_ALIAS_FOR" && test "\$3" = "\$FAKE_ENABLE_NO_ALIAS_FOR"; then :
@@ -335,6 +342,7 @@ case "\$*" in
         ;;
     "disable greetd.service")
         test -z "\$FAKE_DISABLE_FAILS" || exit 1
+        rm -f "$T/greetd-wanted"
         if test -s "$T/dm" && test "\$(cat "$T/dm")" = greetd.service; then : > "$T/dm"; fi
         ;;
 esac

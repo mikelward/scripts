@@ -89,15 +89,6 @@
       can read, mode 0700 say, fails the check, though systemd and PAM run
       it as root just fine. Read those with sudo instead. Raised in review of
       mikelward/scripts#288.
-- [ ] **Disable greetd when enabling it fails partway.** If
-      `display-manager.service` is a plain unit file rather than a link,
-      `systemctl enable --force greetd.service` can add greetd's
-      `graphical.target.wants` link and then fail on the alias. setup then
-      stops switching, but leaves that link, so greetd and the old display
-      manager could both start at the next boot. The fix: disable greetd on
-      every failed enable, and warn if that fails, as the check after a
-      successful enable already does. Raised in review of
-      mikelward/scripts#288.
 - [ ] **Read a script's `#!` line only as far as the kernel does.** setup
       reads the whole first line, but Linux reads only the first 256 bytes
       (`BINPRM_BUF_SIZE`) and may cut the argument short. So with a very
