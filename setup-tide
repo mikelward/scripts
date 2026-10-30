@@ -40,7 +40,13 @@
 # - removes the logind lid drop-ins the retired setup-hypr/setup-sway
 #   installed. They set HandleLidSwitch=ignore, and tide leaves suspend
 #   to logind's defaults, so with one left in place an undocked lid close
-#   would never suspend.
+#   would never suspend;
+# - ends by checking that the tide session will be at the login screen
+#   (its entry is installed, and so is uwsm, without which the login
+#   screen hides it) and that Hyprland is there to start it, naming what's
+#   missing.
+#   After a run that installed packages, that's an error unless
+#   --ignore-errors is given; otherwise a warning.
 #
 # The dotfiles (conf's config/hypr and friends) come from confinst, which
 # setup runs first.
@@ -185,6 +191,11 @@ GREETER_PATH="${SETUP_GREETER_PATH:-/usr/local/bin:/usr/bin:/bin}"
 # or more: systemd's own for a service, and the one pam_env sets on Debian,
 # where it sets one.
 SERVICE_PATH="${SETUP_SERVICE_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
+# The session entry `make install-session PREFIX=/usr` installs, and the PATH
+# the login screen looks its TryExec up on, a system service's, which
+# check_session reads. Overridable for tests.
+SESSION_ENTRY="${SETUP_SESSION_ENTRY:-/usr/share/wayland-sessions/tide.desktop}"
+SESSION_PATH="${SETUP_SESSION_PATH:-$SERVICE_PATH}"
 # What the greeter runs from that PATH: tide-greeter, the Hyprland it
 # starts, the hyprctl that ends that Hyprland, and the qs it shows.
 GREETER_COMMANDS="tide-greeter Hyprland hyprctl qs"
@@ -4563,6 +4574,51 @@ early_greeter() {
     setup_greeter early
 }
 
+# --- The session at the login screen ---
+
+# session_command CMD: whether CMD, a path or a name looked up on
+# SESSION_PATH, is an executable file, as the login screen judges a TryExec.
+session_command() {
+    case "$1" in
+        */*) test -f "$1" && test -x "$1" ;;
+        *) (PATH=$SESSION_PATH && is_command "$1") ;;
+    esac
+}
+
+# check_session says, last, whether the tide session will be at the login
+# screen and start once picked. GDM, SDDM and tide's greeter list it only
+# where its entry is and the entry's TryExec command (uwsm) is installed,
+# and its compositor wrapper runs start-hyprland, or Hyprland without it.
+# The steps that install these warn on their own, early in a long run, where
+# a missing uwsm went unseen; a run that tried to install them stops here,
+# unless errors are being ignored. Returns 1 when the session isn't ready.
+check_session() {
+    _problems=
+    if ! test -f "$SESSION_ENTRY"; then
+        _problems="the tide session won't show at the login screen: there's no $SESSION_ENTRY; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
+    elif ! _try=$(sed -n '/^TryExec[[:space:]]*=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]*$//;p;q;}' "$SESSION_ENTRY"); then
+        _problems="the tide session may not show at the login screen: couldn't read $SESSION_ENTRY"
+    elif test -n "$_try" && ! session_command "$_try"; then
+        _where=
+        if test "$_try" = uwsm && test "$(detect_os)" = redhat; then
+            _where=" (Fedora has it only in the $HYPRLAND_COPR COPR)"
+        fi
+        _problems="the tide session won't show at the login screen: it's listed only where $_try is installed, and it isn't; install $_try$_where"
+    fi
+    if ! session_command start-hyprland && ! session_command Hyprland; then
+        _problems="${_problems:+$_problems
+}the tide session won't start: Hyprland isn't installed"
+    fi
+    test -n "$_problems" || return 0
+    printf '%s\n' "$_problems" | while IFS= read -r _problem; do
+        warn "$_problem"
+    done
+    if test "$INSTALL" = yes && test "$SUDO" = yes && test "$IGNORE_ERRORS" = no; then
+        error "tide isn't ready to log in to; fix the above and rerun, or pass --ignore-errors to carry on"
+    fi
+    return 1
+}
+
 # --- Main ---
 
 if test "$SUDO" != no; then
@@ -4608,7 +4664,9 @@ else
     setup_greeter
 fi
 
-if test "$GREETER_ACTIVE" = yes; then
+if ! check_session; then
+    info "tide installed, but its session isn't ready: see the warnings above."
+elif test "$GREETER_ACTIVE" = yes; then
     info "tide installed. Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
 else
     info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."

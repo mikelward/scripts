@@ -602,6 +602,86 @@ setup; ARGS=(--no-sudo); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-d
 check "--no-sudo leaves GDM alone" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
 teardown
 
+# --- The session at the login screen ---
+
+# The run ends by checking the session will be listed and can start, from
+# what the login screen sees, not the user's PATH.
+setup; ARGS=(); run
+check "session: a ready session says to pick it" has "$output" "the \"tide\" session"
+check "session: a ready session raises nothing" lacks "$output" "the tide session won't"
+teardown
+
+# The login screen hides an entry whose TryExec isn't installed: how the
+# session went missing on Fedora without uwsm.
+setup; ARGS=(); rm "$T/usr-bin/uwsm"; run
+check "session: no uwsm ends the run" test "$status" -ne 0
+check "session: no uwsm says the session won't be listed" \
+    has "$output" "the tide session won't show at the login screen: it's listed only where uwsm is installed, and it isn't; install uwsm"
+check "session: no uwsm says how to carry on" has "$output" "pass --ignore-errors to carry on"
+check "session: no uwsm doesn't say to pick the session" lacks "$output" "the \"tide\" session"
+check "session: no uwsm still installs the rest" has "$calls" "systemctl --user enable tide.service"
+check "session: no uwsm still sets up the greeter" has "$calls" "systemctl show --property=LoadState --value display-manager.service"
+teardown
+
+# uwsm on the user's PATH alone isn't on the login screen's.
+setup; ARGS=(); mv "$T/usr-bin/uwsm" "$T/bin/uwsm"; run
+check "session: a uwsm only the user can find isn't enough" has "$output" "it's listed only where uwsm is installed"
+teardown
+
+setup; ARGS=(); rm "$T/usr-bin/uwsm"; run SETUP_OS=redhat
+check "session: Fedora without uwsm names the COPR it comes from" \
+    has "$output" "install uwsm (Fedora has it only in the lionheartp/Hyprland COPR)"
+teardown
+
+setup; ARGS=(--ignore-errors); rm "$T/usr-bin/uwsm"; run
+check "session: --ignore-errors carries on past it" test "$status" -eq 0
+check "session: --ignore-errors still says why" has "$output" "it's listed only where uwsm is installed"
+check "session: --ignore-errors says the session isn't ready" \
+    has "$output" "tide installed, but its session isn't ready: see the warnings above."
+teardown
+
+setup; ARGS=(); run FAKE_NO_ENTRY=1
+check "session: no entry ends the run" test "$status" -ne 0
+check "session: no entry names it and how to install it" \
+    has "$output" "there's no $T/share/wayland-sessions/tide.desktop; run 'sudo make -C $T/src/tide install-session PREFIX=/usr'"
+teardown
+
+# A run that skipped installing the entry only warns.
+for skip in --no-install --no-sudo; do
+    setup; ARGS=("$skip"); run
+    check "session: $skip without an entry isn't fatal" test "$status" -eq 0
+    check "session: $skip without an entry says so" has "$output" "the tide session won't show at the login screen: there's no"
+    teardown
+done
+
+# A TryExec with a slash is a file, not a name looked up on the PATH.
+setup; ARGS=(); run FAKE_ENTRY_TRYEXEC="$T/no-such-dir/uwsm"
+check "session: a TryExec path that isn't there hides the session" \
+    has "$output" "it's listed only where $T/no-such-dir/uwsm is installed"
+teardown
+setup; ARGS=(); run FAKE_ENTRY_TRYEXEC="$T/usr-bin/uwsm"
+check "session: a TryExec path that's there is fine" test "$status" -eq 0
+teardown
+setup; ARGS=(); rm "$T/usr-bin/uwsm"; run FAKE_ENTRY_TRYEXEC=
+check "session: an entry without TryExec is always listed" test "$status" -eq 0
+teardown
+
+# Hyprland on the user's PATH alone (the mock the rest of the run uses)
+# isn't on the session's.
+setup; ARGS=(); rm "$T/usr-bin/Hyprland"; run
+check "session: no Hyprland ends the run" test "$status" -ne 0
+check "session: no Hyprland says the session won't start" has "$output" "the tide session won't start: Hyprland isn't installed"
+teardown
+setup; ARGS=(); mv "$T/usr-bin/Hyprland" "$T/usr-bin/start-hyprland"; run
+check "session: start-hyprland alone can start it" lacks "$output" "the tide session won't start"
+teardown
+
+# Each problem is named, not just the first.
+setup; ARGS=(--ignore-errors); rm "$T/usr-bin/uwsm" "$T/usr-bin/Hyprland"; run
+check "session: no uwsm and no Hyprland names uwsm" has "$output" "it's listed only where uwsm is installed"
+check "session: and names Hyprland" has "$output" "the tide session won't start: Hyprland isn't installed"
+teardown
+
 # Each awk program setup runs has to parse under whichever awk a distro
 # ships as awk: mawk on Debian and Ubuntu, gawk on Fedora and Arch. A name
 # one of them reserves, as gawk does func, breaks only that one. Each is
