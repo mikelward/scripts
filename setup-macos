@@ -30,6 +30,8 @@
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
+# - Screenshots saved to ~/Pictures/Screenshots, tide's folder, without the
+#   floating thumbnail that holds each back from it for a few seconds
 #
 # Modifier key philosophy (matches Linux muscle memory):
 #   Physical Ctrl (pinky)    → Command  → copy, paste, tabs, close
@@ -1832,6 +1834,23 @@ configure_finder() {
     restart_app Finder "its settings to take effect"
 }
 
+# --- Configure screenshots ---
+
+# tide saves every screenshot to ~/Pictures/Screenshots. macOS's go to the
+# Desktop unless Screenshot's options say otherwise, and only once the
+# floating thumbnail has gone; tilemo copies each new one to the clipboard
+# from the folder, so the thumbnail would hold that back too. SystemUIServer
+# applies the options.
+SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+
+configure_screenshots() {
+    info "Configuring screenshots"
+    try mkdir -p "$SCREENSHOT_DIR"
+    try defaults write com.apple.screencapture location -string "$SCREENSHOT_DIR"
+    try defaults write com.apple.screencapture show-thumbnail -bool false
+    restart_app SystemUIServer "the screenshot settings to take effect"
+}
+
 # --- Main ---
 
 preflight
@@ -1848,6 +1867,7 @@ configure_karabiner
 configure_linearmouse
 configure_app_shortcuts
 configure_finder
+configure_screenshots
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
