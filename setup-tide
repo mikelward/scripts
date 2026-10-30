@@ -4539,6 +4539,15 @@ setup_greeter() {
         return 0
     fi
     if ! sudo_or_warn systemctl enable --force greetd.service; then
+        # A failed enable can still have made some of the links greetd's
+        # unit names, a WantedBy=, before failing on the alias (a plain
+        # display-manager.service file, say), and those would start it
+        # beside the display manager, so they go again. One that took the
+        # alias, not_switching puts back, disabling greetd as it does.
+        if _dm=$(display_manager) && test "$_dm" = "$dm_before" \
+            && ! sudo_or_warn systemctl disable greetd.service; then
+            warn "couldn't disable greetd again, so it may start beside $(describe_dm "$dm_before") from the next boot; run 'sudo systemctl disable greetd.service'"
+        fi
         not_switching "systemctl couldn't enable greetd"
         return 0
     fi
