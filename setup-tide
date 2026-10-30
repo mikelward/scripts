@@ -3396,16 +3396,68 @@ program_starts() {
             why="$1 is run by scripts more than four deep, which the kernel won't start"
             return 1
         fi
-        # The kernel takes what follows #! up to the first blank as the
-        # interpreter, and the rest of the line as one argument.
-        IFS= read -r _ps_line < "$_ps_file" || test -n "$_ps_line" || {
+        # The kernel reads only a script's first 256 bytes (BINPRM_BUF_SIZE,
+        # in fs/binfmt_script.c). The #! line ends at the first newline or
+        # NUL among them, or, with neither, after the 255th byte, cutting its
+        # argument short; and it won't start a script whose interpreter's
+        # name runs on past them. It takes what follows #! up to the first
+        # blank as the interpreter, and the rest of the line as one
+        # argument. It trims the blanks that end a line ended by a newline,
+        # or one that runs to the 255th byte, but an argument ended by a NUL
+        # (as the end of a shorter file is, by the NULs it pads it with)
+        # keeps them. The bytes are read as octal and printed back, since
+        # the shell can't hold a NUL.
+        if ! _ps_bytes=$(od -An -v -to1 -N256 -- "$_ps_file"); then
             why="couldn't read $_ps_file"
             return 1
-        }
+        fi
+        _ps_fmt=
+        _ps_count=0
+        _ps_ended=no
+        _ps_trim=no
+        for _ps_byte in $_ps_bytes; do
+            case "$_ps_byte" in
+                012)
+                    _ps_ended=yes
+                    _ps_trim=yes
+                    break
+                    ;;
+                000)
+                    _ps_ended=yes
+                    break
+                    ;;
+            esac
+            _ps_count=$((_ps_count + 1))
+            _ps_fmt="$_ps_fmt\\$_ps_byte"
+            if test "$_ps_count" -eq 255; then
+                _ps_cut=$_ps_fmt
+            fi
+        done
+        test "$_ps_count" -lt 255 || _ps_trim=yes
+        # A shorter file ends the line too: the kernel pads it with NULs.
+        if test "$_ps_ended" = no && test "$_ps_count" -eq 256; then
+            # shellcheck disable=SC2059  # the format is the bytes
+            _ps_line=$(printf "$_ps_fmt")
+            _ps_line=${_ps_line#??}
+            case "${_ps_line#"${_ps_line%%[! 	]*}"}" in
+                *[' 	']*) ;;
+                *)
+                    why="$_ps_file isn't a program the kernel can start: its #! line names an interpreter that runs past the 256 bytes the kernel reads"
+                    return 1
+                    ;;
+            esac
+            _ps_fmt=$_ps_cut
+        fi
+        # shellcheck disable=SC2059  # the format is the bytes
+        _ps_line=$(printf "$_ps_fmt")
         _ps_line=${_ps_line#??}
-        IFS='	 ' read -r _ps_interp _ps_arg <<EOF
-$_ps_line
-EOF
+        if test "$_ps_trim" = yes; then
+            _ps_line=${_ps_line%"${_ps_line##*[! 	]}"}
+        fi
+        _ps_line=${_ps_line#"${_ps_line%%[! 	]*}"}
+        _ps_interp=${_ps_line%%[ 	]*}
+        _ps_arg=${_ps_line#"$_ps_interp"}
+        _ps_arg=${_ps_arg#"${_ps_arg%%[! 	]*}"}
         case "$_ps_interp" in
             /*) ;;
             *)

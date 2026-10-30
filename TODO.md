@@ -89,14 +89,6 @@
       can read, mode 0700 say, fails the check, though systemd and PAM run
       it as root just fine. Read those with sudo instead. Raised in review of
       mikelward/scripts#288.
-- [ ] **Read a script's `#!` line only as far as the kernel does.** setup
-      reads the whole first line, but Linux reads only the first 256 bytes
-      (`BINPRM_BUF_SIZE`) and may cut the argument short. So with a very
-      long `#!/usr/bin/env <name>` line, setup can check a helper that
-      exists while the kernel hands `env` a cut-off name that doesn't.
-      greetd or the greeter would then fail at boot. The fix: parse only the
-      first 256 bytes, with a test for a long `#!` line. Raised in review of
-      mikelward/scripts#288.
 
 ## Crostini
 
