@@ -456,6 +456,14 @@ assert_file_exists() {
     fi
 }
 
+assert_dir_exists() {
+    if ! test -d "$1"; then
+        echo "  FAIL: expected directory '$1' to exist"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
 assert_dir_not_exists() {
     if test -d "$1"; then
         echo "  FAIL: unexpected directory '$1' exists"
@@ -1418,6 +1426,17 @@ test_missing_pbs_warns_about_logout() {
 }
 
 # --- Finder ---
+
+# tide's folder, and no floating thumbnail holding each shot back from it
+# (tilemo copies new shots to the clipboard from there).
+test_configures_screenshots() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write com.apple.screencapture location -string $TEST_TMPDIR/home/Pictures/Screenshots" &&
+    assert_called "defaults write com.apple.screencapture show-thumbnail -bool false" &&
+    assert_called "killall SystemUIServer" &&
+    assert_dir_exists "$TEST_TMPDIR/home/Pictures/Screenshots"
+}
 
 test_configures_finder() {
     run_macos
@@ -2454,6 +2473,8 @@ run_test "flushes the Services registry so the shortcuts work" \
 run_test "missing pbs falls back to the logout advice" \
     test_missing_pbs_warns_about_logout
 run_test "configures Finder and restarts it" test_configures_finder
+run_test "saves screenshots to ~/Pictures/Screenshots, without the thumbnail" \
+    test_configures_screenshots
 run_test "an app that isn't running is reported, not swallowed" \
     test_app_not_running_is_not_a_warning
 run_test "a failed restart is reported, not relabeled" \

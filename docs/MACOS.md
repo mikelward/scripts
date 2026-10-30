@@ -136,7 +136,7 @@ instead of failing several steps in:
 | `activateSettings` | Shortcuts are written but need a logout to take effect |
 | `launchctl` | The modifier remap applies at next login rather than now |
 | `pbs` | Launch shortcuts need a logout to register |
-| `killall` / `pgrep` | Finder and the Dock need a manual restart or a logout |
+| `killall` / `pgrep` | Finder, the Dock and SystemUIServer (the screenshot settings) need a manual restart or a logout |
 | Launcher helpers | Those launch shortcuts are skipped; the rest are configured |
 | `~/.amethyst.yml` | Warns; Amethyst runs with its own defaults instead of this setup's layouts and keybindings |
 
