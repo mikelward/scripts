@@ -119,6 +119,23 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 - Check the detection markers (`/dev/.cros_milestone`,
   `/opt/google/cros-containers`) on a Chromebook, Baguette included.
 
+## Font smoothing on macOS
+
+- [ ] **Try both lighter settings, then set the one you like in
+      `setup-macos`.** macOS's default font smoothing draws text heavy.
+      Try each on the Mac, logging out and back in (or reopening apps) to
+      see it:
+
+      ```sh
+      defaults -currentHost write -g AppleFontSmoothing -int 0
+      defaults -currentHost write -g AppleFontSmoothing -int 1
+      ```
+
+      `0` turns smoothing off, for the thinnest text; `1` is light.
+      `defaults -currentHost delete -g AppleFontSmoothing` goes back to the
+      default. Then `setup-macos` writes the chosen value, with a test and
+      a line in `docs/MACOS.md`.
+
 ## Decisions needing review
 
 - **mikelward/scripts#288 merges with known gaps in setup-tide's greeter
