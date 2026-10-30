@@ -191,6 +191,42 @@ printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"; chmod +x "$T/usr-local-bin
 printf '#!%s greeter-sh\n' "$T/interp/envalias" > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by a link to env, with one of that name on the greeter's PATH others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by env's greeter-sh, $T/usr-local-bin/greeter-sh: users other than root can write $T/usr-local-bin/greeter-sh"
 teardown
+# The kernel reads only a script's first 256 bytes: with no newline among
+# them, the line ends after the 255th, and env gets the name cut short.
+long_name=$(printf 'g%.0s' $(seq 250))
+cut_name=$(printf 'g%.0s' $(seq 240))
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$long_name"; chmod +x "$T/usr-bin/$long_name"
+printf '#!/usr/bin/env %s\n' "$long_name" > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter whose env name runs past the 256 bytes the kernel reads" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's $cut_name, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$cut_name"; chmod +x "$T/usr-bin/$cut_name"
+printf '#!/usr/bin/env %s\n' "$long_name" > "$T/usr-bin/tide-greeter"; run
+check "greetd: a tide-greeter run by env's name as the kernel cuts it, which is there, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# An interpreter whose name runs past them isn't started at all.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; long_dir=$T/interp/$(printf 'd%.0s' $(seq 200)); mkdir -p "$long_dir"
+printf '#!/bin/sh\n' > "$long_dir/$long_name"; chmod +x "$long_dir/$long_name"
+printf '#!%s\n' "$long_dir/$long_name" > "$T/usr-bin/tide-greeter"; run
+greeter_not_ready "a tide-greeter whose interpreter's name runs past the 256 bytes the kernel reads" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter isn't a program the kernel can start: its #! line names an interpreter that runs past the 256 bytes the kernel reads"
+teardown
+# A NUL ends the line, as a newline does.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\0garbage\n' > "$T/usr-bin/tide-greeter"; run
+check "greetd: a tide-greeter whose #! line ends in a NUL is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# But the kernel trims the blanks that end the line only before a newline:
+# before a NUL, or the end of a short file, env gets the name with them.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+printf '#!/usr/bin/env greeter-sh \t\n' > "$T/usr-bin/tide-greeter"; run
+check "greetd: a tide-greeter run by env, with blanks before the newline, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+for end in '\0garbage\n' ''; do
+    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+    # shellcheck disable=SC2059  # the format is the file's bytes
+    printf "#!/usr/bin/env greeter-sh $end" > "$T/usr-bin/tide-greeter"; run
+    what=${end:+a NUL}
+    greeter_not_ready "a tide-greeter run by env, with a blank before ${what:-the end of the file}," "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env with greeter-sh , which setup can't follow"
+    teardown
+done
 # An ELF one has to be a program for this machine, whole, and, when a loader
 # starts it, have that loader there, root's alone, able to load it with
 # every library it needs.
