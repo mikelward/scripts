@@ -348,6 +348,16 @@ case "\$*" in
 esac
 exit 0
 MOCK
+    # systemd looks a command named without a directory up in $T's
+    # stand-ins for its own, or \$FAKE_EXEC_SEARCH_PATH, and won't say with
+    # \$FAKE_SYSTEMD_PATH_FAILS.
+    cat > "$T/bin/systemd-path" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemd-path \$*" >> "$CALLS"
+test -z "\$FAKE_SYSTEMD_PATH_FAILS" || exit 1
+test "\$1" = search-binaries-default || exit 1
+echo "\${FAKE_EXEC_SEARCH_PATH-$T/usr-local-sbin:$T/usr-local-bin:$T/usr-sbin:$T/usr-bin}"
+MOCK
     # getent reads $T/passwd.
     cat > "$T/bin/getent" <<MOCK
 #!/bin/sh

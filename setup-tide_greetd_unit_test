@@ -117,8 +117,39 @@ setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bi
 chmod o+w "$T/interp/sh"; printf '#!%s\n' "$T/interp/sh" > "$T/usr-sbin/stop"; chmod +x "$T/usr-sbin/stop"; run FAKE_GREETD_EXEC_STOP="$T/usr-sbin/stop"
 greeter_not_ready "a program stopping greetd run by an interpreter others can write" "$unit_why: $T/usr-sbin/stop is run by $T/interp/sh: users other than root can write $T/interp/sh"
 teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=bin/greetd
+greeter_not_ready "a greetd command setup can't read" "systemd named a command for greetd's ExecStart setup can't read: { path=bin/greetd ; argv[]=bin/greetd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+teardown
+# A command named without a directory, as Debian's unit names greetd, is
+# the one systemd finds when it runs it, on its own search path, not ours.
 setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=greetd
-greeter_not_ready "a greetd command setup can't read" "systemd named a command for greetd's ExecStart setup can't read: { path=greetd ; argv[]=greetd ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
+check "greetd: a greetd named without a directory, found in sbin, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+check "greetd: and is looked up where systemd looks" has "$calls" "systemd-path search-binaries-default"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-sbin/greetd"; run FAKE_GREETD_EXEC=greetd
+greeter_not_ready "a greetd named without a directory that systemd finds nowhere" "greetd's unit runs greetd, which isn't in any of the directories systemd looks for it in, $T/usr-local-sbin:$T/usr-local-bin:$T/usr-sbin:$T/usr-bin, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/elsewhere"; mv "$T/usr-sbin/greetd" "$T/elsewhere/greetd"
+run FAKE_GREETD_EXEC=greetd PATH="$T/elsewhere:$T/bin:$PATH"
+greeter_not_ready "a greetd named without a directory, only on setup's own PATH" "greetd's unit runs greetd, which isn't in any of the directories systemd looks for it in, $T/usr-local-sbin:$T/usr-local-bin:$T/usr-sbin:$T/usr-bin, so systemd won't start it"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC_STOP=greetd-stop
+check "greetd: a program only stopping greetd, named without a directory and found nowhere, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+# Whoever can write a directory systemd looks in first could put another
+# greetd there, or make one there that isn't runnable runnable.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-sbin"; chmod o+w "$T/usr-local-sbin"; run FAKE_GREETD_EXEC=greetd
+greeter_not_ready "a greetd named without a directory, after a directory others can write" "$unit_why: users other than root can write $T/usr-local-sbin"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-sbin"; : > "$T/usr-local-sbin/greetd"
+run FAKE_GREETD_EXEC=greetd FAKE_OWNER="1000:$T/usr-local-sbin/greetd"
+greeter_not_ready "a greetd named without a directory, after one someone else could make runnable" "$unit_why: $T/usr-local-sbin/greetd is uid 1000's, not root's"
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-sbin"; : > "$T/usr-local-sbin/greetd"; run FAKE_GREETD_EXEC=greetd
+check "greetd: a greetd named without a directory, after root's that can't be run, is the greeter's" test "$(cat "$T/dm")" = greetd.service
+teardown
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_EXEC=greetd FAKE_SYSTEMD_PATH_FAILS=yes
+greeter_not_ready "a greetd named without a directory, where systemd-path won't say where systemd looks" "systemd-path didn't say where systemd looks for a command named without a directory"
 teardown
 # greetd's unit may only make settings setup knows can't change what
 # greetd runs, as its packages' units do, and start greetd with no
@@ -126,7 +157,7 @@ teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"
 printf '[Unit]\nDescription=Greeter daemon\nAfter=systemd-user-sessions.service plymouth-quit-wait.service\nAfter=getty@tty7.service\nConflicts=getty@tty7.service\n\n[Service]\nType=simple\nExecStart=greetd\nIgnoreSIGPIPE=no\nSendSIGHUP=yes\nTimeoutStopSec=30s\nKeyringMode=shared\nRestart=always\nRestartSec=1\nStartLimitBurst=5\nStartLimitInterval=30\n\n[Install]\nAlias=display-manager.service\n' > "$T/units/greetd.service"
 mkdir -p "$T/units-etc/service.d"; printf '[Service]\nTimeoutStopFailureMode=abort\n' > "$T/units-etc/service.d/10-timeout-abort.conf"
-run FAKE_GREETD_DROPINS="$T/units-etc/service.d/10-timeout-abort.conf"
+run FAKE_GREETD_DROPINS="$T/units-etc/service.d/10-timeout-abort.conf" FAKE_GREETD_EXEC=greetd
 check "greetd: Debian's unit, with Fedora's drop-in for every service, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/units/greetd.service.d"
