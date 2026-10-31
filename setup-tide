@@ -596,6 +596,19 @@ install_packages() {
     if ! install_all cliphist >/dev/null; then
         warn "couldn't install cliphist, so Super+C's picker keeps no clipboard history; its Characters tab still works"
     fi
+    # The Settings pages' *advanced* buttons open these (tide SPEC.md §16):
+    # pavucontrol for Sound, nm-connection-editor for Network,
+    # blueman-manager for Bluetooth and nwg-displays for Displays. Each is
+    # asked for on its own, as not every release packages every one.
+    case "$(detect_os)" in
+        debian) nm_editor=network-manager-gnome ;;
+        *) nm_editor=nm-connection-editor ;;
+    esac
+    for tool in pavucontrol "$nm_editor" blueman nwg-displays; do
+        if ! install_all "$tool" >/dev/null; then
+            info "couldn't install $tool; its Settings page's advanced button works once it's installed"
+        fi
+    done
     if test "$installed" = no; then
         # shellcheck disable=SC2086  # word-split the package list
         warn "could not install:$(printf ' %s' $missing); install them manually"
