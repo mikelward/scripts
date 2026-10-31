@@ -75,6 +75,11 @@ jobs:
         with:
           mode: classify
           pr: ${{ github.event.pull_request.number }}
+      # Here, not in the test job, which skips the docs-only pull requests
+      # most likely to grow AGENTS.md; a failure fails classify, which the
+      # lanes gate reports red.
+      - name: Check AGENTS.md is under Antigravity's 24,000-byte cap
+        run: ./ci-agents-size
 
   test:
     runs-on: ubuntu-latest

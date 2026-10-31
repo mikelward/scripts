@@ -1,0 +1,89 @@
+#!/bin/bash
+# Tests for ci-agents-size, and that CI runs it on every pull request,
+# docs-only ones included.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CHECK="$SCRIPT_DIR/ci-agents-size"
+WORKFLOW="$SCRIPT_DIR/.github/workflows/ci.yml"
+FAILED=0
+
+fail() {
+    echo "  FAIL: $1"
+    FAILED=1
+}
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+# Writes a file of exactly $2 bytes.
+make_file() {
+    head -c "$2" /dev/zero | tr '\0' x > "$1"
+}
+
+make_file "$TMP/under" 23999
+make_file "$TMP/at" 24000
+
+if ! "$CHECK" "$TMP/under" 2>"$TMP/err"; then
+    fail "a file just under 24,000 bytes should pass: $(cat "$TMP/err")"
+fi
+
+if "$CHECK" "$TMP/at" 2>"$TMP/err"; then
+    fail "a file of 24,000 bytes should fail"
+elif ! grep -qF "$TMP/at is 24000 bytes" "$TMP/err"; then
+    fail "the failure should name the file and its size: $(cat "$TMP/err")"
+fi
+
+if "$CHECK" "$TMP/missing" 2>"$TMP/err"; then
+    fail "a missing file should fail"
+elif ! grep -qF "can't read $TMP/missing" "$TMP/err"; then
+    fail "a missing file should say it can't be read: $(cat "$TMP/err")"
+fi
+
+# Any failing file fails the run, whatever its position.
+if "$CHECK" "$TMP/at" "$TMP/under" 2>/dev/null; then
+    fail "a failing file followed by a passing one should still fail"
+fi
+
+# zsh runs it too, where $status is read-only.
+if command -v zsh >/dev/null; then
+    if ! zsh "$CHECK" "$TMP/under" 2>"$TMP/err"; then
+        fail "under zsh, a file just under 24,000 bytes should pass: $(cat "$TMP/err")"
+    fi
+    if zsh "$CHECK" "$TMP/at" 2>"$TMP/err"; then
+        fail "under zsh, a file of 24,000 bytes should fail"
+    elif ! grep -qF "$TMP/at is 24000 bytes" "$TMP/err"; then
+        fail "under zsh, the failure should name the file and its size: $(cat "$TMP/err")"
+    fi
+else
+    echo "ci-agents-size_test: no zsh, so its zsh cases are skipped"
+fi
+
+# With no arguments it checks AGENTS.md in the current directory.
+make_file "$TMP/AGENTS.md" 24001
+if (cd "$TMP" && "$CHECK") 2>"$TMP/err"; then
+    fail "with no arguments it should check ./AGENTS.md"
+elif ! grep -qF "AGENTS.md is 24001 bytes" "$TMP/err"; then
+    fail "with no arguments the failure should name AGENTS.md: $(cat "$TMP/err")"
+fi
+
+# This repo's own copy is within the cap.
+if ! (cd "$SCRIPT_DIR" && "$CHECK") 2>"$TMP/err"; then
+    fail "this repo's AGENTS.md should be under the cap: $(cat "$TMP/err")"
+fi
+
+# The test job skips docs-only pull requests, the ones most likely to grow
+# AGENTS.md, so the check runs in classify, which always runs.
+if ! awk '/^  classify:$/ { in_job = 1; next }
+          /^  [a-z]/ { in_job = 0 }
+          in_job && $0 == "        run: ./ci-agents-size" { found = 1 }
+          END { exit !found }' "$WORKFLOW"; then
+    fail "ci.yml's classify job should run ./ci-agents-size"
+fi
+
+if test "$FAILED" -ne 0; then
+    echo "ci-agents-size_test: FAILED"
+    exit 1
+fi
+echo "ci-agents-size_test: all tests passed"

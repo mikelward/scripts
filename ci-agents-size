@@ -1,0 +1,37 @@
+#!/bin/bash
+# ci-agents-size - fail when AGENTS.md reaches Antigravity's rule-file cap.
+#
+# Antigravity silently truncates a rule file's tail past 24,000 bytes, so
+# rules added at the end would stop reaching it without any error.
+#
+# Usage:
+#     ci-agents-size [FILE...]
+#
+# Checks each FILE, AGENTS.md by default.
+
+scriptname=ci-agents-size
+limit=24000
+
+warn() {
+    printf "%s: %s\n" "$scriptname" "$*" >&2
+}
+
+if test $# -eq 0; then
+    set -- AGENTS.md
+fi
+
+rc=0
+for file; do
+    if ! size=$(wc -c < "$file"); then
+        warn "can't read $file"
+        rc=1
+        continue
+    fi
+    # BSD wc pads the count with spaces.
+    size=${size//[[:space:]]/}
+    if test "$size" -ge "$limit"; then
+        warn "$file is $size bytes; keep it under $limit, or Antigravity truncates its tail"
+        rc=1
+    fi
+done
+exit $rc

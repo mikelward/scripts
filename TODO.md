@@ -21,10 +21,6 @@
       gates, and auto-merge. A ruleset on the default branch requiring
       the gates, the `codex` status, conversation resolution and
       up-to-date branches, with the auto-merge setting enabled.
-- [ ] **Check `AGENTS.md` < 24,000 bytes in CI** (mikelward/stopdash#932):
-      add `test "$(wc -c < AGENTS.md)" -lt 24000` on the docs/classify
-      path so `AGENTS.md` can't silently grow past Antigravity's
-      24,000-byte per-file rule cap, which truncates the tail.
 
 ## Hyprland from source in setup-tide
 

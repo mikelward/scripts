@@ -40,6 +40,7 @@ TESTS = \
 	terminal_on_workstation_test \
 	terminal_on_vm_test \
 	ci-concurrency_test \
+	ci-agents-size_test \
 	ci-test-target_test
 
 # setup-tide's tests take most of the run; CI skips them on a pull request
