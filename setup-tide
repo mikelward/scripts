@@ -27,7 +27,8 @@
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
 #   entry, its compositor wrapper, and the tide commands);
 # - enables tide.service, which hangs it off the tide session's
-#   target only, and masks the distro's waybar and swaync user units, which
+#   target only, and tide-clipboard.service, which keeps the clipboard
+#   history (with cliphist, installed on its own), and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
 # - installs greetd and makes it the display manager, from the next boot,
 #   with tide's greeter as its default session (see setup_greeter). It
@@ -588,6 +589,12 @@ install_packages() {
     # and dnf and pacman refuse a whole transaction over one unknown name.
     if ! install_all satty >/dev/null; then
         info "couldn't install satty; screenshots offer Annotate once it's installed"
+    fi
+    # cliphist keeps the clipboard history that Super+C's picker lists
+    # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
+    # without it still gets the rest.
+    if ! install_all cliphist >/dev/null; then
+        warn "couldn't install cliphist, so Super+C's picker keeps no clipboard history; its Characters tab still works"
     fi
     if test "$installed" = no; then
         # shellcheck disable=SC2086  # word-split the package list
@@ -1285,11 +1292,16 @@ mask_distro_units() {
 
 enable_unit() {
     if ! is_command systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
-        warn "no systemd user manager; run 'systemctl --user enable tide.service' in your session"
+        warn "no systemd user manager; run 'systemctl --user enable tide.service tide-clipboard.service' in your session"
         return 0
     fi
     systemctl --user daemon-reload
     systemctl --user enable tide.service
+    # The clipboard history behind Super+C's picker (tide SPEC.md §8.4).
+    # Apart from tide.service, so a tide checkout too old to ship it costs
+    # only the history.
+    systemctl --user enable tide-clipboard.service \
+        || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup --tide again"
 }
 
 # --- logind ---
