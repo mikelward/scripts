@@ -2,8 +2,8 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [--kde] [--tide] [--minimal | --full] \
-#           [--no-install] [--purge-obsolete] [--ignore-errors] \
+#     setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter] \
+#           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
 #           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
 #
 #  or, to bootstrap from scratch:
@@ -139,7 +139,8 @@ MIN_DISK_GB="${MIN_DISK_GB:-15}"
 INSTALL=yes
 
 # Whether to purge the obsolete Sway/Hyprland desktop packages an earlier setup
-# installed (setup now builds only KDE Plasma + Krohnkite). One of:
+# installed (setup now builds KDE Plasma + Krohnkite, and tide, whose
+# packages stay). One of:
 #   no  - leave them in place (the default)
 #   yes - purge the Sway/Hyprland-specific packages (--purge-obsolete)
 # Off by default because setup is also fetched via "curl | sh" onto machines
@@ -148,10 +149,12 @@ PURGE_OBSOLETE=no
 
 # Whether to also install the tide session (Hyprland + uwsm,
 # github.com/mikelward/tide) beside KDE, via setup-tide. One of:
-#   no  - KDE Plasma only (the default)
-#   yes - KDE Plasma plus tide (--tide)
-# The packages it needs are kept out of --purge-obsolete.
-TIDE=no
+#   yes - KDE Plasma plus tide (the default; --tide says so)
+#   no  - KDE Plasma only (--no-tide)
+# tide is one more session at the login screen: the display manager stays
+# unless --greeter is given. The packages it needs are kept out of
+# --purge-obsolete.
+TIDE=yes
 # Flags for setup-tide only.
 TIDE_SETUP_FLAGS=""
 
@@ -219,7 +222,8 @@ EXTRAS=auto
 
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--kde] [--tide] [--minimal | --full]
+Usage: setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter]
+             [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
              [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
@@ -231,15 +235,20 @@ Options:
   --no-gui         Skip all graphical packages and desktop configuration
   --kde            Accepted for compatibility; KDE Plasma + Krohnkite is
                    always installed on Linux
-  --tide     Also install the tide session (Hyprland + uwsm)
-                   beside KDE, via setup-tide (Linux, GUI only), and from
-                   the next boot log in with greetd and tide's greeter. Its
-                   packages are kept out of --purge-obsolete
+  --tide           The default; state it explicitly. Install the tide
+                   session (Hyprland + uwsm) beside KDE, via setup-tide
+                   (Linux, GUI only), as one more session at the login
+                   screen. Its packages are kept out of --purge-obsolete
+  --no-tide        Install KDE Plasma alone, without tide
   --no-build-hyprland
-                   With --tide, use the distro's Hyprland even where
-                   it's older than tide needs, instead of building it
-  --no-greeter     With --tide, keep the display manager; if setup made
-                   greetd the display manager, put back the one it replaced
+                   Use the distro's Hyprland for tide even where it's older
+                   than tide needs, instead of building it
+  --greeter        Make greetd, with tide's greeter, the display manager
+                   from the next boot, in place of GDM or SDDM. Without it
+                   the display manager is left alone, except that a greetd
+                   setup made the display manager is kept up to date
+  --no-greeter     If setup made greetd the display manager, put back the
+                   one it replaced
   --minimal        Skip heavyweight extras (helix, jj, nushell), installing
                    only core packages, tools, and dotfiles
   --full           Install everything, even when disk space looks tight
@@ -250,10 +259,11 @@ Options:
   --no-install     Skip every install step (packages, fonts, uv, extras, root
                    config) and only (re)apply config. Forwarded to setup-kde/macos
   --purge-obsolete Purge the Sway/Hyprland desktop packages an earlier setup
-                   installed (setup now builds only KDE Plasma + Krohnkite):
-                   the compositors, their lock/idle/bg helpers, the wlroots
-                   portals, and the shared bar/launcher/notification stack
-                   (waybar, fuzzel, swaync), and the CLI tools homepkg has
+                   installed (setup now builds KDE Plasma + Krohnkite, and
+                   tide): the compositors, their lock/idle/bg helpers, the
+                   wlroots portals, and the shared bar/launcher/notification
+                   stack (waybar, fuzzel, swaync), less what tide runs on
+                   unless --no-tide is given, and the CLI tools homepkg has
                    retired (joshuto, yazi) from its env. Off by default; only
                    removes what's installed, so it's safe to re-run. Leaves
                    the generic Wayland utilities -- run autoremove for orphans
@@ -473,6 +483,9 @@ while test $# -gt 0; do
             ;;
         --no-build-hyprland)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"
+            ;;
+        --greeter)
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --greeter"
             ;;
         --no-greeter)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"
@@ -730,6 +743,25 @@ resolve_crostini() {
         CROSTINI=1
         info "ChromeOS Linux (Crostini): skipping the desktop, keyboard and power setup ChromeOS owns"
     fi
+}
+
+# configure_linux_desktop sets up KDE Plasma + Krohnkite and, unless
+# --no-tide, the tide session beside it.
+configure_linux_desktop() {
+    info "Configuring KDE desktop environment"
+    # shellcheck disable=SC2086  # both expand to zero or more flags
+    "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS $KDE_SETUP_FLAGS
+    if test "$TIDE" = no; then
+        info "Skipping the tide session (--no-tide)"
+        return 0
+    fi
+    info "Installing the tide session"
+    # Cloned here, not by setup-tide, so --github, the origin
+    # check and URL redaction work as for setup's other repos.
+    clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes
+    # shellcheck disable=SC2086  # expands to zero or more flags
+    TIDE_DIR="$SRC_DIR/tide" \
+        "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS
 }
 
 # What setup leaves to ChromeOS, and where to set it instead.
@@ -1294,7 +1326,7 @@ purge_obsolete_packages() {
     esac
     # tide runs on Hyprland, uwsm and (until its own shell lands) the
     # waybar/swaync/fuzzel stack, with swww or swaybg for the wallpaper, so
-    # --tide keeps those.
+    # the purge keeps those unless --no-tide is given.
     if test "$TIDE" = yes; then
         tide_pkgs=" hyprland hypridle hyprlock swww swaybg xdg-desktop-portal-hyprland uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
         kept=""
@@ -2480,18 +2512,7 @@ if test "$GUI_ENABLED" -eq 1; then
         info "Skipping the KDE and tide desktop (Crostini)"
         crostini_settings
     else
-        info "Configuring KDE desktop environment"
-        # shellcheck disable=SC2086  # both expand to zero or more flags
-        "$SCRIPTS_DIR/setup-kde" $DESKTOP_SETUP_FLAGS $KDE_SETUP_FLAGS
-        if test "$TIDE" = yes; then
-            info "Installing the tide session"
-            # Cloned here, not by setup-tide, so --github, the origin
-            # check and URL redaction work as for setup's other repos.
-            clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes
-            # shellcheck disable=SC2086  # expands to zero or more flags
-            TIDE_DIR="$SRC_DIR/tide" \
-                "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS
-        fi
+        configure_linux_desktop
     fi
 else
     info "Skipping desktop environment configuration (no GUI)"

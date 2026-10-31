@@ -55,7 +55,7 @@
       the display manager, the run starts by putting its config right, so a
       later step that ends the run can't leave it broken. If systemd can't
       say which display manager this is, that repair is skipped. Stopping the
-      run instead would break `setup --tide` in containers and chroots, where
+      run instead would break `setup` in containers and chroots, where
       `systemctl` always fails; the selection file above is the second
       source to read. Also from review of mikelward/scripts#288.
 - [ ] **Decide how greetd's profile sourcing is checked.** greetd starts

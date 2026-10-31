@@ -10,34 +10,34 @@ set -e
 
 # An account check that needs the password changed passes only if the
 # password lines can change it.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_deny.so"
 printf 'auth include login\naccount [success=bad new_authtok_reqd=ok default=bad] %s\nsession include login\npassword required %s\n' \
     "$T/security/pam_test.so" "$T/mods/pam_deny.so" > "$T/pam.d/greetd"; run
 greeter_not_ready "an account check only a password change passes, with password lines that can't change one" "greetd's PAM stack, from $T/pam.d/greetd, can pass an account check only by changing its password, and can't change one, whatever the modules it can use return, so PAM would refuse every login"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"
 printf 'auth include login\naccount [success=bad new_authtok_reqd=ok default=bad] %s\nsession include login\npassword required %s\n' \
     "$T/security/pam_test.so" "$T/security/pam_test.so" > "$T/pam.d/greetd"; run
 check "greetd: an account check a password change passes, with password lines that can change one, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"
 printf 'password required pam_gone.so\nauth required pam_gone.so\n' > "$T/pam.d/other"; run
 greeter_not_ready "other's password lines that can't load" "greetd's PAM stack, in $T/pam.d/other, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; grep -v '^password' "$T/pam.d/login" > "$T/pam.d/greetd"; run
 check "greetd: a stack with no password lines, and no other, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # So does a module a line can't do without, by its full path or not, and a
 # line PAM can't read.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth required %s\n' "$T/mods/pam_gone.so" >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth required %s\n' "$T/mods/pam_gone.so" >> "$T/pam.d/greetd"; run
 greeter_not_ready "a missing PAM module" "greetd's PAM stack, in $T/pam.d/greetd, needs the module $T/mods/pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth requisite pam_gone.so\n' > "$T/pam.d/login"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth requisite pam_gone.so\n' > "$T/pam.d/login"; run
 greeter_not_ready "a missing PAM module further down" "greetd's PAM stack, in $T/pam.d/login, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
 # PAM runs a module without the function it calls on a line as one that
 # isn't there: auth needs both authenticating and setting credentials.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_half.so" pam_sm_authenticate
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_half.so" pam_sm_authenticate
 printf 'auth required %s\n' "$T/mods/pam_half.so" >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM module that can't set credentials, on an auth line" "greetd's PAM stack, in $T/pam.d/greetd, needs the module $T/mods/pam_half.so, which has no pam_sm_setcred for PAM to call on auth lines, and PAM refuses a login through a stack it can't load whole"
 teardown
@@ -48,7 +48,7 @@ teardown
 other_machine=62
 test "$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')" != 62 || other_machine=183
 for module in hidden text machine unloadable missing-library missing-symbol missing-library-elsewhere missing-symbol-elsewhere stripped; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"
     loader=()
     case "$module" in
         hidden)
@@ -99,14 +99,14 @@ for module in hidden text machine unloadable missing-library missing-symbol miss
     teardown
 done
 # A symbol a library greetd links defines is one a module it loads finds.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_x.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods"; pam_module "$T/mods/pam_x.so"
 printf 'auth required %s\n' "$T/mods/pam_x.so" >> "$T/pam.d/greetd"
 run FAKE_LDD_UNDEFINED="$T/mods/pam_x.so:pam_get_item" FAKE_LDD_PROVIDER="$T/libpam.so.0"
 check "greetd: a PAM module that uses what greetd's libraries define is the greeter's" test "$(cat "$T/dm")" = greetd.service
 check "greetd: which the loader is asked with them loaded" has "$calls" "ldd LD_PRELOAD=$T/libpam.so.0 /lib/libc.so.6 -r -- $T/mods/pam_x.so"
 teardown
 # And what it loads is loaded into greetd, as root.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods" "$T/libs"; pam_module "$T/mods/pam_x.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/mods" "$T/libs"; pam_module "$T/mods/pam_x.so"
 : > "$T/libs/libx.so.1"; chmod g+w "$T/libs/libx.so.1"; printf 'auth optional %s\n' "$T/mods/pam_x.so" >> "$T/pam.d/greetd"
 run FAKE_LDD_LIBS="$T/mods/pam_x.so:$T/libs/libx.so.1"
 greeter_not_ready "a PAM module that loads a library others can write" "greetd's PAM stack isn't root's alone: $T/mods/pam_x.so loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
@@ -121,62 +121,62 @@ for dir in /usr/lib/*/security /usr/lib64/security /lib/*/security /lib64/securi
     fi
 done
 if test -n "$real_permit"; then
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional %s\n' "$real_permit" >> "$T/pam.d/greetd"; run FAKE_LDD_REAL="$real_permit"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional %s\n' "$real_permit" >> "$T/pam.d/greetd"; run FAKE_LDD_REAL="$real_permit"
     check "greetd: a module of this machine's own, as the real loader sees it, is the greeter's" test "$(cat "$T/dm")" = greetd.service
     check "greetd: which the real loader is asked about" has "$calls" "ldd -r -- $real_permit"
     teardown
 fi
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security"; pam_module "$T/sys/lib/security/pam_sess.so" pam_sm_open_session pam_sm_close_session
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security"; pam_module "$T/sys/lib/security/pam_sess.so" pam_sm_open_session pam_sm_close_session
 pam_module_dir_is "$T/sys/lib/security/"
 printf 'account required pam_sess.so\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a session-only PAM module on an account line" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_sess.so, which has no pam_sm_acct_mgmt for PAM to call on account lines, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session [success=ok] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'session [success=ok] pam_gone.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a missing PAM module brackets take as a failure" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success=1 module_unknown=die default=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth [success=1 module_unknown=die default=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a missing PAM module brackets refuse" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth requird pam_unix.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth requird pam_unix.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line with a control PAM doesn't know" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, requird, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success=1 pam_unix.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth [success=1 pam_unix.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line whose brackets don't close" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, [success=1 pam_unix.so, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'autth required pam_unix.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'autth required pam_unix.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line of a type PAM doesn't know" "greetd's PAM stack, in $T/pam.d/greetd, has a line of a type PAM doesn't know, autth, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session required\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'session required\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line with no module" "greetd's PAM stack, in $T/pam.d/greetd, has a line of type session that names no module, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'session\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line with no control" "greetd's PAM stack, in $T/pam.d/greetd, has a line of type session that names no control, and PAM refuses a login through a stack it can't load whole"
 teardown
 # PAM versions disagree on these, so setup can't tell what PAM reads.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n# a comment\nauth required pam_deny.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n# a comment\nauth required pam_deny.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line carried on past a comment" "greetd's PAM stack, in $T/pam.d/greetd, carries a line on with a backslash past a blank or comment line, which PAM 1.6 and later end the line at and earlier versions don't, so setup can't tell what PAM makes of it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so %s\n' "$(printf '%01100d' 0)" >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so %s\n' "$(printf '%01100d' 0)" >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM line too long for older PAM" "greetd's PAM stack, in $T/pam.d/greetd, has a line longer than PAM before 1.6 reads as one, so setup can't tell what PAM makes of it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional ?.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional ?.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM module PAM can't name" "greetd's PAM stack, in $T/pam.d/greetd, names ?.so, which PAM can't name a module or substack after, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional pam_unix.so \\\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM file that ends mid-line" "greetd's PAM stack, in $T/pam.d/greetd, ends in a line a backslash carries on, which PAM can't read, and PAM refuses a login through a stack it can't load whole"
 teardown
 # A - before the type only keeps PAM from logging a module it fails to
 # load: the control still decides.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf -- '-auth required pam_gone.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf -- '-auth required pam_gone.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a missing PAM module after a -" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_gone.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
 # PAM takes brackets it can't read as bad for every result.
 for control in '[default=0]' '[success=okay]' '[sucess=ok]' '[default=IGNORE]'; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth %s pam_test.so\n' "$control" >> "$T/pam.d/greetd"; run
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth %s pam_test.so\n' "$control" >> "$T/pam.d/greetd"; run
     greeter_not_ready "a PAM line whose brackets PAM can't read, $control" "greetd's PAM stack, in $T/pam.d/greetd, has a line with a control PAM doesn't know, $control, and PAM refuses a login through a stack it can't load whole"
     teardown
 done
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth [success = 1 module_unknown=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth [success = 1 module_unknown=ignore] pam_gone.so\n' >> "$T/pam.d/greetd"; run
 check "greetd: brackets PAM can read, spaced or not, pass" test "$(cat "$T/dm")" = greetd.service
 teardown
 # pam_exec fails without the program it runs, so a line that can't do
@@ -186,37 +186,37 @@ pam_exec_sys() {
     pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_exec.so"
     pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
 }
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys
 printf 'auth required pam_exec.so quiet log=%s %s\n' "$T/hooks/log" "$T/hooks/gone" >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a program pam_exec can't do without that isn't there" "greetd's PAM stack, in $T/pam.d/greetd, runs $T/hooks/gone with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; : > "$T/hooks/hook"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; : > "$T/hooks/hook"
 printf 'session [default=die] pam_exec.so %s\n' "$T/hooks/hook" > "$T/pam.d/login"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a program pam_exec can't run" "greetd's PAM stack, in $T/pam.d/login, runs $T/hooks/hook with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf 'auth requisite pam_exec.so expose_authtok\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; printf 'auth requisite pam_exec.so expose_authtok\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a pam_exec line with no program" "greetd's PAM stack, in $T/pam.d/greetd, has a pam_exec line that names no program to run, and PAM refuses a login through a stack it can't load whole"
 teardown
 # pam_exec runs a program named without a full path from greetd's
 # directory, /, as root, whether its line can do without it or not.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/hooks"; chmod o+w "$T/hooks"; hook=${T#/}/hooks/hook
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/hooks"; chmod o+w "$T/hooks"; hook=${T#/}/hooks/hook
 printf 'auth optional pam_exec.so quiet %s\n' "$hook" >> "$T/pam.d/greetd"; run
 greeter_not_ready "a pam_exec program named without a full path, where others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names $hook (which pam_exec runs as /$hook): users other than root can write $T/hooks"
 teardown
 # Any module opens a file an argument names without a full path from /,
 # as pam_userdb does its db=.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/open"; chmod o+w "$T/open"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/open"; chmod o+w "$T/open"
 printf 'auth optional %s db=%s\n' "$T/security/pam_test.so" "${T#/}/open/users" >> "$T/pam.d/greetd"; run
 greeter_not_ready "a file a module reads, named without a full path, where others can write" "greetd's PAM stack isn't root's alone: $T/pam.d/greetd names ${T#/}/open/users (which a module reads as $T/open/users): users other than root can write $T/open"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/shut"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/shut"
 printf 'auth optional %s db=%s nullok\n' "$T/security/pam_test.so" "${T#/}/shut/users" >> "$T/pam.d/greetd"; run
 check "greetd: a file a module reads, named without a full path, that only root can change, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'session optional pam_exec.so bin/true\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'session optional pam_exec.so bin/true\n' >> "$T/pam.d/greetd"; run
 check "greetd: a pam_exec program named without a full path, that only root can change, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
 # pam_exec ignores setting credentials, which greetd does for the greeter
 # without authenticating it, so brackets have to say what ignore does.
 printf '%s\n' "auth required pam_exec.so quiet $T/hooks/hook" "auth optional pam_exec.so $T/hooks/gone" \
@@ -227,25 +227,25 @@ check "greetd: a PAM stack whose pam_exec lines have what they need is the greet
 teardown
 # A pam_exec line passes only with the program it runs, even where
 # it's optional, when it's the only one of its type.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys
 printf 'auth optional pam_exec.so %s\naccount include login\nsession include login\n' "$T/hooks/gone" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a stack whose only auth line runs a program that isn't there" "greetd's PAM stack, from $T/pam.d/greetd, can't authenticate anyone, whatever the modules it can use return, so PAM would refuse every login; pam_exec can't run $T/hooks/gone there, which isn't there or can't be run"
 teardown
 # What runs a program pam_exec runs has to be root's alone too, and one
 # the kernel can't start, it can't run.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"
 chmod +x "$T/interp/sh"; chmod o+w "$T/interp/sh"; printf '#!%s\n' "$T/interp/sh" > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
 printf 'session optional pam_exec.so %s\n' "$T/hooks/hook" >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a pam_exec program run by an interpreter others can write" "greetd's PAM stack isn't root's alone: $T/hooks/hook is run by $T/interp/sh: users other than root can write $T/interp/sh"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/nonexistent/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/nonexistent/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
 printf 'session [default=die] pam_exec.so %s\n' "$T/hooks/hook" > "$T/pam.d/login"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a pam_exec program whose interpreter isn't there" "greetd's PAM stack, in $T/pam.d/login, runs $T/hooks/hook with pam_exec, which isn't there or can't be run, and PAM refuses a login through a stack it can't load whole"
 teardown
 # pam_exec returns what the program it runs says, which for true and false
 # is always the same: a stack that needs false can't authenticate anyone.
 for prog in false true; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
     printf '#!/bin/sh\nexec /bin/%s\n' "$prog" > "$T/hooks/$prog"; chmod +x "$T/hooks/$prog"
     printf 'auth required pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/$prog" "$T/mods/pam_permit.so" > "$T/pam.d/greetd"
     run SETUP_SYSTEM_ROOT="$T/sys"
@@ -259,7 +259,7 @@ done
 # it's one that runs as the name it's given, as busybox does.
 for link in true:false:no check:false:no false:busybox:no true:busybox:yes; do
     IFS=: read -r name to ok <<<"$link"
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; mkdir -p "$T/mods"; pam_module "$T/mods/pam_permit.so"
     printf '#!/bin/sh\nexec /bin/%s\n' "$to" > "$T/hooks/$to"; chmod +x "$T/hooks/$to"; ln -s "$to" "$T/hooks/$name"
     printf 'auth required pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/$name" "$T/mods/pam_permit.so" > "$T/pam.d/greetd"
     run SETUP_SYSTEM_ROOT="$T/sys"
@@ -272,7 +272,7 @@ done
 # pam_debug returns what its arguments say, success for a call none names,
 # so one whose authentication says auth_err can't authenticate anyone.
 for arg in auth=auth_err authtok=auth_err; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_debug.so"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_debug.so"
     printf 'auth required pam_debug.so %s\naccount include login\nsession include login\n' "$arg" > "$T/pam.d/greetd"
     run SETUP_SYSTEM_ROOT="$T/sys"
     case "$arg" in
@@ -282,17 +282,17 @@ for arg in auth=auth_err authtok=auth_err; do
     teardown
 done
 # And it sets no credentials, so it can't be the only line that does.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
 printf 'auth optional pam_exec.so %s\naccount include login\nsession include login\n' "$T/hooks/hook" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a stack whose only auth line runs a program that's there" "greetd's PAM stack, from $T/pam.d/greetd, can't set the credentials of anyone it authenticates, whatever the modules it can use return, so PAM would refuse every login"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_exec_sys; printf '#!/bin/sh\n' > "$T/hooks/hook"; chmod +x "$T/hooks/hook"
 printf 'auth optional pam_exec.so %s\nauth optional %s\naccount include login\nsession include login\n' "$T/hooks/hook" "$T/security/pam_test.so" > "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 check "greetd: a stack whose auth lines run a program that's there, and set credentials, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # A line that does without its module, another service's, and a module in
 # PAM's own directory or where a line names it, pass.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/x86_64-linux-gnu/security" "$T/mods"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/x86_64-linux-gnu/security" "$T/mods"
 pam_module "$T/sys/lib/x86_64-linux-gnu/security/pam_here.so"; pam_module "$T/mods/pam_here.so"
 pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
 printf 'auth required pam_gone.so\n' > "$T/pam.d/cups"
@@ -305,17 +305,17 @@ check "greetd: a PAM stack with each module it needs is the greeter's" test "$(c
 teardown
 # PAM loads a module named without a full path from the one directory its
 # libpam was built with, not from wherever another PAM keeps them.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security" "$T/sys/lib/x86_64-linux-gnu/security"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/sys/lib/security" "$T/sys/lib/x86_64-linux-gnu/security"
 pam_module "$T/sys/lib/security/pam_x.so"; pam_module_dir_is "$T/sys/lib/x86_64-linux-gnu/security/"
 printf 'auth required pam_x.so\n' >> "$T/pam.d/greetd"; run SETUP_SYSTEM_ROOT="$T/sys"
 greeter_not_ready "a PAM module only where libpam doesn't look" "greetd's PAM stack, in $T/pam.d/greetd, needs the module pam_x.so, which isn't there, and PAM refuses a login through a stack it can't load whole"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
 pam_module_dir_is "$T/opt/pam/lib/security/"; chmod o+w "$T/opt/pam/lib"
 printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM module directory in a prefix others can write" "PAM's modules, in $T/opt/pam/lib/security/, aren't root's alone: users other than root can write $T/opt/pam/lib"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/pam/lib/security"; pam_module "$T/opt/pam/lib/security/pam_x.so"
 pam_module_dir_is "$T/opt/pam/lib/security/"; printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"; run
 check "greetd: a PAM module directory in a prefix only root can change is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
@@ -323,7 +323,7 @@ teardown
 # loads from it, and where a link to one leads, still have to be root's
 # alone.
 for kind in o+w uid-1000 link; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; d=$T/sys/lib/x86_64-linux-gnu/security; mkdir -p "$d" "$T/mods"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; d=$T/sys/lib/x86_64-linux-gnu/security; mkdir -p "$d" "$T/mods"
     pam_module_dir_is "$d/"; printf 'auth optional pam_x.so\n' >> "$T/pam.d/greetd"
     case "$kind" in
         o+w)
@@ -343,17 +343,17 @@ for kind in o+w uid-1000 link; do
     greeter_not_ready "a PAM module in the package manager's directory, $kind," "greetd's PAM stack isn't root's alone: $expected"
     teardown
 done
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETD_LIBS=/lib/libc.so.6
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETD_LIBS=/lib/libc.so.6
 greeter_not_ready "a greetd that doesn't link libpam" "setup couldn't find the libpam greetd loads, so it can't tell where PAM finds its modules"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF\0/etc/pam.d/\0' > "$T/libpam.so.0"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '\177ELF\0/etc/pam.d/\0' > "$T/libpam.so.0"; run
 greeter_not_ready "a libpam that names no module directory" "setup couldn't tell where $T/libpam.so.0 finds PAM's modules"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF\0/usr/lib/security/\0/usr/lib64/security/\0' > "$T/libpam.so.0"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '\177ELF\0/usr/lib/security/\0/usr/lib64/security/\0' > "$T/libpam.so.0"; run
 greeter_not_ready "a libpam that names two module directories" "setup couldn't tell where $T/libpam.so.0 finds PAM's modules"
 teardown
 # PAM puts a directory of its own in place of $ISA.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'auth optional pam_$ISA.so\n' >> "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'auth optional pam_$ISA.so\n' >> "$T/pam.d/greetd"; run
 greeter_not_ready "a PAM module named with \$ISA" "greetd's PAM stack names the module pam_\$ISA.so, and setup can't fill in its \$ISA as PAM does"
 teardown
 

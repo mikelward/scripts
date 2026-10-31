@@ -12,7 +12,7 @@ set -e
 
 # On a GDM machine, greetd becomes the display manager from the next boot,
 # running tide's greeter as the user and on the VT this greetd needs.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run
 check "greetd: installs greetd" has "$calls" "sudo apt-get install -y greetd"
 check "greetd: the config is tide's, with Debian's user and VT" \
     test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
@@ -27,7 +27,7 @@ check "greetd: is the display manager" test "$(cat "$T/dm")" = greetd.service
 check "greetd: starts nothing now, which would end this session" lacks "$calls" "--now greetd"
 check "greetd: restarts nothing" lacks "$calls" "restart"
 check "greetd: says when, and the way back" \
-    has "$output" "From the next boot, greetd's greeter replaces gdm3.service. If it doesn't come up, press Ctrl+Alt+F3, log in, and run 'sudo systemctl enable --force gdm3.service && sudo systemctl disable greetd.service', or rerun 'setup --tide --no-greeter'"
+    has "$output" "From the next boot, greetd's greeter replaces gdm3.service. If it doesn't come up, press Ctrl+Alt+F3, log in, and run 'sudo systemctl enable --force gdm3.service && sudo systemctl disable greetd.service', or rerun 'setup --no-greeter'"
 check "greetd: says where to pick tide" has "$output" "Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
 check "greetd: gives greetd's user a home outside /etc" \
     has "$calls" "sudo install -d -m 700 -o 999 -g 999 $T/var/lib/tide-greeter"
@@ -55,6 +55,44 @@ run
 check "--no-greeter: with GDM, touches no display manager" lacks "$calls" "enable --force"
 teardown
 
+# Without --greeter or --no-greeter, the display manager is left alone: on
+# a GDM machine, tide is one more session at GDM's login screen.
+setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+check "default: installs no greetd" lacks "$calls" "install -y greetd"
+check "default: enables no display manager" lacks "$calls" "systemctl enable"
+check "default: GDM stays the display manager" test "$(cat "$T/dm")" = gdm3.service
+check "default: writes no greetd config" test ! -e "$T/etc/greetd/config.toml"
+check "default: notes no display manager" test ! -e "$T/var/lib/setup-tide/previous-display-manager"
+check "default: says how to switch, once" \
+    test "$(printf '%s\n' "$output" | grep -c "Leaving gdm3.service as the display manager; 'setup --greeter' makes tide's greeter the login screen")" -eq 1
+check "default: says where to pick tide" has "$output" "Log out and pick the \"tide\" session"
+check "default: the run succeeds" test "$status" -eq 0
+# Once --greeter has made greetd the display manager, a plain rerun keeps it
+# and puts its config right.
+ARGS=(--greeter); run
+rm "$T/etc/greetd/config.toml"
+: > "$CALLS"
+ARGS=(); run
+check "default after --greeter: greetd stays the display manager" test "$(cat "$T/dm")" = greetd.service
+check "default after --greeter: puts GDM back for no boot" lacks "$calls" "enable --force gdm3.service"
+check "default after --greeter: rewrites greetd's config" \
+    test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
+check "default after --greeter: says where to pick tide" has "$output" "Pick the \"tide\" session at greetd's greeter"
+check "default after --greeter: the run succeeds" test "$status" -eq 0
+teardown
+
+# A greetd that setup didn't make the display manager keeps its own config.
+setup; ARGS=(); echo greetd.service > "$T/dm"
+mkdir -p "$T/etc/greetd"; echo mine > "$T/etc/greetd/config.toml"
+run
+check "default, greetd by hand: leaves its config" test "$(cat "$T/etc/greetd/config.toml")" = mine
+check "default, greetd by hand: stays the display manager" test "$(cat "$T/dm")" = greetd.service
+check "default, greetd by hand: disables nothing" lacks "$calls" "disable greetd"
+check "default, greetd by hand: says why, once" \
+    test "$(printf '%s\n' "$output" | grep -c "Leaving greetd's config as it is, since setup didn't make greetd the display manager; 'setup --greeter' has it run tide's greeter")" -eq 1
+check "default, greetd by hand: the run succeeds" test "$status" -eq 0
+teardown
+
 # Without a note, --no-greeter can't guess what to put back.
 setup; ARGS=(--no-greeter); echo greetd.service > "$T/dm"; run
 check "--no-greeter: without a note, says what to run" has "$output" "setup doesn't know which one it replaced; enable yours, as in 'sudo systemctl enable --force gdm.service && sudo systemctl disable greetd.service'"
@@ -71,7 +109,7 @@ teardown
 
 # A machine with no display manager: greetd replaces the text console, and
 # --no-greeter disables it again.
-setup; ARGS=(); run
+setup; ARGS=(--greeter); run
 check "greetd: with no display manager, notes none" test "$(cat "$T/var/lib/setup-tide/previous-display-manager")" = none
 check "greetd: and says the way back" has "$output" "replaces the text console login. If it doesn't come up, press Ctrl+Alt+F3, log in, and run 'sudo systemctl disable greetd.service'"
 ARGS=(--no-greeter); run
@@ -80,7 +118,7 @@ check "--no-greeter: leaving no display manager" test ! -s "$T/dm"
 teardown
 # One whose unit doesn't name the alias, made the display manager by hand,
 # doesn't take it back when enabled, and disabling greetd would leave none.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run
 : > "$CALLS"
 ARGS=(--no-greeter); run FAKE_ENABLE_NO_ALIAS_FOR=gdm3.service
 check "--no-greeter: an old display manager that doesn't take the alias back is enabled" has "$calls" "sudo systemctl enable --force gdm3.service"
@@ -90,7 +128,7 @@ check "--no-greeter: and says what to do" has "$output" "enabling gdm3.service d
 check "--no-greeter: and doesn't say it's back" lacks "$output" "gdm3.service is the display manager again"
 teardown
 # Nor when systemd won't say which is the display manager after.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run
 : > "$CALLS"; : > "$T/dm-queries"
 ARGS=(--no-greeter); run FAKE_DM_QUERY_FAILS_FROM=2
 check "--no-greeter: a display manager systemd won't say after leaves greetd" lacks "$calls" "systemctl disable greetd.service"
@@ -99,94 +137,94 @@ teardown
 
 # Each thing the greeter needs is checked before greetd takes over, and
 # what's missing is named; the display manager stays.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_MISSING=greetd
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_MISSING=greetd
 greeter_not_ready "no greetd" "greetd isn't installed"
 check "greetd: no greetd says it couldn't be installed" has "$output" "couldn't install greetd"
 teardown
 # Without its own PAM file, PAM's fallback checks greetd's logins.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; run
 greeter_not_ready "no PAM file for greetd" "greetd has no PAM file at $T/pam.d/greetd or $T/vendor-pam.d/greetd, and PAM's fallback for one can refuse every login"
 teardown
 # PAM reads the vendor's when PAM_DIR has none, and the keyring's lines go
 # in a copy of it in PAM_DIR, which PAM then reads in its place.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; mkdir -p "$T/vendor-pam.d"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/pam.d/greetd"; mkdir -p "$T/vendor-pam.d"
 printf '#%%PAM-1.0\n@include login\n' > "$T/vendor-pam.d/greetd"; cp "$T/vendor-pam.d/greetd" "$T/original-pam"; run
 check "greetd: a PAM file only in the vendor's directory is the greeter's" test "$(cat "$T/dm")" = greetd.service
 check "keyring: a vendor's PAM file gains it in a copy in PAM's own directory" \
     test "$(cat "$T/pam.d/greetd")" = "$(cat "$T/original-pam"; printf '\n# Unlock gnome-keyring with the login password (setup-tide).\nauth       optional     pam_gnome_keyring.so\nsession    optional     pam_gnome_keyring.so auto_start')"
 check "keyring: and leaves the vendor's alone" cmp -s "$T/vendor-pam.d/greetd" "$T/original-pam"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/greetd.toml"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/greetd.toml"; run
 greeter_not_ready "no template" "tide's greetd config isn't installed at $T/greetd.toml"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; : > "$T/passwd"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; : > "$T/passwd"; run
 greeter_not_ready "no greetd user" "greetd has no system account to run the greeter as (setup looked for greeter _greetd greetd)"
 teardown
 # The Hyprland on the greeter's PATH is the one checked, not this user's.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.55.0
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.55.0
 greeter_not_ready "an old Hyprland" "the greeter's Hyprland is 0.55.0, and it needs 0.56 or later"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_HYPRLAND_VERSION=0.55.0
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_HYPRLAND_VERSION=0.55.0
 check "greetd: an old Hyprland only on this user's PATH doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
 teardown
 # Its Quickshell has to load the greeter's QML, so it's asked too.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000, distributed by: Debian"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000, distributed by: Debian"
 greeter_not_ready "an old Quickshell" "the greeter's Quickshell is 0.2.1, and it needs 0.3.0 or later"
 check "greetd: asks its own qs for its version" has "$calls" "sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c qs --version"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell nightly"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell nightly"
 greeter_not_ready "a Quickshell of no known version" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
 teardown
 # A prerelease of the version needed isn't that version.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell 0.3.0-rc1 (revision 0000000)"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell 0.3.0-rc1 (revision 0000000)"
 greeter_not_ready "a prerelease Quickshell" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.56.0-rc1
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.56.0-rc1
 greeter_not_ready "a prerelease Hyprland" "the greeter's Hyprland is of no version setup can read, and it needs 0.56 or later"
 teardown
 # The one first on the greeter's PATH is the one asked.
-setup; ARGS=(); echo gdm3.service > "$T/dm"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"
 printf '#!/bin/sh\necho "quickshell 0.2.1, revision 0000000" >&2\n' > "$T/usr-local-bin/qs"; chmod +x "$T/usr-local-bin/qs"
 run
 greeter_not_ready "an old Quickshell ahead of a new one on the PATH" "the greeter's Quickshell is 0.2.1, and it needs 0.3.0 or later"
 teardown
 # Stands in for a build in a home directory, which greetd's user can't reach.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/qs"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/qs"; run
 greeter_not_ready "a qs greetd's user can't run" "greetd's user _greetd can't run qs from $T/usr-local-bin:$T/usr-bin"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/hyprctl"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/hyprctl"; run
 greeter_not_ready "a hyprctl greetd's user can't run, which ends its Hyprland," "greetd's user _greetd can't run hyprctl from $T/usr-local-bin:$T/usr-bin"
 teardown
 # Each has to be a program the kernel can start: an ELF file, or a script
 # whose #! names what runs it, which has to be there, and root's alone, as
 # does what env finds on the greeter's PATH.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf 'not a program\n' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf 'not a program\n' > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter that isn't a program" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter isn't a program the kernel can start: it's neither an ELF file nor a script whose #! names what runs it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/nonexistent/sh\n' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/nonexistent/sh\n' > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter whose interpreter isn't there" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by /nonexistent/sh, which isn't there or can't be run"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod +x "$T/interp/sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod +x "$T/interp/sh"
 chmod o+w "$T/interp/sh"; printf '#! %s -e\n' "$T/interp/sh" > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by an interpreter others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by $T/interp/sh: users other than root can write $T/interp/sh"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env sh\n' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env sh\n' > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by an env's interpreter not on the greeter's PATH" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's sh, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env -S sh -e\n' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/usr/bin/env -S sh -e\n' > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by env with options" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env with -S sh -e, which setup can't follow"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin"; printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin"; printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"
 chmod +x "$T/usr-local-bin/greeter-sh"; chmod o+w "$T/usr-local-bin/greeter-sh"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
 printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by env, with one of that name on the greeter's PATH others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by env's greeter-sh, $T/usr-local-bin/greeter-sh: users other than root can write $T/usr-local-bin/greeter-sh"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
 printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run
 check "greetd: a tide-greeter run by env's interpreter on the greeter's PATH, a script itself, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # env by another name, through a link, is still env.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin" "$T/interp"; ln -s /usr/bin/env "$T/interp/envalias"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/usr-local-bin" "$T/interp"; ln -s /usr/bin/env "$T/interp/envalias"
 printf '#!/bin/sh\n' > "$T/usr-local-bin/greeter-sh"; chmod +x "$T/usr-local-bin/greeter-sh"; chmod o+w "$T/usr-local-bin/greeter-sh"
 printf '#!%s greeter-sh\n' "$T/interp/envalias" > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter run by a link to env, with one of that name on the greeter's PATH others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is run by env's greeter-sh, $T/usr-local-bin/greeter-sh: users other than root can write $T/usr-local-bin/greeter-sh"
@@ -195,32 +233,32 @@ teardown
 # them, the line ends after the 255th, and env gets the name cut short.
 long_name=$(printf 'g%.0s' $(seq 250))
 cut_name=$(printf 'g%.0s' $(seq 240))
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$long_name"; chmod +x "$T/usr-bin/$long_name"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$long_name"; chmod +x "$T/usr-bin/$long_name"
 printf '#!/usr/bin/env %s\n' "$long_name" > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter whose env name runs past the 256 bytes the kernel reads" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's $cut_name, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$cut_name"; chmod +x "$T/usr-bin/$cut_name"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/$cut_name"; chmod +x "$T/usr-bin/$cut_name"
 printf '#!/usr/bin/env %s\n' "$long_name" > "$T/usr-bin/tide-greeter"; run
 check "greetd: a tide-greeter run by env's name as the kernel cuts it, which is there, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # An interpreter whose name runs past them isn't started at all.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; long_dir=$T/interp/$(printf 'd%.0s' $(seq 200)); mkdir -p "$long_dir"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; long_dir=$T/interp/$(printf 'd%.0s' $(seq 200)); mkdir -p "$long_dir"
 printf '#!/bin/sh\n' > "$long_dir/$long_name"; chmod +x "$long_dir/$long_name"
 printf '#!%s\n' "$long_dir/$long_name" > "$T/usr-bin/tide-greeter"; run
 greeter_not_ready "a tide-greeter whose interpreter's name runs past the 256 bytes the kernel reads" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter isn't a program the kernel can start: its #! line names an interpreter that runs past the 256 bytes the kernel reads"
 teardown
 # A NUL ends the line, as a newline does.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\0garbage\n' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\0garbage\n' > "$T/usr-bin/tide-greeter"; run
 check "greetd: a tide-greeter whose #! line ends in a NUL is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # But the kernel trims the blanks that end the line only before a newline:
 # before a NUL, or the end of a short file, env gets the name with them.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
 printf '#!/usr/bin/env greeter-sh \t\n' > "$T/usr-bin/tide-greeter"; run
 check "greetd: a tide-greeter run by env, with blanks before the newline, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 for end in '\0garbage\n' ''; do
-    setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
+    setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod +x "$T/usr-bin/greeter-sh"
     # shellcheck disable=SC2059  # the format is the file's bytes
     printf "#!/usr/bin/env greeter-sh $end" > "$T/usr-bin/tide-greeter"; run
     what=${end:+a NUL}
@@ -230,10 +268,10 @@ done
 # An ELF one has to be a program for this machine, whole, and, when a loader
 # starts it, have that loader there, root's alone, able to load it with
 # every library it needs.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter"; run
 check "greetd: a tide-greeter that's a static program is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run
 check "greetd: a tide-greeter its loader can load is the greeter's" test "$(cat "$T/dm")" = greetd.service
 check "greetd: which the loader is asked about" has "$calls" "ldd -r -- $T/usr-bin/tide-greeter"
@@ -241,83 +279,83 @@ teardown
 greeter_elf_not_ready() {
     greeter_not_ready "a tide-greeter that $1" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter $2"
 }
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '\177ELF' > "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '\177ELF' > "$T/usr-bin/tide-greeter"; run
 greeter_elf_not_ready "is only an ELF file's first bytes" "isn't a program the kernel can start"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --machine=183; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --machine=183; run
 greeter_elf_not_ready "is built for another machine" "is built for another kind of machine than this one"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; pam_module "$T/usr-bin/tide-greeter"; chmod +x "$T/usr-bin/tide-greeter"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; pam_module "$T/usr-bin/tide-greeter"; chmod +x "$T/usr-bin/tide-greeter"; run
 greeter_elf_not_ready "is a library" "has no code where the kernel would start it"
 teardown
 # The program starts at its entry point, which has to be in code it loads.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --entry=4096; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --entry=4096; run
 greeter_elf_not_ready "starts past what it loads" "has no code where the kernel would start it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --flags=4; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --flags=4; run
 greeter_elf_not_ready "starts in what it maps not executable" "has no code where the kernel would start it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --type=1; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --type=1; run
 greeter_elf_not_ready "is an object file" "is an ELF file, but not a program the kernel can start"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --short; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --short; run
 greeter_elf_not_ready "is cut short" "is cut short: a part of it the kernel loads runs past its end"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --interp=/nonexistent/ld.so; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; elf_program "$T/usr-bin/tide-greeter" --interp=/nonexistent/ld.so; run
 greeter_elf_not_ready "names a loader that isn't there" "is loaded by /nonexistent/ld.so, which isn't there"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod o+w "$T/loader/ld.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod o+w "$T/loader/ld.so"
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run
 greeter_not_ready "a tide-greeter loaded by a loader others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter is loaded by $T/loader/ld.so: users other than root can write $T/loader/ld.so"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_LDD_FAILS="$T/usr-bin/tide-greeter"
 greeter_elf_not_ready "its loader can't load" "can't be loaded by the system's loader"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_LDD_MISSING="$T/usr-bin/tide-greeter:libgone.so.1"
 greeter_elf_not_ready "needs a library that isn't there" "needs libgone.so.1, which isn't there, or _greetd can't read it"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
 run LC_ALL= FAKE_LDD_LOCALE=fr FAKE_LDD_UNDEFINED="$T/usr-bin/tide-greeter:gone_function"
 greeter_elf_not_ready "needs a symbol nothing defines, which ldd would say in another locale" "needs gone_function, which nothing it loads defines"
 teardown
 # The loader takes a library from wherever an RPATH, a RUNPATH or
 # ld.so.conf leads, and each it takes has to be root's alone.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
 : > "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
 run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1"
 check "greetd: a tide-greeter whose libraries are root's alone is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
 : > "$T/libs/libx.so.1"; chmod o+w "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
 run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1"
 greeter_not_ready "a tide-greeter that loads a library others can write" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/tide-greeter loads $T/libs/libx.so.1: users other than root can write $T/libs/libx.so.1"
 teardown
 # The kernel runs an interpreter or a loader for greetd's user, and the
 # loader opens libraries as that user, so root being able to isn't enough.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod 744 "$T/interp/sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/interp"; printf '#!/bin/sh\n' > "$T/interp/sh"; chmod 744 "$T/interp/sh"
 printf '#!%s\n' "$T/interp/sh" > "$T/usr-bin/tide-greeter"; run FAKE_USER_NOEXEC="$T/interp/sh"
 greeter_not_ready "a tide-greeter run by an interpreter greetd's user can't run" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by $T/interp/sh, which isn't there or can't be run"
 check "greetd: which is asked as greetd's user" has "$calls" "sudo -u _greetd test -x $T/interp/sh"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod 744 "$T/usr-bin/greeter-sh"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; printf '#!/bin/sh\n' > "$T/usr-bin/greeter-sh"; chmod 744 "$T/usr-bin/greeter-sh"
 printf '#!/usr/bin/env greeter-sh\n' > "$T/usr-bin/tide-greeter"; run FAKE_USER_NOEXEC="$T/usr-bin/greeter-sh"
 greeter_not_ready "a tide-greeter run by env's interpreter greetd's user can't run" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter is run by env's greeter-sh, which isn't on its PATH, $T/usr-local-bin:$T/usr-bin, as a program it can run"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
 elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run FAKE_USER_NOEXEC="$T/loader/ld.so"
 greeter_elf_not_ready "is loaded by a loader greetd's user can't run" "is loaded by $T/loader/ld.so, which _greetd can't run"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader" "$T/libs"; elf_program "$T/loader/ld.so" --type=3
 : > "$T/libs/libx.so.1"; elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"
 run FAKE_LDD_LIBS="$T/usr-bin/tide-greeter:$T/libs/libx.so.1" FAKE_USER_NOREAD="$T/libs/libx.so.1"
 greeter_elf_not_ready "loads a library greetd's user can't read" "needs libx.so.1, which isn't there, or _greetd can't read it"
 check "greetd: which ldd is asked as greetd's user" has "$calls" "sudo -u _greetd env LC_ALL=C ldd -r -- $T/usr-bin/tide-greeter"
 teardown
 # A loader no one can run can't start what's run as root either.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod 644 "$T/loader/ld.so"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3; chmod 644 "$T/loader/ld.so"
 elf_program "$T/usr-sbin/greetd" --interp="$T/loader/ld.so"; run
 greeter_not_ready "a greetd loaded by a loader no one can run" "greetd's unit runs $T/usr-sbin/greetd, and $T/usr-sbin/greetd is loaded by $T/loader/ld.so, which root can't run, so systemd won't start it"
 teardown
@@ -325,31 +363,31 @@ teardown
 # The greeter reads every password typed at login, so setup only switches to
 # a greeter whose every piece only root can change: on the way from /,
 # through every link, and through the build a command comes from.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/qs"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_OWNER="1000:$T/usr-bin/qs"
 # The fixtures' usr-bin isn't a bin directory by name, so it's checked
 # whole, from the first command found there.
 greeter_not_ready "a qs that isn't root's" "the greeter's tide-greeter isn't root's alone: $T/usr-bin/qs is uid 1000's, not root's"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod g+w "$T/usr-bin"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; chmod g+w "$T/usr-bin"; run
 greeter_not_ready "a directory on the way that others can write" "the greeter's PATH isn't root's alone: users other than root can write $T/usr-bin"
 teardown
 # A directory earlier on the PATH could hold a Hyprland of someone else's.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; chmod o+w "$T/usr-local-bin"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; chmod o+w "$T/usr-local-bin"; run
 greeter_not_ready "a PATH directory others can write" "the greeter's PATH isn't root's alone: users other than root can write $T/usr-local-bin"
 teardown
 # One that isn't there is fine, while only root could make it.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH="$T/none:$T/usr-local-bin:$T/usr-bin"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH="$T/none:$T/usr-local-bin:$T/usr-bin"
 check "greetd: a PATH directory that isn't there doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -m 777 "$T/open"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -m 777 "$T/open"
 run SETUP_GREETER_PATH="$T/open/bin:$T/usr-local-bin:$T/usr-bin"
 greeter_not_ready "a missing PATH directory others could make" "the greeter's PATH isn't root's alone: users other than root can write $T/open"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH=":$T/usr-local-bin:$T/usr-bin"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run SETUP_GREETER_PATH=":$T/usr-local-bin:$T/usr-bin"
 greeter_not_ready "a PATH with the current directory" "the greeter's PATH, :$T/usr-local-bin:$T/usr-bin, names the current directory"
 teardown
 # A build in a home directory greetd's user can read: a 755 home.
-setup; ARGS=(); echo gdm3.service > "$T/dm"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"
 mkdir -p "$T/home/build/bin"
 mv "$T/usr-bin/qs" "$T/home/build/bin/qs"
 ln -s "$T/home/build/bin/qs" "$T/usr-local-bin/qs"
@@ -367,29 +405,29 @@ fake_qs_build() {
     ln -s v1 "$T/opt/qs-build/current"
     ln -s ../opt/qs-build/current/bin/qs "$T/usr-local-bin/qs"
 }
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; run
 check "greetd: a sealed build, through relative links, is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; chmod g+w "$T/opt/qs-build/v1/lib/libqs.so.1"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; chmod g+w "$T/opt/qs-build/v1/lib/libqs.so.1"; run
 greeter_not_ready "a build library others can write" "the greeter's qs isn't root's alone: users other than root can write $T/opt/qs-build/v1/lib/libqs.so.1"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; run FAKE_OWNER="1000:$T/opt/qs-build/v1/lib/libqs.so.1"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; run FAKE_OWNER="1000:$T/opt/qs-build/v1/lib/libqs.so.1"
 greeter_not_ready "a build library that isn't root's" "the greeter's qs isn't root's alone: $T/opt/qs-build/v1/lib/libqs.so.1 is uid 1000's, not root's"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
 ln -s "$T/home/lib/libplugin.so" "$T/opt/qs-build/v1/lib/libplugin.so"; : > "$T/home/lib/libplugin.so"
 run FAKE_OWNER="1000:$T/home"
 greeter_not_ready "a build link out to a home directory" "the greeter's qs isn't root's alone: $T/home is uid 1000's, not root's"
 teardown
 # A build replaced by a link to someone's own copy of it.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build
 mv "$T/opt/qs-build/v1" "$T/home/v1"; ln -s "$T/home/v1" "$T/opt/qs-build/v1"
 run FAKE_OWNER="1000:$T/home"
 greeter_not_ready "a build that links into a home directory" "the greeter's qs isn't root's alone: $T/home is uid 1000's, not root's"
 teardown
 # A scan that fails stops the switch rather than passing for a clean one.
 # The PAM stack's is the first.
-setup; ARGS=(); echo gdm3.service > "$T/dm"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"
 cat > "$T/bin/awk" <<MOCK
 #!/bin/sh
 case "\$*" in *'print "writable "'*) exit 2 ;; esac
@@ -400,22 +438,22 @@ greeter_not_ready "a failed ownership scan" "what systemd starts greetd from isn
 teardown
 # A link to a directory outside the build, itself root's, has everything in
 # it checked too.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext/plugins"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext/plugins"
 : > "$T/ext/plugins/libplugin.so"; ln -s "$T/ext" "$T/opt/qs-build/v1/lib/qml"
 run FAKE_OWNER="1000:$T/ext/plugins/libplugin.so"
 greeter_not_ready "a library under a directory a build links to" "the greeter's qs isn't root's alone: $T/ext/plugins/libplugin.so is uid 1000's, not root's"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
 : > "$T/ext/libplugin.so"; chmod g+w "$T/ext/libplugin.so"; ln -s ../../../../ext "$T/opt/qs-build/v1/lib/qml"; run
 greeter_not_ready "a writable library under a directory a build links to" "the greeter's qs isn't root's alone: users other than root can write $T/ext/libplugin.so"
 teardown
 # Links back into what's been looked through end there, loops included.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir -p "$T/ext"
 ln -s .. "$T/opt/qs-build/v1/lib/up"; ln -s "$T/ext" "$T/opt/qs-build/v1/lib/ext"; ln -s "$T/opt/qs-build/v1" "$T/ext/back"
 run
 check "greetd: a build whose links loop back is still the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; ln -s loop "$T/opt/qs-build/v1/lib/loop"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; ln -s loop "$T/opt/qs-build/v1/lib/loop"; run
 greeter_not_ready "a link loop in a build" "the greeter's qs isn't root's alone: $T/opt/qs-build/v1/lib/loop leads through too many links"
 teardown
 # A command installed straight into /usr/local loads its libraries from
@@ -430,32 +468,32 @@ fake_system() {
 system_run() {
     run SETUP_SYSTEM_ROOT="$T/sys" SETUP_GREETER_PATH="$T/sys/usr/local/$1:$T/sys/usr/bin:$T/usr-bin" "${@:2}"
 }
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin local/bin; system_run bin
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin local/bin; system_run bin
 check "greetd: a sealed /usr/local install is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin local/bin; chmod g+w "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin local/bin; chmod g+w "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
 greeter_not_ready "a /usr/local library others can write" "the greeter's qs isn't root's alone: users other than root can write $T/sys/usr/local/lib/libqs.so.1"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system sbin local/sbin; system_run sbin FAKE_OWNER="1000:$T/sys/usr/local/lib/libqs.so.1"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system sbin local/sbin; system_run sbin FAKE_OWNER="1000:$T/sys/usr/local/lib/libqs.so.1"
 greeter_not_ready "a /usr/local/sbin command's library that isn't root's" "the greeter's qs isn't root's alone: $T/sys/usr/local/lib/libqs.so.1 is uid 1000's, not root's"
 teardown
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_system bin bin; chmod g+w "$T/sys/usr/lib/libc.so.6" "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin bin; chmod g+w "$T/sys/usr/lib/libc.so.6" "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
 check "greetd: the package manager's own qs isn't held to what's beside it" test "$(cat "$T/dm")" = greetd.service
 teardown
 # hyprctl ends the greeter's Hyprland, so it has to be that Hyprland's own,
 # not another install's earlier on the greeter's PATH.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; cp "$T/usr-bin/hyprctl" "$T/usr-local-bin/hyprctl"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; cp "$T/usr-bin/hyprctl" "$T/usr-local-bin/hyprctl"; run
 greeter_not_ready "a hyprctl from another install" "the greeter's hyprctl, in $T/usr-local-bin, isn't from the same install as its Hyprland, in $T/usr-bin, so it may not be able to end it"
 teardown
 # Both linked from a build in a prefix of their own are the same install.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/h/v1/bin"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/h/v1/bin"
 mv "$T/usr-bin/Hyprland" "$T/usr-bin/hyprctl" "$T/opt/h/v1/bin/"
 ln -s ../opt/h/v1/bin/Hyprland "$T/usr-local-bin/Hyprland"; ln -s "$T/opt/h/v1/bin/hyprctl" "$T/usr-local-bin/hyprctl"; run
 check "greetd: Hyprland and hyprctl linked from one build are the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
 # A link whose target ends in a newline, which $(readlink) would drop, to
 # check another file than the one the kernel runs.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/other"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/opt/other"
 cp "$T/usr-bin/qs" "$T/opt/other/qs"
 cp "$T/usr-bin/qs" "$T/opt/other/qs
 "
@@ -467,7 +505,7 @@ greeter_not_ready "a link to a name ending in a newline" "the greeter's qs isn't
 teardown
 # And a name with a newline anywhere in a build, which would read as two,
 # one of them a decoy, and leave what it names unchecked.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_qs_build; mkdir "$T/home/lib"
 : > "$T/home/lib/libplugin.so"; chmod o+w "$T/home/lib/libplugin.so"
 : > "$T/opt/qs-build/v1/lib/libplugin.so"
 ln -s "$T/home/lib/libplugin.so" "$T/opt/qs-build/v1/lib/libplugin.so
