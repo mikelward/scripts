@@ -728,4 +728,68 @@ setup; ARGS=(--bogus); run
 check "an unknown option fails" test "$status" -eq 1
 teardown
 
+# --- blueman's applet ---
+
+# blueman's entry as blueman 2.4 installs it, naming no desktop to skip.
+blueman_entry() {
+    mkdir -p "$T/xdg/autostart"
+    printf '%s\n' "[Desktop Entry]" "Name=Blueman Applet" "Comment=Blueman Bluetooth Manager" \
+        "Icon=blueman" "Exec=blueman-applet" "Terminal=false" "Type=Application" "Categories=" "$@" \
+        > "$T/xdg/autostart/blueman.desktop"
+}
+copy_at() { echo "$T/home/.config/autostart/blueman.desktop"; }
+mark="# Written by setup-tide from blueman's own entry, which it rewrites."
+
+# A copy in the user's autostart directory hides the package's entry, and
+# skips the desktops nm-applet's entry skips.
+setup; blueman_entry; ARGS=(); run; copy=$(copy_at)
+check "blueman: a copy hides the package's entry" test -f "$copy"
+check "blueman: it's marked as setup's" test "$(head -n 1 "$copy")" = "$mark"
+check "blueman: it skips Plasma and the others with Bluetooth of their own" \
+    test "$(grep -c '^NotShowIn=KDE;GNOME;Budgie;COSMIC;$' "$copy")" -eq 1
+check "blueman: and keeps the rest of the entry" \
+    test "$(sed -e 1d -e '/^NotShowIn=/d' "$copy")" = "$(cat "$T/xdg/autostart/blueman.desktop")"
+check "blueman: says so" has "$output" "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $copy"
+run
+check "blueman: a rerun says nothing more" lacks "$output" "Keeping blueman's applet"
+teardown
+# Without sudo too: it's the user's own file.
+setup; blueman_entry; ARGS=(--no-sudo); run; copy=$(copy_at)
+check "blueman: --no-sudo still writes the copy" test -f "$copy"
+teardown
+
+# Desktops the package's entry skips already stay skipped.
+setup; blueman_entry "NotShowIn=XFCE"; ARGS=(); run; copy=$(copy_at)
+check "blueman: adds to the desktops the entry skips" \
+    test "$(grep '^NotShowIn=' "$copy")" = "NotShowIn=XFCE;KDE;GNOME;Budgie;COSMIC;"
+teardown
+
+# The key goes in the [Desktop Entry] group, not a later one.
+setup; blueman_entry "" "[Desktop Action Manager]" "Name=Manager" "Exec=blueman-manager"; ARGS=(); run; copy=$(copy_at)
+check "blueman: NotShowIn is in the [Desktop Entry] group" \
+    test "$(awk '/^\[/ { g = $0 } /^NotShowIn=/ { print g }' "$copy")" = "[Desktop Entry]"
+teardown
+
+# An entry that already limits itself needs no copy.
+setup; blueman_entry "OnlyShowIn=XFCE;"; ARGS=(); run; copy=$(copy_at)
+check "blueman: an entry with OnlyShowIn gets no copy" test ! -e "$copy"
+teardown
+
+# One the user wrote is theirs.
+setup; blueman_entry; copy=$(copy_at); mkdir -p "${copy%/*}"; echo "[Desktop Entry]" > "$copy"; ARGS=(); run
+check "blueman: leaves the user's own copy" test "$(cat "$copy")" = "[Desktop Entry]"
+teardown
+
+# Once blueman is gone, so is setup's copy.
+setup; blueman_entry; ARGS=(); run; copy=$(copy_at)
+rm "$T/xdg/autostart/blueman.desktop"
+run
+check "blueman: removes setup's copy once blueman is gone" test ! -e "$copy"
+teardown
+
+# Without blueman there's nothing to copy.
+setup; ARGS=(); run; copy=$(copy_at)
+check "blueman: none installed, no copy" test ! -e "$copy"
+teardown
+
 finish

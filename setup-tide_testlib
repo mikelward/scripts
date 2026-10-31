@@ -570,6 +570,7 @@ teardown() {
 run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
+        XDG_CONFIG_HOME="$T/home/.config" XDG_CONFIG_DIRS="$T/xdg" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
