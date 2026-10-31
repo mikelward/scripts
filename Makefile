@@ -38,6 +38,7 @@ TESTS = \
 	confinst_test \
 	screenshot_test \
 	terminal_on_workstation_test \
+	terminal_on_vm_test \
 	ci-concurrency_test \
 	ci-test-target_test
 
