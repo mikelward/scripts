@@ -38,6 +38,10 @@
 #   with a copy of its entry in ~/.config/autostart (see
 #   keep_blueman_out_of_plasma). tide skips it too, since its bar draws
 #   Bluetooth;
+# - writes a desktop entry for each app script here (gmail, google-calendar,
+#   browser1, notepad, ...), so tide's launcher lists it by name, with the
+#   site's own icon for a web app, fetched once (see
+#   install_launcher_entries);
 # - with --greeter, installs greetd and makes it the display manager, from
 #   the next boot, with tide's greeter as its default session (see
 #   setup_greeter). It checks first that the greeter can run, notes the
@@ -1438,6 +1442,149 @@ keep_blueman_out_of_plasma() {
         return 0
     fi
     info "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $_bm_copy"
+}
+
+# --- Launcher entries for the app scripts ---
+
+# The scripts that open an app, as SCRIPT|NAME|ICON, one per line: each
+# gets a desktop entry, so tide's launcher (and Plasma's) finds it by name,
+# with ICON, an Adwaita name, as its icon. NAME is the key binding's
+# description in conf's hyprland.lua, where it has one. The other scripts
+# here are command-line tools, which do nothing visible run with no
+# terminal and would crowd the launcher's matches, so a new app script
+# needs a line here.
+LAUNCHER_SCRIPTS='gmail|Gmail|mail-unread-symbolic
+google-calendar|Google Calendar|x-office-calendar-symbolic
+google-chat|Google Chat|chat-symbolic
+google-meet|Google Meet|camera-web
+youtube-music|YouTube Music|audio-x-generic
+discord|Discord|chat-symbolic
+remote-desktop|Remote desktop|video-display
+browser1|Browser|google-chrome
+browser2|Browser, second profile|google-chrome
+browser3|Browser, third profile|google-chrome
+terminal_on_workstation|Terminal on the workstation|computer
+terminal_on_vm|Terminal on the VM|network-server
+notepad|Notepad|text-x-generic
+irc|IRC|io.github.Hexchat
+home|Home folder|user-home
+bluetooth-connect|Connect the headphones|audio-headphones'
+# Where they live: this script's own directory, ~/scripts.
+SCRIPTS_DIR="${SETUP_SCRIPTS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+# Where a web app's site icon is kept, fetched once.
+LAUNCHER_ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/scripts"
+
+# The `--app=URL` a launcher script opens as a Chrome app window, or nothing.
+launcher_web_app() {
+    sed -n 's/.*--app=["'"'"']\{0,1\}\(https\{0,1\}:\/\/[^"'"'"' ;&|)]*\).*/\1/p' "$1" | head -n 1
+}
+
+# The class Chrome gives an `--app` window of URL on Wayland, as tide-grant's
+# webAppClass works it out (tide SPEC.md §14.3): its host, then its path with
+# each / a _, so https://mail.google.com is chrome-mail.google.com__-Default.
+# The launcher grants focus to the entry's StartupWMClass, so the window
+# the script opens takes focus.
+launcher_web_class() {
+    _lw_rest=${1#*://}
+    _lw_host=${_lw_rest%%/*}
+    _lw_path=/
+    case "$_lw_rest" in */*) _lw_path=/${_lw_rest#*/} ;; esac
+    printf 'chrome-%s_%s-Default\n' "$(printf '%s' "$_lw_host" | tr '[:upper:]' '[:lower:]')" \
+        "$(printf '%s' "$_lw_path" | tr / _)"
+}
+
+# A web app's own site icon, at $LAUNCHER_ICON_DIR/SCRIPT.png: fetched once
+# from Google's favicon service (the site's host is all it's told), and
+# kept, so a rerun stays offline. Delete the file to fetch it again. Prints
+# the path, or nothing when there's none, for the theme icon instead.
+launcher_site_icon() {
+    _li_icon=$LAUNCHER_ICON_DIR/$1.png
+    if test -s "$_li_icon"; then
+        printf '%s\n' "$_li_icon"
+        return 0
+    fi
+    # Not tied to --no-fetch, which is about the tide checkout: setup
+    # passes it on every run, having pulled the checkout itself.
+    is_command curl || return 0
+    _li_rest=${2#*://}
+    mkdir -p "$LAUNCHER_ICON_DIR" || return 0
+    _li_tmp=$(mktemp "$LAUNCHER_ICON_DIR/.$1.XXXXXX") || return 0
+    if curl --fail --silent --show-error --location --max-time 10 --output "$_li_tmp" \
+        "https://www.google.com/s2/favicons?sz=128&domain=${_li_rest%%/*}" \
+        && test "$(head -c 4 "$_li_tmp" | tail -c 3)" = PNG \
+        && mv -f "$_li_tmp" "$_li_icon"; then
+        printf '%s\n' "$_li_icon"
+        return 0
+    fi
+    rm -f "$_li_tmp"
+    warn "couldn't fetch $1's site icon, so the launcher shows a theme icon; setup fetches it again next run"
+}
+
+# Writes ~/.local/share/applications/scripts-SCRIPT.desktop for each line of
+# LAUNCHER_SCRIPTS whose script is here, and removes the scripts-*.desktop
+# entries of scripts no longer listed or gone. The prefix marks them as
+# setup's, beside setup-kde's hidden shortcut-*.desktop. The launcher reads
+# the directory again when it changes, so they show up without a restart.
+install_launcher_entries() {
+    _le_dir=${XDG_DATA_HOME:-$HOME/.local/share}/applications
+    if ! mkdir -p "$_le_dir"; then
+        warn "couldn't make $_le_dir, so the launcher won't list the app scripts"
+        return 0
+    fi
+    _le_kept=' '
+    _le_count=0
+    while IFS='|' read -r _le_script _le_name _le_icon; do
+        test -n "$_le_script" || continue
+        _le_path=$SCRIPTS_DIR/$_le_script
+        test -x "$_le_path" || continue
+        case "$_le_path" in
+            *[\"\`\$\\]* | *"
+"*)
+                warn "$_le_path has a character a desktop entry's Exec can't quote, so the launcher won't list $_le_script"
+                continue
+                ;;
+        esac
+        _le_class=
+        _le_url=$(launcher_web_app "$_le_path")
+        if test -n "$_le_url"; then
+            _le_class=$(launcher_web_class "$_le_url")
+            _le_site=$(launcher_site_icon "$_le_script" "$_le_url")
+            test -z "$_le_site" || _le_icon=$_le_site
+        fi
+        _le_file=$_le_dir/scripts-$_le_script.desktop
+        _le_tmp=$(mktemp "$_le_dir/.scripts-$_le_script.XXXXXX") || {
+            warn "couldn't write $_le_file, so the launcher won't list $_le_script"
+            continue
+        }
+        if ! {
+            printf '[Desktop Entry]\nType=Application\n'
+            printf 'Name=%s\n' "$_le_name"
+            # Quoted, so a path with a space is one word; the characters
+            # Exec would need escaped inside the quotes are refused above.
+            printf 'Exec="%s"\n' "$_le_path"
+            printf 'TryExec=%s\n' "$_le_path"
+            printf 'Icon=%s\n' "$_le_icon"
+            test -z "$_le_class" || printf 'StartupWMClass=%s\n' "$_le_class"
+        } > "$_le_tmp" || ! mv -f "$_le_tmp" "$_le_file"; then
+            rm -f "$_le_tmp"
+            warn "couldn't write $_le_file, so the launcher won't list $_le_script"
+            continue
+        fi
+        _le_kept="$_le_kept$_le_script "
+        _le_count=$((_le_count + 1))
+    done <<EOF2
+$LAUNCHER_SCRIPTS
+EOF2
+    for _le_old in "$_le_dir"/scripts-*.desktop; do
+        test -f "$_le_old" || continue
+        _le_name=${_le_old##*/scripts-}
+        _le_name=${_le_name%.desktop}
+        case "$_le_kept" in
+            *" $_le_name "*) ;;
+            *) rm -f "$_le_old" || warn "couldn't remove $_le_old, a launcher entry for a script that's gone" ;;
+        esac
+    done
+    info "Listing $_le_count app scripts in the launcher, with entries in $_le_dir"
 }
 
 enable_unit() {
@@ -4988,6 +5135,7 @@ if is_command systemctl; then
     mask_distro_units
 fi
 keep_blueman_out_of_plasma
+install_launcher_entries
 GREETER_ACTIVE=no
 if test "$SUDO" = no; then
     info "Leaving the logind lid drop-ins, GDM and the display manager alone (needs sudo; --no-sudo)"
