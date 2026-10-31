@@ -813,4 +813,101 @@ setup; ARGS=(); run; copy=$(copy_at)
 check "blueman: none installed, no copy" test ! -e "$copy"
 teardown
 
+# --- Launcher entries for the app scripts ---
+
+# An app script, as scripts' own: a web app opens its site with chrome.
+app_script() {
+    mkdir -p "$T/scripts"
+    printf '#!/bin/bash\n%s\n' "$2" > "$T/scripts/$1"
+    chmod +x "$T/scripts/$1"
+}
+entry() { cat "$T/home/.local/share/applications/scripts-$1.desktop"; }
+apps_dir="home/.local/share/applications"
+
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; app_script notepad 'scite "$@"'
+app_script args 'printf "%s\n" "$@"'
+ARGS=(); run
+check "launcher: exits 0" test "$status" -eq 0
+check "launcher: lists gmail by its name" has "$(entry gmail)" "Name=Gmail"
+check "launcher: runs the script itself, quoted" has "$(entry gmail)" "Exec=\"$T/scripts/gmail\""
+check "launcher: hides the entry if the script goes" has "$(entry gmail)" "TryExec=$T/scripts/gmail"
+check "launcher: is an application" has "$(entry gmail)" "Type=Application"
+check "launcher: a web app's window class is Chrome's for its site" \
+    has "$(entry gmail)" "StartupWMClass=chrome-mail.google.com__-Default"
+check "launcher: a web app gets its site's icon" \
+    has "$(entry gmail)" "Icon=$T/home/.local/share/icons/scripts/gmail.png"
+check "launcher: the site icon is kept" test -s "$T/home/.local/share/icons/scripts/gmail.png"
+check "launcher: fetches the icon by the site's host alone" \
+    has "$calls" "https://www.google.com/s2/favicons?sz=128&domain=mail.google.com"
+check "launcher: another app gets its theme icon" has "$(entry notepad)" "Icon=text-x-generic"
+check "launcher: another app names no window class" lacks "$(entry notepad)" "StartupWMClass"
+check "launcher: a command-line tool gets no entry" test ! -e "$T/$apps_dir/scripts-args.desktop"
+check "launcher: a listed script that isn't here gets no entry" test ! -e "$T/$apps_dir/scripts-irc.desktop"
+check "launcher: says how many it listed" has "$output" "Listing 2 app scripts in the launcher"
+# A rerun reuses the icon rather than fetching it again.
+: > "$CALLS"; run
+check "launcher: a rerun fetches no icon it has" lacks "$calls" "curl"
+check "launcher: a rerun still uses it" has "$(entry gmail)" "Icon=$T/home/.local/share/icons/scripts/gmail.png"
+teardown
+
+# A path past the host goes into the class, each / a _.
+setup; app_script discord 'chrome --app="https://discord.com/app"'; ARGS=(); run
+check "launcher: a site's path is in its class" has "$(entry discord)" "StartupWMClass=chrome-discord.com__app-Default"
+teardown
+
+# A failed fetch falls back to the theme icon, warns, and isn't fatal.
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; ARGS=(); run FAKE_CURL_FAILS=1
+check "launcher: a failed icon fetch isn't fatal" test "$status" -eq 0
+check "launcher: a failed icon fetch uses the theme icon" has "$(entry gmail)" "Icon=mail-unread-symbolic"
+check "launcher: a failed icon fetch says so" has "$output" "couldn't fetch gmail's site icon"
+check "launcher: a failed icon fetch leaves no file" test ! -e "$T/home/.local/share/icons/scripts/gmail.png"
+teardown
+
+# Something other than a PNG (an error page) isn't kept as the icon.
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; ARGS=(); run FAKE_CURL_NOT_PNG=1
+check "launcher: a page that isn't a PNG uses the theme icon" has "$(entry gmail)" "Icon=mail-unread-symbolic"
+check "launcher: and isn't kept" test -z "$(ls -A "$T/home/.local/share/icons/scripts")"
+teardown
+
+# --no-fetch is about the tide checkout, and setup always passes it, so
+# the icons are still fetched.
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; ARGS=(--no-fetch); mkdir -p "$T/src/tide/.git"; run
+check "launcher: --no-fetch still fetches the site icon" has "$calls" "curl"
+check "launcher: --no-fetch uses it" has "$(entry gmail)" "Icon=$T/home/.local/share/icons/scripts/gmail.png"
+teardown
+
+# An entry for a script no longer listed, or gone, is removed; others' stay.
+setup; app_script gmail 'chrome --app="https://mail.google.com"'
+mkdir -p "$T/$apps_dir"
+printf '[Desktop Entry]\n' > "$T/$apps_dir/scripts-hangouts.desktop"
+printf '[Desktop Entry]\n' > "$T/$apps_dir/shortcut-browser1.desktop"
+printf '[Desktop Entry]\n' > "$T/$apps_dir/firefox.desktop"
+ARGS=(); run
+check "launcher: removes an entry for a script it no longer lists" test ! -e "$T/$apps_dir/scripts-hangouts.desktop"
+check "launcher: keeps setup-kde's shortcut entries" test -e "$T/$apps_dir/shortcut-browser1.desktop"
+check "launcher: keeps other apps' entries" test -e "$T/$apps_dir/firefox.desktop"
+check "launcher: keeps its own" test -e "$T/$apps_dir/scripts-gmail.desktop"
+teardown
+
+# A path Exec can't quote is skipped, with a warning.
+setup; mkdir -p "$T/odd\$dir"; printf '#!/bin/sh\n' > "$T/odd\$dir/notepad"; chmod +x "$T/odd\$dir/notepad"
+ARGS=(); run SETUP_SCRIPTS_DIR="$T/odd\$dir"
+check "launcher: a path with \$ is skipped" test ! -e "$T/$apps_dir/scripts-notepad.desktop"
+check "launcher: and named" has "$output" "can't quote, so the launcher won't list notepad"
+teardown
+
+# Every listed script is in this repo, and every web app's URL is found.
+setup; ARGS=(); run SETUP_SCRIPTS_DIR="$SCRIPT_DIR"
+listed=$(sed -n "/^LAUNCHER_SCRIPTS='/,/'$/p" "$SCRIPT" | sed "s/^LAUNCHER_SCRIPTS='//; s/'$//" | cut -d'|' -f1)
+missing=
+for s in $listed; do
+    test -e "$T/$apps_dir/scripts-$s.desktop" || missing="$missing $s"
+done
+check "launcher: every listed script exists here (missing:$missing)" test -z "$missing"
+for s in gmail google-calendar google-chat google-meet youtube-music discord remote-desktop; do
+    check "launcher: $s is a web app" has "$(entry "$s")" "StartupWMClass=chrome-"
+done
+check "launcher: YouTube Music's class" has "$(entry youtube-music)" "StartupWMClass=chrome-music.youtube.com__-Default"
+teardown
+
 finish

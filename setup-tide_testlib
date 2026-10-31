@@ -568,6 +568,24 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "dconf \$*" >> "$CALLS"
 MOCK
+    # curl fetches a site icon: a PNG's first bytes, or an HTML page with
+    # \$FAKE_CURL_NOT_PNG; it fails with \$FAKE_CURL_FAILS. No test reaches
+    # the network.
+    cat > "$T/bin/curl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "curl \$*" >> "$CALLS"
+test -z "\$FAKE_CURL_FAILS" || exit 22
+out=
+while test \$# -gt 0; do
+    test "\$1" != --output || out=\$2
+    shift
+done
+if test -n "\$FAKE_CURL_NOT_PNG"; then
+    printf "<html>" > "\$out"
+else
+    printf "\\211PNG\\r\\n" > "\$out"
+fi
+MOCK
     cat > "$T/bin/Hyprland" <<MOCK
 #!/bin/sh
 echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
@@ -583,6 +601,7 @@ run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         XDG_CONFIG_HOME="$T/home/.config" XDG_CONFIG_DIRS="$T/xdg" \
+        XDG_DATA_HOME="$T/home/.local/share" SETUP_SCRIPTS_DIR="$T/scripts" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
