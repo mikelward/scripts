@@ -3800,6 +3800,52 @@ $_gs_out
 EOF
 }
 
+# exec_search: where systemd finds the program $1, a unit's command named
+# without a directory, setting exec_found to it, or to nothing where it's
+# in none, and exec_search_path to where it looked. Since systemd 247 it
+# keeps such a name as it is, so `systemctl show` says it as it was
+# written however often systemd reloads, and looks it up each time it
+# runs it, in its own PATH, not the caller's, for the first that's a file
+# with an execute bit (find_executable_full in src/core/exec-invoke.c and
+# default_PATH in src/basic/path-util.c, which systemd-path prints). Only
+# ExecSearchPath= changes where, which greetd's unit may not set.
+# Anyone who can put one in a directory before that one, or make one
+# already there runnable, chooses what runs instead, so each has to be
+# root's alone, as does each after it if none matches, since one could
+# appear there. Fails, setting why, if one isn't, or systemd-path won't
+# say, with greetd_unit_own_why set where why says it all.
+exec_search() {
+    exec_found=
+    if ! exec_search_path=$(systemd-path search-binaries-default) || test -z "$exec_search_path"; then
+        greetd_unit_own_why=yes
+        why="systemd-path didn't say where systemd looks for a command named without a directory"
+        return 1
+    fi
+    _es_rest=$exec_search_path:
+    while test -n "$_es_rest"; do
+        _es_dir=${_es_rest%%:*}
+        _es_rest=${_es_rest#*:}
+        # systemd skips one that isn't a full path.
+        case "$_es_dir" in
+            /*) ;;
+            *) continue ;;
+        esac
+        trusted "$_es_dir/$1" missing-ok || return 1
+        if test -z "$trusted_to" || ! test -f "$trusted_to"; then
+            continue
+        fi
+        if ! _es_x=$(find "$trusted_to" -prune -perm /111); then
+            greetd_unit_own_why=yes
+            why="couldn't tell whether systemd can run $trusted_to, which it looks for $1 at"
+            return 1
+        fi
+        if test -n "$_es_x"; then
+            exec_found=$_es_dir/$1
+            return 0
+        fi
+    done
+}
+
 # greetd_unit_trusted: whether only root can change what systemd starts
 # greetd from, as root, at every boot, setting why if not: its unit file
 # and each drop-in, those of every name it has or enabling it gives it
@@ -3956,7 +4002,7 @@ EOF
         while IFS= read -r _gu_line; do
             test -n "$_gu_line" || continue
             case "$_gu_line" in
-                "{ path=/"*" ; argv[]="*) ;;
+                "{ path="*" ; argv[]="*) ;;
                 *)
                     greetd_unit_own_why=yes
                     why="systemd named a command for greetd's $_gu_prop setup can't read: $_gu_line"
@@ -3965,6 +4011,20 @@ EOF
             esac
             _gu_path=${_gu_line#"{ path="}
             _gu_path=${_gu_path%%" ; argv[]="*}
+            case "$_gu_path" in
+                /*) ;;
+                "" | . | .. | */*)
+                    greetd_unit_own_why=yes
+                    why="systemd named a command for greetd's $_gu_prop setup can't read: $_gu_line"
+                    return 1
+                    ;;
+                *)
+                    exec_search "$_gu_path" || return 1
+                    # Where it isn't found, nothing runs, and nothing
+                    # starts what has to.
+                    _gu_path=${exec_found:-$_gu_path}
+                    ;;
+            esac
             # An argument can name a file greetd reads, as --config does,
             # and setup would have to know which, so there are none.
             _gu_argv=${_gu_line#*" ; argv[]="}
@@ -3991,6 +4051,17 @@ EOF
                             return 1
                             ;;
                     esac
+                    ;;
+            esac
+            case "$_gu_path" in
+                /*) ;;
+                *)
+                    if test -n "$_gu_needed"; then
+                        greetd_unit_own_why=yes
+                        why="greetd's unit runs $_gu_path, which isn't in any of the directories systemd looks for it in, $exec_search_path, so systemd won't start it"
+                        return 1
+                    fi
+                    continue
                     ;;
             esac
             trusted "$_gu_path" missing-ok || return 1
