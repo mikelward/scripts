@@ -404,6 +404,17 @@ check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfi
 check "cliphist is asked for on its own" has "$calls" "pacman -S --needed --noconfirm cliphist"
 check "cliphist isn't in the main transaction" lacks "$main" "cliphist"
 teardown
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=nwg-displays
+check "a missing nwg-displays isn't fatal" test "$status" -eq 0
+check "a missing nwg-displays is said" has "$output" "couldn't install nwg-displays"
+main=$(printf '%s\n' "$calls" | grep 'hypridle')
+check "nwg-displays isn't in the main transaction" lacks "$main" "nwg-displays"
+check "nwg-displays is asked for on its own" has "$calls" "pacman -S --needed --noconfirm nwg-displays"
+for tool in pavucontrol nm-connection-editor blueman; do
+    check "$tool is asked for on its own" has "$calls" "pacman -S --needed --noconfirm $tool"
+    check "$tool isn't in the main transaction" lacks "$main" "$tool"
+done
+teardown
 
 setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=cliphist
 check "a missing cliphist isn't fatal" test "$status" -eq 0
@@ -447,6 +458,7 @@ check "a missing swww names the stand-in" has "$output" "swaybg shows the wallpa
 check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
 check "the rest install in one go, notify-send, Go and python3 too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang python3"
 check "satty is asked for, for the screenshot's Annotate" has "$calls" "apt-get install -y satty"
+check "Debian gets nm-connection-editor from network-manager-gnome" has "$calls" "apt-get install -y network-manager-gnome"
 check "a missing package is never asked for" lacks "$calls" "swww"
 teardown
 
