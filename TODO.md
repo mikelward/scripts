@@ -152,3 +152,10 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
   launchd's bare `PATH` on macOS, behind `~/.env`'s own entries. The alternative for the web apps is
   opening each installed app by its bundle id. It's reversible: one branch
   per script on `uname -s`.
+- **setup-macos still names conf's old "Alt+Tab switches applications"
+  rule without `--wm tilemo`, when the conf checkout predates it.** That
+  rule still works as it always did there, so the run names it as it is,
+  as it does a stale arrow rule, and says an update replaces it. Under
+  `--wm tilemo` it isn't named: it would make Alt+Tab Cmd+Tab, which is
+  tilemo's key now. The alternative was to warn and name nothing in both
+  modes. It's reversible: one `elif` arm in `configure_karabiner`.

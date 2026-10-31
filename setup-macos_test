@@ -188,7 +188,10 @@ MOCK
     mkdir -p "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/MacOS"
     printf 'app\n' > "$APPLICATIONS_DIR/Karabiner-Elements.app/Contents/Info.plist"
     mkdir -p "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications"
-    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    # The Tab rule's description, which is how the run tells the current rule
+    # from the one that made Alt+Tab switch applications.
+    printf '%s\n' '"description": "Ctrl+Tab goes to the next tab, not the application switcher"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
     # LinearMouse installed, with no config of its own yet.
     mkdir -p "$APPLICATIONS_DIR/LinearMouse.app/Contents/MacOS"
     printf 'app\n' > "$APPLICATIONS_DIR/LinearMouse.app/Contents/Info.plist"
@@ -872,14 +875,14 @@ test_stale_conf_without_terminal_rule_warns() {
 
 # A conf checkout from before the arrow rule has pc-alt-tab.json and nothing
 # else. The run must say the arrow rule is missing rather than name a rule
-# there is nothing to enable -- while still naming the Alt+Tab one that is.
+# there is nothing to enable -- while still naming the Tab one that is.
 test_stale_conf_without_arrow_rule_warns() {
     rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "pc-arrows.json not found" &&
     assert_output_contains "Win+Shift+Left/Right won't move the window a Space" &&
-    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl is Control and Alt is Meta in kitty\" in Karabiner" &&
+    assert_output_contains "Enable \"Ctrl+Tab goes to the next tab\" and \"Ctrl is Control and Alt is Meta in kitty\" in Karabiner" &&
     assert_output_lacks "Win+Left/Right switches Spaces\" and"
 }
 
@@ -892,7 +895,33 @@ test_stale_arrow_rule_warns() {
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "predates Win+Shift+Left/Right; update the conf repo" &&
-    assert_output_contains "Enable \"Alt+Tab switches applications\" and \"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\" and \"Ctrl is Control"
+    assert_output_contains "Enable \"Ctrl+Tab goes to the next tab\" and \"Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces\" and \"Ctrl is Control"
+}
+
+# conf gave physical Alt+Tab to tilemo, so its Tab rule is "Ctrl+Tab goes to
+# the next tab" now and no rule makes Alt+Tab switch applications. Without
+# tilemo, Alt+Tab is left to the rotation, the next tab (conf's
+# config/karabiner/README.md).
+test_names_the_tab_karabiner_rule() {
+    run_macos
+    assert_status 0 &&
+    assert_output_contains 'Enable "Ctrl+Tab goes to the next tab" and' &&
+    assert_output_lacks "Alt+Tab switches applications" &&
+    assert_output_contains "Alt+Tab goes to the next tab too, and no longer switches applications" &&
+    assert_output_contains "Right Ctrl+Tab still does" &&
+    assert_output_lacks "Cmd+Tab still works" &&
+    assert_output_lacks "Alt+Tab is tilemo's: the tilemo rule"
+}
+
+# A conf checkout from before still has the old rule, which works as it
+# always did without tilemo: name it as it is, and say an update changes it.
+test_old_tab_karabiner_rule_is_named_without_tilemo() {
+    printf '%s\n' '"description": "Alt+Tab switches applications (PC muscle memory, alongside the setup-macos modifier rotation)"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    run_macos
+    assert_status 0 &&
+    assert_output_contains 'Enable "Alt+Tab switches applications" and' &&
+    assert_output_contains "pc-alt-tab.json predates tilemo taking Alt+Tab and still makes Alt+Tab switch applications"
 }
 
 test_applies_shortcut_settings() {
@@ -1198,7 +1227,8 @@ test_missing_brew_does_not_abort_karabiner() {
     run_macos_without brew --ignore-errors
     assert_status 0 &&
     assert_output_contains "Homebrew not found, so Karabiner-Elements can't be installed" &&
-    # The arrow keys depend on Karabiner too, not just Alt+Tab.
+    # The arrow keys depend on Karabiner too, not just Ctrl+Tab.
+    assert_output_contains "Ctrl+Tab will switch applications rather than tabs" &&
     assert_output_contains "Ctrl+Left/Right will jump to the line ends" &&
     assert_output_contains "Win+Left/Right will move by word rather than switching Spaces" &&
     assert_output_contains "Win+Shift+Left/Right will select by word rather than moving the window a Space"
@@ -2279,6 +2309,34 @@ test_tilemo_names_the_karabiner_rule() {
     assert_output_contains "keep the tilemo rule above the arrow rule"
 }
 
+# Under tilemo, Alt+Tab is tilemo's swap with the master: the Tab rule is
+# named by its current name, and the run says whose Alt+Tab is.
+test_tilemo_alt_tab_is_tilemos() {
+    stage_tilemo_machine
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_output_contains 'Enable "Ctrl+Tab goes to the next tab" and' &&
+    assert_output_lacks "Alt+Tab switches applications" &&
+    assert_output_contains "Alt+Tab is tilemo's: the tilemo rule makes it swap the window with the master" &&
+    assert_output_contains "Alt+Tab is tilemo's: its rule makes it swap the window with the master" &&
+    assert_output_contains "right Ctrl+Tab still switches applications" &&
+    assert_output_lacks "Cmd+Tab still works"
+}
+
+# The old rule makes Alt+Tab Cmd+Tab, tilemo's key now, so under tilemo it is
+# not named for enabling; the run says to update the conf checkout instead.
+test_tilemo_old_tab_karabiner_rule_is_not_enabled() {
+    stage_tilemo_machine
+    printf '%s\n' '"description": "Alt+Tab switches applications (PC muscle memory, alongside the setup-macos modifier rotation)"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "pc-alt-tab.json predates tilemo taking Alt+Tab; update the conf repo" &&
+    assert_output_lacks 'Enable "Alt+Tab switches applications"' &&
+    assert_output_lacks 'Enable "Ctrl+Tab goes to the next tab"' &&
+    assert_output_contains 'the rule whose name starts "tilemo:"'
+}
+
 test_tilemo_missing_karabiner_rule_warns() {
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
@@ -2369,6 +2427,10 @@ run_test "a conf checkout without the kitty rule warns" \
     test_stale_conf_without_terminal_rule_warns
 run_test "an arrow rule from before Win+Shift+arrow is reported" \
     test_stale_arrow_rule_warns
+run_test "names the Tab Karabiner rule, and Alt+Tab no longer switches applications" \
+    test_names_the_tab_karabiner_rule
+run_test "a Tab rule from before tilemo took Alt+Tab is named as it is" \
+    test_old_tab_karabiner_rule_is_named_without_tilemo
 run_test "applies the shortcut settings to this session" \
     test_applies_shortcut_settings
 run_test "missing activateSettings falls back to the logout advice" \
@@ -2624,6 +2686,10 @@ run_test "tilemo: an unknown tiler state is reported" \
     test_tilemo_unknown_tiler_state_is_reported
 run_test "tilemo: names the tilemo Karabiner rule" \
     test_tilemo_names_the_karabiner_rule
+run_test "tilemo: Alt+Tab is tilemo's" \
+    test_tilemo_alt_tab_is_tilemos
+run_test "tilemo: a Tab rule from before tilemo took Alt+Tab isn't enabled" \
+    test_tilemo_old_tab_karabiner_rule_is_not_enabled
 run_test "tilemo: a missing tilemo Karabiner rule warns" \
     test_tilemo_missing_karabiner_rule_warns
 run_test "tilemo: names a Karabiner rule from before the rename" \
