@@ -31,6 +31,10 @@
 #   target only, and tide-clipboard.service, which keeps the clipboard
 #   history (with cliphist, installed on its own), and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
+# - keeps blueman's applet, which autostarts in every desktop, out of
+#   Plasma (and GNOME, Budgie and COSMIC), which has Bluetooth of its own,
+#   with a copy of its entry in ~/.config/autostart (see
+#   keep_blueman_out_of_plasma). tide still starts it;
 # - with --greeter, installs greetd and makes it the display manager, from
 #   the next boot, with tide's greeter as its default session (see
 #   setup_greeter). It checks first that the greeter can run, notes the
@@ -1313,6 +1317,106 @@ mask_distro_units() {
     # shellcheck disable=SC2086  # word-split the unit list
     systemctl --user mask $now $units \
         || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take tide's notifications"
+}
+
+# blueman's applet autostarts in every desktop: its entry, unlike
+# nm-applet's, names none to skip. In Plasma it would run beside bluedevil,
+# a second Bluetooth icon in the tray and a second pairing agent. A copy of
+# the entry in the user's autostart directory hides the system's, as the XDG
+# autostart spec has it, and skips the desktops nm-applet's entry skips,
+# which have Bluetooth of their own. tide's autostart allowlist still starts
+# it in tide, by the same desktop ID. The copy is setup's while its first
+# line is BLUEMAN_MARK, and each run makes it afresh from the package's
+# entry; one of the user's own is left alone.
+BLUEMAN_NOT_SHOWN_IN="KDE;GNOME;Budgie;COSMIC;"
+BLUEMAN_MARK="# Written by setup-tide from blueman's own entry, which it rewrites."
+
+keep_blueman_out_of_plasma() {
+    _bm_copy=${XDG_CONFIG_HOME:-$HOME/.config}/autostart/blueman.desktop
+    _bm_entry=
+    _bm_ifs=$IFS
+    IFS=:
+    for _bm_dir in ${XDG_CONFIG_DIRS:-/etc/xdg}; do
+        if test -f "$_bm_dir/autostart/blueman.desktop"; then
+            _bm_entry=$_bm_dir/autostart/blueman.desktop
+            break
+        fi
+    done
+    IFS=$_bm_ifs
+    if test -e "$_bm_copy" || test -L "$_bm_copy"; then
+        if ! _bm_first=$(head -n 1 "$_bm_copy"); then
+            warn "couldn't read $_bm_copy, so blueman's applet may start in Plasma too"
+            return 0
+        fi
+        test "$_bm_first" = "$BLUEMAN_MARK" || return 0
+    fi
+    # The entry with NotShowIn in its [Desktop Entry] group naming the
+    # desktops above too; or exit 3 where it has OnlyShowIn, which needs
+    # nothing, or 4 where it has no such group.
+    _bm_status=0
+    if test -n "$_bm_entry"; then
+        _bm_text=$(awk -v mark="$BLUEMAN_MARK" -v add="$BLUEMAN_NOT_SHOWN_IN" '
+            function merged(v,    n, a, i) {
+                if (v != "" && v !~ /;$/) v = v ";"
+                n = split(add, a, ";")
+                for (i = 1; i <= n; i++)
+                    if (a[i] != "" && index(";" v, ";" a[i] ";") == 0) v = v a[i] ";"
+                return v
+            }
+            NR == 1 { print mark }
+            /^\[/ {
+                if (group == "[Desktop Entry]" && !done) { print "NotShowIn=" merged(""); done = 1 }
+                group = $0
+            }
+            group == "[Desktop Entry]" { seen = 1 }
+            group == "[Desktop Entry]" && /^OnlyShowIn[[:space:]]*=/ { only = 1 }
+            group == "[Desktop Entry]" && /^NotShowIn[[:space:]]*=/ {
+                v = $0
+                sub(/^NotShowIn[[:space:]]*=[[:space:]]*/, "", v)
+                print "NotShowIn=" merged(v)
+                done = 1
+                next
+            }
+            { print }
+            END {
+                if (group == "[Desktop Entry]" && !done) print "NotShowIn=" merged("")
+                if (!seen) exit 4
+                if (only) exit 3
+            }' "$_bm_entry") || _bm_status=$?
+    fi
+    case $_bm_status in
+        0) ;;
+        3) _bm_entry= ;;
+        4)
+            warn "$_bm_entry has no [Desktop Entry] group, so setup can't keep blueman's applet out of Plasma"
+            return 0
+            ;;
+        *)
+            warn "couldn't read $_bm_entry, so blueman's applet may start in Plasma too"
+            return 0
+            ;;
+    esac
+    # No blueman, or an entry that limits itself, needs no copy: a stale one
+    # would start an applet that's gone.
+    if test -z "$_bm_entry"; then
+        if test -e "$_bm_copy" && ! rm -f "$_bm_copy"; then
+            warn "couldn't remove $_bm_copy, setup's copy of an autostart entry blueman no longer needs"
+        fi
+        return 0
+    fi
+    if test -f "$_bm_copy" && test "$(cat "$_bm_copy")" = "$_bm_text"; then
+        return 0
+    fi
+    if ! mkdir -p "${_bm_copy%/*}" || ! _bm_tmp=$(mktemp "${_bm_copy%/*}/.blueman.desktop.XXXXXX"); then
+        warn "couldn't write $_bm_copy, so blueman's applet may start in Plasma too"
+        return 0
+    fi
+    if ! printf '%s\n' "$_bm_text" > "$_bm_tmp" || ! mv -f "$_bm_tmp" "$_bm_copy"; then
+        rm -f "$_bm_tmp"
+        warn "couldn't write $_bm_copy, so blueman's applet may start in Plasma too"
+        return 0
+    fi
+    info "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $_bm_copy"
 }
 
 enable_unit() {
@@ -4861,6 +4965,7 @@ enable_unit
 if is_command systemctl; then
     mask_distro_units
 fi
+keep_blueman_out_of_plasma
 GREETER_ACTIVE=no
 if test "$SUDO" = no; then
     info "Leaving the logind lid drop-ins, GDM and the display manager alone (needs sudo; --no-sudo)"
