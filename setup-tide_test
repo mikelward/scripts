@@ -88,6 +88,27 @@ check "a failed Hyprland COPR still installs the rest" has "$calls" "dnf install
 check "a failed Hyprland COPR still enables Quickshell's" has "$calls" "dnf copr enable -y errornointernet/quickshell"
 teardown
 
+# brightnessctl writes the backlight itself where it's built without logind
+# (Debian and Ubuntu), through a file its udev rule gives the video group,
+# so the brightness keys need this user in it.
+setup; ARGS=(); run FAKE_GROUPS="user sudo"
+check "a user outside the video group is added to it" has "$calls" "usermod -aG video"
+check "and told it takes a new login" has "$output" "log out and back in"
+teardown
+
+setup; ARGS=(); run
+check "a user in the video group already is left alone" lacks "$calls" "usermod -aG video"
+teardown
+
+setup; ARGS=(); run FAKE_GROUPS="user" FAKE_USERMOD_FAILS=1
+check "a failed usermod isn't fatal" test "$status" -eq 0
+check "a failed usermod says the brightness keys won't work" has "$output" "brightness keys won't change the backlight"
+teardown
+
+setup; ARGS=(--no-sudo); run FAKE_GROUPS="user"
+check "--no-sudo adds no group" lacks "$calls" "usermod -aG video"
+teardown
+
 # Without the copr plugin there's no COPR, and that costs only the bar.
 setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_PLUGIN_FAILS=1
 check "a missing copr plugin isn't fatal" test "$status" -eq 0
