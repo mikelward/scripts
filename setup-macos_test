@@ -2081,6 +2081,61 @@ MOCK
     assert_output_lacks "macOS configured successfully"
 }
 
+# tilemo's bar reads whether Bluetooth is on through blueutil; without it the
+# icon hides, so it's installed with Hammerspoon.
+test_tilemo_installs_blueutil_when_missing() {
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_called "brew install blueutil"
+}
+
+test_tilemo_does_not_reinstall_blueutil() {
+    printf '#!/bin/sh\nexit 0\n' > "$TEST_TMPDIR/bin/blueutil"
+    chmod +x "$TEST_TMPDIR/bin/blueutil"
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_not_called "brew install blueutil" &&
+    assert_output_contains "blueutil is already installed"
+}
+
+test_tilemo_no_install_skips_blueutil() {
+    run_macos --wm tilemo --no-install --ignore-errors
+    assert_status 0 &&
+    assert_not_called "brew install blueutil" &&
+    assert_output_contains "blueutil is not installed and --no-install was given; tilemo's bar won't show whether Bluetooth is on until it is"
+}
+
+test_tilemo_missing_brew_warns_about_blueutil() {
+    run_macos_without brew --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Homebrew not found, so blueutil can't be installed"
+}
+
+test_tilemo_failed_blueutil_install_is_counted() {
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$*" >> "$CALLS"
+case "\$*" in
+    "install blueutil") exit 1 ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/brew"
+    stage_tilemo_machine
+    add_app Hammerspoon
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not install blueutil; tilemo's bar won't show whether Bluetooth is on until it is" &&
+    assert_output_lacks "macOS configured successfully"
+}
+
+# Amethyst's setup has no bar to show it on.
+test_amethyst_does_not_install_blueutil() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "brew install blueutil"
+}
+
 test_tilemo_clones_and_installs_tilemo() {
     run_macos --wm tilemo
     assert_status 0 &&
@@ -2699,6 +2754,12 @@ run_test "Amethyst runs don't mention the tilemo rule" \
 run_test "tilemo: the preflight names tilemo's manual steps" test_tilemo_preflight
 run_test "tilemo: a configured machine reports success" \
     test_tilemo_reports_success_on_a_clean_run
+run_test "tilemo: blueutil is installed when missing" test_tilemo_installs_blueutil_when_missing
+run_test "tilemo: blueutil already there isn't reinstalled" test_tilemo_does_not_reinstall_blueutil
+run_test "tilemo: --no-install skips blueutil, saying what's lost" test_tilemo_no_install_skips_blueutil
+run_test "tilemo: no Homebrew warns about blueutil" test_tilemo_missing_brew_warns_about_blueutil
+run_test "tilemo: a failed blueutil install is counted" test_tilemo_failed_blueutil_install_is_counted
+run_test "amethyst: blueutil isn't installed" test_amethyst_does_not_install_blueutil
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
