@@ -11,6 +11,8 @@
 #   tools conf's Hyprland config calls. A package the distro doesn't have
 #   (swww on Ubuntu 26.04) is reported and the rest still install. Fedora
 #   gets Hyprland and uwsm from the lionheartp/Hyprland COPR;
+# - adds you to the video group, which the brightness keys need where
+#   brightnessctl writes the backlight itself (Debian, Ubuntu);
 # - installs Quickshell, which draws tide's own shell (the bar so far),
 #   where the distro packages it: apt and pacman, and on Fedora the
 #   errornointernet/quickshell COPR. Where apt has none (Ubuntu 26.04), or
@@ -634,6 +636,23 @@ install_packages() {
             esac ;;
             *" swww "*) info "swww isn't packaged here; swaybg shows the wallpaper instead" ;;
         esac
+    fi
+}
+
+# join_video_group adds this user to the video group. brightnessctl writes
+# the backlight itself where it's built without logind (Debian, Ubuntu), and
+# its udev rule gives that file to the video group, so without it the
+# brightness keys fail with "Permission denied". It takes effect at the next
+# login.
+join_video_group() {
+    _user=${USER:-$(id -un)}
+    case " $(id -nG "$_user") " in
+        *" video "*) return 0 ;;
+    esac
+    if sudo_or_warn usermod -aG video "$_user"; then
+        info "Added $_user to the video group, so the brightness keys can change the backlight; log out and back in for it to take effect"
+    else
+        warn "couldn't add $_user to the video group, so the brightness keys won't change the backlight"
     fi
 }
 
@@ -4942,6 +4961,7 @@ elif test "$SUDO" = no; then
 else
     decide_hyprland_build
     install_packages
+    join_video_group
     install_quickshell
     # Only once the distro's is there to replace them.
     if test "$DISTRO_HYPRLAND" = yes; then

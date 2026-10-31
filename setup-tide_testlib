@@ -360,6 +360,17 @@ test -z "\$FAKE_SYSTEMD_PATH_FAILS" || exit 1
 test "\$1" = search-binaries-default || exit 1
 echo "\${FAKE_EXEC_SEARCH_PATH-$T/usr-local-sbin:$T/usr-local-bin:$T/usr-sbin:$T/usr-bin}"
 MOCK
+    # id -nG names this user's groups as \$FAKE_GROUPS, or video alone; any
+    # other question goes to the real id.
+    real_id=$(command -v id)
+    cat > "$T/bin/id" <<MOCK
+#!/bin/sh
+if test "\$1" = -nG; then
+    echo "\${FAKE_GROUPS-user video}"
+    exit 0
+fi
+exec "$real_id" "\$@"
+MOCK
     # getent reads $T/passwd.
     cat > "$T/bin/getent" <<MOCK
 #!/bin/sh
@@ -415,6 +426,7 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "usermod \$*" >> "$CALLS"
 test -z "\$FAKE_USERMOD_FAILS" || exit 1
+test "\$1" = -d || exit 0
 awk -F: -v OFS=: -v home="\$2" -v user="\$3" '\$1 == user { \$6 = home } { print }' "$T/passwd" > "$T/passwd.new" \\
     && mv "$T/passwd.new" "$T/passwd"
 MOCK
