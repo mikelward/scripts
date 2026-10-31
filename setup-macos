@@ -22,7 +22,8 @@
 #   that mode hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
 #   tiling features that would fight it. It also hides the menu bar for
-#   tilemo's own bar. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
+#   tilemo's own bar, and installs blueutil (Homebrew) so that bar can show
+#   whether Bluetooth is on. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
 #   7.3 and 8), which say what it needs from here. --wm timo, its old name,
 #   still works.
 # - LinearMouse, so a mouse wheel notch scrolls ten lines rather than one: its
@@ -401,7 +402,9 @@ Then once this run has finished:
      Hammerspoon and tilemo are free and open source too, and neither touches
      the network once installed. If Hammerspoon is missing, blocked, or not
      granted Accessibility, nothing tiles and the workspace keys do nothing;
-     the rest of this setup still applies.
+     the rest of this setup still applies. blueutil, from Homebrew, is free
+     and open source; tilemo's bar asks it whether Bluetooth is on, and
+     without it, or if it fails, only that icon hides.
 
 NOTES
 }
@@ -1243,6 +1246,32 @@ install_hammerspoon() {
         || warn "could not install Hammerspoon; $TILEMO_MISSING_EFFECT until it is"
 }
 
+# What a tilemo machine without blueutil loses: tilemo reads whether
+# Bluetooth is on through it (tilemo's SPEC.md, section 8), and hides that
+# icon without it. Its headphones icons need nothing from here.
+BLUEUTIL_MISSING_EFFECT="tilemo's bar won't show whether Bluetooth is on"
+
+# blueutil is a Homebrew formula (free, open source), not a cask, so it needs
+# no administrator and --no-sudo doesn't skip it. It's a command, so it's
+# found on PATH rather than in an Applications directory.
+install_blueutil() {
+    if is_command blueutil; then
+        info "blueutil is already installed at $(command -v blueutil)"
+        return 0
+    fi
+    if test "$INSTALL" = no; then
+        warn "blueutil is not installed and --no-install was given; $BLUEUTIL_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if ! is_command brew; then
+        warn "Homebrew not found, so blueutil can't be installed; $BLUEUTIL_MISSING_EFFECT until it is"
+        return 0
+    fi
+    info "Installing blueutil"
+    brew install blueutil \
+        || warn "could not install blueutil; $BLUEUTIL_MISSING_EFFECT until it is"
+}
+
 # Clone tilemo if there's no checkout, then copy its modules into
 # ~/.hammerspoon/tilemo with its own `make install`, so what lands there is
 # whatever its Makefile says belongs there rather than a list kept here.
@@ -1362,6 +1391,7 @@ configure_tilemo() {
     info "Configuring tilemo"
 
     install_hammerspoon
+    install_blueutil
     install_tilemo
     configure_hammerspoon_init
 

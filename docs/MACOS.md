@@ -188,6 +188,11 @@ run does that:
   `make -C "$TILEMO_DIR" install` copies it into `~/.hammerspoon/tilemo`. An
   existing checkout is used as it stands, not pulled. `--no-install` skips
   Hammerspoon and the clone.
+- **blueutil** from Homebrew (`brew install blueutil`, a formula, so no
+  administrator either), which tilemo's bar asks whether Bluetooth is on.
+  It's free and open source. Without it, or when it fails, tilemo hides
+  only that icon; its headphones icons don't need it. `--no-install` skips
+  it too, saying so.
 - **Renamed from timo.** A `~/timo` checkout an earlier run cloned is used
   when there's no `~/tilemo`, rather than cloning a second copy, and
   `$TIMO_DIR` is still read when `$TILEMO_DIR` isn't set. One from before
