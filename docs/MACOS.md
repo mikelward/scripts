@@ -87,7 +87,7 @@ password.
 
 The default is to try anyway. If you have admin rights you'll get the usual
 password prompt; if you don't, the install fails, the run warns and carries on,
-and everything except the Karabiner rules (Alt+Tab, and the Ctrl and Win arrow
+and everything except the Karabiner rules (Ctrl+Tab, and the Ctrl and Win arrow
 keys) still applies. Pass `--no-sudo` only if
 you want to skip the attempt outright — `setup` promises that flag never
 prompts or stalls, so it has to skip rather than try.
@@ -279,7 +279,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Terminal on workstation | `Win+W` | `Win+W` | Automator Quick Action |
 | Music | `Win+Y` | `Win+Y` | Automator Quick Action |
 | Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
-| Switch applications | `Alt+Tab` | `Alt+Tab` † | Karabiner rule |
+| Switch applications | `Alt+Tab` | right `Ctrl+Tab` † | the rotation alone; the Tab rule takes only left Ctrl |
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
 | Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right`, `Alt+Left`/`Right` ‡ | Karabiner rule |
 | Shell keys in kitty | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … § | Karabiner rule |
@@ -307,9 +307,11 @@ kitty's own `Ctrl+C` and `Ctrl+V` maps, from the same `kitty.conf` as Linux;
 `Ctrl+C` with nothing selected sends the interrupt. Without the rule,
 `Ctrl+U` is Cmd+U and never reaches the shell.
 
-† Without Karabiner the two Tab rows swap round — `Ctrl+Tab` switches
-applications and `Alt+Tab` goes to the next tab. Its driver extension is the
-one part of this setup a managed Mac can refuse; see
+† Physical `Alt+Tab` no longer switches applications: it goes to the next tab,
+as left `Ctrl+Tab` does, and with `--wm tilemo` it is tilemo's swap with the
+master instead. Right `Ctrl+Tab` switches applications. Without Karabiner,
+left `Ctrl+Tab` does too. Its driver
+extension is the one part of this setup a managed Mac can refuse; see
 [the one binding the rotation inverts](#the-one-binding-the-rotation-inverts).
 
 Only two rows differ from the Linux keys:
@@ -352,19 +354,25 @@ something Linux does with Alt. Left alone, the rotation swaps the two round:
 | physical `Ctrl+Tab` | next tab in app | **switch applications** |
 | physical `Alt+Tab` | switch windows | **next tab in app** |
 
-`setup-macos` installs Karabiner-Elements and the conf repo ships a complex
-modification that swaps them back:
+`setup-macos` installs Karabiner-Elements, and the conf repo ships a complex
+modification, "Ctrl+Tab goes to the next tab", that puts the next tab back
+on physical `Ctrl+Tab`. Physical `Alt+Tab` is tilemo's, in tilemo's own rule
+(the conf repo's `config/karabiner/README.md`, tilemo's SPEC.md §7.2):
 
-| Physical keys | Rotation alone | With the Karabiner rule |
-| --- | --- | --- |
-| `Alt+Tab` | next tab in app | **switch applications** |
-| `Ctrl+Tab` | switch applications | **next tab in app** |
+| Physical keys | Rotation alone | With the Tab rule | With tilemo's rule too |
+| --- | --- | --- | --- |
+| `Ctrl+Tab` | switch applications | **next tab in app** | next tab in app |
+| `Alt+Tab` | next tab in app | next tab in app | **swap with the master** |
 
-Both directions are mapped, and that matters. Remapping only `Alt+Tab` would
-put application switching on the physical Alt key without taking it off the
-physical Ctrl key, leaving next-tab with no physical keys at all. Shift
-variants are mapped alongside each, so `Shift+Alt+Tab` cycles the switcher
-backwards and `Shift+Ctrl+Tab` goes to the previous tab.
+So `Alt+Tab` no longer switches applications. The rule used to swap the two
+both ways, making `Alt+Tab` switch applications, and gave that up when
+tilemo took the key. The rule takes only left Ctrl, so physical right
+`Ctrl+Tab`, which the rotation makes Cmd+Tab, still switches applications on
+a keyboard that has a right Ctrl. tilemo's switcher has a Windows tab for it
+too. A Mac keyboard's own `Cmd+Tab` doesn't: `hidutil` applies the rotation
+to every keyboard, so its Command key sends Option. Without tilemo, physical `Alt+Tab` is
+left to the rotation: the next tab. `Shift+Ctrl+Tab` goes to the previous
+tab, and so does `Shift+Alt+Tab`, which tilemo's rule leaves alone.
 
 **This is the one part of the setup that a managed Mac can refuse.** Karabiner
 installs a driver extension, and an MDM profile can block system extensions
@@ -374,29 +382,26 @@ commitment than an ordinary app: a driver extension loading at boot plus a
 background service, and a macOS upgrade can require re-approving the
 extension. If it's blocked, fails, or is uninstalled, the keyboard keeps
 working — the `hidutil` rotation is independent of it — and the only effect is
-that the two Tab bindings revert to the "rotation alone" column above, and the
+that the Tab bindings revert to the "rotation alone" column above, and the
 arrow keys to plain macOS: `Ctrl+arrow` jumps to the line ends, `Win+arrow`
 moves by word instead of switching Spaces, and `Win+Shift+arrow` selects by
 word instead of moving the window a Space.
 
-The rule maps left Alt+Tab to **`left_control`**+Tab, which reads wrong until
+The rule maps left Ctrl+Tab to **`left_option`**+Tab, which reads wrong until
 you follow the layering: Karabiner grabs the keyboard and sees the *physical*
 key, and its output then passes through the `hidutil` rotation. So it has to
-name the key the rotation turns into Command — left Control. Naming
-`left_command` would come out as Option.
+name the key the rotation turns into Control — left Option.
 
 Karabiner needs three things done by hand, none of them scriptable: its driver
 extension approved, Input Monitoring granted, and the rule enabled under
-Complex Modifications > Add rule. Until then Alt+Tab keeps switching tabs and
-the arrow keys behave as plain macOS. Enabling copies the rule into
+Complex Modifications > Add rule. Until then Ctrl+Tab keeps switching
+applications and the arrow keys behave as plain macOS. Enabling copies the rule into
 `karabiner.json`, so after a conf update changes one, remove it and add it
 again. The full reasoning, and what to flip if the layering differs on your macOS
 version, is in the conf repo's `config/karabiner/README.md`.
 
-The reciprocal mapping works the same way in reverse: physical Ctrl emits
-`left_option`, which the rotation turns back into Control. Karabiner doesn't
-feed its own output through its manipulators, so the two directions don't
-chase each other.
+Karabiner doesn't feed its own output through its manipulators, so the
+Control+Tab the rule makes isn't matched again.
 
 Only left Alt is mapped; right Alt stays a plain modifier.
 
