@@ -37,6 +37,7 @@ TESTS = \
 	dvorak_test \
 	confinst_test \
 	screenshot_test \
+	terminal_on_workstation_test \
 	ci-concurrency_test \
 	ci-test-target_test
 
