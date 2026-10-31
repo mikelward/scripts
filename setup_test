@@ -1030,11 +1030,69 @@ test_tide_flag_is_accepted() {
     assert_output_contains "--tide"
 }
 
-test_tide_off_by_default() {
-    assert_source_contains "^TIDE=no" &&
-    assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch' &&
-    assert_source_contains 'clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes' &&
+# Run configure_linux_desktop against stub setup-kde and setup-tide that
+# record how they're called. TIDE is setup's own default, replayed from its
+# source as extract_homebrew_env does, unless $1 overrides it; $2 is
+# TIDE_SETUP_FLAGS.
+run_linux_desktop() {
+    desktop_tmpdir=$(mktemp -d)
+    desktop_calls="$desktop_tmpdir/calls"
+    for desktop_script in setup-kde setup-tide; do
+        printf '#!/bin/sh\necho "%s TIDE_DIR=$TIDE_DIR $*" >> "%s"\n' \
+            "$desktop_script" "$desktop_calls" > "$desktop_tmpdir/$desktop_script"
+        chmod +x "$desktop_tmpdir/$desktop_script"
+    done
+
+    set +e
+    output="$(sh -c "set -e
+$(grep '^TIDE=' "$SETUP")
+${1:+TIDE=$1}
+TIDE_SETUP_FLAGS='${2-}'
+DESKTOP_SETUP_FLAGS=--ignore-errors
+KDE_SETUP_FLAGS=
+SCRIPTS_DIR='$desktop_tmpdir'
+SRC_DIR='$desktop_tmpdir/src'
+TIDE_REPO=https://example.com/mikelward/tide.git
+clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
+$(extract_functions "info warn configure_linux_desktop")
+configure_linux_desktop" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$desktop_calls" 2>/dev/null)"
+    desktop_src="$desktop_tmpdir/src"
+    rm -rf "$desktop_tmpdir"
+}
+
+# A plain run sets up KDE and then tide, pulling tide first, and leaves the
+# display manager to setup-tide's default (no --greeter).
+test_tide_on_by_default() {
+    run_linux_desktop
+    assert_status 0 &&
+    assert_calls_contain "setup-kde TIDE_DIR= --ignore-errors" &&
+    assert_calls_contain "clone_or_pull https://example.com/mikelward/tide.git $desktop_src/tide yes" &&
+    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors" &&
+    assert_calls_lack "--greeter" &&
     assert_source_contains 'TIDE_REPO_PATH="mikelward/tide.git"'
+}
+
+# --no-tide sets up KDE alone, and says so.
+test_no_tide_skips_tide() {
+    run_linux_desktop no
+    assert_status 0 &&
+    assert_calls_contain "setup-kde" &&
+    assert_calls_lack "setup-tide" &&
+    assert_calls_lack "clone_or_pull" &&
+    assert_output_contains "Skipping the tide session (--no-tide)"
+}
+
+# setup takes --greeter and hands it to setup-tide.
+test_greeter_is_forwarded() {
+    run_setup --greeter --help
+    assert_status 0 &&
+    assert_output_contains "--greeter" &&
+    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --greeter"' &&
+    run_linux_desktop "" " --greeter" &&
+    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --greeter"
 }
 
 # setup takes --no-build-hyprland and hands it to setup-tide.
@@ -1054,7 +1112,7 @@ test_no_greeter_is_forwarded() {
     assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"'
 }
 
-# With --tide the purge keeps the Hyprland stack tide runs on
+# With tide (the default) the purge keeps the Hyprland stack tide runs on
 # and still removes what it doesn't use (sway).
 test_purge_obsolete_keeps_tide_stack() {
     PURGE_TIDE=yes run_purge_obsolete debian "sway swaybg hyprland hyprlock waybar uwsm"
@@ -3056,7 +3114,9 @@ run_test "home-prefix path keeps the runtime when no hx landed" \
 
 run_test "--kde is accepted as a no-op" test_kde_flag_is_a_noop
 run_test "--tide is accepted" test_tide_flag_is_accepted
-run_test "--tide is off by default" test_tide_off_by_default
+run_test "tide is on by default" test_tide_on_by_default
+run_test "--no-tide skips tide" test_no_tide_skips_tide
+run_test "--greeter is forwarded to setup-tide" test_greeter_is_forwarded
 run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
 run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
 run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack

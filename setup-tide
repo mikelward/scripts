@@ -1,8 +1,9 @@
 #!/bin/sh
 # Install the tide session (github.com/mikelward/tide) beside KDE.
 #
-# `setup --tide` runs this after setup-kde, so KDE Plasma stays the
-# fallback session. It:
+# `setup` runs this after setup-kde, so KDE Plasma stays the
+# fallback session. Unless --greeter is given, nothing here changes how you
+# log in: the display manager stays, with tide as one more session. It:
 #
 # - installs the session's packages: Hyprland, hypridle, uwsm, the Hyprland
 #   and GTK portals, Go (to build tide-grant), and, until the
@@ -30,11 +31,14 @@
 #   target only, and tide-clipboard.service, which keeps the clipboard
 #   history (with cliphist, installed on its own), and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
-# - installs greetd and makes it the display manager, from the next boot,
-#   with tide's greeter as its default session (see setup_greeter). It
-#   checks first that the greeter can run, notes the display manager it
-#   replaces, and --no-greeter puts that one back. Plasma stays a session
-#   at the new greeter, and logging in unlocks gnome-keyring, as GDM does;
+# - with --greeter, installs greetd and makes it the display manager, from
+#   the next boot, with tide's greeter as its default session (see
+#   setup_greeter). It checks first that the greeter can run, notes the
+#   display manager it replaces, and --no-greeter puts that one back. Plasma
+#   stays a session at the new greeter, and logging in unlocks
+#   gnome-keyring, as GDM does. Without either, a greetd that setup made
+#   the display manager stays it, kept up to date, and any other display
+#   manager is left alone;
 # - on a GDM machine, puts the short hostname on GDM's login screen, as
 #   hyprlock shows it on the lock screen, for as long as GDM is the way
 #   back;
@@ -54,7 +58,8 @@
 #
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
-#                      [--no-build-hyprland] [--no-greeter] [-h | --help]
+#                      [--no-build-hyprland] [--greeter | --no-greeter]
+#                      [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -62,15 +67,18 @@
 # is: setup passes it after cloning or pulling the repo with its own
 # clone_or_pull, which honors --github and redacts the URLs it prints.
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
-# --no-greeter leaves the display manager alone, or puts back the one setup
-# replaced with greetd.
+# --greeter makes greetd the display manager. --no-greeter puts back the
+# one setup replaced with greetd. Without either, the display manager stays
+# as it is.
 
 INSTALL=yes
 SUDO=yes
 IGNORE_ERRORS=no
 FETCH=yes
 BUILD_HYPRLAND=yes
-GREETER=yes
+# keep (the default) leaves the display manager as it is, yes (--greeter)
+# makes greetd it, and no (--no-greeter) puts back the one greetd replaced.
+GREETER=keep
 
 # Overridable for tests, which can't touch the real /etc or clone.
 LOGIND_DIR="${SETUP_LOGIND_DIR:-/etc/systemd/logind.conf.d}"
@@ -303,9 +311,12 @@ sudo_or_warn() {
 usage() {
     cat <<'USAGE'
 Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
-                  [--no-build-hyprland] [--no-greeter] [-h | --help]
+                  [--no-build-hyprland] [--greeter | --no-greeter]
+                  [-h | --help]
 
-Install the tide session (Hyprland + uwsm) beside KDE Plasma.
+Install the tide session (Hyprland + uwsm) beside KDE Plasma. The display
+manager stays as it is, with tide as one more session, unless --greeter is
+given.
 
 Options:
   --no-install     Skip the packages and the system-wide session install
@@ -315,9 +326,10 @@ Options:
   --no-build-hyprland
                    On Debian and Ubuntu, don't build Hyprland from source when
                    apt's is older than 0.56 (the build takes 10-20 minutes)
-  --no-greeter     Don't make greetd, with tide's greeter, the display
-                   manager; if setup made it one, put back the display
-                   manager it replaced
+  --greeter        Make greetd, with tide's greeter, the display manager
+                   from the next boot
+  --no-greeter     If setup made greetd the display manager, put back the
+                   one it replaced
   -h, --help       Show this help and exit
 USAGE
 }
@@ -1314,7 +1326,7 @@ enable_unit() {
     # Apart from tide.service, so a tide checkout too old to ship it costs
     # only the history.
     systemctl --user enable tide-clipboard.service \
-        || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup --tide again"
+        || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup again"
 }
 
 # --- logind ---
@@ -4619,8 +4631,10 @@ not_switching() {
     fi
 }
 
-# setup_greeter makes greetd, with tide's greeter, the display manager, or
-# with --no-greeter puts back the one it replaced. Nothing here is fatal:
+# setup_greeter makes greetd, with tide's greeter, the display manager with
+# --greeter, or with --no-greeter puts back the one it replaced. Without
+# either, it keeps up a greetd that setup made the display manager, and
+# leaves any other alone, greetd too. Nothing here is fatal:
 # the tide session runs under any display manager. "setup_greeter early"
 # installs nothing, leaving packages to the end like everything else, and
 # takes greetd as the display manager, as early_greeter has just found it:
@@ -4641,6 +4655,27 @@ setup_greeter() {
         test "$dm_now" = greetd.service || return 0
         restore_display_manager "$(replaced_display_manager)" || :
         return 0
+    fi
+    # Kept up only where setup made greetd the display manager, as the note
+    # of what it replaced says: a greetd set up by hand keeps its own config.
+    # Remembered from the early pass, which gives way to the display manager
+    # greetd replaced when the greeter can't run, so the end of the run takes
+    # over again once this run has made it runnable. The early pass says
+    # nothing, so the end of the run says it once.
+    if test "$GREETER" = keep; then
+        if test "$dm_now" = greetd.service && test -n "$(replaced_display_manager)"; then
+            KEEP_GREETD=yes
+        fi
+        if test "$KEEP_GREETD" != yes; then
+            if test "${1-}" = early; then
+                :
+            elif test "$dm_now" = greetd.service; then
+                info "Leaving greetd's config as it is, since setup didn't make greetd the display manager; 'setup --greeter' has it run tide's greeter"
+            else
+                info "Leaving $(describe_dm "$dm_now") as the display manager; 'setup --greeter' makes tide's greeter the login screen"
+            fi
+            return 0
+        fi
     fi
     # Installed here, after everything that can end the run, and once the
     # display manager is noted: Debian's package enables greetd on a machine
@@ -4711,7 +4746,7 @@ setup_greeter() {
         return 0
     fi
     GREETER_ACTIVE=yes
-    info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --tide --no-greeter'"
+    info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --no-greeter'"
 }
 
 # early_greeter runs before anything that can end the run, so a failure
@@ -4719,8 +4754,9 @@ setup_greeter() {
 # have. When greetd is the display manager it does what setup_greeter does
 # at the end, short of installing: with --no-greeter it puts back the one
 # greetd replaced, and so it does when the greeter can't run as things
-# stand; otherwise it puts greetd's config, the greeter's home and the PAM
-# stack right. setup_greeter, at the end, makes greetd the display manager
+# stand; otherwise, with --greeter or for a greetd setup made the display
+# manager, it puts greetd's config, the greeter's home and the PAM stack
+# right. setup_greeter, at the end, makes greetd the display manager
 # again if this run has made its greeter runnable.
 early_greeter() {
     is_command systemctl || return 0
@@ -4778,6 +4814,7 @@ check_session() {
 
 # --- Main ---
 
+KEEP_GREETD=no
 if test "$SUDO" != no; then
     early_greeter
 fi
