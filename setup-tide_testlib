@@ -192,6 +192,8 @@ printf "%s\\n" "sudo \$*" >> "$CALLS"
 # -u USER runs the command as this user.
 if test "\$1" = -u; then
     shift 2
+    # sudo's reset environment has no runtime directory.
+    unset XDG_RUNTIME_DIR
     if test "\$1" = test && test "\$2" = -x; then
         case " \$FAKE_USER_NOEXEC " in *" \$3 "*) exit 1 ;; esac
     fi
@@ -451,8 +453,19 @@ MOCK
     : > "$T/share/tide/greeter/hyprland.lua"
     : > "$T/share/tide/shell/greeter.qml"
     # The greeter's Hyprland is \$FAKE_GREETER_HYPRLAND_VERSION, or new enough,
-    # and its qs answers \$FAKE_GREETER_QS_VERSION, or Quickshell 0.3.1.
-    printf '#!/bin/sh\necho "Hyprland ${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"\n' > "$T/usr-bin/Hyprland"
+    # and its qs answers \$FAKE_GREETER_QS_VERSION, or Quickshell 0.3.1. Like
+    # Hyprland 0.56, it aborts without a runtime directory; it notes the one
+    # it had in \$T/greeter-runtime-dir.
+    cat > "$T/usr-bin/Hyprland" <<MOCK
+#!/bin/sh
+if ! test -d "\$XDG_RUNTIME_DIR"; then
+    echo "terminate called after throwing an instance of 'std::runtime_error'" >&2
+    echo "  what():  XDG_RUNTIME_DIR is not set!" >&2
+    exit 134
+fi
+printf '%s\\n' "\$XDG_RUNTIME_DIR" > "$T/greeter-runtime-dir"
+echo "Hyprland \${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"
+MOCK
     printf '#!/bin/sh\necho "${FAKE_GREETER_QS_VERSION:-Quickshell 0.3.1 (revision 1a4716c, distributed by test)}" >&2\n' > "$T/usr-bin/qs"
     printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/etc/greetd" > "$T/passwd"
     # Debian's greetd PAM file, which lists the keyring already, and the one

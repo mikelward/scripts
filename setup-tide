@@ -4313,8 +4313,7 @@ greeter_ready() {
     fi
     # The Hyprland the greeter runs, which needn't be the one on this user's
     # PATH.
-    # shellcheck disable=SC2016  # the inner shell's
-    if ! _version=$(sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c 'Hyprland --version'); then
+    if ! _version=$(greeter_query 'Hyprland --version'); then
         why="greetd's user $greeter couldn't ask its Hyprland for its version"
         return 1
     fi
@@ -4327,8 +4326,7 @@ greeter_ready() {
     # And its Quickshell, which loads the greeter's QML as tide's shell is
     # loaded. 0.2 prints its version as "quickshell 0.2.1, revision ...", 0.3
     # as "Quickshell 0.3.1 (revision ...)", as tide-shell reads them.
-    # shellcheck disable=SC2016  # the inner shell's
-    if ! _version=$(sudo -u "$greeter" env PATH="$GREETER_PATH" /bin/sh -c 'qs --version' 2>&1); then
+    if ! _version=$(greeter_query 'qs --version' 2>&1); then
         why="greetd's user $greeter couldn't ask its Quickshell for its version"
         return 1
     fi
@@ -4337,6 +4335,20 @@ greeter_ready() {
         why="the greeter's Quickshell is ${_version:-of no version setup can read}, and it needs $MIN_QUICKSHELL or later"
         return 1
     fi
+}
+
+# greeter_query CMD runs the shell command CMD as greetd's user, on the
+# greeter's PATH, with a runtime directory of that user's own, as logind
+# gives the greeter at boot. sudo's environment has none, and Hyprland 0.56
+# aborts without one, even for --version. The same shell, as that user,
+# makes the directory in its temporary directory and removes it after.
+greeter_query() {
+    # shellcheck disable=SC2016  # the inner shell's
+    sudo -u "$greeter" /bin/sh -c '_d=$(mktemp -d) || exit 1
+PATH=$1 XDG_RUNTIME_DIR=$_d /bin/sh -c "$2"
+_s=$?
+rm -rf -- "$_d" || echo "setup-tide: left $_d behind" >&2
+exit "$_s"' sh "$GREETER_PATH" "$1"
 }
 
 # describe_dm names display manager $1 for a message.

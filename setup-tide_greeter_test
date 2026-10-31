@@ -19,8 +19,13 @@ check "greetd: the config is tide's, with Debian's user and VT" \
 check "greetd: the config is root's" has "$calls" "sudo install -D -m 644"
 check "greetd: checks greetd's user can run each command the greeter starts" \
     test "$(printf '%s\n' "$calls" | grep -c "^sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c _p=")" -eq 4
-check "greetd: and asks its own Hyprland for its version" \
-    has "$calls" "sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c Hyprland --version"
+check "greetd: and asks its own Hyprland for its version, as greetd's user" \
+    has "$calls" "sudo -u _greetd /bin/sh -c _d=\$(mktemp -d)"
+check "greetd: on the greeter's PATH" has "$calls" "sh $T/usr-local-bin:$T/usr-bin Hyprland --version"
+# sudo's environment has no runtime directory, and Hyprland 0.56 aborts
+# without one, even for --version.
+check "greetd: gives that Hyprland a runtime directory" test -s "$T/greeter-runtime-dir"
+check "greetd: and removes it after" test ! -e "$(cat "$T/greeter-runtime-dir")"
 check "greetd: notes the display manager it replaces" test "$(cat "$T/var/lib/setup-tide/previous-display-manager")" = gdm3.service
 check "greetd: takes the display manager's alias" has "$calls" "sudo systemctl enable --force greetd.service"
 check "greetd: is the display manager" test "$(cat "$T/dm")" = greetd.service
@@ -170,7 +175,7 @@ teardown
 # Its Quickshell has to load the greeter's QML, so it's asked too.
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000, distributed by: Debian"
 greeter_not_ready "an old Quickshell" "the greeter's Quickshell is 0.2.1, and it needs 0.3.0 or later"
-check "greetd: asks its own qs for its version" has "$calls" "sudo -u _greetd env PATH=$T/usr-local-bin:$T/usr-bin /bin/sh -c qs --version"
+check "greetd: asks its own qs for its version" has "$calls" "sh $T/usr-local-bin:$T/usr-bin qs --version"
 teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell nightly"
 greeter_not_ready "a Quickshell of no known version" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
