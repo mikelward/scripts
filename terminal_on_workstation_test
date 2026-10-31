@@ -1,0 +1,107 @@
+#!/bin/bash
+# Tests for terminal_on_workstation
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/terminal_on_workstation"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_it <workstation> [stub...]: run terminal_on_workstation on host0, with ~/.workstation holding <workstation>
+# (none if empty), and only the named stub commands on PATH, each recording
+# its name and arguments to $calls. A stub named "name=fail" exits 1.
+run_it() {
+    ws="$1"
+    shift
+    home="$(mktemp -d)"
+    bin="$home/bin"
+    mkdir "$bin"
+    log="$home/calls"
+    : > "$log"
+    if test -n "$ws"; then
+        printf '%s\n' "$ws" > "$home/.workstation"
+    fi
+    cat > "$home/.shrc" <<'SHRC'
+workstation() { test -e "$HOME/.workstation" && read -r line < "$HOME/.workstation" && printf '%s\n' "$line"; }
+SHRC
+    for stub in terminal terminal_on "$@"; do
+        name="${stub%=fail}"
+        rc=0
+        test "$name" = "$stub" || rc=1
+        printf '#!/bin/sh\necho "%s${*:+ $*}" >> "%s"\nexit %s\n' "$name" "$log" "$rc" > "$bin/$name"
+    done
+    chmod +x "$bin"/*
+    set +e
+    errors="$(HOME="$home" HOSTNAME=host0 PATH="$bin" "$SCRIPT" 2>&1 >/dev/null)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$home"
+}
+
+# check <calls> [stderr substring]
+check() {
+    if test "$status" -ne 0 || test "$calls" != "$1"; then
+        echo "  FAIL: status $status, calls: $calls, expected: $1, stderr: $errors"
+        return 1
+    fi
+    if test -z "${2:-}"; then
+        if test -n "$errors"; then
+            echo "  FAIL: unexpected stderr: $errors"
+            return 1
+        fi
+    else
+        case "$errors" in
+            *"$2"*) ;;
+            *) echo "  FAIL: stderr lacks '$2': $errors"; return 1;;
+        esac
+    fi
+}
+
+run_test() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if "$2"; then
+        echo "ok $TESTS_RUN $1"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $1"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+notice="~/.workstation isn't set, so this terminal is local"
+
+test_remote() { run_it host1 notify-send; check "terminal_on host1"; }
+test_here() { run_it host0 notify-send; check "terminal"; }
+test_unset_notifies() {
+    run_it "" notify-send
+    check "notify-send -a Terminal Terminal on the workstation $notice
+terminal" "$notice"
+}
+test_unset_osascript() {
+    run_it "" osascript
+    case "$calls" in
+        "osascript "*"Terminal on the workstation $notice
+terminal") ;;
+        *) echo "  FAIL: calls: $calls"; return 1;;
+    esac
+}
+test_unset_no_notifier() { run_it ""; check "terminal" "$notice"; }
+test_notify_fails() {
+    run_it "" notify-send=fail
+    check "notify-send -a Terminal Terminal on the workstation $notice
+terminal" "notify-send failed"
+}
+
+run_test "a workstation elsewhere gets a terminal on it" test_remote
+run_test "on the workstation itself, a local terminal" test_here
+run_test "without ~/.workstation, says so on stderr and in a notification" test_unset_notifies
+run_test "without ~/.workstation on macOS, notifies through osascript" test_unset_osascript
+run_test "without ~/.workstation or a notifier, still says so on stderr" test_unset_no_notifier
+run_test "a failed notification is reported, and the terminal still opens" test_notify_fails
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

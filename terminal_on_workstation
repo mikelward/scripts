@@ -1,9 +1,30 @@
 #!/bin/bash
 # shellcheck source=/dev/null
 . "$HOME"/.shrc
+
+# Say why this is a local terminal, on stderr and as a desktop notification,
+# since a key binding's stderr goes nowhere anyone reads.
+notify() {
+  echo "$0: $1" >&2
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a Terminal 'Terminal on the workstation' "$1" ||
+      echo "$0: notify-send failed" >&2
+  elif command -v osascript >/dev/null 2>&1; then
+    osascript -e 'on run argv' \
+      -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+      -e 'end run' 'Terminal on the workstation' "$1" ||
+      echo "$0: osascript failed to show a notification" >&2
+  fi
+  # Neither: stderr above is all there is.
+}
+
 WORKSTATION="$(workstation)"
 export WORKSTATION
-if test -z "$WORKSTATION" || test "$HOSTNAME" = "$WORKSTATION"; then
+if test -z "$WORKSTATION"; then
+  # shellcheck disable=SC2088  # the ~ is for the reader
+  notify "~/.workstation isn't set, so this terminal is local"
+  terminal
+elif test "$HOSTNAME" = "$WORKSTATION"; then
   terminal
 else
   terminal_on "$WORKSTATION"
