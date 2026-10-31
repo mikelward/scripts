@@ -36,7 +36,8 @@
 # - keeps blueman's applet, which autostarts in every desktop, out of
 #   Plasma (and GNOME, Budgie and COSMIC), which has Bluetooth of its own,
 #   with a copy of its entry in ~/.config/autostart (see
-#   keep_blueman_out_of_plasma). tide still starts it;
+#   keep_blueman_out_of_plasma). tide skips it too, since its bar draws
+#   Bluetooth;
 # - with --greeter, installs greetd and makes it the display manager, from
 #   the next boot, with tide's greeter as its default session (see
 #   setup_greeter). It checks first that the greeter can run, notes the
@@ -1343,8 +1344,9 @@ mask_distro_units() {
 # a second Bluetooth icon in the tray and a second pairing agent. A copy of
 # the entry in the user's autostart directory hides the system's, as the XDG
 # autostart spec has it, and skips the desktops nm-applet's entry skips,
-# which have Bluetooth of their own. tide's autostart allowlist still starts
-# it in tide, by the same desktop ID. The copy is setup's while its first
+# which have Bluetooth of their own. tide skips it too: its bar draws
+# Bluetooth, and its autostart allowlist leaves blueman off (tide SPEC.md
+# §5.4), so the copy needn't name tide. The copy is setup's while its first
 # line is BLUEMAN_MARK, and each run makes it afresh from the package's
 # entry; one of the user's own is left alone.
 BLUEMAN_NOT_SHOWN_IN="KDE;GNOME;Budgie;COSMIC;"
