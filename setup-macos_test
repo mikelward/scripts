@@ -895,7 +895,7 @@ test_configures_adjacent_space_shortcuts() {
 # The conf repo ships a second Karabiner rule for the arrow keys; Karabiner
 # never enables an asset on its own, so the run has to name it.
 test_names_arrow_karabiner_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl+Left/Right moves by word"'
 }
@@ -903,7 +903,7 @@ test_names_arrow_karabiner_rule() {
 # The kitty rule, which gives Ctrl back to Control there, is named too, with
 # where it goes: above the arrow rule, since both match Ctrl+Left/Right.
 test_names_terminal_karabiner_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl is Control and Alt is Meta in kitty"' &&
     assert_says "That order keeps the kitty rule above the arrow rule"
@@ -927,7 +927,7 @@ test_stale_conf_without_terminal_rule_warns() {
 # there is nothing to enable -- while still naming the Tab one that is.
 test_stale_conf_without_arrow_rule_warns() {
     rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "pc-arrows.json not found" &&
     assert_output_contains "Win+Shift+Left/Right won't move the window a Space" &&
@@ -943,7 +943,7 @@ test_stale_conf_without_arrow_rule_warns() {
 test_stale_arrow_rule_warns() {
     printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces"' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "predates Win+Shift+Left/Right; update the conf repo" &&
     assert_says 'the rule starting "Ctrl+Left/Right moves by word"' &&
@@ -1114,7 +1114,7 @@ test_names_a_karabiner_rule_by_its_title() {
     printf '%s\n' '{' '  "title": "PC keyboard Ctrl+Tab",' \
         '  "rules": [{ "description": "Ctrl+Tab goes to the next tab, not the application switcher" }]' '}' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'under "PC keyboard Ctrl+Tab", the rule starting "Ctrl+Tab goes to the next tab"'
 }
@@ -1485,11 +1485,12 @@ test_missing_karabiner_rule_warns() {
 # the only thing the script can do about it. Enabling copies the rule into
 # karabiner.json, so a rule already enabled has to be re-added to change.
 test_says_how_to_enable_the_karabiner_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says "click Complex Modifications in the sidebar, then Add predefined rule (not Add your own rule)" &&
     assert_says "Click Enable beside each of these" &&
-    assert_says "click the trash icon beside it in that list, then enable it again"
+    assert_says "click the trash icon beside it in that list, then enable it again" &&
+    assert_never_says "tilemo then turns on conf's Karabiner rules"
 }
 
 # The preflight has to name the driver approval too: Karabiner is inert until
@@ -2657,8 +2658,10 @@ test_tilemo_names_the_karabiner_rule() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says 'the rule starting "tilemo:"' &&
-    assert_says "That order keeps the kitty rule and the tilemo rule above the arrow rule"
+    assert_says "tilemo then turns on conf's Karabiner rules, such as Ctrl+Tab going to the next tab" &&
+    assert_says "each is On or Off under Keyboard in tide's settings (Tide Settings: Keyboard, in the switcher)" &&
+    assert_never_says "Add predefined rule" &&
+    assert_never_says 'the rule starting'
 }
 
 # Under tilemo, Alt+Tab is tilemo's swap with the master: the Tab rule is
@@ -2667,7 +2670,6 @@ test_tilemo_alt_tab_is_tilemos() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says 'the rule starting "Ctrl+Tab goes to the next tab"' &&
     assert_output_lacks "Alt+Tab switches applications" &&
     assert_output_contains "Alt+Tab is tilemo's: the tilemo rule makes it swap the window with the master" &&
     assert_output_contains "Alt+Tab is tilemo's: its rule makes it swap the window with the master" &&
@@ -2684,9 +2686,7 @@ test_tilemo_old_tab_karabiner_rule_is_not_enabled() {
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "pc-alt-tab.json predates tilemo taking Alt+Tab; update the conf repo" &&
-    assert_never_says 'the rule starting "Alt+Tab switches applications"' &&
-    assert_never_says 'the rule starting "Ctrl+Tab goes to the next tab"' &&
-    assert_says 'the rule starting "tilemo:"'
+    assert_says "Bring conf's Karabiner rules up to date"
 }
 
 test_tilemo_missing_karabiner_rule_warns() {
@@ -2705,8 +2705,7 @@ test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/timo.json"
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says 'the rule starting "timo:"' &&
-    assert_says "That order keeps the kitty rule and the timo rule above the arrow rule" &&
+    assert_says "tilemo then turns on conf's Karabiner rules" &&
     assert_output_contains "timo.json predates the rename to tilemo and still works" &&
     assert_output_lacks "tilemo.json not found" &&
     assert_output_contains "macOS configured successfully"

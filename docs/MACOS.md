@@ -256,14 +256,18 @@ after, to start again with it.
 it needs allowed — its driver extension, background services, input capture
 — each with a button that opens the System Settings page for it.
 
-**Karabiner's rules.** In Karabiner-Elements, Complex Modifications, then
-**Add predefined rule** — not "Add your own rule", which opens an editor. Each
-of conf's rules is listed under its file's title, such as "PC keyboard
-Ctrl+Tab", with an Enable button; the box at the top filters the list. The run
-names each rule and the order to enable them in (see [The one binding the
-rotation inverts](#the-one-binding-the-rotation-inverts)). With `--wm tilemo`, Karabiner's
-Devices page also needs Modify events turned on for each mouse and trackpad,
-for Win+click and Win+drag.
+**Karabiner's rules.** With tilemo, the default, there's nothing to do: tilemo
+turns conf's rules on itself, editing `karabiner.json`, keeps Karabiner's
+copies up to date with conf, and has each On or Off under Keyboard in tide's
+settings. Karabiner's Devices page needs Modify events turned on for each
+mouse and trackpad, for tilemo's Win+click and Win+drag.
+
+With `--wm amethyst`: in Karabiner-Elements, Complex Modifications, then **Add
+predefined rule** — not "Add your own rule", which opens an editor. Each of
+conf's rules is listed under its file's title, such as "PC keyboard Ctrl+Tab",
+with an Enable button; the box at the top filters the list. The run names each
+rule and the order to enable them in (see [The one binding the rotation
+inverts](#the-one-binding-the-rotation-inverts)).
 
 **LinearMouse's Accessibility, and its Start at login**, from its menu bar
 icon.

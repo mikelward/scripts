@@ -1706,14 +1706,22 @@ configure_karabiner() {
     # Nothing to set up in an app that isn't there; the install said so.
     karabiner_path >/dev/null || return 0
 
-    todo "Finish setting up Karabiner-Elements, or none of its rules work: open Karabiner-Elements, from Applications, and click Setup in its sidebar. Allow each item it lists: the button beside each opens the System Settings page for it, and Setup says when each is allowed."
+    # tilemo turns conf's rules on itself, editing karabiner.json, and keeps
+    # Karabiner's copies up to date with them (tilemo's SPEC.md, section
+    # 15), so with it there's nothing to enable by hand.
+    if test "$WM" = tilemo; then
+        todo "Finish setting up Karabiner-Elements, or none of its rules work: open Karabiner-Elements, from Applications, and click Setup in its sidebar. Allow each item it lists: the button beside each opens the System Settings page for it, and Setup says when each is allowed." \
+            "tilemo then turns on conf's Karabiner rules, such as Ctrl+Tab going to the next tab, and keeps them up to date with conf: each is On or Off under Keyboard in tide's settings (Tide Settings: Keyboard, in the switcher)."
+    else
+        todo "Finish setting up Karabiner-Elements, or none of its rules work: open Karabiner-Elements, from Applications, and click Setup in its sidebar. Allow each item it lists: the button beside each opens the System Settings page for it, and Setup says when each is allowed."
+    fi
 
-    # Karabiner lists an asset but doesn't enable it, and there's no
-    # supported way to enable one from a script: karabiner.json is rewritten
-    # by the app, so editing it here would be racing the GUI. Enabling copies
-    # the rule into karabiner.json, and Karabiner runs that copy, so an
-    # updated asset only takes effect once the rule is added again.
-    if test -n "$_karabiner_rules"; then
+    # Without tilemo, Karabiner lists an asset but doesn't enable it, and
+    # this script doesn't edit karabiner.json: the app rewrites it, so
+    # editing it from here would be racing the GUI. Enabling copies the rule
+    # into karabiner.json, and Karabiner runs that copy, so an updated asset
+    # only takes effect once the rule is added again.
+    if test -n "$_karabiner_rules" && test "$WM" != tilemo; then
         _karabiner_order=""
         if test -n "$_karabiner_above"; then
             _karabiner_order=" That order keeps $_karabiner_above above the arrow rule: Karabiner puts each rule you enable at the top, and uses the first that matches a key."
