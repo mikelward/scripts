@@ -250,10 +250,16 @@ macOS can't say how far a mouse wheel notch scrolls (System Settings' speed
 only changes the acceleration), so a notch barely moves a page. The run
 installs LinearMouse (free, open source), writes
 `~/.config/linearmouse/linearmouse.json` with ten lines a notch for a mouse
-and nothing for a trackpad, and starts it. The config is written only when
-there's none: LinearMouse rewrites it whenever its settings change, so its
-Scrolling settings are where to tune the number. Without LinearMouse, or
-without the permission, the wheel scrolls as stock macOS does.
+and nothing for a trackpad, and starts it. LinearMouse reads
+`~/Library/Application Support/linearmouse/linearmouse.json` instead when
+that exists, so that one is written then. The config is written only when
+there's none, or only the empty one LinearMouse makes as it first starts:
+LinearMouse rewrites it whenever its settings change, so its Scrolling
+settings are where to tune the number. Without LinearMouse, or without the
+permission, the wheel scrolls as stock macOS does: a line or so a notch,
+faster as you spin it. With `--wm tilemo`, tide's settings window has a
+LinearMouse settings button under Mouse, and tilemo says when LinearMouse
+isn't installed or isn't running.
 
 ## Key mapping
 
