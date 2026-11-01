@@ -156,7 +156,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in awk cat dirname grep id mkdir mv rm sed unzip; do
+    for cmd in awk cat dirname grep id mkdir mv rm sed tr unzip; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -1121,6 +1121,67 @@ test_keeps_existing_linearmouse_config() {
     assert_status 0 &&
     assert_file_contains "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" '{"schemes": []}' &&
     assert_output_contains "leaving LinearMouse's settings as they are"
+}
+
+# What LinearMouse writes as it first starts, before setup has run: its
+# schema and no schemes, pretty-printed with its slashes escaped.
+write_linearmouse_first_config() {
+    mkdir -p "$(dirname "$1")"
+    cat > "$1" <<'CONFIG'
+{
+  "$schema" : "https:\/\/schema.linearmouse.app\/0.10.0",
+  "schemes" : [
+
+  ]
+}
+CONFIG
+}
+
+# That sets nothing, so it's replaced as if there were none, which a
+# LinearMouse opened before setup would otherwise keep from happening.
+test_replaces_linearmouse_first_config() {
+    _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
+    write_linearmouse_first_config "$_config"
+    run_macos
+    assert_status 0 &&
+    assert_file_contains "$_config" '"category": "mouse"' &&
+    assert_file_contains "$_config" '"vertical": 10' &&
+    assert_output_contains "is the empty one LinearMouse made as it first started"
+}
+
+# One that sets anything is the user's, schema or not.
+test_keeps_linearmouse_config_with_a_scheme() {
+    _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
+    mkdir -p "$(dirname "$_config")"
+    printf '%s\n' '{"$schema": "x", "schemes": [{"scrolling": {"reverse": {"vertical": true}}}]}' > "$_config"
+    run_macos
+    assert_status 0 &&
+    assert_file_contains "$_config" '"reverse"' &&
+    assert_file_lacks "$_config" '"vertical": 10' &&
+    assert_output_contains "leaving LinearMouse's settings as they are"
+}
+
+# LinearMouse reads ~/Library/Application Support/linearmouse first, so
+# when that's there it's the one checked and written, and ~/.config's is
+# left alone.
+test_uses_linearmouse_support_config() {
+    _support="$TEST_TMPDIR/home/Library/Application Support/linearmouse/linearmouse.json"
+    write_linearmouse_first_config "$_support"
+    run_macos
+    assert_status 0 &&
+    assert_file_contains "$_support" '"vertical": 10' &&
+    test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
+}
+
+test_keeps_linearmouse_support_config() {
+    _support="$TEST_TMPDIR/home/Library/Application Support/linearmouse/linearmouse.json"
+    mkdir -p "$(dirname "$_support")"
+    printf '%s\n' '{"schemes": [{"pointer": {"acceleration": 0}}]}' > "$_support"
+    run_macos
+    assert_status 0 &&
+    assert_file_lacks "$_support" '"vertical": 10' &&
+    test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" &&
+    assert_output_contains "linearmouse.json exists; leaving LinearMouse's settings as they are"
 }
 
 test_starts_linearmouse() {
@@ -2533,6 +2594,10 @@ run_test "does not reinstall LinearMouse" test_does_not_reinstall_linearmouse
 run_test "--no-install skips installing LinearMouse" test_no_install_skips_linearmouse
 run_test "writes a LinearMouse config: ten lines a notch for a mouse" test_writes_linearmouse_config
 run_test "keeps a LinearMouse config that's already there" test_keeps_existing_linearmouse_config
+run_test "replaces the empty config LinearMouse makes as it first starts" test_replaces_linearmouse_first_config
+run_test "keeps a LinearMouse config with a scheme" test_keeps_linearmouse_config_with_a_scheme
+run_test "writes LinearMouse's Application Support config when it has one" test_uses_linearmouse_support_config
+run_test "keeps LinearMouse's Application Support config" test_keeps_linearmouse_support_config
 run_test "starts LinearMouse and says to grant it Accessibility" test_starts_linearmouse
 run_test "missing brew warns about LinearMouse" test_missing_brew_warns_about_linearmouse
 run_test "installs Karabiner-Elements when missing" \

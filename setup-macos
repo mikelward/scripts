@@ -27,7 +27,8 @@
 #   7.3 and 8), which say what it needs from here. --wm timo, its old name,
 #   still works.
 # - LinearMouse, so a mouse wheel notch scrolls ten lines rather than one: its
-#   config is written only where there's none, since the app rewrites it.
+#   config is written only where there's none, or only the empty one it makes
+#   as it first starts, since the app rewrites it.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
@@ -1562,6 +1563,9 @@ configure_karabiner() {
 # macOS can't say how far a mouse wheel notch scrolls: System Settings'
 # scrolling speed only changes the acceleration, and a notch at a time
 # barely moves a page. LinearMouse (free, open source) sets it per device.
+# It reads the first of these that exists, and makes the last when there's
+# none (its ConfigurationState.swift).
+LINEARMOUSE_SUPPORT_CONFIG="$HOME/Library/Application Support/linearmouse/linearmouse.json"
 LINEARMOUSE_CONFIG="$HOME/.config/linearmouse/linearmouse.json"
 # Lines per notch for a mouse, in the config written below. A trackpad is
 # left as macOS has it.
@@ -1592,20 +1596,58 @@ install_linearmouse() {
         || warn "could not install LinearMouse; $LINEARMOUSE_MISSING_EFFECT until it is"
 }
 
-# The config is written only where there's none. LinearMouse rewrites the
-# file whenever its settings change, so one that's there is the user's, and a
-# symlink into the conf repo would be replaced or edited behind its back.
+# The config LinearMouse reads: the first of its two places that exists.
+linearmouse_config() {
+    if test -e "$LINEARMOUSE_SUPPORT_CONFIG" || test -L "$LINEARMOUSE_SUPPORT_CONFIG"; then
+        printf '%s' "$LINEARMOUSE_SUPPORT_CONFIG"
+    else
+        printf '%s' "$LINEARMOUSE_CONFIG"
+    fi
+}
+
+# Whether the file at $1 is the config LinearMouse makes the first time it
+# starts, which sets nothing: its "$schema" and no schemes, whatever the
+# spacing (its Configuration.swift). A LinearMouse started before setup
+# leaves that, and it's no more the user's than no file at all.
+linearmouse_config_is_first() {
+    test -f "$1" || return 1
+    # The $ is the key's own, not the shell's.
+    # shellcheck disable=SC2016
+    tr -d ' \t\r\n' < "$1" | grep -Eq '^\{"\$schema":"[^"]*","schemes":\[\]\}$'
+}
+
+# The config is written only where there's none, or only LinearMouse's
+# first. LinearMouse rewrites the file whenever its settings change, so any
+# other is the user's, and a symlink into the conf repo would be replaced or
+# edited behind its back.
 configure_linearmouse() {
     info "Configuring LinearMouse"
 
     install_linearmouse
 
-    if test -e "$LINEARMOUSE_CONFIG" || test -L "$LINEARMOUSE_CONFIG"; then
-        info "$LINEARMOUSE_CONFIG exists; leaving LinearMouse's settings as they are"
+    _lm_config=$(linearmouse_config)
+    if linearmouse_config_is_first "$_lm_config"; then
+        info "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch over it"
+        write_linearmouse_config "$_lm_config"
+    elif test -e "$_lm_config" || test -L "$_lm_config"; then
+        info "$_lm_config exists; leaving LinearMouse's settings as they are"
     else
-        try mkdir -p "$(dirname "$LINEARMOUSE_CONFIG")"
-        info "Writing $LINEARMOUSE_CONFIG: $LINEARMOUSE_LINES lines per mouse wheel notch"
-        try write_file "$LINEARMOUSE_CONFIG" <<CONFIG
+        info "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch"
+        write_linearmouse_config "$_lm_config"
+    fi
+
+    _linearmouse=$(linearmouse_path) || return 0
+    # Started in the background so it reads the config now. It asks for
+    # Accessibility the first time, which only a person can grant.
+    try open -g "$_linearmouse"
+    info "Grant LinearMouse Accessibility when it asks, and turn on its Start at login; its Scrolling settings change the lines per notch"
+}
+
+# Write the config to $1: every mouse's notch LINEARMOUSE_LINES lines, and
+# nothing for a trackpad.
+write_linearmouse_config() {
+    try mkdir -p "$(dirname "$1")"
+    try write_file "$1" <<CONFIG
 {
     "schemes": [
         {
@@ -1623,13 +1665,6 @@ configure_linearmouse() {
     ]
 }
 CONFIG
-    fi
-
-    _linearmouse=$(linearmouse_path) || return 0
-    # Started in the background so it reads the config now. It asks for
-    # Accessibility the first time, which only a person can grant.
-    try open -g "$_linearmouse"
-    info "Grant LinearMouse Accessibility when it asks, and turn on its Start at login; its Scrolling settings change the lines per notch"
 }
 
 # --- Configure application launch shortcuts ---
