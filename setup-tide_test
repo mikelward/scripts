@@ -914,44 +914,58 @@ teardown
 
 tabs_manifest() { cat "$T/home/.config/$1/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"; }
 tabs_host() { mkdir -p "$T/usr-bin"; printf '#!/bin/sh\n' > "$T/usr-bin/tide-tabs"; chmod +x "$T/usr-bin/tide-tabs"; }
+# The tide connector's checkout, and the ID Chromium gives it unpacked.
+connector() { mkdir -p "$T/connector"; echo '{"manifest_version": 3}' > "$T/connector/manifest.json"; }
+connector_id() { printf '%s' "$(cd "$T/connector" && pwd -P)" | sha256sum | cut -c1-32 | tr 0-9a-f a-p; }
+STORE_ID=abcdefghijklmnopabcdefghijklmnop
 
-# Chrome and Brave each get the manifest, naming the host and the store's ID.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/home/.config/BraveSoftware/Brave-Browser"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+# Chrome and Brave each get the manifest, naming the host and the
+# connector's checkout, and no store ID until there is one.
+setup; tabs_host; connector; mkdir -p "$T/home/.config/google-chrome" "$T/home/.config/BraveSoftware/Brave-Browser"
+want=$(connector_id)
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: exits 0" test "$status" -eq 0
 for b in google-chrome BraveSoftware/Brave-Browser; do
     check "tabs: $b's manifest names the host" has "$(tabs_manifest "$b")" '"name": "io.github.mikelward.tide.tabs"'
     check "tabs: $b's manifest runs tide-tabs" has "$(tabs_manifest "$b")" "\"path\": \"$T/usr-bin/tide-tabs\""
-    check "tabs: $b's manifest allows the store's tileco" has "$(tabs_manifest "$b")" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
+    check "tabs: $b's manifest allows the connector's checkout" has "$(tabs_manifest "$b")" "\"allowed_origins\": [\"chrome-extension://$want/\"]"
     check "tabs: $b's manifest is stdio" has "$(tabs_manifest "$b")" '"type": "stdio"'
 done
 check "tabs: the manifest is JSON" sh -c "python3 -m json.tool '$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json' >/dev/null"
-check "tabs: says where tileco comes from" has "$output" "clone mikelward/tileco to $T/no-tileco"
+check "tabs: says how to load the connector" has "$output" "load $T/connector unpacked"
+check "tabs: no store to mention yet" lacks "$output" "Chrome Web Store"
+teardown
+
+# Once the connector is in the store, its ID is allowed too.
+setup; tabs_host; connector; mkdir -p "$T/home/.config/google-chrome"
+want=$(connector_id)
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector" SETUP_CONNECTOR_STORE_ID="$STORE_ID"
+check "tabs: allows the store's ID and the checkout's" has "$(tabs_manifest google-chrome)" "\"allowed_origins\": [\"chrome-extension://$STORE_ID/\", \"chrome-extension://$want/\"]"
+check "tabs: points at the store" has "$output" "from the Chrome Web Store"
 teardown
 
 # A browser that isn't here gets no manifest, and none at all says so.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+setup; tabs_host; connector; mkdir -p "$T/home/.config/google-chrome"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: no Brave, no Brave manifest" test ! -e "$T/home/.config/BraveSoftware"
 teardown
-setup; tabs_host; ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+setup; tabs_host; connector; ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: no browser, nothing written" test ! -e "$T/home/.config/google-chrome"
 check "tabs: no browser, says so" has "$output" "No Chrome or Brave here"
 teardown
 
 # Brave found by its command alone, before it has ever run.
-setup; tabs_host; printf '#!/bin/sh\n' > "$T/bin/brave-browser"; chmod +x "$T/bin/brave-browser"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+setup; tabs_host; connector; printf '#!/bin/sh\n' > "$T/bin/brave-browser"; chmod +x "$T/bin/brave-browser"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: Brave's command is enough" has "$(tabs_manifest BraveSoftware/Brave-Browser)" "tide-tabs"
 teardown
 
 # An unpacked checkout's ID comes from its real path, as Chromium makes it.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/real/tileco"
-echo '{"manifest_version": 3}' > "$T/real/tileco/manifest.json"; ln -s "$T/real/tileco" "$T/tileco"
-want=$(printf '%s' "$(cd "$T/real/tileco" && pwd -P)" | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
-check "tabs: allows the checkout's ID, from its real path" has "$(tabs_manifest google-chrome)" "\"chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/\", \"chrome-extension://$want/\""
-check "tabs: with a checkout, no hint to clone one" lacks "$output" "clone mikelward/tileco"
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/real/connector"
+echo '{"manifest_version": 3}' > "$T/real/connector/manifest.json"; ln -s "$T/real/connector" "$T/linked"
+want=$(printf '%s' "$(cd "$T/real/connector" && pwd -P)" | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/linked"
+check "tabs: allows the checkout's ID, from its real path" has "$(tabs_manifest google-chrome)" "\"allowed_origins\": [\"chrome-extension://$want/\"]"
 teardown
 
 # The formula, against an ID Chromium 153 gave an unpacked extension at
@@ -961,53 +975,70 @@ check "tabs: a path's ID matches Chromium's" test "$(printf '%s' /tmp/e2e-tabs/e
 teardown
 
 # A manifest key fixes the ID, whatever the path.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/connector"
 key=$(printf 'tide-test-key' | base64)
-printf '{\n  "key": "%s",\n  "manifest_version": 3\n}\n' "$key" > "$T/tileco/manifest.json"
+printf '{\n  "key": "%s",\n  "manifest_version": 3\n}\n' "$key" > "$T/connector/manifest.json"
 want=$(printf 'tide-test-key' | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: a manifest key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
 teardown
 
 # The key is found however the manifest is laid out.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/connector"
 key=$(printf 'tide-test-key' | base64)
-printf '{"manifest_version":3,"key":"%s"}' "$key" > "$T/tileco/manifest.json"
+printf '{"manifest_version":3,"key":"%s"}' "$key" > "$T/connector/manifest.json"
 want=$(printf 'tide-test-key' | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: a compact manifest's key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
-printf '{\n\t"key"\n  :\n "%s" ,\n "manifest_version": 3 }\n' "$key" > "$T/tileco/manifest.json"
-run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
+printf '{\n\t"key"\n  :\n "%s" ,\n "manifest_version": 3 }\n' "$key" > "$T/connector/manifest.json"
+run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: an oddly spaced manifest's key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
 teardown
 
 # A manifest that isn't JSON, or a key that isn't base64, is said so, and
 # allows only the store's ID rather than guessing the path's.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
-echo '{"key": ' > "$T/tileco/manifest.json"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/connector"
+echo '{"key": ' > "$T/connector/manifest.json"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector" SETUP_CONNECTOR_STORE_ID="$STORE_ID"
 check "tabs: a broken manifest still exits 0" test "$status" -eq 0
-check "tabs: a broken manifest is named" has "$output" "couldn't work out the extension ID of the tileco at $T/tileco"
-check "tabs: a broken manifest allows only the store's ID" has "$(tabs_manifest google-chrome)" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
-echo '{"key": "not base64!"}' > "$T/tileco/manifest.json"
-run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/tileco"
+check "tabs: a broken manifest is named" has "$output" "couldn't work out the extension ID of the tide connector at $T/connector"
+check "tabs: a broken manifest allows only the store's ID" has "$(tabs_manifest google-chrome)" "\"allowed_origins\": [\"chrome-extension://$STORE_ID/\"]"
+echo '{"key": "not base64!"}' > "$T/connector/manifest.json"
+run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector" SETUP_CONNECTOR_STORE_ID="$STORE_ID"
 check "tabs: a bad key is named" has "$output" "isn't base64"
-check "tabs: a bad key allows only the store's ID" has "$(tabs_manifest google-chrome)" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
+check "tabs: a bad key allows only the store's ID" has "$(tabs_manifest google-chrome)" "\"allowed_origins\": [\"chrome-extension://$STORE_ID/\"]"
 check "tabs: leaves no temporary files" test -z "$(find "$T/home/.config/google-chrome/NativeMessagingHosts" -name '.*')"
 teardown
 
+# With no store ID yet, a broken checkout allows nothing, so no manifest.
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/connector"
+echo '{"key": ' > "$T/connector/manifest.json"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
+check "tabs: nothing to allow, still exits 0" test "$status" -eq 0
+check "tabs: nothing to allow, no manifest" test ! -e "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
+check "tabs: nothing to allow, says so" has "$output" "no extension may use tide-tabs"
+teardown
+
+# A tide checkout from before the connector says to update it.
+setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/no-connector"
+check "tabs: no connector, still exits 0" test "$status" -eq 0
+check "tabs: no connector, says so" has "$output" "no tide connector at $T/no-connector; update tide"
+check "tabs: no connector, no manifest" test ! -e "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
+teardown
+
 # Without the host installed (--no-install, say), no manifest, and a warning.
-setup; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+setup; connector; mkdir -p "$T/home/.config/google-chrome"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: no host, still exits 0" test "$status" -eq 0
 check "tabs: no host, no manifest" test ! -e "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
 check "tabs: no host, says so" has "$output" "isn't installed, so tide's switcher won't list browser tabs"
 teardown
 
 # A rerun replaces the manifest whole.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome/NativeMessagingHosts"
+setup; tabs_host; connector; mkdir -p "$T/home/.config/google-chrome/NativeMessagingHosts"
 echo stale > "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" CONNECTOR_DIR="$T/connector"
 check "tabs: a rerun replaces an old manifest" lacks "$(tabs_manifest google-chrome)" "stale"
 check "tabs: and leaves no temporary file" test -z "$(ls -A "$T/home/.config/google-chrome/NativeMessagingHosts" | grep -v '^io.github.mikelward.tide.tabs.json$')"
 teardown

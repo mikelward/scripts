@@ -119,12 +119,16 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 
 - **setup-tide writes tide-tabs's host manifest for Chrome and Brave**
   (2026-11-01), in each one's `NativeMessagingHosts`, when its config
-  directory exists or its command is on `PATH`. It allows the Web Store's
-  tileco ID, and an unpacked checkout's at `$TILECO_DIR` (`~/src/tileco`),
-  worked out from the manifest's `key` or else the folder's real path, as
-  Chromium does. Sub-choices, each reversible in `install_tabs_host`:
-  - setup doesn't clone tileco; it says where to put it. The alternative
-    is cloning it beside tide, one more network fetch per run.
+  directory exists or its command is on `PATH`. It allows the tide
+  connector, the extension in tide's `connector/`, unpacked from the tide
+  checkout setup already keeps (`$TIDE_DIR/connector`), its ID worked out
+  from the manifest's `key` or else the folder's real path, as Chromium
+  does. tileco no longer lists tabs, so its IDs are gone. Sub-choices, each
+  reversible in `install_tabs_host`:
+  - No store ID yet: `CONNECTOR_STORE_ID` is empty until the connector is
+    listed, then gets its ID.
+  - Nothing to allow (no connector in an old tide checkout, or one whose ID
+    can't be worked out, and no store ID) writes no manifest and warns.
   - No host installed (`--no-install`, or an old tide) writes no manifest
     and warns, rather than a manifest pointing at nothing.
   - Chromium and other Chromium browsers get none; each has its own

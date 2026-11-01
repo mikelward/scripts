@@ -43,8 +43,8 @@
 #   site's own icon for a web app, fetched once (see
 #   install_launcher_entries);
 # - installs tide-tabs's native-messaging host manifest for Chrome and
-#   Brave, each where it's installed or has run, so tileco can list their
-#   tabs in tide's switcher (see install_tabs_host);
+#   Brave, each where it's installed or has run, so the tide connector can
+#   list their tabs in tide's switcher (see install_tabs_host);
 # - with --greeter, installs greetd and makes it the display manager, from
 #   the next boot, with tide's greeter as its default session (see
 #   setup_greeter). It checks first that the greeter can run, notes the
@@ -1592,24 +1592,26 @@ EOF2
 
 # --- Browser tabs in tide's switcher ---
 
-# tileco, the extension that lists a browser's tabs for tide's switcher on
-# Linux, talks to tide-tabs, its native-messaging host (tide SPEC.md §8.3).
-# Each browser finds the host by a manifest in its own config directory,
-# which names the extension IDs that may start it: the Chrome Web Store's,
-# and an unpacked checkout's at $TILECO_DIR.
+# The tide connector, the extension that lists a browser's tabs for tide's
+# switcher on Linux, talks to tide-tabs, its native-messaging host (tide
+# SPEC.md §8.3). It lives in the tide checkout, at $CONNECTOR_DIR. Each
+# browser finds the host by a manifest in its own config directory, which
+# names the extension IDs that may start it: the unpacked checkout's, and
+# the Chrome Web Store's once the connector is listed there.
 TABS_HOST_NAME=io.github.mikelward.tide.tabs
-TILECO_STORE_ID=ajcfbfgjfglgofbepnkiimmmnaidfedl
-TILECO_DIR="${TILECO_DIR:-$HOME/src/tileco}"
+# Empty until the connector is in the Chrome Web Store. Overridable for tests.
+CONNECTOR_STORE_ID="${SETUP_CONNECTOR_STORE_ID-}"
+CONNECTOR_DIR="${CONNECTOR_DIR:-$TIDE_DIR/connector}"
 # Where `make install-session PREFIX=/usr` puts it. Overridable for tests.
 TABS_HOST="${SETUP_TABS_HOST:-/usr/bin/tide-tabs}"
 
-# The extension ID Chromium gives the unpacked tileco at $1: from its
+# The extension ID Chromium gives the unpacked extension at $1: from its
 # manifest's key, if it has one, else from the folder's real path, as
 # crx_file::id_util does (the first 16 bytes of a SHA-256, 0-f as a-p).
 # The manifest is read as JSON (python3, which tide doctor needs too), so
 # its layout doesn't matter; one that isn't JSON, or a key that isn't
 # base64, is an error rather than a guess at the path's ID.
-tileco_unpacked_id() {
+unpacked_extension_id() {
     is_command python3 || {
         echo "python3 isn't installed, so $1/manifest.json can't be read" >&2
         return 1
@@ -1671,22 +1673,31 @@ install_tabs_host() {
         warn "$TABS_HOST isn't installed, so tide's switcher won't list browser tabs; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
         return 0
     fi
-    _th_origins="\"chrome-extension://$TILECO_STORE_ID/\""
+    _th_origins=
+    test -z "$CONNECTOR_STORE_ID" || _th_origins="\"chrome-extension://$CONNECTOR_STORE_ID/\""
     _th_err=$(mktemp) || {
         warn "couldn't make a temporary file, so tide's switcher won't list browser tabs"
         return 0
     }
-    if test -f "$TILECO_DIR/manifest.json"; then
-        if _th_id=$(tileco_unpacked_id "$TILECO_DIR" 2>"$_th_err") && test ${#_th_id} -eq 32; then
-            test "$_th_id" = "$TILECO_STORE_ID" || _th_origins="$_th_origins, \"chrome-extension://$_th_id/\""
+    if test -f "$CONNECTOR_DIR/manifest.json"; then
+        if _th_id=$(unpacked_extension_id "$CONNECTOR_DIR" 2>"$_th_err") && test ${#_th_id} -eq 32; then
+            if test "$_th_id" != "$CONNECTOR_STORE_ID"; then
+                _th_origins="${_th_origins:+$_th_origins, }\"chrome-extension://$_th_id/\""
+            fi
         else
-            warn "couldn't work out the extension ID of the tileco at $TILECO_DIR ($(cat "$_th_err")), so only the Web Store's tileco can list tabs"
+            warn "couldn't work out the extension ID of the tide connector at $CONNECTOR_DIR ($(cat "$_th_err"))"
         fi
+    else
+        warn "no tide connector at $CONNECTOR_DIR; update tide and run setup again"
+    fi
+    rm -f "$_th_err"
+    if test -z "$_th_origins"; then
+        warn "no extension may use tide-tabs, so tide's switcher won't list browser tabs"
+        return 0
     fi
     case "$TABS_HOST" in
         *[\"\\]*)
             warn "$TABS_HOST has a character JSON would need escaped, so tide's switcher won't list browser tabs"
-            rm -f "$_th_err"
             return 0
             ;;
     esac
@@ -1711,9 +1722,11 @@ install_tabs_host() {
     done <<EOF2
 $_th_dirs
 EOF2
-    rm -f "$_th_err"
-    test -f "$TILECO_DIR/manifest.json" \
-        || info "For tabs in tide's switcher, install tide (tileco) from the Chrome Web Store, or clone mikelward/tileco to $TILECO_DIR, load it unpacked, and run setup again"
+    if test -n "$CONNECTOR_STORE_ID"; then
+        info "For tabs in tide's switcher, add the tide connector from the Chrome Web Store, or load $CONNECTOR_DIR unpacked at chrome://extensions (or brave://extensions), with developer mode on"
+    else
+        info "For tabs in tide's switcher, load $CONNECTOR_DIR unpacked at chrome://extensions (or brave://extensions), with developer mode on"
+    fi
 }
 
 enable_unit() {
