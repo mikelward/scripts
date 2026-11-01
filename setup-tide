@@ -42,6 +42,9 @@
 #   browser1, notepad, ...), so tide's launcher lists it by name, with the
 #   site's own icon for a web app, fetched once (see
 #   install_launcher_entries);
+# - installs tide-tabs's native-messaging host manifest for Chrome and
+#   Brave, each where it's installed or has run, so tileco can list their
+#   tabs in tide's switcher (see install_tabs_host);
 # - with --greeter, installs greetd and makes it the display manager, from
 #   the next boot, with tide's greeter as its default session (see
 #   setup_greeter). It checks first that the greeter can run, notes the
@@ -1585,6 +1588,132 @@ EOF2
         esac
     done
     info "Listing $_le_count app scripts in the launcher, with entries in $_le_dir"
+}
+
+# --- Browser tabs in tide's switcher ---
+
+# tileco, the extension that lists a browser's tabs for tide's switcher on
+# Linux, talks to tide-tabs, its native-messaging host (tide SPEC.md §8.3).
+# Each browser finds the host by a manifest in its own config directory,
+# which names the extension IDs that may start it: the Chrome Web Store's,
+# and an unpacked checkout's at $TILECO_DIR.
+TABS_HOST_NAME=io.github.mikelward.tide.tabs
+TILECO_STORE_ID=ajcfbfgjfglgofbepnkiimmmnaidfedl
+TILECO_DIR="${TILECO_DIR:-$HOME/src/tileco}"
+# Where `make install-session PREFIX=/usr` puts it. Overridable for tests.
+TABS_HOST="${SETUP_TABS_HOST:-/usr/bin/tide-tabs}"
+
+# The extension ID Chromium gives the unpacked tileco at $1: from its
+# manifest's key, if it has one, else from the folder's real path, as
+# crx_file::id_util does (the first 16 bytes of a SHA-256, 0-f as a-p).
+# The manifest is read as JSON (python3, which tide doctor needs too), so
+# its layout doesn't matter; one that isn't JSON, or a key that isn't
+# base64, is an error rather than a guess at the path's ID.
+tileco_unpacked_id() {
+    is_command python3 || {
+        echo "python3 isn't installed, so $1/manifest.json can't be read" >&2
+        return 1
+    }
+    _ti_key=$(python3 -c '
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    m = json.load(f)
+if not isinstance(m, dict):
+    sys.exit("not a JSON object")
+key = m.get("key", "")
+if not isinstance(key, str):
+    sys.exit("its key is not a string")
+print(key)
+' "$1/manifest.json") || return 1
+    if test -n "$_ti_key"; then
+        _ti_der=$(mktemp) || return 1
+        if ! printf '%s' "$_ti_key" | base64 -d > "$_ti_der" 2>/dev/null || ! test -s "$_ti_der"; then
+            rm -f "$_ti_der"
+            echo "the key in $1/manifest.json isn't base64" >&2
+            return 1
+        fi
+        _ti_hash=$(sha256sum < "$_ti_der")
+        _ti_status=$?
+        rm -f "$_ti_der"
+        test "$_ti_status" -eq 0 || return 1
+    else
+        _ti_path=$(cd "$1" && pwd -P) || return 1
+        _ti_hash=$(printf '%s' "$_ti_path" | sha256sum) || return 1
+    fi
+    printf '%s\n' "$_ti_hash" | cut -c1-32 | tr 0-9a-f a-p
+}
+
+# Whether browser $1 is installed, looked up on $SETUP_BROWSER_PATH (for
+# tests, so a machine's own Chrome doesn't count) or else PATH.
+tabs_browser_installed() {
+    (PATH=${SETUP_BROWSER_PATH:-$PATH}; command -v "$1" >/dev/null 2>&1)
+}
+
+# The config directory of each browser here, one per line: Chrome's and
+# Brave's, when the browser is installed or has run.
+tabs_browser_dirs() {
+    _tb_conf=${XDG_CONFIG_HOME:-$HOME/.config}
+    if test -d "$_tb_conf/google-chrome" || tabs_browser_installed google-chrome || tabs_browser_installed google-chrome-stable; then
+        printf '%s\n' "$_tb_conf/google-chrome"
+    fi
+    if test -d "$_tb_conf/BraveSoftware/Brave-Browser" || tabs_browser_installed brave-browser || tabs_browser_installed brave; then
+        printf '%s\n' "$_tb_conf/BraveSoftware/Brave-Browser"
+    fi
+}
+
+install_tabs_host() {
+    _th_dirs=$(tabs_browser_dirs)
+    if test -z "$_th_dirs"; then
+        info "No Chrome or Brave here, so no host for tide's browser tabs"
+        return 0
+    fi
+    if ! test -x "$TABS_HOST"; then
+        warn "$TABS_HOST isn't installed, so tide's switcher won't list browser tabs; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
+        return 0
+    fi
+    _th_origins="\"chrome-extension://$TILECO_STORE_ID/\""
+    _th_err=$(mktemp) || {
+        warn "couldn't make a temporary file, so tide's switcher won't list browser tabs"
+        return 0
+    }
+    if test -f "$TILECO_DIR/manifest.json"; then
+        if _th_id=$(tileco_unpacked_id "$TILECO_DIR" 2>"$_th_err") && test ${#_th_id} -eq 32; then
+            test "$_th_id" = "$TILECO_STORE_ID" || _th_origins="$_th_origins, \"chrome-extension://$_th_id/\""
+        else
+            warn "couldn't work out the extension ID of the tileco at $TILECO_DIR ($(cat "$_th_err")), so only the Web Store's tileco can list tabs"
+        fi
+    fi
+    case "$TABS_HOST" in
+        *[\"\\]*)
+            warn "$TABS_HOST has a character JSON would need escaped, so tide's switcher won't list browser tabs"
+            rm -f "$_th_err"
+            return 0
+            ;;
+    esac
+    while IFS= read -r _th_dir; do
+        _th_hosts=$_th_dir/NativeMessagingHosts
+        _th_file=$_th_hosts/$TABS_HOST_NAME.json
+        if ! mkdir -p "$_th_hosts"; then
+            warn "couldn't make $_th_hosts, so that browser's tabs won't be in tide's switcher"
+            continue
+        fi
+        _th_tmp=$(mktemp "$_th_hosts/.$TABS_HOST_NAME.XXXXXX") || {
+            warn "couldn't write $_th_file, so that browser's tabs won't be in tide's switcher"
+            continue
+        }
+        if ! printf '{\n  "name": "%s",\n  "description": "tide: browser tabs in the switcher",\n  "path": "%s",\n  "type": "stdio",\n  "allowed_origins": [%s]\n}\n' \
+            "$TABS_HOST_NAME" "$TABS_HOST" "$_th_origins" > "$_th_tmp" || ! mv -f "$_th_tmp" "$_th_file"; then
+            rm -f "$_th_tmp"
+            warn "couldn't write $_th_file, so that browser's tabs won't be in tide's switcher"
+            continue
+        fi
+        info "Installed tide's browser-tabs host for $_th_dir"
+    done <<EOF2
+$_th_dirs
+EOF2
+    rm -f "$_th_err"
+    test -f "$TILECO_DIR/manifest.json" \
+        || info "For tabs in tide's switcher, install tide (tileco) from the Chrome Web Store, or clone mikelward/tileco to $TILECO_DIR, load it unpacked, and run setup again"
 }
 
 enable_unit() {
@@ -5136,6 +5265,7 @@ if is_command systemctl; then
 fi
 keep_blueman_out_of_plasma
 install_launcher_entries
+install_tabs_host
 GREETER_ACTIVE=no
 if test "$SUDO" = no; then
     info "Leaving the logind lid drop-ins, GDM and the display manager alone (needs sudo; --no-sudo)"

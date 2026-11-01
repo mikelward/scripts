@@ -612,6 +612,7 @@ run() {
         SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \
         SETUP_PAM_VENDOR_DIR="$T/vendor-pam.d" SETUP_PAM_AT_INCLUDE=yes \
         SETUP_SESSION_ENTRY="$T/share/wayland-sessions/tide.desktop" SETUP_SESSION_PATH="$T/usr-local-bin:$T/usr-bin" \
+        SETUP_BROWSER_PATH="$T/bin" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
     status=$?
     set -e
