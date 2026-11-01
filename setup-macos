@@ -28,7 +28,7 @@
 #   and margins come from ~/.amethyst.yml, which confinst symlinks out of the
 #   conf repo. Focus follows mouse is turned off -- see configure_amethyst for
 #   why it can't carry over from KDE.
-# - LinearMouse, so a mouse wheel notch scrolls ten lines rather than one: its
+# - LinearMouse, so a mouse wheel notch scrolls nine lines rather than one: its
 #   config is written only where there's none, or only the empty one it makes
 #   as it first starts, since the app rewrites it.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
@@ -1772,9 +1772,10 @@ configure_karabiner() {
 # none (its ConfigurationState.swift).
 LINEARMOUSE_SUPPORT_CONFIG="$HOME/Library/Application Support/linearmouse/linearmouse.json"
 LINEARMOUSE_CONFIG="$HOME/.config/linearmouse/linearmouse.json"
-# Lines per notch for a mouse, in the config written below. A trackpad is
+# Lines per notch for a mouse, in the config written below: tide's 3x
+# scroll speed at three lines a notch, as tilemo applies it. A trackpad is
 # left as macOS has it.
-LINEARMOUSE_LINES=10
+LINEARMOUSE_LINES=9
 LINEARMOUSE_MISSING_EFFECT="a mouse wheel notch will keep scrolling a line or so"
 
 linearmouse_path() {

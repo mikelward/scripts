@@ -274,7 +274,7 @@ icon.
 macOS can't say how far a mouse wheel notch scrolls (System Settings' speed
 only changes the acceleration), so a notch barely moves a page. The run
 installs LinearMouse (free, open source), writes
-`~/.config/linearmouse/linearmouse.json` with ten lines a notch for a mouse
+`~/.config/linearmouse/linearmouse.json` with nine lines a notch for a mouse
 and nothing for a trackpad, and starts it. LinearMouse reads
 `~/Library/Application Support/linearmouse/linearmouse.json` instead when
 that exists, so that one is written then. The config is written only when

@@ -1253,13 +1253,13 @@ test_no_install_skips_linearmouse() {
 }
 
 # A wheel notch barely moves a page on macOS; the config makes a mouse's
-# notch ten lines, and leaves trackpads alone.
+# notch nine lines, and leaves trackpads alone.
 test_writes_linearmouse_config() {
     run_macos
     _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
     assert_status 0 &&
     assert_file_contains "$_config" '"category": "mouse"' &&
-    assert_file_contains "$_config" '"vertical": 10' &&
+    assert_file_contains "$_config" '"vertical": 9' &&
     assert_file_lacks "$_config" 'trackpad'
 }
 
@@ -1296,7 +1296,7 @@ test_replaces_linearmouse_first_config() {
     run_macos
     assert_status 0 &&
     assert_file_contains "$_config" '"category": "mouse"' &&
-    assert_file_contains "$_config" '"vertical": 10' &&
+    assert_file_contains "$_config" '"vertical": 9' &&
     assert_output_contains "is the empty one LinearMouse made as it first started"
 }
 
@@ -1308,7 +1308,7 @@ test_keeps_linearmouse_config_with_a_scheme() {
     run_macos
     assert_status 0 &&
     assert_file_contains "$_config" '"reverse"' &&
-    assert_file_lacks "$_config" '"vertical": 10' &&
+    assert_file_lacks "$_config" '"vertical": 9' &&
     assert_output_contains "leaving LinearMouse's settings as they are"
 }
 
@@ -1320,7 +1320,7 @@ test_uses_linearmouse_support_config() {
     write_linearmouse_first_config "$_support"
     run_macos
     assert_status 0 &&
-    assert_file_contains "$_support" '"vertical": 10' &&
+    assert_file_contains "$_support" '"vertical": 9' &&
     test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
 }
 
@@ -1330,7 +1330,7 @@ test_keeps_linearmouse_support_config() {
     printf '%s\n' '{"schemes": [{"pointer": {"acceleration": 0}}]}' > "$_support"
     run_macos
     assert_status 0 &&
-    assert_file_lacks "$_support" '"vertical": 10' &&
+    assert_file_lacks "$_support" '"vertical": 9' &&
     test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" &&
     assert_output_contains "linearmouse.json exists; leaving LinearMouse's settings as they are"
 }
@@ -2891,7 +2891,7 @@ run_test "a stale LinearMouse record names the fix instead of installing" \
     test_stale_linearmouse_record_names_the_fix
 run_test "does not reinstall LinearMouse" test_does_not_reinstall_linearmouse
 run_test "--no-install skips installing LinearMouse" test_no_install_skips_linearmouse
-run_test "writes a LinearMouse config: ten lines a notch for a mouse" test_writes_linearmouse_config
+run_test "writes a LinearMouse config: nine lines a notch for a mouse" test_writes_linearmouse_config
 run_test "keeps a LinearMouse config that's already there" test_keeps_existing_linearmouse_config
 run_test "replaces the empty config LinearMouse makes as it first starts" test_replaces_linearmouse_first_config
 run_test "keeps a LinearMouse config with a scheme" test_keeps_linearmouse_config_with_a_scheme
