@@ -1921,6 +1921,17 @@ test_macos_brew_failure_still_attempts_later_steps() {
     assert_calls_contain "brew install kitty"
 }
 
+# setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
+# over keys and windows, so setup installs neither; `setup-macos --wm
+# amethyst` installs Amethyst itself.
+test_macos_installs_no_other_tiler() {
+    run_macos_packages 0
+    assert_status 0 &&
+    assert_calls_contain "brew install --cask iterm2" &&
+    assert_calls_lack "amethyst" &&
+    assert_calls_lack "rectangle"
+}
+
 # Homebrew's ask mode is on by default, so each install below printed its plan
 # and waited for a yes whenever it pulled in a dependency -- which the core
 # formula list always does. Running setup is the yes. The mock reports what
@@ -3366,6 +3377,7 @@ run_test "macOS brew failures warn instead of aborting the bootstrap" \
     test_macos_brew_failures_are_not_fatal
 run_test "a failing brew still attempts the later macOS steps" \
     test_macos_brew_failure_still_attempts_later_steps
+run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
 run_test "brew installs don't stop for confirmation" \
     test_brew_installs_do_not_ask_for_confirmation
 run_test "the Homebrew installer can still ask for the admin password" \

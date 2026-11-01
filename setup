@@ -1234,11 +1234,11 @@ install_packages() {
                 info "Installing graphical packages"
                 brew install kitty \
                     || warn "skipping kitty installation"
+                # No Amethyst or Rectangle: setup-macos sets up tilemo, which
+                # they'd fight over keys and windows. `setup-macos --wm
+                # amethyst` installs Amethyst itself.
                 info "Installing macOS applications"
-                brew install --cask \
-                    amethyst \
-                    iterm2 \
-                    rectangle \
+                brew install --cask iterm2 \
                     || warn "some macOS applications could not be installed"
             fi
             ;;

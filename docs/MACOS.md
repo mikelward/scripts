@@ -6,7 +6,9 @@ title: macOS desktop setup
 
 How the KDE/Krohnkite setup in `setup-kde` is reproduced on macOS by
 `setup-macos`, what carries over, what doesn't, and why Amethyst was chosen
-over the alternatives.
+over the alternatives. tilemo, tide's tiling on Hammerspoon, has since
+replaced it as the default (see [tilemo, the default](#tilemo-the-default));
+`--wm amethyst` still sets up Amethyst, which most of this file describes.
 
 The window manager config itself lives in the `conf` repo as `amethyst.yml`,
 which `confinst` symlinks to `~/.amethyst.yml`. This file covers the setup
@@ -22,7 +24,7 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
   - [Desktop configuration on its own](#desktop-configuration-on-its-own)
   - [What `setup-macos` requires](#what-setup-macos-requires)
   - [Install backends for Amethyst](#install-backends-for-amethyst)
-  - [tilemo instead of Amethyst](#tilemo-instead-of-amethyst)
+  - [tilemo, the default](#tilemo-the-default)
 - [Do these by hand first](#do-these-by-hand-first)
   - [And afterwards](#and-afterwards)
 - [Key mapping](#key-mapping)
@@ -60,7 +62,7 @@ On macOS this installs Homebrew if it's missing, then, by category:
 | Directory jumping | zoxide |
 | Node toolchain | node, typescript (skip with `--no-npm`; an Intel Mac gets them from conda-forge via `homepkg`, as Homebrew would compile them) |
 | Android CLI tools | android-platform-tools (adb, fastboot) |
-| Graphical apps | kitty, iTerm2, Amethyst, Rectangle (skip with `--no-gui`) |
+| Graphical apps | kitty, iTerm2 (skip with `--no-gui`); `setup-macos` installs Hammerspoon for tilemo, or Amethyst with `--wm amethyst` |
 | Heavyweight extras | helix, jj, nushell (`--minimal` skips, `--brew` / `--release` picks the source) |
 | Dotfiles | clones the `conf` repo and symlinks it via `confinst` |
 
@@ -105,16 +107,17 @@ missed step.
 
 | Flag | Effect |
 | --- | --- |
-| `--no-install` | Configure whatever Amethyst is already there; don't install |
+| `--no-install` | Configure whatever tilemo (or Amethyst) is already there; don't install |
 | `--ignore-errors` | Keep going past failures instead of aborting on the first |
 | `--yes` | Skip the preflight pause |
 | `--no-sudo` | Skip anything needing administrator rights — only Karabiner's installer does |
-| `--wm amethyst\|tilemo` | The tiling window manager; `amethyst` by default. See [tilemo instead of Amethyst](#tilemo-instead-of-amethyst) |
+| `--wm tilemo\|amethyst` | The tiling window manager; `tilemo` by default. See [tilemo, the default](#tilemo-the-default) |
 | `--help` | Usage |
 
 `setup` forwards `--no-install`, `--no-sudo` and `--ignore-errors` when it
-dispatches here, but not `--wm`: for tilemo, run `setup-macos --wm tilemo`
-again after `setup`. `--wm timo`, tilemo's old name, still works. The
+dispatches here, but not `--wm`, so a plain `setup` sets up tilemo. For
+Amethyst, run `setup-macos --wm amethyst` again after `setup`. `--wm timo`,
+tilemo's old name, still works. The
 preflight pause is skipped automatically when stdin isn't a terminal, so an
 unattended bootstrap doesn't block on an Enter that can never arrive.
 
@@ -162,14 +165,13 @@ manager's own layouts and keybindings are missing.
 There's no third backend. If Amethyst is already installed in either location,
 both are skipped.
 
-### tilemo instead of Amethyst
+### tilemo, the default
 
-`setup-macos --wm tilemo` sets up [tilemo](https://github.com/mikelward/tilemo)
-instead: a Hammerspoon config with tide's tiling, nine workspaces done by
-minimizing windows rather than with Spaces, focus follows mouse, and a
-launcher. It's opt-in while tilemo grows; without `--wm` nothing changes.
-tilemo's `SPEC.md` (sections 6.4 and 7.3) says what it needs from here, and the
-run does that:
+`setup-macos` sets up [tilemo](https://github.com/mikelward/tilemo) unless
+`--wm amethyst` says otherwise: a Hammerspoon config with tide's tiling, named
+workspaces done by minimizing windows rather than with Spaces, focus follows
+mouse, and a launcher. tilemo's `SPEC.md` (sections 6.4 and 7.3) says what it
+needs from here, and the run does that:
 
 - **Keys.** tilemo registers its keys with `RegisterEventHotKey`, which fails
   silently on a key the system holds, so the hotkeys the Amethyst setup moved
@@ -186,8 +188,10 @@ run does that:
   no administrator rights, so `--no-sudo` doesn't skip it). tilemo is cloned
   to `$TILEMO_DIR` (default `~/tilemo`) if it isn't there, and
   `make -C "$TILEMO_DIR" install` copies it into `~/.hammerspoon/tilemo`. An
-  existing checkout is used as it stands, not pulled. `--no-install` skips
-  Hammerspoon and the clone.
+  existing checkout is pulled first, fast-forward only, as `setup` pulls
+  tide, so a plain `setup` keeps it current. One with commits of its own, or
+  changes a pull would overwrite, is installed as it stands, with a warning.
+  `--no-install` skips Hammerspoon, the clone and the pull.
 - **blueutil** from Homebrew (`brew install blueutil`, a formula, so no
   administrator either), which tilemo's bar asks whether Bluetooth is on.
   It's free and open source. Without it, or when it fails, tilemo hides
