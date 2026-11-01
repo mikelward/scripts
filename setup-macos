@@ -8,24 +8,25 @@
 #   Move left/right a space on Control+Option+arrow, which the conf repo's
 #   Karabiner rule puts under physical Win+Left/Right
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
-# - Amethyst tiling window manager: installs it (Homebrew, or a staged bundle
-#   offline). Its layouts, modifiers and margins come from ~/.amethyst.yml,
-#   which confinst symlinks out of the conf repo. Focus follows mouse is turned
-#   off -- see configure_amethyst for why it can't carry over from KDE.
-# - Karabiner-Elements, for the bindings the modifier rotation can't carry:
-#   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
-#   Win+Shift+Left/Right moving the window a Space (with Amethyst), and Ctrl
-#   as Control in kitty. Its rules are symlinked out of the conf repo too.
-# - Or, with --wm tilemo, tilemo instead of Amethyst: a Hammerspoon config with
-#   tide's tiling and nine workspaces of its own, done by minimizing windows
-#   rather than with Spaces. It needs the keys the Amethyst setup binds, so
-#   that mode hands Spotlight back Cmd+Space, turns the Switch to Desktop and
+# - tilemo, the tiling window manager by default: a Hammerspoon config with
+#   tide's tiling and named workspaces of its own, done by minimizing windows
+#   rather than with Spaces. It clones tilemo, or pulls an existing checkout
+#   (--ff-only), and installs it. It needs the keys the Amethyst setup binds,
+#   so it hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
 #   tiling features that would fight it. It also hides the menu bar for
 #   tilemo's own bar, and installs blueutil (Homebrew) so that bar can show
 #   whether Bluetooth is on. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
-#   7.3 and 8), which say what it needs from here. --wm timo, its old name,
-#   still works.
+#   7.3 and 8), which say what it needs from here.
+# - Karabiner-Elements, for the bindings the modifier rotation can't carry:
+#   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
+#   Win+Shift+Left/Right moving the window a Space (with Amethyst), and Ctrl
+#   as Control in kitty. Its rules are symlinked out of the conf repo too.
+# - Or, with --wm amethyst, the Amethyst tiling window manager instead:
+#   installs it (Homebrew, or a staged bundle offline). Its layouts, modifiers
+#   and margins come from ~/.amethyst.yml, which confinst symlinks out of the
+#   conf repo. Focus follows mouse is turned off -- see configure_amethyst for
+#   why it can't carry over from KDE.
 # - LinearMouse, so a mouse wheel notch scrolls ten lines rather than one: its
 #   config is written only where there's none, or only the empty one it makes
 #   as it first starts, since the app rewrites it.
@@ -78,17 +79,17 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [--wm amethyst|tilemo] [-h | --help]
+#                 [--wm tilemo|amethyst] [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
-# --no-install skips installing Amethyst and Karabiner-Elements and configures
-# whatever is already there. --no-sudo skips only Karabiner's install, the one
+# --no-install skips installing tilemo (or Amethyst) and Karabiner-Elements and
+# configures whatever is already there. --no-sudo skips only Karabiner's install, the one
 # step here that needs administrator rights -- its cask is a .pkg and Homebrew
 # hands those to the system installer. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
-# pause. --wm picks the tiling window manager: amethyst, the default, or tilemo
-# (or timo, its old name). setup doesn't forward --wm, so a tilemo machine runs
-# this a second time on its own.
+# pause. --wm picks the tiling window manager: tilemo (or timo, its old name),
+# the default, so a plain setup sets it up, or amethyst. setup doesn't forward
+# --wm, so an Amethyst machine runs this a second time with --wm amethyst.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -99,10 +100,9 @@ IGNORE_ERRORS=no
 # manager (Krohnkite) under the same flag.
 INSTALL=yes
 
-# Which tiling window manager to set up (--wm): amethyst or tilemo. Amethyst is
-# the default so a run that doesn't ask keeps doing what it always has; tilemo
-# is opt-in while it grows (its SPEC.md, question 4).
-WM=amethyst
+# Which tiling window manager to set up (--wm): tilemo, the default, or
+# amethyst. A plain `setup`, which passes no --wm, sets up tilemo.
+WM=tilemo
 
 # Where tilemo's checkout lives, or will once cloned. A checkout rather than a
 # package because tilemo is a Hammerspoon config with no release to install:
@@ -527,21 +527,21 @@ preflight() {
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [--wm amethyst|tilemo] [-h | --help]
+                   [--wm tilemo|amethyst] [-h | --help]
 
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Don't install Amethyst, Karabiner-Elements or LinearMouse
-                   (or, with --wm tilemo, Hammerspoon and tilemo); configure
+  --no-install     Don't install Hammerspoon, tilemo (or, with --wm amethyst,
+                   Amethyst), Karabiner-Elements or LinearMouse; configure
                    whatever is already there
   --no-sudo        Don't run anything needing administrator rights. Only
                    Karabiner-Elements' installer does, so only that is skipped
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Skip the preflight pause and start configuring right away
-  --wm WM          The tiling window manager: amethyst (the default) or tilemo
-                   (timo, its old name, works too), which takes over
-                   Option+1..9 and Option+Space and needs Hammerspoon
+  --wm WM          The tiling window manager: tilemo (the default; timo, its
+                   old name, works too), which takes over Option+1..9 and
+                   Option+Space and needs Hammerspoon, or amethyst
   -h, --help       Show this help and exit
 USAGE
 }
@@ -1382,9 +1382,11 @@ install_blueutil() {
 # ~/.hammerspoon/tilemo with its own `make install`, so what lands there is
 # whatever its Makefile says belongs there rather than a list kept here.
 #
-# An existing checkout is installed as it stands, not pulled: it may be a
-# working copy with changes in it, and updating it is its owner's call.
-# --no-install skips only the clone -- copying an existing checkout's files is
+# An existing checkout is pulled with --ff-only first, as setup pulls tide, so
+# a plain run keeps it current. A checkout with commits of its own, or
+# changes a pull would overwrite, is left as it is, with a warning, and
+# installed as it stands. --no-install skips the clone and the pull, which
+# would bring in a newer tilemo -- copying an existing checkout's files is
 # configuring what's already there. That includes one from before the rename,
 # whose `make install` writes ~/.hammerspoon/timo instead; the init.lua written
 # below loads tilemo, so that's checked for afterwards and a stale checkout
@@ -1393,7 +1395,15 @@ install_tilemo() {
     if test "$TILEMO_DIR" = "$TILEMO_OLD_DIR"; then
         info "Using the checkout in $TILEMO_DIR, cloned before timo was renamed tilemo; rename it to $HOME/tilemo whenever suits"
     fi
-    if ! test -d "$TILEMO_DIR"; then
+    if test -d "$TILEMO_DIR"; then
+        if test "$INSTALL" = no; then
+            info "Installing $TILEMO_DIR as it stands, without pulling it (--no-install)"
+        elif ! is_command git; then
+            warn "git not found, so $TILEMO_DIR isn't updated; installing it as it stands"
+        elif ! git -C "$TILEMO_DIR" pull --ff-only; then
+            warn "could not update $TILEMO_DIR (local commits, changes a pull would overwrite, or no network?); installing it as it stands"
+        fi
+    else
         if test "$INSTALL" = no; then
             warn "$TILEMO_DIR not found and --no-install was given; clone $TILEMO_REPO there and re-run, or $TILEMO_MISSING_EFFECT"
             return 0

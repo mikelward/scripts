@@ -869,7 +869,7 @@ MOCK
 
 # Nine desktops, IDs 118-126, each on Option (modifier flag 524288).
 test_configures_nine_desktop_shortcuts() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 || return 1
     for _hotkey_id in 118 119 120 121 122 123 124 125 126; do
         assert_called "AppleSymbolicHotKeys -dict-add $_hotkey_id" || return 1
@@ -882,7 +882,7 @@ test_configures_nine_desktop_shortcuts() {
 # what the rule synthesizes for Ctrl+arrow word movement, and a hotkey there
 # would switch Spaces on Ctrl+arrow too. Arrow keys also carry the fn flag.
 test_configures_adjacent_space_shortcuts() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "AppleSymbolicHotKeys -dict-add 79" &&
     assert_called "AppleSymbolicHotKeys -dict-add 81" &&
@@ -955,7 +955,7 @@ test_stale_arrow_rule_warns() {
 # tilemo, Alt+Tab is left to the rotation, the next tab (conf's
 # config/karabiner/README.md).
 test_names_the_tab_karabiner_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl+Tab goes to the next tab"' &&
     assert_output_lacks "Alt+Tab switches applications" &&
@@ -970,7 +970,7 @@ test_names_the_tab_karabiner_rule() {
 test_old_tab_karabiner_rule_is_named_without_tilemo() {
     printf '%s\n' '"description": "Alt+Tab switches applications (PC muscle memory, alongside the setup-macos modifier rotation)"' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Alt+Tab switches applications"' &&
     assert_output_contains "pc-alt-tab.json predates tilemo taking Alt+Tab and still makes Alt+Tab switch applications"
@@ -1008,14 +1008,14 @@ test_pins_the_spaces_order() {
 # binding that failed to write. Say which ones are dead instead.
 test_warns_when_too_few_spaces() {
     stage_spaces 4
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "display 1 has 4 Space(s), so Option+5..9 will do nothing there"
 }
 
 test_no_spaces_warning_when_all_nine_exist() {
     stage_spaces 9
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "Spaces per display: 9" &&
     assert_output_lacks "will do nothing"
@@ -1035,7 +1035,7 @@ test_no_spaces_warning_when_more_than_nine() {
 # were dead on both. Desktop numbering is per display, so the count must be.
 test_counts_spaces_per_display_not_in_total() {
     stage_spaces 5 5
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "display 1 has 5 Space(s)" &&
     assert_output_contains "display 2 has 5 Space(s)"
@@ -1044,7 +1044,7 @@ test_counts_spaces_per_display_not_in_total() {
 # Only the short display is named; the one with enough Spaces isn't.
 test_only_the_short_display_is_named() {
     stage_spaces 9 3
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "display 2 has 3 Space(s)" &&
     assert_output_lacks "display 1 has"
@@ -1054,7 +1054,7 @@ test_only_the_short_display_is_named() {
 # rather than reporting a number that was never read.
 test_unreadable_spaces_config_is_reported() {
     rm -f "$TEST_TMPDIR/defaults_read.com.apple.spaces"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not read the Spaces configuration" &&
     assert_output_lacks "has 0 Space(s)"
@@ -1064,7 +1064,7 @@ test_unreadable_spaces_config_is_reported() {
 # must not be reported as a display with zero Spaces.
 test_spaces_config_without_a_display_is_reported() {
     stage_spaces_without_display
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "named no displays" &&
     assert_output_lacks "has 0 Space(s)"
@@ -1076,7 +1076,7 @@ test_spaces_config_without_a_display_is_reported() {
 # so it's on screen when the run ends: every line after its heading is the
 # list's, indented, or its "And if you like:".
 test_steps_left_come_last() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
     _after=$(printf '%s\n' "$output" | sed -n '/^Still to do by hand/,$p' | sed '1d' | grep -v '^$' | grep -v '^ ' | grep -v '^And if you like:$')
@@ -1129,7 +1129,7 @@ test_tilemo_says_to_turn_on_the_mouse_in_karabiner() {
 }
 
 test_amethyst_leaves_karabiner_devices_alone() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_never_says "Modify events"
 }
@@ -1157,7 +1157,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
 # --- preflight ---
 
 test_preflight_names_the_manual_steps() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "Create nine Spaces in Mission Control" &&
     assert_output_contains "Quit System Settings" &&
@@ -1169,7 +1169,7 @@ test_preflight_names_the_manual_steps() {
 # The preflight says the rest comes at the end, and it does: after the
 # run's own output, where it doesn't scroll away.
 test_preflight_defers_accessibility_until_after_the_run() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says "is listed step by step at the end of the run" &&
     assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
@@ -1199,14 +1199,14 @@ test_preflight_names_the_focus_cue_options() {
 # The pause only happens on a terminal: setup runs this as part of an
 # unattended bootstrap, where a prompt would block forever.
 test_preflight_does_not_pause_without_a_terminal() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "stdin is not a terminal" &&
     assert_output_contains "macOS configured successfully"
 }
 
 test_yes_skips_the_preflight_pause() {
-    run_macos --yes
+    run_macos --wm amethyst --yes
     assert_status 0 &&
     assert_output_contains "Create nine Spaces in Mission Control" &&
     assert_output_lacks "stdin is not a terminal"
@@ -1442,7 +1442,7 @@ test_no_sudo_skips_karabiner_install() {
 # privileged is involved and skipping it would be a needless regression.
 test_no_sudo_still_installs_amethyst() {
     remove_amethyst
-    run_macos --no-sudo --ignore-errors
+    run_macos --wm amethyst --no-sudo --ignore-errors
     assert_status 0 &&
     assert_called "brew install --cask amethyst"
 }
@@ -1453,7 +1453,7 @@ test_no_sudo_still_installs_amethyst() {
 test_cask_installs_do_not_ask_for_confirmation() {
     remove_amethyst
     remove_karabiner
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_called "brew install --cask amethyst [HOMEBREW_NO_ASK=1]" &&
     assert_called "brew install --cask karabiner-elements [HOMEBREW_NO_ASK=1]"
@@ -1503,7 +1503,7 @@ test_preflight_names_karabiner_permissions() {
 # The preflight names the arrow rule the way Karabiner lists it, so it has to
 # follow the rule's rename when Win+Shift+arrow joined it.
 test_preflight_names_the_current_arrow_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl+Left/Right moves by word"' &&
     assert_says "selects by word rather than moving the window a Space"
@@ -1526,7 +1526,8 @@ test_preflight_states_karabiner_cost_and_reliability() {
 test_help_names_both_installs() {
     run_macos --help
     assert_status 0 &&
-    assert_output_contains "Amethyst, Karabiner-Elements or LinearMouse"
+    assert_output_contains "Don't install Hammerspoon, tilemo (or, with --wm amethyst," &&
+    assert_output_contains "Amethyst), Karabiner-Elements or LinearMouse"
 }
 
 # --- Amethyst ---
@@ -1537,7 +1538,7 @@ test_help_names_both_installs() {
 # KWin's FocusFollowsMouse exempts popups; Amethyst has no equivalent, so this
 # is one of the settings that can't carry over from the KDE side.
 test_disables_focus_follows_mouse() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.amethyst.Amethyst focus-follows-mouse -bool false"
 }
@@ -1554,7 +1555,7 @@ test_focus_follows_mouse_not_left_enabled() {
 
 test_missing_amethyst_config() {
     rm -f "$TEST_TMPDIR/home/.amethyst.yml"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "run confinst after cloning the conf repo"
 }
@@ -1726,7 +1727,7 @@ printf "%s\\n" "pgrep \$*" >> "$CALLS"
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "Finder was not running" &&
     assert_not_called "killall Finder" &&
@@ -1762,13 +1763,13 @@ test_missing_pgrep_warns_about_restarting() {
 # over a machine with no tiling at all.
 test_installs_amethyst_when_missing() {
     remove_amethyst
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "brew install --cask amethyst"
 }
 
 test_does_not_reinstall_amethyst_when_present() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "Amethyst is already installed" &&
     assert_not_called "brew install"
@@ -1778,7 +1779,7 @@ test_does_not_reinstall_amethyst_when_present() {
 # says what the run won't do as a result.
 test_no_install_skips_amethyst() {
     remove_amethyst
-    run_macos --no-install --ignore-errors
+    run_macos --wm amethyst --no-install --ignore-errors
     assert_status 0 &&
     assert_not_called "brew install" &&
     assert_output_contains "the tiling settings below will have no effect" &&
@@ -1795,7 +1796,7 @@ printf "%s\\n" "brew \$*" >> "$CALLS"
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/brew"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "trying a staged bundle" &&
     assert_output_contains "Installing Amethyst from bundle" &&
@@ -1808,7 +1809,7 @@ test_stale_amethyst_record_names_the_fix_and_tries_the_bundle() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
     printf 'amethyst 0.24.2\n' > "$TEST_TMPDIR/brew-casks"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_not_called "brew install --cask amethyst" &&
     assert_output_contains "Homebrew lists amethyst 0.24.2 as installed but Amethyst is missing" &&
@@ -1821,7 +1822,7 @@ test_stale_amethyst_record_names_the_fix_and_tries_the_bundle() {
 test_installs_amethyst_from_bundle_without_brew() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "Homebrew not found" &&
     assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
@@ -1833,7 +1834,7 @@ test_amethyst_bundle_env_var_is_honored() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/elsewhere.zip"
     AMETHYST_BUNDLE="$TEST_TMPDIR/elsewhere.zip"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     AMETHYST_BUNDLE=
     assert_status 0 &&
     assert_output_contains "elsewhere.zip" &&
@@ -1845,7 +1846,7 @@ test_amethyst_bundle_env_var_is_honored() {
 test_staged_bundle_clears_quarantine() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_called "xattr -d -r com.apple.quarantine"
 }
@@ -1872,7 +1873,7 @@ test_staged_bundle_falls_back_to_user_applications() {
     else
         chmod a-w "$APPLICATIONS_DIR"
     fi
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "is not writable" &&
     assert_file_exists "$USER_APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
@@ -1900,7 +1901,7 @@ mkdir -p "\$_out/Amethyst.app/Contents"
 exit 2
 MOCK
     chmod +x "$TEST_TMPDIR/bin/unzip"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not unpack" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
@@ -1917,7 +1918,7 @@ MOCK
 test_partial_app_bundle_does_not_count_as_installed() {
     remove_amethyst
     mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "brew install --cask amethyst" &&
     assert_output_lacks "Amethyst is already installed"
@@ -1938,7 +1939,7 @@ esac
 exec /bin/rm "\$@"
 MOCK
     chmod +x "$TEST_TMPDIR/bin/rm"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not clear" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
@@ -1956,7 +1957,7 @@ test_bundle_without_info_plist_is_rejected() {
     mkdir -p "$_staging/Amethyst.app/Contents"
     (cd "$_staging" && zip -qr "$TEST_TMPDIR/home/amethyst.zip" Amethyst.app)
     rm -rf "$_staging"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "did not contain a usable Amethyst.app" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
@@ -1970,7 +1971,7 @@ test_unusable_destination_is_replaced_not_nested() {
     remove_amethyst
     mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "Replacing the unusable" &&
     assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist" &&
@@ -1994,7 +1995,7 @@ echo "xattr: [Errno 1] Operation not permitted" >&2
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/xattr"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not clear the quarantine attribute" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
@@ -2012,7 +2013,7 @@ test_bundle_without_executable_dir_is_rejected() {
     printf 'app\n' > "$_bad/Amethyst.app/Contents/Info.plist"
     (cd "$_bad" && zip -qr "$TEST_TMPDIR/home/amethyst.zip" Amethyst.app)
     rm -rf "$_bad"
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "did not contain a usable Amethyst.app" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app"
@@ -2022,7 +2023,7 @@ test_installed_app_without_executable_dir_is_reinstalled() {
     remove_amethyst
     mkdir -p "$APPLICATIONS_DIR/Amethyst.app/Contents"
     printf 'app\n' > "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "brew install --cask amethyst" &&
     assert_output_lacks "Amethyst is already installed"
@@ -2032,7 +2033,7 @@ test_installed_app_without_executable_dir_is_reinstalled() {
 # user to work out why tiling never happens.
 test_no_brew_and_no_bundle_says_how_to_stage_one() {
     remove_amethyst
-    run_macos_without brew --ignore-errors
+    run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "brew fetch --cask amethyst" &&
     assert_output_lacks "macOS configured successfully"
@@ -2114,7 +2115,7 @@ MOCK
 }
 
 test_reports_success_when_nothing_warned() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "macOS configured successfully"
 }
@@ -2133,10 +2134,24 @@ test_reports_problems_instead_of_success() {
 
 # --- --wm tilemo ---
 
-# Without --wm nothing changes: the Amethyst-era bindings, Amethyst itself,
-# and none of tilemo's Mission Control writes.
-test_default_wm_keeps_amethyst_bindings() {
+# Without --wm, as a plain setup runs it, it's tilemo: cloned, installed and
+# loaded by Hammerspoon, with tilemo's Mission Control writes and none of
+# Amethyst's.
+test_default_wm_is_tilemo() {
     run_macos
+    assert_status 0 &&
+    assert_output_contains "Configuring tilemo" &&
+    assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/home/tilemo" &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install" &&
+    assert_called "com.apple.WindowManager" &&
+    assert_not_called "com.amethyst.Amethyst" &&
+    assert_file_exists "$TEST_TMPDIR/home/.hammerspoon/init.lua"
+}
+
+# --wm amethyst keeps the Amethyst-era bindings, Amethyst itself, and none
+# of tilemo's Mission Control writes.
+test_wm_amethyst_keeps_amethyst_bindings() {
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_hotkey 64 true 32 49 524288 &&
     assert_hotkey 65 false 32 49 1572864 &&
@@ -2151,12 +2166,6 @@ test_default_wm_keeps_amethyst_bindings() {
     assert_file_not_exists "$TEST_TMPDIR/home/.hammerspoon/init.lua"
 }
 
-test_wm_amethyst_is_the_default() {
-    run_macos --wm amethyst
-    assert_status 0 &&
-    assert_hotkey 64 true 32 49 524288 &&
-    assert_not_called "com.apple.WindowManager"
-}
 
 test_wm_equals_syntax() {
     run_macos --wm=tilemo
@@ -2200,7 +2209,8 @@ test_help_documents_wm() {
     run_macos --help
     assert_status 0 &&
     assert_output_contains "--wm WM" &&
-    assert_output_contains "amethyst (the default) or tilemo"
+    assert_output_contains "tilemo (the default;" &&
+    assert_output_contains "or amethyst"
 }
 
 # tilemo registers its keys with RegisterEventHotKey, which fails
@@ -2279,7 +2289,7 @@ test_tilemo_hides_the_menu_bar_for_its_bar() {
 }
 
 test_amethyst_leaves_the_menu_bar_alone() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_not_called "_HIHideMenuBar"
 }
@@ -2392,7 +2402,7 @@ MOCK
 
 # Amethyst's setup has no bar to show it on.
 test_amethyst_does_not_install_blueutil() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_not_called "brew install blueutil"
 }
@@ -2404,13 +2414,37 @@ test_tilemo_clones_and_installs_tilemo() {
     assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
-# An existing checkout may hold work of its own, so it's installed as it
-# stands rather than cloned over or pulled.
-test_tilemo_uses_an_existing_checkout() {
+# An existing checkout is pulled, fast-forward only, so a plain run keeps it
+# current, then installed; it's never cloned over.
+test_tilemo_updates_an_existing_checkout() {
     mkdir -p "$TEST_TMPDIR/home/tilemo"
     run_macos --wm tilemo
     assert_status 0 &&
+    assert_not_called "git clone" &&
+    assert_called "git -C $TEST_TMPDIR/home/tilemo pull --ff-only" &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install"
+}
+
+# --no-install brings in no newer tilemo: the checkout is installed as it
+# stands, unpulled.
+test_tilemo_no_install_doesnt_pull() {
+    mkdir -p "$TEST_TMPDIR/home/tilemo"
+    run_macos --wm tilemo --no-install
+    assert_status 0 &&
     assert_not_called "git " &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install" &&
+    assert_output_contains "without pulling it (--no-install)"
+}
+
+# One a pull can't fast-forward (commits of its own, changes in the way, no
+# network) is installed as it stands, saying why.
+test_tilemo_installs_a_checkout_it_cant_update() {
+    mkdir -p "$TEST_TMPDIR/home/tilemo"
+    touch "$TEST_TMPDIR/git_fails"
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not update $TEST_TMPDIR/home/tilemo" &&
+    assert_output_contains "installing it as it stands" &&
     assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
@@ -2429,7 +2463,8 @@ test_tilemo_uses_a_checkout_from_before_the_rename() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_not_called "git " &&
+    assert_not_called "git clone" &&
+    assert_called "git -C $TEST_TMPDIR/home/timo pull --ff-only" &&
     assert_called "make -C $TEST_TMPDIR/home/timo install" &&
     assert_output_contains "Using the checkout in $TEST_TMPDIR/home/timo, cloned before timo was renamed tilemo" &&
     assert_output_contains "macOS configured successfully"
@@ -2678,7 +2713,7 @@ test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
 }
 
 test_amethyst_does_not_mention_the_tilemo_rule() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_output_lacks "tilemo.json" &&
     assert_output_lacks '"tilemo:"'
@@ -2940,9 +2975,9 @@ run_test "reports success when nothing warned" \
 run_test "reports the problem count instead of success" \
     test_reports_problems_instead_of_success
 
-run_test "no --wm keeps the Amethyst bindings" \
-    test_default_wm_keeps_amethyst_bindings
-run_test "--wm amethyst is the default" test_wm_amethyst_is_the_default
+run_test "no --wm sets up tilemo" test_default_wm_is_tilemo
+run_test "--wm amethyst keeps the Amethyst bindings" \
+    test_wm_amethyst_keeps_amethyst_bindings
 run_test "--wm=tilemo is accepted" test_wm_equals_syntax
 run_test "--wm timo, the old name, sets up tilemo" \
     test_wm_timo_is_an_alias_for_tilemo
@@ -2983,8 +3018,12 @@ run_test "tilemo: --no-sudo still installs Hammerspoon" \
 run_test "tilemo: a failed Hammerspoon install is counted" \
     test_tilemo_failed_hammerspoon_install_is_counted
 run_test "tilemo: clones and installs tilemo" test_tilemo_clones_and_installs_tilemo
-run_test "tilemo: an existing checkout is used as it stands" \
-    test_tilemo_uses_an_existing_checkout
+run_test "tilemo: an existing checkout is pulled, then installed" \
+    test_tilemo_updates_an_existing_checkout
+run_test "tilemo: a checkout that can't be pulled is installed as it stands" \
+    test_tilemo_installs_a_checkout_it_cant_update
+run_test "tilemo: --no-install installs the checkout unpulled" \
+    test_tilemo_no_install_doesnt_pull
 run_test "tilemo: a ~/timo checkout from before the rename is used" \
     test_tilemo_uses_a_checkout_from_before_the_rename
 run_test "tilemo: ~/tilemo wins over an old ~/timo" \
