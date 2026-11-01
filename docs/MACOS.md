@@ -219,8 +219,8 @@ setup still applies.
 
 ## Do these by hand first
 
-**Create nine Spaces** in Mission Control (Ctrl-Up, then `+` at the top
-right). There is no API that creates a Space — not for this script, not for
+**Create nine Spaces** in Mission Control: open it (`open -a 'Mission
+Control'`), then click `+` at the top right until there are nine. There is no API that creates a Space — not for this script, not for
 any window manager. macOS accepts a "switch to desktop 7" binding whether or
 not desktop 7 exists, and the key simply does nothing when it doesn't. The
 script counts the Spaces afterwards and names which of `Option+1..9` are dead,
@@ -236,16 +236,33 @@ closes, silently reverting them. The script warns if it sees it running.
 
 ### And afterwards
 
-**Grant Amethyst Accessibility access**, under System Settings > Privacy &
-Security > Accessibility. Amethyst moves and resizes windows through the
+The run ends with a numbered list of what's left for you, printed last so it
+doesn't scroll away under the run's own output, with where to click for each.
+Most of it can only be done *after* the run: on a first run the apps aren't
+installed yet, so there's nothing to grant a permission to. What's on it:
+
+**Accessibility for Amethyst**, or for Hammerspoon with `--wm tilemo`: System
+Settings > Privacy & Security > Accessibility, turn it on, or click `+` to add
+it if it isn't listed. Amethyst moves and resizes windows through the
 Accessibility API and is completely inert without it — it will run, show its
-menu bar icon, and tile nothing.
+menu bar icon, and tile nothing. tilemo needs Hammerspoon's Reload Config
+after, to start again with it.
 
-This one can only be done *after* the run, not before it: on a first run
-Amethyst isn't installed yet, so there's nothing to grant the permission to.
-The run repeats the instruction when it gets there.
+**Karabiner-Elements' setup.** Its own Setup page, in its sidebar, lists what
+it needs allowed — its driver extension, background services, input capture
+— each with a button that opens the System Settings page for it.
 
-**Grant LinearMouse Accessibility too, and turn on its Start at login.**
+**Karabiner's rules.** In Karabiner-Elements, Complex Modifications, then
+**Add predefined rule** — not "Add your own rule", which opens an editor. Each
+of conf's rules is listed under its file's title, such as "PC keyboard
+Ctrl+Tab", with an Enable button; the box at the top filters the list. The run
+names each rule and the order to enable them in (see [The one binding the
+rotation inverts](#the-one-binding-the-rotation-inverts)). With `--wm tilemo`, Karabiner's
+Devices page also needs Modify events turned on for each mouse and trackpad,
+for Win+click and Win+drag.
+
+**LinearMouse's Accessibility, and its Start at login**, from its menu bar
+icon.
 macOS can't say how far a mouse wheel notch scrolls (System Settings' speed
 only changes the acceleration), so a notch barely moves a page. The run
 installs LinearMouse (free, open source), writes
@@ -403,10 +420,13 @@ you follow the layering: Karabiner grabs the keyboard and sees the *physical*
 key, and its output then passes through the `hidutil` rotation. So it has to
 name the key the rotation turns into Control — left Option.
 
-Karabiner needs three things done by hand, none of them scriptable: its driver
-extension approved, Input Monitoring granted, and the rule enabled under
-Complex Modifications > Add rule. Until then Ctrl+Tab keeps switching
-applications and the arrow keys behave as plain macOS. Enabling copies the rule into
+Karabiner needs two things done by hand, neither of them scriptable: what its
+Setup page lists allowed (the driver extension, background services and input
+capture), and the rules enabled under Complex Modifications > Add predefined
+rule, each under its file's title ("PC keyboard Ctrl+Tab", "PC keyboard
+arrows", "PC keyboard terminals", "tilemo"). The run's closing list says how.
+Until then Ctrl+Tab keeps switching applications and the arrow keys behave as
+plain macOS. Enabling copies the rule into
 `karabiner.json`, so after a conf update changes one, remove it and add it
 again. The full reasoning, and what to flip if the layering differs on your macOS
 version, is in the conf repo's `config/karabiner/README.md`.
