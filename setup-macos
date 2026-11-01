@@ -1018,6 +1018,26 @@ is_usable_app() {
     test -f "$1/Contents/Info.plist" && test -d "$1/Contents/MacOS"
 }
 
+# Whether Homebrew still lists cask $1 though its app, $2, is missing. If so,
+# this warns with the command that clears the record, followed by $3: what stays
+# broken until then, or what the caller tries next.
+#
+# Something removed the app without telling brew: its own uninstaller, or a
+# deleted app. brew install can't repair that. It skips a cask it thinks is
+# current, and upgrading an older one first runs that version's uninstall
+# steps, which can fail on what's gone. Karabiner's uninstall script went with
+# the rest of it, so its run failed after the download with "uninstall script
+# ... does not exist". --force skips what's missing. Removing the record is the
+# user's call (Karabiner's asks for a password), so say how rather than do it.
+# brew list's "not installed" error is the expected answer, so it's dropped; a
+# brew that can't answer at all reads as no record, and the install goes ahead.
+stale_cask_record() {
+    if ! _listed=$(brew list --cask --versions "$1" 2>/dev/null); then
+        return 1
+    fi
+    warn "Homebrew lists $_listed as installed but $2 is missing, so brew can't reinstall it; run 'brew uninstall --cask --force $1' and rerun setup-macos; $3"
+}
+
 amethyst_path() {
     for _dir in "$APPLICATIONS_DIR" "$USER_APPLICATIONS_DIR"; do
         if is_usable_app "$_dir/Amethyst.app"; then
@@ -1157,14 +1177,14 @@ install_amethyst() {
         return 0
     fi
 
-    if is_command brew; then
+    if ! is_command brew; then
+        info "Homebrew not found; looking for a staged Amethyst bundle"
+    elif ! stale_cask_record amethyst Amethyst "trying a staged bundle meanwhile"; then
         info "Installing Amethyst"
         if brew install --cask amethyst; then
             return 0
         fi
         warn "could not install Amethyst via Homebrew; trying a staged bundle"
-    else
-        info "Homebrew not found; looking for a staged Amethyst bundle"
     fi
     install_amethyst_from_bundle
 }
@@ -1240,6 +1260,9 @@ install_hammerspoon() {
     fi
     if ! is_command brew; then
         warn "Homebrew not found, so Hammerspoon can't be installed; $TILEMO_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if stale_cask_record hammerspoon Hammerspoon "until then, $TILEMO_MISSING_EFFECT"; then
         return 0
     fi
     info "Installing Hammerspoon"
@@ -1489,6 +1512,9 @@ install_karabiner() {
         warn "Homebrew not found, so Karabiner-Elements can't be installed; $KARABINER_MISSING_EFFECT until it is"
         return 0
     fi
+    if stale_cask_record karabiner-elements Karabiner-Elements "until then, $KARABINER_MISSING_EFFECT"; then
+        return 0
+    fi
     info "Installing Karabiner-Elements"
     brew install --cask karabiner-elements \
         || warn "could not install Karabiner-Elements; $KARABINER_MISSING_EFFECT until it is"
@@ -1589,6 +1615,9 @@ install_linearmouse() {
     fi
     if ! is_command brew; then
         warn "Homebrew not found, so LinearMouse can't be installed; $LINEARMOUSE_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if stale_cask_record linearmouse LinearMouse "until then, $LINEARMOUSE_MISSING_EFFECT"; then
         return 0
     fi
     info "Installing LinearMouse"

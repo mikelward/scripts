@@ -411,6 +411,14 @@ applications and the arrow keys behave as plain macOS. Enabling copies the rule 
 again. The full reasoning, and what to flip if the layering differs on your macOS
 version, is in the conf repo's `config/karabiner/README.md`.
 
+Removing Karabiner outside Homebrew, with its own uninstaller or by deleting the
+app, leaves brew's record behind, and brew can't reinstall over it: the upgrade
+runs the old version's uninstall script, which is gone. A stale record can
+strand Amethyst, Hammerspoon and LinearMouse too, as brew skips a cask it thinks
+is current. `setup-macos` skips the install then and names the fix, such as
+`brew uninstall --cask --force karabiner-elements`, then run it again. Amethyst
+still tries a staged bundle meanwhile.
+
 Karabiner doesn't feed its own output through its manipulators, so the
 Control+Tab the rule makes isn't matched again.
 
