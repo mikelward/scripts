@@ -16,7 +16,8 @@
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
 #   tiling features that would fight it. It also hides the menu bar for
 #   tilemo's own bar, and installs blueutil (Homebrew) so that bar can show
-#   whether Bluetooth is on. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
+#   whether Bluetooth is on, and m1ddc (Apple silicon) or ddcctl (Intel) so it
+#   can show and set a monitor's speaker volume over DDC. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
 #   7.3 and 8), which say what it needs from here.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
@@ -483,7 +484,10 @@ the network once installed. If Hammerspoon is missing, blocked, or not
 granted Accessibility, nothing tiles and the workspace keys do nothing;
 the rest of this setup still applies. blueutil, from Homebrew, is free
 and open source; tilemo's bar asks it whether Bluetooth is on, and
-without it, or if it fails, only that icon hides.
+without it, or if it fails, only that icon hides. So are m1ddc (Apple
+silicon) and ddcctl (Intel), from Homebrew, which tilemo's bar asks for a
+monitor's speaker volume over DDC; without the one for this Mac, or with a
+monitor that doesn't answer, only that level is missing.
 
 NOTES
 }
@@ -1357,25 +1361,44 @@ install_hammerspoon() {
 # icon without it. Its headphones icons need nothing from here.
 BLUEUTIL_MISSING_EFFECT="tilemo's bar won't show whether Bluetooth is on"
 
-# blueutil is a Homebrew formula (free, open source), not a cask, so it needs
-# no administrator and --no-sudo doesn't skip it. It's a command, so it's
-# found on PATH rather than in an Applications directory.
-install_blueutil() {
-    if is_command blueutil; then
-        info "blueutil is already installed at $(command -v blueutil)"
+# What a tilemo machine without its DDC tool loses: a monitor's own speakers
+# have no volume macOS can read, so tilemo asks the monitor over DDC/CI
+# (tilemo's SPEC.md, section 8), and without the tool the speaker shows no
+# level.
+DDC_MISSING_EFFECT="tilemo's bar won't show a monitor's speaker volume"
+
+# The DDC tool for this Mac: m1ddc on Apple silicon, ddcctl on Intel, whose
+# IOFramebuffer calls don't reach displays on Apple silicon.
+ddc_tool() {
+    if test "$(uname -m)" = arm64; then
+        echo m1ddc
+    else
+        echo ddcctl
+    fi
+}
+
+# Installs Homebrew formula $1, a command tilemo runs, saying what's lost
+# ($2) while it's missing. A formula (free, open source), not a cask, so it
+# needs no administrator and --no-sudo doesn't skip it. It's a command, so
+# it's found on PATH rather than in an Applications directory.
+install_brew_tool() {
+    _tool=$1
+    _effect=$2
+    if is_command "$_tool"; then
+        info "$_tool is already installed at $(command -v "$_tool")"
         return 0
     fi
     if test "$INSTALL" = no; then
-        warn "blueutil is not installed and --no-install was given; $BLUEUTIL_MISSING_EFFECT until it is"
+        warn "$_tool is not installed and --no-install was given; $_effect until it is"
         return 0
     fi
     if ! is_command brew; then
-        warn "Homebrew not found, so blueutil can't be installed; $BLUEUTIL_MISSING_EFFECT until it is"
+        warn "Homebrew not found, so $_tool can't be installed; $_effect until it is"
         return 0
     fi
-    info "Installing blueutil"
-    brew install blueutil \
-        || warn "could not install blueutil; $BLUEUTIL_MISSING_EFFECT until it is"
+    info "Installing $_tool"
+    brew install "$_tool" \
+        || warn "could not install $_tool; $_effect until it is"
 }
 
 # Clone tilemo if there's no checkout, then copy its modules into
@@ -1507,7 +1530,8 @@ configure_tilemo() {
     info "Configuring tilemo"
 
     install_hammerspoon
-    install_blueutil
+    install_brew_tool blueutil "$BLUEUTIL_MISSING_EFFECT"
+    install_brew_tool "$(ddc_tool)" "$DDC_MISSING_EFFECT"
     install_tilemo
     configure_hammerspoon_init
 
