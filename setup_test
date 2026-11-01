@@ -213,6 +213,9 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 run_macos_packages() {
     # homebrew_status: 0 = installed, 1 = Homebrew unavailable
     homebrew_status="$1"
+    # The Mac's architecture as uname -m reports it: arm64 (the default) or
+    # x86_64 for an Intel Mac, whose node comes from homepkg instead.
+    macos_arch="${2:-arm64}"
     macos_tmpdir="$(mktemp -d)"
     macos_calls="$macos_tmpdir/calls"
     cat > "$macos_tmpdir/brew" <<MOCK
@@ -221,6 +224,7 @@ printf '%s\n' "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}]" >> "$macos
 exit 1
 MOCK
     chmod +x "$macos_tmpdir/brew"
+    write_mock_uname "$macos_tmpdir" "$macos_arch"
 
     set +e
     output="$(PATH="$macos_tmpdir:$PATH" \
@@ -232,13 +236,62 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn install_packages")
+$(extract_functions "info warn is_intel_mac install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$macos_calls" 2>/dev/null)"
     rm -rf "$macos_tmpdir"
+}
+
+# Write a uname into directory $1 that reports a Mac whose uname -m is $2, so a
+# test's answer doesn't depend on the machine running it.
+write_mock_uname() {
+    cat > "$1/uname" <<MOCK
+#!/bin/sh
+case "\$1" in
+    -m) echo $2 ;;
+    *) echo Darwin ;;
+esac
+MOCK
+    chmod +x "$1/uname"
+}
+
+# Run install_node_home on a Mac whose uname -m is $1, with NPM=$2 and ROOT=$3,
+# against a mock homepkg that records its arguments and succeeds and a mock brew
+# whose `list` exits $4 (0: Homebrew's node is installed, 1: it isn't).
+#   Leaves $calls set to the homepkg and brew invocations.
+run_node_home() {
+    node_tmpdir="$(mktemp -d)"
+    node_calls="$node_tmpdir/calls"
+    mkdir "$node_tmpdir/bin" "$node_tmpdir/scripts"
+    cat > "$node_tmpdir/scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$node_calls"
+MOCK
+    cat > "$node_tmpdir/bin/brew" <<MOCK
+#!/bin/sh
+printf '%s\n' "brew \$*" >> "$node_calls"
+exit $4
+MOCK
+    chmod +x "$node_tmpdir/scripts/homepkg" "$node_tmpdir/bin/brew"
+    write_mock_uname "$node_tmpdir/bin" "$1"
+
+    set +e
+    output="$(PATH="$node_tmpdir/bin:$PATH" \
+        sh -c "set -e
+OS=macos
+NPM=$2
+ROOT=$3
+SCRIPTS_DIR='$node_tmpdir/scripts'
+$(extract_functions "info warn is_intel_mac install_node_home")
+install_node_home
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$node_calls" 2>/dev/null)"
+    rm -rf "$node_tmpdir"
 }
 
 # Run install_packages' Linux arm ($1: debian|redhat) against a mock package
@@ -1890,6 +1943,57 @@ test_installer_can_still_ask_for_the_admin_password() {
     assert_calls_contain "installer ran [NONINTERACTIVE=unset]"
 }
 
+# Homebrew still pours bottles on Apple Silicon, so node and tsc come from it.
+test_apple_silicon_mac_gets_node_from_homebrew() {
+    run_macos_packages 0 arm64
+    assert_status 0 &&
+    assert_calls_contain "brew install node" &&
+    assert_calls_contain "brew install typescript"
+}
+
+# Homebrew has no Intel bottles, so brew would compile node (about 40 minutes)
+# and typescript with it. install_packages leaves both to homepkg and still
+# runs the rest of the arm.
+test_intel_mac_leaves_node_to_homepkg() {
+    run_macos_packages 0 x86_64
+    assert_status 0 &&
+    assert_calls_lack "brew install node" &&
+    assert_calls_lack "brew install typescript" &&
+    assert_calls_contain "brew install zoxide" &&
+    assert_output_contains "Intel Mac: Node.js and tsc come from homepkg" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# ...and install_node_home installs them from conda-forge instead.
+test_intel_mac_installs_node_from_homepkg() {
+    run_node_home x86_64 yes yes 1
+    assert_status 0 &&
+    assert_calls_contain "homepkg install node typescript" &&
+    assert_output_lacks "brew uninstall" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A Homebrew node from an earlier run stays, but it would keep compiling, so
+# the run says how to remove it.
+test_intel_mac_says_how_to_remove_homebrew_node() {
+    run_node_home x86_64 yes yes 0
+    assert_status 0 &&
+    assert_calls_contain "homepkg install node typescript" &&
+    assert_calls_lack "brew uninstall" &&
+    assert_output_contains "'brew uninstall typescript node' removes it"
+}
+
+# Apple Silicon has Homebrew's node already; --no-npm wants none; --no-root got
+# it from install_home_tools. None of them install it again.
+test_node_home_only_runs_on_a_privileged_intel_mac() {
+    run_node_home arm64 yes yes 1
+    assert_status 0 && test -z "$calls" &&
+    run_node_home x86_64 no yes 1 &&
+    assert_status 0 && test -z "$calls" &&
+    run_node_home x86_64 yes no 1 &&
+    assert_status 0 && test -z "$calls"
+}
+
 # When Homebrew itself can't be made available there is nothing to install
 # from, so the arm bows out with a warning instead of running brew at all --
 # and, again, without taking the bootstrap down.
@@ -3268,6 +3372,16 @@ run_test "the Homebrew installer can still ask for the admin password" \
     test_installer_can_still_ask_for_the_admin_password
 run_test "macOS without Homebrew skips the arm and continues" \
     test_macos_without_homebrew_skips_the_arm
+run_test "an Apple Silicon Mac gets node and tsc from Homebrew" \
+    test_apple_silicon_mac_gets_node_from_homebrew
+run_test "an Intel Mac doesn't compile node and tsc with Homebrew" \
+    test_intel_mac_leaves_node_to_homepkg
+run_test "an Intel Mac gets node and tsc from homepkg" \
+    test_intel_mac_installs_node_from_homepkg
+run_test "an Intel Mac says how to remove Homebrew's node" \
+    test_intel_mac_says_how_to_remove_homebrew_node
+run_test "node from homepkg is only for a privileged Intel Mac" \
+    test_node_home_only_runs_on_a_privileged_intel_mac
 run_test "no unguarded brew install remains" \
     test_no_unguarded_brew_install_remains
 run_test "missing-homepkg warnings name no absolute path" \

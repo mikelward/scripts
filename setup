@@ -60,8 +60,9 @@
 # but falls back to building from source (which needs tsc, without fetching
 # from the npm registry at build time) when that release can't be fetched.
 # On privileged boxes they come from the distro package (apt/dnf/brew); under
-# --no-root, where the distro installs are skipped, they come from
-# conda-forge via homepkg instead (rootless). Pass
+# --no-root, where the distro installs are skipped, and on an Intel Mac, where
+# Homebrew would compile them, they come from conda-forge via homepkg instead
+# (rootless). Pass
 # --no-npm to skip them where Node is provided some other way (nvm, fnm,
 # corepack, a system package, etc.) -- then provide tsc yourself.
 #
@@ -725,6 +726,16 @@ detect_os() {
     esac
 }
 
+# Whether this is a Mac running Intel Homebrew. Homebrew stopped building Intel
+# bottles in August 2026 (Intel is its Tier 3 now), so there every formula that
+# changes compiles from source -- about 40 minutes for Node.js on one. uname -m
+# names the process's architecture, not the chip's: a shell under Rosetta says
+# x86_64, and the brew that installs there is Intel Homebrew too (the Apple
+# Silicon one won't install under Rosetta), so it compiles just the same.
+is_intel_mac() {
+    test "$OS" = macos && test "$(uname -m)" = x86_64
+}
+
 # --- Detect Crostini ---
 
 # ChromeOS's Linux container (Crostini). It looks like Debian with a display,
@@ -1199,8 +1210,11 @@ install_packages() {
             # sudo, so unlike the apt/dnf branches this can't self-skip under
             # --no-root -- gate it on ROOT so an unprivileged macOS run gets
             # node/tsc from conda-forge via homepkg (install_home_tools)
-            # instead of a second copy here.
-            if test "$NPM" = yes && test "$ROOT" = yes; then
+            # instead of a second copy here. An Intel Mac gets them from
+            # homepkg too (install_node_home), as Homebrew would compile them.
+            if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
+                info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned (Homebrew has no Intel bottles, so it would compile them)"
+            elif test "$NPM" = yes && test "$ROOT" = yes; then
                 info "Installing Node.js (npm)"
                 brew install node \
                     || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
@@ -1838,6 +1852,34 @@ install_file_managers() {
     info "Installing lf from conda-forge via homepkg (~/.local, no root)"
     "$homepkg" install lf \
         || warn "could not install lf via homepkg; install manually if you want it"
+}
+
+# --- Install Node.js and tsc on an Intel Mac ---
+
+# Homebrew compiles node on an Intel Mac (see is_intel_mac), and typescript
+# depends on it, so install_packages leaves both to this step: conda-forge
+# still builds them for osx-64, and homepkg installs those into ~/.local with
+# no compiler. Runs after the clone because homepkg lives in the scripts repo.
+# The --no-root path already got them from install_home_tools.
+#
+# A Homebrew node left from an earlier run stays -- removing it is the user's
+# call, as something else may depend on it -- but it would keep compiling on
+# every upgrade, so this says how to remove it.
+install_node_home() {
+    if test "$NPM" != yes || test "$ROOT" != yes || ! is_intel_mac; then
+        return 0
+    fi
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found in the scripts repo; skipping Node.js and tsc"
+        return 0
+    fi
+    info "Installing Node.js and tsc from conda-forge via homepkg (~/.local; Homebrew would compile them on an Intel Mac)"
+    "$homepkg" install node typescript \
+        || warn "could not install Node.js and tsc via homepkg"
+    if command -v brew >/dev/null 2>&1 && brew list --formula --versions node >/dev/null 2>&1; then
+        info "Homebrew's node is still installed and compiles on every upgrade here; 'brew uninstall typescript node' removes it"
+    fi
 }
 
 # --- Remove the homepkg tools setup no longer installs ---
@@ -2490,10 +2532,12 @@ fi
 # has no reliable distro package -- all come from homepkg once the scripts
 # repo (and with it homepkg) is on disk, on every profile (including --minimal).
 # install_file_managers is a no-op where lf is already installed (--no-root
-# via install_home_tools, macOS via Homebrew).
+# via install_home_tools, macOS via Homebrew). An Intel Mac's node and tsc
+# come from homepkg here too (install_node_home).
 if test "$INSTALL" = yes; then
     install_shell_tools
     install_file_managers
+    install_node_home
 fi
 # After the clone, so it reads the scripts repo's current list.
 if test "$PURGE_OBSOLETE" = yes; then
