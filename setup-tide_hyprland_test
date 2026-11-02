@@ -51,6 +51,17 @@ check "the build never uses sudo to install" lacks "$calls" "sudo cmake"
 check "the build builds hyprutils before Hyprland" \
     test "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/hyprutils ' | cut -d: -f1)" -lt \
         "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/Hyprland ' | cut -d: -f1)"
+# Debian's libre2 can be built against an older abseil than its headers.
+check "the build builds its own re2" has "$calls" "--branch 2025-08-05 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/google/re2.git"
+check "the build builds re2 before Hyprland" \
+    test "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/re2 ' | cut -d: -f1)" -lt \
+        "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/Hyprland ' | cut -d: -f1)"
+check "Hyprland links the re2 built for it" has "$calls" "-Dpkgcfg_lib_deps_re2=$(inst)/lib/libre2.a "
+check "hyprctl links the re2 built for it" has "$calls" "-Dpkgcfg_lib_hyprctl_deps_re2=$(inst)/lib/libre2.a "
+check "only Hyprland is told where re2 is" \
+    test "$(printf '%s\n' "$calls" | grep -c 'pkgcfg_lib_deps_re2')" -eq 1
+check "the build installs abseil's headers for re2" has "$calls" " libabsl-dev "
+check "the build doesn't install apt's re2" lacks "$calls" "libre2-dev"
 check "the build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
 check "the build links Hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/Hyprland")" = "$T/opt/hyprland/current/bin/Hyprland"
 check "the build links hyprctl onto PATH, through current" test "$(readlink "$T/usr-local-bin/hyprctl")" = "$T/opt/hyprland/current/bin/hyprctl"

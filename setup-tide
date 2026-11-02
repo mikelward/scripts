@@ -175,7 +175,11 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # each clone must check out exactly that commit before its build files run.
 # Each tag meets the next one's minimums (Hyprland v0.56.2's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
-# Hyprland needs 1.49.
+# Hyprland needs 1.49. re2 is here because a distro's can lag its abseil:
+# Debian's libre2 was built against an abseil whose absl::string_view was
+# its own type, and its libabsl-dev's headers now make it std::string_view,
+# so Hyprland and hyprctl can't link it. Built here, against the abseil
+# installed, it's static, so nothing more loads at run time.
 HYPRLAND_PINS="
 wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
 hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
@@ -185,6 +189,7 @@ hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc4699
 hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 44e91d467bdad8dcf8bbd2ac7cf49972540980a5 cmake
 hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 482d4b7ec36ffdaf3573086aa586b178fd5404be cmake
 aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 f31c47a1b9d300847d8fc3108ad959448103dfc1 cmake
+re2 https://github.com/google/re2.git 2025-08-05 85c7c0fb1163b0bd83a7951f5a205ee7b489e33e cmake
 Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 efb50993780079460b0cbed1363e2166a2de1d9f cmake
 "
 # The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
@@ -199,7 +204,7 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
     libjpeg-dev libwebp-dev libmagic-dev libpng-dev libjxl-dev libheif-dev
     libgles-dev libegl-dev libgbm-dev libseat-dev libinput-dev libudev-dev
     libdisplay-info-dev hwdata libxkbcommon-dev uuid-dev libxcursor-dev libeis-dev
-    libglib2.0-dev libre2-dev libmuparser-dev liblcms2-dev liblua5.5-dev
+    libglib2.0-dev libabsl-dev libmuparser-dev liblcms2-dev liblua5.5-dev
     glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
     libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
     xwayland"
@@ -1206,6 +1211,14 @@ build_component() {
             find "$dir" -name meson.build -exec sed -i "s/'--strict', *//g" {} + || return 1
             ;;
     esac
+    # Hyprland and hyprctl link the re2 built above, not the distro's (see
+    # HYPRLAND_PINS). CMake takes the first libre2 on pkg-config's -L paths,
+    # and for Hyprland's own list that's the system's library directory, so
+    # each of the two lookups is told ours instead.
+    re2=
+    case "$1" in
+        Hyprland) re2=$install_dir/lib/libre2.a ;;
+    esac
     case "$5" in
         meson)
             CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
@@ -1219,6 +1232,7 @@ build_component() {
                 -DCMAKE_INSTALL_PREFIX="$install_dir" -DCMAKE_INSTALL_LIBDIR=lib \
                 -DCMAKE_PREFIX_PATH="$install_dir" -DCMAKE_INSTALL_RPATH="$install_dir/lib" \
                 -DCMAKE_C_COMPILER="gcc-$HYPRLAND_GCC" -DCMAKE_CXX_COMPILER="g++-$HYPRLAND_GCC" \
+                ${re2:+"-Dpkgcfg_lib_deps_re2=$re2"} ${re2:+"-Dpkgcfg_lib_hyprctl_deps_re2=$re2"} \
                 -DBUILD_TESTING=OFF \
                 && cmake --build "$dir/build" \
                 && cmake --install "$dir/build"
