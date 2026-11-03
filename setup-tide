@@ -73,7 +73,7 @@
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
 #                      [--no-build-hyprland] [--greeter | --no-greeter]
-#                      [-h | --help]
+#                      [--github PREFIX] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -83,13 +83,20 @@
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
 # --greeter makes greetd the display manager. --no-greeter puts back the
 # one setup replaced with greetd. Without either, the display manager stays
-# as it is.
+# as it is. --github PREFIX, or $GITHUB_PREFIX, clones what it clones from
+# GitHub (tide, Quickshell, Hyprland and its libraries and submodules) from
+# a mirror instead, as setup's --github does for its own repos, and setup
+# passes its prefix on. Only the host changes: each source build still
+# checks out its pinned commit, so a mirror can't swap what's built.
 
 INSTALL=yes
 SUDO=yes
 IGNORE_ERRORS=no
 FETCH=yes
 BUILD_HYPRLAND=yes
+# Where GitHub's repos come from: empty for github.com itself (see
+# git_github).
+GITHUB_PREFIX="${GITHUB_PREFIX:-}"
 # keep (the default) leaves the display manager as it is, yes (--greeter)
 # makes greetd it, and no (--no-greeter) puts back the one greetd replaced.
 GREETER=keep
@@ -371,7 +378,7 @@ usage() {
     cat <<'USAGE'
 Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
                   [--no-build-hyprland] [--greeter | --no-greeter]
-                  [-h | --help]
+                  [--github PREFIX] [-h | --help]
 
 Install the tide session (Hyprland + uwsm) beside KDE Plasma. The display
 manager stays as it is, with tide as one more session, unless --greeter is
@@ -389,6 +396,10 @@ Options:
                    from the next boot
   --no-greeter     If setup made greetd the display manager, put back the
                    one it replaced
+  --github PREFIX  Clone from a GitHub mirror at PREFIX (git@ghe.corp: or
+                   https://ghe.corp/) instead of github.com: tide, and the
+                   Quickshell and Hyprland source builds. A bare host is
+                   treated as SSH. Also settable via GITHUB_PREFIX
   -h, --help       Show this help and exit
 USAGE
 }
@@ -406,6 +417,23 @@ while test $# -gt 0; do
         --no-build-hyprland) BUILD_HYPRLAND=no ;;
         --greeter) GREETER=yes ;;
         --no-greeter) GREETER=no ;;
+        --github)
+            if test $# -lt 2 || test -z "$2"; then
+                warn "--github needs a host or prefix"
+                usage >&2
+                exit 1
+            fi
+            shift
+            GITHUB_PREFIX=$1
+            ;;
+        --github=*)
+            GITHUB_PREFIX=${1#--github=}
+            if test -z "$GITHUB_PREFIX"; then
+                warn "--github needs a host or prefix"
+                usage >&2
+                exit 1
+            fi
+            ;;
         -h|--help) usage; exit 0 ;;
         *)
             warn "Unknown option: $1"
@@ -418,6 +446,58 @@ done
 
 # From here on, the run ends by repeating its warnings and errors.
 start_problem_recap
+
+# normalize_github_prefix PREFIX, as setup's: PREFIX with the separator an
+# OWNER/REPO path follows, so a bare host is SSH (host:) and a URL gets a /.
+normalize_github_prefix() {
+    case "$1" in
+        */ | *:) printf '%s' "$1" ;;
+        *://*)   printf '%s/' "$1" ;;
+        *)       printf '%s:' "$1" ;;
+    esac
+}
+
+# The mirror that stands in for https://github.com/, or nothing for GitHub
+# itself. setup's default, GitHub over SSH, is GitHub too: these repos are
+# public, so they're cloned over HTTPS, which needs no key.
+case "$GITHUB_PREFIX" in
+    "" | git@github.com: | https://github.com/) GITHUB_BASE= ;;
+    *) GITHUB_BASE=$(normalize_github_prefix "$GITHUB_PREFIX") ;;
+esac
+
+# git_github runs git with each https://github.com/ URL rewritten to
+# $GITHUB_BASE, a submodule's too: a url.insteadOf rule, given in the
+# environment rather than with -c, so a token in the prefix stays out of
+# ps. It goes after any the environment already gives git. Nothing to
+# rewrite runs plain git.
+git_github() {
+    if test -z "$GITHUB_BASE"; then
+        git "$@"
+        return
+    fi
+    _gh_n=${GIT_CONFIG_COUNT:-0}
+    case $_gh_n in
+        *[!0-9]*)
+            warn "GIT_CONFIG_COUNT is '$_gh_n', not a number, so git can't be pointed at $(github_host "$GITHUB_BASE")"
+            return 1
+            ;;
+    esac
+    env "GIT_CONFIG_COUNT=$((_gh_n + 1))" "GIT_CONFIG_KEY_$_gh_n=url.$GITHUB_BASE.insteadOf" \
+        "GIT_CONFIG_VALUE_$_gh_n=https://github.com/" git "$@"
+}
+
+# github_host PREFIX: the host in a normalized prefix, without a user or
+# token, to name in a message.
+github_host() {
+    case "$1" in
+        *://*)
+            _gh_host=${1#*://}
+            _gh_host=${_gh_host%%/*}
+            ;;
+        *) _gh_host=${1%%:*} ;;
+    esac
+    printf '%s' "${_gh_host#*@}"
+}
 trap 'recap_problems "$?"' EXIT
 
 if test "$IGNORE_ERRORS" = no; then
@@ -952,7 +1032,7 @@ build_quickshell() {
         fi
         mkdir -p "$QUICKSHELL_SRC" || return 1
         make_build_dir "$qs_dir" || return 1
-        git clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
+        git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
         commit=$(git -C "$src" rev-parse HEAD) || return 1
         if test "$commit" != "$QUICKSHELL_COMMIT"; then
             warn "Quickshell's $QUICKSHELL_TAG tag is commit $commit, not the pinned $QUICKSHELL_COMMIT; not building it"
@@ -1240,7 +1320,7 @@ build_component() {
     rm -rf "$dir"
     # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
     # profiling, so it isn't fetched; a mirror without it can't fail the clone.
-    git clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
     head=$(git -C "$dir" rev-parse HEAD) || return 1
     if test "$head" != "$4"; then
         warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
@@ -1311,15 +1391,17 @@ fetch_tide() {
     elif test -d "$TIDE_DIR/.git"; then
         info "Updating $TIDE_DIR"
         # The existing checkout is enough to install, so a failed pull (no
-        # network, say) warns rather than ending the run.
-        git -C "$TIDE_DIR" pull --ff-only \
+        # network, say) warns rather than ending the run. A checkout cloned
+        # through the mirror still names GitHub as its origin, so the pull
+        # goes through the mirror too.
+        git_github -C "$TIDE_DIR" pull --ff-only \
             || warn "could not update $TIDE_DIR; installing the existing checkout"
     else
         # Not naming the URL: one passed with credentials in it would land in
         # the terminal and any captured log.
         info "Cloning tide into $TIDE_DIR"
         mkdir -p "$(dirname "$TIDE_DIR")"
-        git clone "$TIDE_REPO" "$TIDE_DIR"
+        git_github clone "$TIDE_REPO" "$TIDE_DIR"
     fi
 }
 

@@ -80,6 +80,8 @@
 # prefix doesn't stop to wait for the key at all (nothing it clones needs one),
 # the end-of-run offer to rewrite remotes to SSH is skipped, and a repo already
 # cloned from somewhere else is reported rather than silently left behind.
+# setup-tide clones its source builds (Quickshell, Hyprland and the hyprwm
+# libraries, at pinned commits) from the mirror too.
 
 # The three repositories setup clones, kept as OWNER/REPO paths. The host and
 # protocol come from GITHUB_PREFIX, which defaults to GitHub over SSH and can be
@@ -293,8 +295,10 @@ Options:
   --no-npm         Skip installing Node.js (node/npm) and the TypeScript
                    compiler (for machines where Node is provided another way;
                    provide tsc yourself)
-  --github PREFIX  Clone the scripts/conf/root repos from PREFIX instead of
-                   github.com over SSH -- for an internal GitHub mirror. PREFIX
+  --github PREFIX  Clone the scripts/conf/root/tide repos, and the tide
+                   session's Quickshell and Hyprland source builds, from
+                   PREFIX instead of github.com -- for an internal GitHub
+                   mirror. PREFIX
                    is the host or full prefix before OWNER/REPO; its protocol is
                    taken as given, e.g. an internal SSH host (git@ghe.corp or
                    git@ghe.corp:) or an HTTPS mirror (https://ghe.corp). A bare
@@ -814,8 +818,14 @@ configure_linux_desktop() {
     # Cloned here, not by setup-tide, so --github, the origin
     # check and URL redaction work as for setup's other repos.
     clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes
+    # A mirror stands in for GitHub in setup-tide's source builds too; in
+    # the environment, not argv, where a token in it would show in ps.
+    tide_github=
+    if test "$GITHUB_MIRROR" = yes; then
+        tide_github=$GITHUB_PREFIX
+    fi
     # shellcheck disable=SC2086  # expands to zero or more flags
-    TIDE_DIR="$SRC_DIR/tide" \
+    TIDE_DIR="$SRC_DIR/tide" GITHUB_PREFIX="$tide_github" \
         "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS
 }
 
