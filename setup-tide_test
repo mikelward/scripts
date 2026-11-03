@@ -724,6 +724,30 @@ check "session: no uwsm and no Hyprland names uwsm" has "$output" "it's listed o
 check "session: and names Hyprland" has "$output" "the tide session won't start: Hyprland isn't installed"
 teardown
 
+# A Quickshell too old for tide's bar and lock (Debian's 0.2.1, where the
+# build failed or a Qt upgrade retired it) ends the run, as the user would
+# otherwise find out only from waybar and a lock that never comes.
+setup; ARGS=(); run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000"
+check "session: an old qs ends the run" test "$status" -ne 0
+check "session: and says what it costs and why" has "$output" \
+    "tide's own bar and lock won't run, so the session falls back to waybar and hyprlock: qs ($T/usr-bin/qs) is Quickshell 0.2.1, and they need 0.3.0 or newer"
+check "session: and is repeated at the end" \
+    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "Quickshell 0.2.1, and they need 0.3.0"
+teardown
+
+setup; ARGS=(--ignore-errors); rm "$T/usr-bin/qs"; run
+check "session: no qs is named" has "$output" "falls back to waybar and hyprlock: there's no Quickshell (qs) on"
+check "session: and with --ignore-errors is a warning" test "$status" -eq 0
+teardown
+
+setup; ARGS=(); run FAKE_GREETER_QS_VERSION="Quickshell 0.3.1 (revision 1a4716c, distributed by test)"
+check "session: a new enough qs says nothing" lacks "$output" "tide's own bar and lock won't run"
+teardown
+
+setup; ARGS=(--ignore-errors); run FAKE_GREETER_QS_VERSION="something else"
+check "session: an unreadable version is named" has "$output" "couldn't read qs's version from 'something else'"
+teardown
+
 # Each awk program setup runs has to parse under whichever awk a distro
 # ships as awk: mawk on Debian and Ubuntu, gawk on Fedora and Arch. A name
 # one of them reserves, as gawk does func, breaks only that one. Each is

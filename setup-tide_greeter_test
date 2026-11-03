@@ -173,15 +173,15 @@ setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_HYPRLAND_VERSION=
 check "greetd: an old Hyprland only on this user's PATH doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
 teardown
 # Its Quickshell has to load the greeter's QML, so it's asked too.
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000, distributed by: Debian"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run "$(good_session_qs)" FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000, distributed by: Debian"
 greeter_not_ready "an old Quickshell" "the greeter's Quickshell is 0.2.1, and it needs 0.3.0 or later"
 check "greetd: asks its own qs for its version" has "$calls" "sh $T/usr-local-bin:$T/usr-bin qs --version"
 teardown
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell nightly"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run "$(good_session_qs)" FAKE_GREETER_QS_VERSION="Quickshell nightly"
 greeter_not_ready "a Quickshell of no known version" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
 teardown
 # A prerelease of the version needed isn't that version.
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_QS_VERSION="Quickshell 0.3.0-rc1 (revision 0000000)"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run "$(good_session_qs)" FAKE_GREETER_QS_VERSION="Quickshell 0.3.0-rc1 (revision 0000000)"
 greeter_not_ready "a prerelease Quickshell" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
 teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.56.0-rc1
@@ -190,11 +190,11 @@ teardown
 # The one first on the greeter's PATH is the one asked.
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"
 printf '#!/bin/sh\necho "quickshell 0.2.1, revision 0000000" >&2\n' > "$T/usr-local-bin/qs"; chmod +x "$T/usr-local-bin/qs"
-run
+run "$(good_session_qs)"
 greeter_not_ready "an old Quickshell ahead of a new one on the PATH" "the greeter's Quickshell is 0.2.1, and it needs 0.3.0 or later"
 teardown
 # Stands in for a build in a home directory, which greetd's user can't reach.
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/qs"; run
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/qs"; run "$(good_session_qs)"
 greeter_not_ready "a qs greetd's user can't run" "greetd's user _greetd can't run qs from $T/usr-local-bin:$T/usr-bin"
 teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; rm "$T/usr-bin/hyprctl"; run
@@ -476,10 +476,10 @@ system_run() {
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin local/bin; system_run bin
 check "greetd: a sealed /usr/local install is the greeter's" test "$(cat "$T/dm")" = greetd.service
 teardown
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin local/bin; chmod g+w "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin local/bin; chmod g+w "$T/sys/usr/local/lib/libqs.so.1"; system_run bin "$(good_session_qs)"
 greeter_not_ready "a /usr/local library others can write" "the greeter's qs isn't root's alone: users other than root can write $T/sys/usr/local/lib/libqs.so.1"
 teardown
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system sbin local/sbin; system_run sbin FAKE_OWNER="1000:$T/sys/usr/local/lib/libqs.so.1"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system sbin local/sbin; system_run sbin "$(good_session_qs)" FAKE_OWNER="1000:$T/sys/usr/local/lib/libqs.so.1"
 greeter_not_ready "a /usr/local/sbin command's library that isn't root's" "the greeter's qs isn't root's alone: $T/sys/usr/local/lib/libqs.so.1 is uid 1000's, not root's"
 teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; fake_system bin bin; chmod g+w "$T/sys/usr/lib/libc.so.6" "$T/sys/usr/local/lib/libqs.so.1"; system_run bin
