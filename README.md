@@ -65,6 +65,15 @@ homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
 `setup` prefers a bundle over the download, so an offline run never waits for
 a fetch that can't succeed.
 
+**A machine that won't run binaries from `~/.local/bin`** — a managed Mac whose
+policy kills any binary it hasn't approved (exit 137), or a `noexec` home —
+gets none of this. Before installing anything there, `setup` copies a system
+binary (`true`) into `~/.local/bin` and runs the copy. If that fails, it
+installs nothing there (the `homepkg` tools, `uv`) and removes the `atuin` and
+`carapace` an earlier run left there that won't run, so the shell stops
+starting them. Nothing looks for a particular company or product; install the
+tools some other way (Homebrew, if the policy allows it) instead.
+
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
 closure), native updates, and clean removal. micromamba is bootstrapped
