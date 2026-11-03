@@ -162,7 +162,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in awk cat dirname grep id mkdir mv rm sed tr unzip; do
+    for cmd in awk cat dirname grep id mkdir mktemp mv rm sed tr unzip; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 

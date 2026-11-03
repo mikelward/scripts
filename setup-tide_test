@@ -1012,4 +1012,37 @@ check "tabs: a rerun replaces an old manifest" lacks "$(tabs_manifest google-chr
 check "tabs: and leaves no temporary file" test -z "$(ls -A "$T/home/.config/google-chrome/NativeMessagingHosts" | grep -v '^io.github.mikelward.tide.tabs.json$')"
 teardown
 
+
+# Every warning and error is repeated at the end, where it's seen: a
+# warning in the middle scrolls away among thousands of lines.
+setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=swww
+check "recap: the run ends by repeating its warnings" \
+    has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
+  Warning: could not install: swww; install them manually"
+check "recap: a warning still shows where it happened too" \
+    test "$(printf '%s\n' "$output" | grep -c 'Warning: could not install: swww')" -eq 2
+check "recap: a run that went on still exits 0" test "$status" -eq 0
+check "recap: leaves no file behind" test -z "$(ls -A "$T/tmp")"
+teardown
+
+setup; ARGS=(); run
+check "recap: a clean run repeats nothing" lacks "$output" "from this run, again"
+teardown
+
+setup; ARGS=(); run GO="$T/no-such-go"
+check "recap: an error is repeated" \
+    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "  Error: tide needs Go 1.22 or newer"
+check "recap: and the run says it stopped early" has "$output" "setup-tide stopped early, with exit status 1"
+check "recap: and keeps its exit status" test "$status" -eq 1
+teardown
+
+# Run from setup, which made the file: add to it and leave the repeat to
+# setup, at the very end.
+setup; ARGS=(); : > "$T/problems"; run SETUP_OS=redhat FAKE_MISSING=swww SETUP_PROBLEMS="$T/problems"
+check "recap: a helper adds to setup's file" \
+    has "$(cat "$T/problems")" "Warning: could not install: swww; install them manually"
+check "recap: and doesn't repeat it itself" lacks "$output" "from this run, again"
+check "recap: nor removes setup's file" test -f "$T/problems"
+teardown
+
 finish
