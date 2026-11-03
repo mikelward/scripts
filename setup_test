@@ -1125,8 +1125,8 @@ run_linux_desktop() {
     desktop_tmpdir=$(mktemp -d)
     desktop_calls="$desktop_tmpdir/calls"
     for desktop_script in setup-kde setup-tide; do
-        printf '#!/bin/sh\necho "%s TIDE_DIR=$TIDE_DIR $*" >> "%s"\n' \
-            "$desktop_script" "$desktop_calls" > "$desktop_tmpdir/$desktop_script"
+        printf '#!/bin/sh\necho "%s TIDE_DIR=$TIDE_DIR $*" >> "%s"\necho "%s GITHUB_PREFIX=${GITHUB_PREFIX-unset}" >> "%s"\n' \
+            "$desktop_script" "$desktop_calls" "$desktop_script" "$desktop_calls" > "$desktop_tmpdir/$desktop_script"
         chmod +x "$desktop_tmpdir/$desktop_script"
     done
 
@@ -1140,6 +1140,8 @@ KDE_SETUP_FLAGS=
 SCRIPTS_DIR='$desktop_tmpdir'
 SRC_DIR='$desktop_tmpdir/src'
 TIDE_REPO=https://example.com/mikelward/tide.git
+GITHUB_MIRROR='${DESKTOP_MIRROR:-no}'
+GITHUB_PREFIX='${DESKTOP_PREFIX:-git@github.com:}'
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
 $(extract_functions "info warn note_problem configure_linux_desktop")
 configure_linux_desktop" 2>&1)"
@@ -1160,6 +1162,22 @@ test_tide_on_by_default() {
     assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors" &&
     assert_calls_lack "--greeter" &&
     assert_source_contains 'TIDE_REPO_PATH="mikelward/tide.git"'
+}
+
+# A mirror stands in for GitHub in setup-tide's source builds too, handed
+# over in the environment; GitHub itself is left to setup-tide's default.
+test_tide_gets_the_mirror() {
+    DESKTOP_MIRROR=yes DESKTOP_PREFIX=https://ghe.corp.example.com/ run_linux_desktop
+    assert_status 0 &&
+    assert_calls_contain "setup-tide GITHUB_PREFIX=https://ghe.corp.example.com/" &&
+    assert_calls_lack "--github"
+}
+
+test_tide_gets_no_prefix_for_github() {
+    run_linux_desktop
+    assert_status 0 &&
+    assert_calls_contain "setup-tide GITHUB_PREFIX=" &&
+    assert_calls_lack "setup-tide GITHUB_PREFIX=git@"
 }
 
 # --no-tide sets up KDE alone, and says so.
@@ -3198,6 +3216,9 @@ run_test "github_prefix_host reduces both prefix shapes to a host" \
     test_github_prefix_host
 run_test "warnings and errors are repeated as setup exits" \
     test_problems_recapped_at_exit
+run_test "setup-tide clones from the mirror too" test_tide_gets_the_mirror
+run_test "setup-tide gets no prefix for GitHub itself" \
+    test_tide_gets_no_prefix_for_github
 run_test "redact_url_credentials strips embedded user-info" \
     test_redact_url_credentials
 run_test "a mirror prefix skips the SSH remote-switch offer" \

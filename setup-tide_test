@@ -1045,4 +1045,74 @@ check "recap: and doesn't repeat it itself" lacks "$output" "from this run, agai
 check "recap: nor removes setup's file" test -f "$T/problems"
 teardown
 
+
+# --github, or setup's mirror in $GITHUB_PREFIX, stands in for GitHub in
+# every clone: a url.insteadOf rule, so submodules follow it too, given in
+# the environment so a token stays out of ps.
+# The rules the test's own environment gives git aren't these tests'.
+unset GIT_CONFIG_COUNT
+rule_for() { printf 'git config: url.%s.insteadOf=https://github.com/' "$1"; }
+setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX=https://ghe.example.com
+check "mirror: setup's prefix rewrites the Quickshell clone" has "$calls" "quickshell-build/quickshell
+$(rule_for https://ghe.example.com/)"
+check "mirror: and tide's" has "$calls" "git clone https://example.com/tide.git $T/src/tide
+$(rule_for https://ghe.example.com/)"
+check "mirror: the URL itself stays GitHub's, for the rule to rewrite" \
+    has "$calls" "https://github.com/quickshell-mirror/quickshell.git"
+check "mirror: no prefix on the command line" lacks "$calls" "-c url."
+teardown
+
+# A checkout cloned through the mirror names GitHub as its origin, so a
+# rerun's pull goes through the mirror too.
+setup; mkdir -p "$T/src/tide/.git"; ARGS=(--github https://ghe.example.com); run
+check "mirror: a rerun pulls tide through the mirror" has "$calls" "git -C $T/src/tide pull --ff-only
+$(rule_for https://ghe.example.com/)"
+teardown
+
+# A rule the environment already gives git stays, and this one goes after it.
+setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX=https://ghe.example.com \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.interactive GIT_CONFIG_VALUE_0=false
+check "mirror: keeps the environment's own git config" has "$calls" "quickshell-build/quickshell
+git config: credential.interactive=false
+$(rule_for https://ghe.example.com/)"
+teardown
+
+setup; ARGS=(--github ghe.example.com); run FAKE_MISSING=quickshell
+check "mirror: --github takes a bare host as SSH" has "$calls" "$(rule_for ghe.example.com:)"
+teardown
+
+setup; ARGS=(--github=git@ghe.example.com:); run FAKE_MISSING=quickshell
+check "mirror: --github=PREFIX works too" has "$calls" "$(rule_for git@ghe.example.com:)"
+teardown
+
+setup; ARGS=(--github); run
+check "mirror: --github needs a value" test "$status" -eq 1
+check "mirror: and says so" has "$output" "--github needs a host or prefix"
+teardown
+
+for prefix in "" git@github.com: https://github.com/; do
+    setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX="$prefix"
+    check "mirror: '$prefix' is GitHub itself, so nothing is rewritten" lacks "$calls" ".insteadOf=https://github.com/"
+    teardown
+done
+
+# Real git follows the rule as git_github gives it, into a submodule too,
+# as Hyprland's udis86 is.
+setup
+g config --global protocol.file.allow always
+g init -q "$T/mirror/owner/sub" && g -C "$T/mirror/owner/sub" commit -q --allow-empty -m sub
+g init -q "$T/mirror/owner/top"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.file://$T/mirror/.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/ \
+    g -C "$T/mirror/owner/top" submodule add -q https://github.com/owner/sub sub
+g -C "$T/mirror/owner/top" commit -q -m top
+eval "$(sed -n '/^git_github() {$/,/^}$/p' "$SCRIPT")"
+GITHUB_BASE="file://$T/mirror/"
+clone_status=0
+clone_output=$(export HOME="$G_HOME" XDG_CONFIG_HOME="$G_HOME/.config" GIT_CONFIG_GLOBAL="$G_HOME/.gitconfig" GIT_CONFIG_NOSYSTEM=1
+    git_github clone -q --recurse-submodules https://github.com/owner/top "$T/clone" 2>&1) || clone_status=$?
+test "$clone_status" -eq 0 || printf '%s\n' "$clone_output"
+check "mirror: real git clones through the rule" test "$clone_status" -eq 0
+check "mirror: and its submodule too" test -e "$T/clone/sub/.git"
+teardown
+
 finish

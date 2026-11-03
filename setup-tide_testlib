@@ -221,6 +221,13 @@ MOCK
     cat > "$T/bin/git" <<MOCK
 #!/bin/sh
 printf "%s\\n" "git \$*" >> "$CALLS"
+# A url.insteadOf rule given in the environment (setup-tide's git_github).
+i=0
+while test "\$i" -lt "\${GIT_CONFIG_COUNT:-0}"; do
+    eval "k=\\\$GIT_CONFIG_KEY_\$i v=\\\$GIT_CONFIG_VALUE_\$i"
+    printf "%s\\n" "git config: \$k=\$v" >> "$CALLS"
+    i=\$((i + 1))
+done
 if test "\$1" = clone; then
     for last; do :; done
     mkdir -p "\$last/.git"
