@@ -157,7 +157,7 @@ MOCK
 
     set +e
     output="$(PATH="$brew_tmpdir" \
-        sh -c "$(extract_functions "info warn install_homebrew")
+        sh -c "$(extract_functions "info warn note_problem install_homebrew")
 install_homebrew" 2>&1)"
     status=$?
     set -e
@@ -197,7 +197,7 @@ MOCK
         sh -c "set -e
 OS=$terminal_os
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn set_kde_default_terminal set_default_terminal")
+$(extract_functions "info warn note_problem set_kde_default_terminal set_default_terminal")
 set_default_terminal
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -236,7 +236,7 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn is_intel_mac install_packages")
+$(extract_functions "info warn note_problem is_intel_mac install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -285,7 +285,7 @@ OS=macos
 NPM=$2
 ROOT=$3
 SCRIPTS_DIR='$node_tmpdir/scripts'
-$(extract_functions "info warn is_intel_mac install_node_home")
+$(extract_functions "info warn note_problem is_intel_mac install_node_home")
 install_node_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -324,7 +324,7 @@ OS=$linux_os
 NPM=no
 GUI_ENABLED=0
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn install_packages")
+$(extract_functions "info warn note_problem install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -407,7 +407,7 @@ MOCK
 OS=$purge_os
 TIDE=${PURGE_TIDE:-no}
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn obsolete_pkg_installed purge_obsolete_packages")
+$(extract_functions "info warn note_problem obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -440,7 +440,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
-$(extract_functions "info warn lf_missing install_file_managers")
+$(extract_functions "info warn note_problem lf_missing install_file_managers")
 install_file_managers
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -468,7 +468,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$prune_tmpdir/home'
 SCRIPTS_DIR='$prune_scripts'
-$(extract_functions "info warn prune_retired_tools")
+$(extract_functions "info warn note_problem prune_retired_tools")
 prune_retired_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -487,7 +487,7 @@ run_missing_homepkg_warnings() {
 
     set +e
     output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
-$(extract_functions "info warn install_home_tools install_shell_tools install_extras_release")
+$(extract_functions "info warn note_problem install_home_tools install_shell_tools install_extras_release")
 install_home_tools
 install_shell_tools
 install_extras_release" 2>&1)"
@@ -549,7 +549,7 @@ run_helix_runtime_helper() {
 HOME='$helix_home'
 XDG_CONFIG_HOME='$helix_config'
 SRC_DIR='$helix_home/src'
-$(extract_functions "info warn link_helix_runtime clear_managed_helix_runtime")
+$(extract_functions "info warn note_problem link_helix_runtime clear_managed_helix_runtime")
 $helix_call
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -620,7 +620,7 @@ MOCK
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info warn system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "info warn note_problem system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -680,7 +680,7 @@ HOME='$release_home'
 XDG_CONFIG_HOME='$release_home/.config'
 SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
-$(extract_functions "info warn system_jj set_extras_tools link_helix_runtime install_extras_release")
+$(extract_functions "info warn note_problem system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -758,7 +758,7 @@ MOCK
 OS=debian
 HOME='$services_home'
 XDG_CONFIG_HOME='$services_home/.config'
-$(extract_functions "info warn systemd_user_available shpool_service_exists start_services")
+$(extract_functions "info warn note_problem systemd_user_available shpool_service_exists start_services")
 start_services
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -825,7 +825,7 @@ SRC_DIR='$ht_home/src'
 SCRIPTS_DIR='$ht_home/scripts'
 MINIMAL_ENABLED=0
 NPM=yes
-$(extract_functions "info warn system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
+$(extract_functions "info warn note_problem system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
 install_home_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -882,7 +882,7 @@ run_check_go() {
         chmod +x "$go_tmpdir/go"
     fi
     set +e
-    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn go_at_least check_go")
+    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn note_problem go_at_least check_go")
 check_go" 2>&1)"
     status=$?
     set -e
@@ -978,7 +978,7 @@ test_crostini_not_detected_elsewhere() {
 
 test_crostini_skips_the_keyboard() {
     set +e
-    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn configure_keyboard")
+    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem configure_keyboard")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
@@ -1045,6 +1045,40 @@ run_test() {
     fi
 }
 
+# Every warning and error is repeated as setup exits, and a helper it runs
+# (setup-tide, here a nested sh) adds its own to the same list instead of
+# repeating them itself.
+test_problems_recapped_at_exit() {
+    recap_tmpdir="$(mktemp -d)"
+    set +e
+    output="$(TMPDIR="$recap_tmpdir" sh -c "PROBLEMS_OWNER=no
+$(extract_functions "warn error note_problem start_problem_recap recap_problems")
+start_problem_recap
+trap 'recap_problems \"\$?\"' EXIT
+warn first
+sh -c \"\$1\" helper
+error second
+echo LAST_STEP
+exit 3" sh "PROBLEMS_OWNER=no
+$(extract_functions "warn note_problem start_problem_recap recap_problems")
+start_problem_recap
+trap 'recap_problems \"\$?\"' EXIT
+warn from-helper" 2>&1)"
+    status=$?
+    set -e
+    leftover="$(ls -A "$recap_tmpdir")"
+    rm -rf "$recap_tmpdir"
+    assert_status 3 &&
+    assert_eq "$(printf '%s\n' "$output" | sed -n '/^LAST_STEP$/,$p')" "LAST_STEP
+
+setup: the warnings and errors from this run, again:
+  Warning: first
+  Warning: from-helper
+  Error: second
+setup stopped early, with exit status 3" &&
+    assert_eq "$leftover" ""
+}
+
 # --- usage and help ---
 
 test_help_flag() {
@@ -1107,7 +1141,7 @@ SCRIPTS_DIR='$desktop_tmpdir'
 SRC_DIR='$desktop_tmpdir/src'
 TIDE_REPO=https://example.com/mikelward/tide.git
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
-$(extract_functions "info warn configure_linux_desktop")
+$(extract_functions "info warn note_problem configure_linux_desktop")
 configure_linux_desktop" 2>&1)"
     status=$?
     set -e
@@ -2154,7 +2188,7 @@ GITHUB_HOST=ghe.corp.example.com
 SCRIPTS_DIR='$offer_tmpdir/scripts'
 CONF_DIR='$offer_tmpdir/conf'
 ROOT_DIR='$offer_tmpdir/src/root'
-$(extract_functions "info warn offer_ssh_remotes")
+$(extract_functions "info warn note_problem offer_ssh_remotes")
 offer_ssh_remotes
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2215,7 +2249,7 @@ SSH=yes
 GITHUB_MIRROR=yes
 GITHUB_HOST=ghe.corp.example.com
 GITHUB_PREFIX_SSH=no
-$(extract_functions "info warn generate_ssh_key")
+$(extract_functions "info warn note_problem generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2268,7 +2302,7 @@ MOCK
     output="$(PATH="$cop_tmpdir/bin:$PATH" MOCK_ORIGIN="$cop_origin" \
         sh -c "set -e
 GITHUB_MIRROR=$cop_mirror
-$(extract_functions "info warn redact_url_credentials canonical_remote clone_or_pull")
+$(extract_functions "info warn note_problem redact_url_credentials canonical_remote clone_or_pull")
 clone_or_pull '$cop_repo' '$cop_tmpdir/scripts' $cop_from_prefix
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -2812,7 +2846,7 @@ SPEC
     output="$(GPU_CALLS="$gpu_tmpdir/calls" SETUP_SYSFS="$gpu_sys" SETUP_UDEV_RULES="$gpu_rules" \
         sh -c "set -e
 OS=$gpu_os
-$(extract_functions "info warn has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
+$(extract_functions "info warn note_problem has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
 $gpu_stub
 keep_display_gpu_awake
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -3069,7 +3103,7 @@ OS=$zas_os
 $zas_consts
 ZSH_AUTOSUGGESTIONS_REPO='file://$zas_tmp/repo'
 ZSH_AUTOSUGGESTIONS_COMMIT='$zas_pinned'
-$(extract_functions "info warn install_zsh_autosuggestions_home")
+$(extract_functions "info warn note_problem install_zsh_autosuggestions_home")
 install_zsh_autosuggestions_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3162,6 +3196,8 @@ run_test "the mirror flags are derived from the normalized prefix" \
     test_github_mirror_derived_after_normalizing
 run_test "github_prefix_host reduces both prefix shapes to a host" \
     test_github_prefix_host
+run_test "warnings and errors are repeated as setup exits" \
+    test_problems_recapped_at_exit
 run_test "redact_url_credentials strips embedded user-info" \
     test_redact_url_credentials
 run_test "a mirror prefix skips the SSH remote-switch offer" \

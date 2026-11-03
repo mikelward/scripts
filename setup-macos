@@ -173,12 +173,51 @@ WARNINGS=0
 DVORAK_LAYOUT_ID=16300
 DVORAK_INPUT_SOURCE="<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>$DVORAK_LAYOUT_ID</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>"
 
+# Every warning and error goes to $SETUP_PROBLEMS too, so the run ends by
+# repeating them all: one line among thousands scrolls by unseen. The
+# outermost of setup and its helpers (setup-kde, setup-tide, setup-macos)
+# makes the file and repeats it as it exits, however it exits; a helper it
+# runs inherits the file and only adds to it.
+note_problem() {
+    test -n "${SETUP_PROBLEMS:-}" || return 0
+    printf '%s\n' "$1" >>"$SETUP_PROBLEMS" ||
+        printf "Warning: couldn't add that to %s, so the end of the run won't repeat it\n" "$SETUP_PROBLEMS" >&2
+}
+
+PROBLEMS_OWNER=no
+start_problem_recap() {
+    test -z "${SETUP_PROBLEMS:-}" || return 0
+    if ! SETUP_PROBLEMS=$(mktemp "${TMPDIR:-/tmp}/setup-problems-XXXXXX"); then
+        SETUP_PROBLEMS=
+        warn "couldn't make a file to collect warnings in, so the end of the run won't repeat them"
+        return 0
+    fi
+    export SETUP_PROBLEMS
+    PROBLEMS_OWNER=yes
+}
+
+# recap_problems STATUS, from the EXIT trap: repeats every warning and error,
+# says if the run stopped early, and keeps STATUS as the exit status.
+recap_problems() {
+    test "$PROBLEMS_OWNER" = yes || return "$1"
+    if test -s "$SETUP_PROBLEMS"; then
+        printf '\n%s: the warnings and errors from this run, again:\n' "setup-macos" >&2
+        sed 's/^/  /' "$SETUP_PROBLEMS" >&2
+    fi
+    if test "$1" -ne 0; then
+        printf '%s stopped early, with exit status %s\n' "setup-macos" "$1" >&2
+    fi
+    rm -f "$SETUP_PROBLEMS"
+    return "$1"
+}
+
 info() {
     printf "%s\n" "$*"
 }
 
 warn() {
     printf "Warning: %s\n" "$*" >&2
+    note_problem "Warning: $*"
     WARNINGS=$((WARNINGS + 1))
 }
 
@@ -273,6 +312,7 @@ print_todo() {
 
 error() {
     printf "Error: %s\n" "$*" >&2
+    note_problem "Error: $*"
     exit 1
 }
 
@@ -618,6 +658,10 @@ case "$WM" in
         exit 1
         ;;
 esac
+
+# From here on, the run ends by repeating its warnings and errors.
+start_problem_recap
+trap 'recap_problems "$?"' EXIT
 
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the script pushes through failing steps.
