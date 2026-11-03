@@ -1620,6 +1620,9 @@ KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
 # The rule that gives kitty Ctrl as Control and Alt as Meta, so Ctrl+U and
 # the like reach the shell. Checked separately, for older conf checkouts.
 KARABINER_TERMINAL_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-terminal.json"
+# The same file's second rule, which puts the interrupt (Control+C) on
+# physical Ctrl+Shift+C in Terminal and iTerm2, whose copy is Ctrl+C.
+KARABINER_INTERRUPT="Ctrl+Shift+C interrupts in Terminal and iTerm2"
 # The rule that makes the physical Win key tilemo's Super (Ctrl+Option+Command),
 # for --wm tilemo. Its name starts "tilemo:".
 KARABINER_TILEMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/tilemo.json"
@@ -1748,6 +1751,12 @@ configure_karabiner() {
     if test -f "$KARABINER_TERMINAL_RULE"; then
         karabiner_rule "Ctrl is Control and Alt is Meta in kitty" "$KARABINER_TERMINAL_RULE"
         _karabiner_above="the kitty rule"
+        # It matches nothing the others do, so it can go anywhere.
+        if grep -qF "$KARABINER_INTERRUPT" "$KARABINER_TERMINAL_RULE"; then
+            karabiner_rule "$KARABINER_INTERRUPT" "$KARABINER_TERMINAL_RULE"
+        else
+            info "$KARABINER_TERMINAL_RULE predates \"$KARABINER_INTERRUPT\"; update the conf repo for it, or Terminal and iTerm2 keep the interrupt on Alt+C"
+        fi
     else
         warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
         _karabiner_stale=yes
