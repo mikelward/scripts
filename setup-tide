@@ -700,9 +700,10 @@ decide_hyprland_build() {
 # distro's Hyprland.
 install_packages() {
     DISTRO_HYPRLAND=no
-    # hyprlock is the lock screen until tide-lock lands (M5): conf's
-    # Super+L and hypridle's lock_cmd both run it. It's a separate program,
-    # so the distro's works beside a source-built Hyprland. notify-send (the
+    # hyprlock is the lock outside the tide session, and in it the
+    # fallback for a tide-lock that can't run (tide SPEC.md §10). It's a
+    # separate program, so the distro's works beside a source-built
+    # Hyprland. notify-send (the
     # libnotify package below) is how screenshot reports from a key binding,
     # and python3 is how `tide doctor` reads the session bus's XML config.
     # tide-shell shows the wallpaper with swww, or with swaybg where
@@ -745,6 +746,20 @@ install_packages() {
     # and dnf and pacman refuse a whole transaction over one unknown name.
     if ! install_all satty >/dev/null; then
         info "couldn't install satty; screenshots offer Annotate once it's installed"
+    fi
+    # waybar, the bar while tide's own can't run, draws its icons with Nerd
+    # Font symbols, from Symbols Nerd Font, the icons-only font (conf's
+    # config/waybar/common.css). Asked for on its own: Debian has it only
+    # from forky (13 lacks it), Ubuntu from 26.10, and Fedora not at all.
+    case "$(detect_os)" in
+        debian) nerd_font=fonts-nerd-symbols ;;
+        arch) nerd_font=ttf-nerd-fonts-symbols ;;
+        *) nerd_font= ;;
+    esac
+    if test -z "$nerd_font"; then
+        info "This distro doesn't package Symbols Nerd Font, so waybar shows no icons; install it from nerdfonts.com for them"
+    elif ! install_all "$nerd_font" >/dev/null; then
+        info "couldn't install $nerd_font (it isn't in every release), so waybar shows no icons; install Symbols Nerd Font from nerdfonts.com for them"
     fi
     # cliphist keeps the clipboard history that Super+C's picker lists
     # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
