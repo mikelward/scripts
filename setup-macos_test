@@ -909,6 +909,26 @@ test_names_terminal_karabiner_rule() {
     assert_says "That order keeps the kitty rule above the arrow rule"
 }
 
+# Terminal and iTerm2's interrupt on Ctrl+Shift+C is the terminal file's
+# second rule; Karabiner enables each rule on its own, so the run names it.
+test_names_interrupt_karabiner_rule() {
+    printf '%s\n' '"description": "Ctrl is Control and Alt is Meta in kitty and Ghostty"' \
+        '"description": "Ctrl+Shift+C interrupts in Terminal and iTerm2, as Control+C"' \
+        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-terminal.json"
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_says 'the rule starting "Ctrl+Shift+C interrupts in Terminal and iTerm2"'
+}
+
+# A terminal file from before that rule: name only the kitty one, and say
+# what updating brings.
+test_terminal_rule_without_interrupt_says_so() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_never_says 'the rule starting "Ctrl+Shift+C' &&
+    assert_output_contains 'predates "Ctrl+Shift+C interrupts in Terminal and iTerm2"; update the conf repo for it'
+}
+
 # A conf checkout from before the kitty rule: say it's missing, and name only
 # the rules there are.
 test_stale_conf_without_terminal_rule_warns() {
@@ -2828,6 +2848,10 @@ run_test "a conf checkout without the arrow rule is reported" \
     test_stale_conf_without_arrow_rule_warns
 run_test "names the kitty Karabiner rule, above the arrow rule" \
     test_names_terminal_karabiner_rule
+run_test "names the Ctrl+Shift+C interrupt rule for Terminal and iTerm2" \
+    test_names_interrupt_karabiner_rule
+run_test "says a terminal rule file predates the interrupt rule" \
+    test_terminal_rule_without_interrupt_says_so
 run_test "a conf checkout without the kitty rule warns" \
     test_stale_conf_without_terminal_rule_warns
 run_test "an arrow rule from before Win+Shift+arrow is reported" \
