@@ -1293,13 +1293,16 @@ test_no_install_skips_linearmouse() {
 }
 
 # A wheel notch barely moves a page on macOS; the config makes a mouse's
-# notch nine lines, and leaves trackpads alone.
+# notch nine lines, gives it a gentler acceleration than macOS's, and
+# leaves trackpads alone.
 test_writes_linearmouse_config() {
     run_macos
     _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
     assert_status 0 &&
     assert_file_contains "$_config" '"category": "mouse"' &&
     assert_file_contains "$_config" '"vertical": 9' &&
+    assert_file_contains "$_config" '"acceleration": 1.5' &&
+    assert_file_contains "$_config" '"speed": 0.35' &&
     assert_file_lacks "$_config" 'trackpad'
 }
 
