@@ -1,0 +1,26 @@
+# The scripts here that open an app, one per line, as SCRIPT|NAME|ICON|MAC:
+# each is listed by NAME in tide's launcher (setup-tide writes it a desktop
+# entry) and in tilemo's switcher on macOS, which reads this file. NAME is
+# the key binding's description in conf's hyprland.lua, where it has one.
+# ICON is an Adwaita icon name for tide; a web app shows its site's icon
+# there instead. MAC is the bundle ID of the Mac app whose icon tilemo
+# shows, - for none, or linux for a script that only runs on Linux. The
+# other scripts here are command-line tools, which do nothing visible run
+# with no terminal and would crowd the launcher's matches, so a new app
+# script needs a line here.
+gmail|Gmail|mail-unread-symbolic|com.google.Chrome
+google-calendar|Google Calendar|x-office-calendar-symbolic|com.google.Chrome
+google-chat|Google Chat|chat-symbolic|com.google.Chrome
+google-meet|Google Meet|camera-web|com.google.Chrome
+youtube-music|YouTube Music|audio-x-generic|com.google.Chrome
+discord|Discord|chat-symbolic|com.google.Chrome
+remote-desktop|Remote desktop|video-display|com.google.Chrome
+browser1|Browser|google-chrome|com.google.Chrome
+browser2|Browser, second profile|google-chrome|com.google.Chrome
+browser3|Browser, third profile|google-chrome|com.google.Chrome
+terminal_on_workstation|Terminal on the workstation|computer|net.kovidgoyal.kitty
+terminal_on_vm|Terminal on the VM|network-server|net.kovidgoyal.kitty
+notepad|Notepad|text-x-generic|com.apple.TextEdit
+irc|IRC|io.github.Hexchat|-
+home|Home folder|user-home|com.apple.finder
+bluetooth-connect|Connect the headphones|audio-headphones|linux

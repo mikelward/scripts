@@ -922,7 +922,7 @@ teardown
 
 # Every listed script is in this repo, and every web app's URL is found.
 setup; ARGS=(); run SETUP_SCRIPTS_DIR="$SCRIPT_DIR"
-listed=$(sed -n "/^LAUNCHER_SCRIPTS='/,/'$/p" "$SCRIPT" | sed "s/^LAUNCHER_SCRIPTS='//; s/'$//" | cut -d'|' -f1)
+listed=$(grep -v '^#' "$SCRIPT_DIR/launcher-scripts" | cut -d'|' -f1)
 missing=
 for s in $listed; do
     test -e "$T/$apps_dir/scripts-$s.desktop" || missing="$missing $s"
@@ -933,6 +933,22 @@ for s in gmail google-calendar google-chat google-meet youtube-music discord rem
 done
 check "launcher: YouTube Music's class" has "$(entry youtube-music)" "StartupWMClass=chrome-music.youtube.com__-Default"
 teardown
+
+# The list is launcher-scripts: comments and blank lines are skipped, a
+# missing list is named, and every line has its four fields.
+setup; mkdir -p "$T/list"; printf '#!/bin/sh\n' > "$T/list/notepad"; chmod +x "$T/list/notepad"
+printf '# a comment|Nope|x|-\n\nnotepad|My notes|text-x-generic|com.apple.TextEdit\n' > "$T/list/launcher-scripts"
+ARGS=(); run SETUP_SCRIPTS_DIR="$T/list" SETUP_LAUNCHER_SCRIPTS="$T/list/launcher-scripts"
+check "launcher: the list's name" has "$(entry notepad)" "Name=My notes"
+check "launcher: the list's icon, not the macOS field" has "$(entry notepad)" "Icon=text-x-generic"
+check "launcher: a comment isn't a script" test ! -e "$T/$apps_dir/scripts-# a comment.desktop"
+teardown
+setup; ARGS=(); run SETUP_LAUNCHER_SCRIPTS="$T/no-such-list"
+check "launcher: a missing list is named" has "$output" "can't read $T/no-such-list, so the launcher won't list the app scripts"
+check "launcher: and setup goes on" test "$status" -eq 0
+teardown
+bad=$(grep -v '^#' "$SCRIPT_DIR/launcher-scripts" | awk -F'|' 'NF != 4 || $2 == "" || $3 == "" || $4 == "" { print NR": "$0 }')
+check "launcher: every line of launcher-scripts has SCRIPT|NAME|ICON|MAC ($bad)" test -z "$bad"
 
 # --- Browser tabs in tide's switcher ---
 

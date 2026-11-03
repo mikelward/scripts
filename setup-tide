@@ -1590,29 +1590,9 @@ keep_blueman_out_of_plasma() {
 
 # --- Launcher entries for the app scripts ---
 
-# The scripts that open an app, as SCRIPT|NAME|ICON, one per line: each
-# gets a desktop entry, so tide's launcher (and Plasma's) finds it by name,
-# with ICON, an Adwaita name, as its icon. NAME is the key binding's
-# description in conf's hyprland.lua, where it has one. The other scripts
-# here are command-line tools, which do nothing visible run with no
-# terminal and would crowd the launcher's matches, so a new app script
-# needs a line here.
-LAUNCHER_SCRIPTS='gmail|Gmail|mail-unread-symbolic
-google-calendar|Google Calendar|x-office-calendar-symbolic
-google-chat|Google Chat|chat-symbolic
-google-meet|Google Meet|camera-web
-youtube-music|YouTube Music|audio-x-generic
-discord|Discord|chat-symbolic
-remote-desktop|Remote desktop|video-display
-browser1|Browser|google-chrome
-browser2|Browser, second profile|google-chrome
-browser3|Browser, third profile|google-chrome
-terminal_on_workstation|Terminal on the workstation|computer
-terminal_on_vm|Terminal on the VM|network-server
-notepad|Notepad|text-x-generic
-irc|IRC|io.github.Hexchat
-home|Home folder|user-home
-bluetooth-connect|Connect the headphones|audio-headphones'
+# The scripts that open an app: launcher-scripts, beside this script, says
+# which, by what name and with what icon, for tilemo's switcher too.
+LAUNCHER_SCRIPTS_LIST="${SETUP_LAUNCHER_SCRIPTS:-$(cd "$(dirname "$0")" && pwd)/launcher-scripts}"
 # Where they live: this script's own directory, ~/scripts.
 SCRIPTS_DIR="${SETUP_SCRIPTS_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 # Where a web app's site icon is kept, fetched once.
@@ -1665,7 +1645,7 @@ launcher_site_icon() {
 }
 
 # Writes ~/.local/share/applications/scripts-SCRIPT.desktop for each line of
-# LAUNCHER_SCRIPTS whose script is here, and removes the scripts-*.desktop
+# launcher-scripts whose script is here, and removes the scripts-*.desktop
 # entries of scripts no longer listed or gone. The prefix marks them as
 # setup's, beside setup-kde's hidden shortcut-*.desktop. The launcher reads
 # the directory again when it changes, so they show up without a restart.
@@ -1675,10 +1655,17 @@ install_launcher_entries() {
         warn "couldn't make $_le_dir, so the launcher won't list the app scripts"
         return 0
     fi
+    if ! test -r "$LAUNCHER_SCRIPTS_LIST"; then
+        warn "can't read $LAUNCHER_SCRIPTS_LIST, so the launcher won't list the app scripts"
+        return 0
+    fi
     _le_kept=' '
     _le_count=0
-    while IFS='|' read -r _le_script _le_name _le_icon; do
-        test -n "$_le_script" || continue
+    # The fourth field, MAC, is tilemo's, and read into _.
+    while IFS='|' read -r _le_script _le_name _le_icon _; do
+        case "$_le_script" in
+            '' | '#'*) continue ;;
+        esac
         _le_path=$SCRIPTS_DIR/$_le_script
         test -x "$_le_path" || continue
         case "$_le_path" in
@@ -1716,9 +1703,7 @@ install_launcher_entries() {
         fi
         _le_kept="$_le_kept$_le_script "
         _le_count=$((_le_count + 1))
-    done <<EOF2
-$LAUNCHER_SCRIPTS
-EOF2
+    done < "$LAUNCHER_SCRIPTS_LIST"
     for _le_old in "$_le_dir"/scripts-*.desktop; do
         test -f "$_le_old" || continue
         _le_name=${_le_old##*/scripts-}
