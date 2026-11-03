@@ -1708,6 +1708,10 @@ install_extras_brew() {
 # time; homepkg installs both (its registry's "payload" key) and
 # link_helix_runtime points hx at the result.
 install_extras_release() {
+    if local_bin_blocked; then
+        info "Skipping helix, jj and nushell from their releases: $LOCAL_BIN_WHY"
+        return 0
+    fi
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
         warn "homepkg not found in the scripts repo; skipping helix, jj, and nushell"
@@ -1769,6 +1773,10 @@ install_extras() {
 # prebuilt bundle is present it's used first (so a fresh box provisions fully
 # offline), then refreshed online best-effort -- see the provisioning block.
 install_home_tools() {
+    if local_bin_blocked; then
+        info "Skipping the home-prefix tools: $LOCAL_BIN_WHY"
+        return 0
+    fi
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
         warn "homepkg not found in the scripts repo; skipping home-prefix tool install"
@@ -1894,13 +1902,17 @@ lf_missing() {
 }
 
 install_file_managers() {
+    if ! lf_missing; then
+        info "lf already installed"
+        return 0
+    fi
+    if local_bin_blocked; then
+        info "Skipping lf: $LOCAL_BIN_WHY"
+        return 0
+    fi
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
         warn "homepkg not found in the scripts repo; skipping lf"
-        return 0
-    fi
-    if ! lf_missing; then
-        info "lf already installed"
         return 0
     fi
     info "Installing lf from conda-forge via homepkg (~/.local, no root)"
@@ -1921,6 +1933,10 @@ install_file_managers() {
 # every upgrade, so this says how to remove it.
 install_node_home() {
     if test "$NPM" != yes || test "$ROOT" != yes || ! is_intel_mac; then
+        return 0
+    fi
+    if local_bin_blocked; then
+        info "Skipping Node.js and tsc: $LOCAL_BIN_WHY"
         return 0
     fi
     homepkg="$SCRIPTS_DIR/homepkg"
@@ -1952,6 +1968,74 @@ prune_retired_tools() {
     fi
     "$homepkg" prune \
         || warn "couldn't remove the tools homepkg has retired; run $homepkg prune to retry"
+}
+
+# --- Whether this machine runs binaries from ~/.local/bin ---
+
+# Some managed machines run only binaries their policy has approved, wherever
+# they're installed, and kill the rest: on macOS a binary run from ~/.local/bin
+# exits 137 (SIGKILL), even a copy of one the system ships. Everything homepkg
+# and the uv installer download lands there, so on such a machine none of it
+# would run, and the shell would hit each one as it starts (atuin, carapace).
+#
+# So setup checks once, before installing anything there: it copies a small
+# system binary (true) into ~/.local/bin and runs the copy. Any failure means
+# the directory's binaries don't run (killed by a policy, or a noexec home);
+# setup then installs nothing there and removes the shell tools it installed
+# there before, which the shell would otherwise start and see killed. Nothing
+# here looks for a particular company or product. Sets LOCAL_BIN_WHY to say
+# why. LOCAL_BIN_PROBE names the binary to copy, for the tests.
+local_bin_blocked() {
+    if test -z "${LOCAL_BIN_CHECKED:-}"; then
+        LOCAL_BIN_CHECKED=1
+        LOCAL_BIN_BLOCKED=no
+        LOCAL_BIN_WHY=
+        probe_src="${LOCAL_BIN_PROBE:-}"
+        if test -z "$probe_src"; then
+            for cand in /usr/bin/true /bin/true; do
+                if test -x "$cand"; then
+                    probe_src="$cand"
+                    break
+                fi
+            done
+        fi
+        if test -z "$probe_src"; then
+            warn "no system binary to test ~/.local/bin with; assuming its binaries run"
+        elif ! mkdir -p "$HOME/.local/bin"; then
+            warn "couldn't make ~/.local/bin to test it; assuming its binaries run"
+        else
+            probe="$HOME/.local/bin/.setup-probe-$$"
+            if ! cp "$probe_src" "$probe"; then
+                warn "couldn't copy $probe_src into ~/.local/bin to test it; assuming its binaries run"
+            else
+                "$probe" </dev/null >/dev/null 2>&1
+                probe_status=$?
+                rm -f "$probe"
+                if test "$probe_status" -ne 0; then
+                    LOCAL_BIN_BLOCKED=yes
+                    LOCAL_BIN_WHY="this machine doesn't run binaries from ~/.local/bin (a copy of $probe_src there exited $probe_status)"
+                    warn "$LOCAL_BIN_WHY; installing nothing there"
+                    remove_blocked_shell_tools
+                fi
+            fi
+        fi
+    fi
+    test "$LOCAL_BIN_BLOCKED" = yes
+}
+
+# The atuin and carapace an earlier run put in ~/.local/bin, on a machine that
+# won't run them: the shell starts both and would see them killed every time.
+# Only a plain file that fails to run goes, so a working one, or one installed
+# some other way as a link, stays.
+remove_blocked_shell_tools() {
+    for tool in atuin carapace; do
+        bin="$HOME/.local/bin/$tool"
+        if test -f "$bin" && ! test -L "$bin" \
+                && ! "$bin" --version </dev/null >/dev/null 2>&1; then
+            info "Removing ~/.local/bin/$tool, which this machine won't run"
+            rm -f "$bin" || warn "couldn't remove ~/.local/bin/$tool; remove it so the shell stops starting it"
+        fi
+    done
 }
 
 # --- Install the interactive shell tools with no packaged build ---
@@ -1989,6 +2073,10 @@ missing_shell_tools() {
 }
 
 install_shell_tools() {
+    if local_bin_blocked; then
+        info "Skipping atuin and carapace: $LOCAL_BIN_WHY"
+        return 0
+    fi
     homepkg="$SCRIPTS_DIR/homepkg"
     if ! test -x "$homepkg"; then
         warn "homepkg not found in the scripts repo; skipping atuin and carapace"
@@ -2099,6 +2187,8 @@ install_uv() {
         # files unless UV_NO_MODIFY_PATH is set; PATH is managed by the conf repo.
         UV_NO_MODIFY_PATH=1 uv self update \
             || warn "could not update uv (offline?); keeping the installed version"
+    elif local_bin_blocked; then
+        info "Skipping uv: $LOCAL_BIN_WHY"
     else
         info "Installing uv"
         # --no-modify-path keeps the uv installer out of the shell rc/profile

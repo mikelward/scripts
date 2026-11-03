@@ -2146,6 +2146,80 @@ fi' &&
         -lt "$(grep -n '^    install_shell_tools$' "$SETUP" | cut -d: -f1)"
 }
 
+# Run install_shell_tools against a sandboxed HOME whose ~/.local/bin either
+# runs binaries or kills them, as a managed Mac's policy does (exit 137).
+#   $1  ok | killed: what running a binary from ~/.local/bin does
+# The sandbox starts with an atuin there that's killed when run, a carapace
+# that runs, and a homepkg stub that records whether it was called. Leaves
+# $lb_home for the assertions; the caller removes $lb_tmpdir.
+run_local_bin_check() {
+    lb_tmpdir="$(mktemp -d)"
+    lb_home="$lb_tmpdir/home"
+    mkdir -p "$lb_home/.local/bin" "$lb_tmpdir/scripts"
+    printf '#!/bin/sh\nkill -9 $$\n' > "$lb_tmpdir/killed"
+    printf '#!/bin/sh\nexit 0\n' > "$lb_tmpdir/ok"
+    printf '#!/bin/sh\necho "homepkg $*" >> "%s/calls"\n' "$lb_tmpdir" > "$lb_tmpdir/scripts/homepkg"
+    chmod +x "$lb_tmpdir/killed" "$lb_tmpdir/ok" "$lb_tmpdir/scripts/homepkg"
+    cp "$lb_tmpdir/killed" "$lb_home/.local/bin/atuin"
+    cp "$lb_tmpdir/ok" "$lb_home/.local/bin/carapace"
+    # carapace runs, so neither is "missing" there: move atuin aside for the
+    # case where binaries run, so the install has something to do.
+    if test "$1" = ok; then
+        rm -f "$lb_home/.local/bin/atuin"
+    fi
+    set +e
+    output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
+$(extract_functions "info warn note_problem local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
+install_shell_tools
+install_shell_tools
+echo \"blocked=\$LOCAL_BIN_BLOCKED\"" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$lb_tmpdir/calls" 2>/dev/null)"
+}
+
+# On a machine that kills ~/.local/bin's binaries, setup installs nothing
+# there and removes the shell tools it put there before, since the shell
+# would start them and see them killed. It tells by running a copy of a
+# system binary there, so nothing looks for a particular company.
+test_local_bin_blocked_skips_and_cleans_up() {
+    run_local_bin_check killed
+    assert_status 0 &&
+    assert_output_contains "this machine doesn't run binaries from ~/.local/bin (a copy of $lb_tmpdir/killed there exited 137); installing nothing there" &&
+    assert_output_contains "Skipping atuin and carapace: this machine doesn't run binaries" &&
+    assert_output_contains "Removing ~/.local/bin/atuin, which this machine won't run" &&
+    assert_output_contains "blocked=yes" &&
+    assert_eq "$calls" "" &&
+    assert_eq "$(test -e "$lb_home/.local/bin/atuin" && echo there || echo gone)" "gone" &&
+    assert_eq "$(test -e "$lb_home/.local/bin/carapace" && echo there || echo gone)" "there" &&
+    assert_eq "$(ls -A "$lb_home/.local/bin" | grep -c setup-probe)" "0" &&
+    # Checked once a run, so the second call says nothing more.
+    assert_eq "$(printf '%s\n' "$output" | grep -c "installing nothing there")" "1"
+    rm -rf "$lb_tmpdir"
+}
+
+test_local_bin_runs_installs_as_before() {
+    run_local_bin_check ok
+    assert_status 0 &&
+    assert_output_contains "blocked=no" &&
+    assert_output_contains "Installing atuin via homepkg" &&
+    assert_eq "$(printf '%s\n' "$calls" | head -1)" "homepkg --backend github install atuin" &&
+    assert_eq "$(ls -A "$lb_home/.local/bin" | grep -c setup-probe)" "0"
+    rm -rf "$lb_tmpdir"
+}
+
+# Every installer that puts binaries in ~/.local/bin asks first.
+test_local_bin_check_gates_every_home_install() {
+    for fn in install_shell_tools install_extras_release install_home_tools \
+            install_file_managers install_node_home install_uv; do
+        if ! extract_functions "$fn" | grep -q "local_bin_blocked"; then
+            echo "  FAIL: $fn doesn't check local_bin_blocked"
+            TEST_FAILED=1
+            return 1
+        fi
+    done
+}
+
 # --- SSH key ---
 
 # The default Krohnkite clone is HTTPS, but other repos (conf, scripts) are
@@ -3457,6 +3531,12 @@ run_test "missing-homepkg warnings name no absolute path" \
     test_missing_homepkg_warnings_name_no_absolute_path
 run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
+run_test "a machine that kills ~/.local/bin's binaries installs nothing there and removes its stale shell tools" \
+    test_local_bin_blocked_skips_and_cleans_up
+run_test "a machine that runs ~/.local/bin's binaries installs into it as before" \
+    test_local_bin_runs_installs_as_before
+run_test "every installer into ~/.local/bin checks it runs binaries first" \
+    test_local_bin_check_gates_every_home_install
 run_test "the shell tools install from a bundle on an offline host" \
     test_shell_tools_install_from_a_bundle_offline
 run_test "a partial bundle still installs the rest of the shell tools" \
