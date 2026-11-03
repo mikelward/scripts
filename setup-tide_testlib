@@ -171,6 +171,10 @@ for arg; do
                 printf "#!/bin/sh\\n" > "\$prefix/bin/\$cmd"
                 chmod +x "\$prefix/bin/\$cmd"
             done
+            # The Quickshell build says which it is, as the real one does.
+            for cmd in qs quickshell; do
+                printf "#!/bin/sh\\necho 'Quickshell 0.3.1 (revision 1a4716c, distributed by setup-tide (source build))'\\n" > "\$prefix/bin/\$cmd"
+            done
             ;;
     esac
 done
@@ -790,6 +794,16 @@ real_awk=$(command -v awk)
 
 # greeter_not_ready WHAT WHY: greetd doesn't take over for WHAT, which is
 # named with WHY, and the display manager stays.
+# good_session_qs: a qs new enough for tide's session, on a session PATH of
+# its own, for a test of a greeter whose qs isn't: prints the run argument
+# that puts it first.
+good_session_qs() {
+    mkdir -p "$T/session-bin"
+    printf '#!/bin/sh\necho "Quickshell 0.3.1 (revision 1a4716c, distributed by test)"\n' > "$T/session-bin/qs"
+    chmod +x "$T/session-bin/qs"
+    printf 'SETUP_SESSION_PATH=%s\n' "$T/session-bin:$T/usr-local-bin:$T/usr-bin"
+}
+
 greeter_not_ready() {
     check "greetd: $1 doesn't switch" lacks "$calls" "enable --force greetd"
     check "greetd: $1 writes no config" test ! -e "$T/etc/greetd/config.toml"

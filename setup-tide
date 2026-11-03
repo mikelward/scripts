@@ -62,7 +62,8 @@
 #   would never suspend;
 # - ends by checking that the tide session will be at the login screen
 #   (its entry is installed, and so is uwsm, without which the login
-#   screen hides it) and that Hyprland is there to start it, naming what's
+#   screen hides it), that Hyprland is there to start it, and that its qs
+#   is a Quickshell new enough for tide's bar and lock, naming what's
 #   missing.
 #   After a run that installed packages, that's an error unless
 #   --ignore-errors is given; otherwise a warning.
@@ -4871,11 +4872,18 @@ greeter_ready() {
         why="greetd's user $greeter couldn't ask its Quickshell for its version"
         return 1
     fi
-    _version=$(printf '%s\n' "$_version" | sed -n 's/^[Qq]uickshell \([0-9][0-9]*\.[0-9][0-9.]*\)\([ ,].*\)\{0,1\}$/\1/p' | head -n1)
+    _version=$(quickshell_version "$_version")
     if test -z "$_version" || ! version_at_least "$_version" "$MIN_QUICKSHELL"; then
         why="the greeter's Quickshell is ${_version:-of no version setup can read}, and it needs $MIN_QUICKSHELL or later"
         return 1
     fi
+}
+
+# quickshell_version OUTPUT: the version in `qs --version`'s OUTPUT, or
+# nothing. 0.2 prints "quickshell 0.2.1, revision ...", 0.3 "Quickshell
+# 0.3.1 (revision ...)", as tide-shell reads them.
+quickshell_version() {
+    printf '%s\n' "$1" | sed -n 's/^[Qq]uickshell \([0-9][0-9]*\.[0-9][0-9.]*\)\([ ,].*\)\{0,1\}$/\1/p' | head -n1
 }
 
 # greeter_query CMD runs the shell command CMD as greetd's user, on the
@@ -5332,7 +5340,7 @@ session_command() {
 }
 
 # check_session says, last, whether the tide session will be at the login
-# screen and start once picked. GDM, SDDM and tide's greeter list it only
+# screen, start once picked, and run tide's own bar and lock. GDM, SDDM and tide's greeter list it only
 # where its entry is and the entry's TryExec command (uwsm) is installed,
 # and its compositor wrapper runs start-hyprland, or Hyprland without it.
 # The steps that install these warn on their own, early in a long run, where
@@ -5354,6 +5362,27 @@ check_session() {
     if ! session_command start-hyprland && ! session_command Hyprland; then
         _problems="${_problems:+$_problems
 }the tide session won't start: Hyprland isn't installed"
+    fi
+    # Without a new enough Quickshell, tide's own bar and lock don't run:
+    # tide-shell falls back to waybar and tide-lock to hyprlock. The
+    # Quickshell step warns why, early in a long run, where a failed build
+    # went unseen, so this is checked here too, on the session's PATH.
+    _qs_problem=
+    if ! session_command qs; then
+        _qs_problem="there's no Quickshell (qs) on $SESSION_PATH"
+    elif ! _qs_out=$(PATH=$SESSION_PATH qs --version 2>&1); then
+        _qs_problem="couldn't ask qs which Quickshell it is: $(printf '%s\n' "$_qs_out" | tail -n 1)"
+    else
+        _qs_version=$(quickshell_version "$_qs_out")
+        if test -z "$_qs_version"; then
+            _qs_problem="couldn't read qs's version from '$(printf '%s\n' "$_qs_out" | head -n 1)'"
+        elif ! version_at_least "$_qs_version" "$MIN_QUICKSHELL"; then
+            _qs_problem="qs ($(PATH=$SESSION_PATH command -v qs)) is Quickshell $_qs_version, and they need $MIN_QUICKSHELL or newer"
+        fi
+    fi
+    if test -n "$_qs_problem"; then
+        _problems="${_problems:+$_problems
+}tide's own bar and lock won't run, so the session falls back to waybar and hyprlock: $_qs_problem; see the Quickshell warnings above, then rerun setup"
     fi
     test -n "$_problems" || return 0
     printf '%s\n' "$_problems" | while IFS= read -r _problem; do
