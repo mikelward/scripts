@@ -1614,6 +1614,9 @@ KARABINER_MISSING_EFFECT="Ctrl+Tab will switch applications rather than tabs, Ct
 # switching and Win+Shift+arrow moving the window a Space. Checked separately, since a conf checkout older than the rule has
 # the first without the second.
 KARABINER_ARROW_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-arrows.json"
+# The same file's second rule, which makes Home and End go to the line's
+# start and end outside terminals, as on a PC; a Mac's scroll the document.
+KARABINER_HOME_END="Home and End go to the line's start and end"
 # The part of that rule's name that a checkout from before Win+Shift+arrow
 # lacks, so a stale rule can be told apart from a current one.
 KARABINER_THROW="Win+Shift+Left/Right moves the window a Space"
@@ -1733,6 +1736,12 @@ configure_karabiner() {
     fi
     if test -f "$KARABINER_ARROW_RULE" && grep -qF "$KARABINER_THROW" "$KARABINER_ARROW_RULE"; then
         karabiner_rule "Ctrl+Left/Right moves by word" "$KARABINER_ARROW_RULE"
+        # It matches nothing the others do, so it can go anywhere.
+        if grep -qF "$KARABINER_HOME_END" "$KARABINER_ARROW_RULE"; then
+            karabiner_rule "$KARABINER_HOME_END" "$KARABINER_ARROW_RULE"
+        else
+            info "$KARABINER_ARROW_RULE predates \"$KARABINER_HOME_END\"; update the conf repo for it, or Home and End keep scrolling the document"
+        fi
     elif test -f "$KARABINER_ARROW_RULE"; then
         # A conf checkout from before the Win+Shift row: re-adding that rule
         # can't bring the binding, so updating the checkout comes first.
