@@ -425,6 +425,23 @@ check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfi
 check "cliphist is asked for on its own" has "$calls" "pacman -S --needed --noconfirm cliphist"
 check "cliphist isn't in the main transaction" lacks "$main" "cliphist"
 teardown
+# waybar's icons come from Symbols Nerd Font, which not every release
+# packages, so it's asked for on its own, and its absence costs only them.
+setup; ARGS=(); run
+check "nerd font: Debian installs the icons-only font" has "$calls" "apt-get install -y fonts-nerd-symbols"
+check "nerd font: not in the main transaction" lacks "$(printf '%s\n' "$calls" | grep 'hypridle')" "fonts-nerd-symbols"
+teardown
+setup; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols
+check "nerd font: a release without it isn't fatal" test "$status" -eq 0
+check "nerd font: and says what it costs" has "$output" "couldn't install fonts-nerd-symbols (it isn't in every release), so waybar shows no icons"
+teardown
+setup; ARGS=(); run SETUP_OS=arch
+check "nerd font: Arch installs its package" has "$calls" "pacman -S --needed --noconfirm ttf-nerd-fonts-symbols"
+teardown
+setup; ARGS=(); run SETUP_OS=redhat
+check "nerd font: Fedora, which doesn't package it, says where to get it" has "$output" "doesn't package Symbols Nerd Font, so waybar shows no icons"
+check "nerd font: and asks dnf for nothing" lacks "$calls" "nerd"
+teardown
 setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=nwg-displays
 check "a missing nwg-displays isn't fatal" test "$status" -eq 0
 check "a missing nwg-displays is said" has "$output" "couldn't install nwg-displays"
