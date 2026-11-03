@@ -28,8 +28,9 @@
 #   and margins come from ~/.amethyst.yml, which confinst symlinks out of the
 #   conf repo. Focus follows mouse is turned off -- see configure_amethyst for
 #   why it can't carry over from KDE.
-# - LinearMouse, so a mouse wheel notch scrolls nine lines rather than one: its
-#   config is written only where there's none, or only the empty one it makes
+# - LinearMouse, so a mouse wheel notch scrolls nine lines rather than one, and
+#   the pointer accelerates more gently than macOS's curve: its config is
+#   written only where there's none, or only the empty one it makes
 #   as it first starts, since the app rewrites it.
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
@@ -1838,6 +1839,11 @@ LINEARMOUSE_CONFIG="$HOME/.config/linearmouse/linearmouse.json"
 # scroll speed at three lines a notch, as tilemo applies it. A trackpad is
 # left as macOS has it.
 LINEARMOUSE_LINES=9
+# A mouse's pointer: macOS's acceleration and LinearMouse's speed, gentler
+# than macOS's own curve and closer to libinput's adaptive profile at tide's
+# sensitivity. Tried by hand on a PC mouse; a high-DPI one may want less.
+LINEARMOUSE_ACCELERATION=1.5
+LINEARMOUSE_SPEED=0.35
 LINEARMOUSE_MISSING_EFFECT="a mouse wheel notch will keep scrolling a line or so"
 
 linearmouse_path() {
@@ -1898,12 +1904,12 @@ configure_linearmouse() {
 
     _lm_config=$(linearmouse_config)
     if linearmouse_config_is_first "$_lm_config"; then
-        info "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch over it"
+        info "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration over it"
         write_linearmouse_config "$_lm_config"
     elif test -e "$_lm_config" || test -L "$_lm_config"; then
         info "$_lm_config exists; leaving LinearMouse's settings as they are"
     else
-        info "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch"
+        info "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration"
         write_linearmouse_config "$_lm_config"
     fi
 
@@ -1912,11 +1918,12 @@ configure_linearmouse() {
     # Accessibility the first time, which only a person can grant.
     try open -g "$_linearmouse"
     todo "Turn on LinearMouse, or a mouse wheel notch scrolls a line or so: allow it Accessibility when it asks, or turn it on yourself under System Settings > Privacy & Security > Accessibility." \
-        "Then click its icon in the menu bar and choose Start at login. Its Settings window's Scrolling page changes the lines per notch."
+        "Then click its icon in the menu bar and choose Start at login. Its Settings window's Scrolling page changes the lines per notch, its Pointer page the acceleration and speed."
 }
 
-# Write the config to $1: every mouse's notch LINEARMOUSE_LINES lines, and
-# nothing for a trackpad.
+# Write the config to $1: every mouse's notch LINEARMOUSE_LINES lines and its
+# pointer LINEARMOUSE_ACCELERATION and LINEARMOUSE_SPEED, and nothing for a
+# trackpad.
 write_linearmouse_config() {
     try mkdir -p "$(dirname "$1")"
     try write_file "$1" <<CONFIG
@@ -1932,6 +1939,10 @@ write_linearmouse_config() {
                 "distance": {
                     "vertical": $LINEARMOUSE_LINES
                 }
+            },
+            "pointer": {
+                "acceleration": $LINEARMOUSE_ACCELERATION,
+                "speed": $LINEARMOUSE_SPEED
             }
         }
     ]
