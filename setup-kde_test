@@ -1207,7 +1207,9 @@ test_launch_shortcut_keys() {
     assert_called "--group shortcut-browser2.desktop --key _launch Meta+F," &&
     assert_called "--group shortcut-terminal.desktop --key _launch Meta+T," &&
     assert_called "--group shortcut-terminal_on_workstation.desktop --key _launch Meta+W," &&
-    assert_called "--group shortcut-music.desktop --key _launch Meta+Y,"
+    assert_called "--group shortcut-music.desktop --key _launch Meta+Y," &&
+    assert_called "--group shortcut-google-chat.desktop --key _launch Meta+C," &&
+    assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C,"
 }
 
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch

@@ -314,6 +314,8 @@ match on all but two rows, which is the muscle memory being preserved.
 | Terminal | `Win+T` | `Win+T` | Automator Quick Action |
 | Terminal on workstation | `Win+W` | `Win+W` | Automator Quick Action |
 | Music | `Win+Y` | `Win+Y` | Automator Quick Action |
+| Chat | `Win+C` | `Win+C` | Automator Quick Action |
+| Calendar | `Win+Shift+C` | `Win+Shift+C` | Automator Quick Action |
 | Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
 | Switch applications | `Alt+Tab` | right `Ctrl+Tab` † | the rotation alone; the Tab rule takes only left Ctrl |
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |

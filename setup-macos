@@ -2140,6 +2140,8 @@ configure_app_shortcuts() {
     #   Win+T → Option+T → terminal
     #   Win+W → Option+W → terminal_on_workstation
     #   Win+Y → Option+Y → music
+    #   Win+C → Option+C → google-chat
+    #   Win+Shift+C → Option+Shift+C → google-calendar
     #
     # $@ accumulates the key/value pairs for one `defaults write`, so a
     # launcher that isn't installed drops out of the registry entry too rather
@@ -2150,7 +2152,9 @@ configure_app_shortcuts() {
         "Launch Browser2:browser2:f" \
         "Launch Terminal:terminal:t" \
         "Launch Terminal on Workstation:terminal_on_workstation:w" \
-        "Launch Music:music:y"; do
+        "Launch Music:music:y" \
+        "Launch Chat:google-chat:c" \
+        "Launch Calendar:google-calendar:\$c"; do
         workflow_name=${entry%%:*}
         entry_rest=${entry#*:}
         launcher_name=${entry_rest%%:*}
