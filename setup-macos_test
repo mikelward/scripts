@@ -1209,7 +1209,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says "for the Dvorak layout, the Desktop & Dock settings and the hidden menu bar to take effect" &&
+    assert_says "for the Dvorak layout, the Desktop & Dock settings and the menu bar setting to take effect" &&
     assert_output_in_order "Turn on LinearMouse" "Log out and back in" &&
     assert_output_in_order "Log out and back in" "And if you like:"
 }
@@ -2359,11 +2359,12 @@ test_tilemo_turns_off_stage_manager_and_tiling() {
     assert_output_contains "take effect at the next login"
 }
 
-test_tilemo_hides_the_menu_bar_for_its_bar() {
+test_tilemo_keeps_the_menu_bar_shown_for_its_bar() {
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool true" &&
-    assert_output_contains "The menu bar hides for tilemo's bar"
+    assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool false" &&
+    assert_not_called "_HIHideMenuBar -bool true" &&
+    assert_output_contains "The menu bar stays shown, under tilemo's bar"
 }
 
 test_amethyst_leaves_the_menu_bar_alone() {
@@ -3133,8 +3134,8 @@ run_test "tilemo: the shortcuts are applied to this session" \
 run_test "tilemo: no nine-Spaces check" test_tilemo_does_not_ask_for_nine_spaces
 run_test "tilemo: Stage Manager and Sequoia tiling are turned off" \
     test_tilemo_turns_off_stage_manager_and_tiling
-run_test "tilemo: hides the menu bar for its bar" \
-    test_tilemo_hides_the_menu_bar_for_its_bar
+run_test "tilemo: keeps the menu bar shown for its bar to cover" \
+    test_tilemo_keeps_the_menu_bar_shown_for_its_bar
 run_test "Amethyst runs leave the menu bar alone" \
     test_amethyst_leaves_the_menu_bar_alone
 run_test "tilemo: installs Hammerspoon when missing" \

@@ -14,8 +14,8 @@
 #   (--ff-only), and installs it. It needs the keys the Amethyst setup binds,
 #   so it hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
-#   tiling features that would fight it. It also hides the menu bar for
-#   tilemo's own bar, and installs blueutil (Homebrew) so that bar can show
+#   tiling features that would fight it. It also keeps the menu bar shown,
+#   for tilemo's own bar to cover, and installs blueutil (Homebrew) so that bar can show
 #   whether Bluetooth is on, and m1ddc (Apple silicon) or ddcctl (Intel) so it
 #   can show and set a monitor's speaker volume over DDC. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
 #   7.3 and 8), which say what it needs from here.
@@ -1475,12 +1475,14 @@ configure_tilemo() {
     # SPEC.md, section 7.3, unverified there), the chord tilemo takes.
     warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which tilemo needs"
 
-    # tilemo draws its own bar along the top (tilemo's SPEC.md, section 8), so
-    # the menu bar hides until the pointer reaches the top edge. Apps read it
-    # at launch, so it shows everywhere after the next login.
-    try defaults write NSGlobalDomain _HIHideMenuBar -bool true
-    info "The menu bar hides for tilemo's bar after the next login"
-    needs_logout "the hidden menu bar"
+    # tilemo draws its own bar along the top, over the menu bar (tilemo's
+    # SPEC.md, section 8). An auto-hidden menu bar slides in over it whenever
+    # the pointer reaches the top edge, so keep it shown; the Apple logo's
+    # Show Menu Bar reveals it. Apps read it at launch, so it takes effect
+    # everywhere after the next login.
+    try defaults write NSGlobalDomain _HIHideMenuBar -bool false
+    info "The menu bar stays shown, under tilemo's bar, after the next login"
+    needs_logout "the menu bar setting"
 
     # Same as Amethyst's: no defaults key grants it, so say so rather than
     # leave tilemo looking configured but inert.
