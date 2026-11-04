@@ -444,6 +444,9 @@ check "satty isn't in the main transaction" lacks "$main" "satty"
 check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfirm satty"
 check "cliphist is asked for on its own" has "$calls" "pacman -S --needed --noconfirm cliphist"
 check "cliphist isn't in the main transaction" lacks "$main" "cliphist"
+check "wtype, which types the picker's Fill, is in the main transaction" has "$main" " wtype "
+check "rbw, which Fedora lacks, is asked for on its own" has "$calls" "pacman -S --needed --noconfirm rbw"
+check "rbw isn't in the main transaction" lacks "$main" "rbw"
 teardown
 # waybar's icons come from Symbols Nerd Font, which not every release
 # packages, so it's asked for on its own, and its absence costs only them.
@@ -474,9 +477,14 @@ for tool in pavucontrol nm-connection-editor blueman; do
 done
 teardown
 
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=rbw
+check "a missing rbw isn't fatal" test "$status" -eq 0
+check "a missing rbw is said, with what it costs and how to add it" has "$output" "Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
+teardown
+
 setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=cliphist
 check "a missing cliphist isn't fatal" test "$status" -eq 0
-check "a missing cliphist is said, with what it costs" has "$output" "couldn't install cliphist, so Super+C's picker keeps no clipboard history"
+check "a missing cliphist is said, with what it costs" has "$output" "couldn't install cliphist, so Super+V's picker keeps no clipboard history"
 check "a missing cliphist still enables the rest" has "$calls" "systemctl --user enable tide.service"
 teardown
 

@@ -1,0 +1,77 @@
+#!/bin/sh
+#
+# fill-menu: KDE Plasma's Win+Shift+V. Lists your snippets and each
+# Bitwarden login's username, password and 2FA code in fuzzel, and types
+# the one chosen into the window you were in, as tide's picker does on its
+# Fill tab.
+#
+#   fill-menu
+#
+# The rows and the typing are tide's `tide fill` (tide SPEC.md §8.4):
+# `tide fill list` gives names only, never a secret, and `tide fill type`
+# types the value through KWin's fake-input (tide-kwin-paste --type), so it
+# never goes on the clipboard. With the vault locked, the one row is Unlock
+# Bitwarden, which runs rbw's pinentry and then opens the menu again.
+#
+# It needs Plasma's Wayland session: fuzzel and KWin's fake-input are
+# Wayland's. Esc does nothing. Any failure is a notification, and exits 1.
+
+prog=fill-menu
+tab='	'
+
+fail() {
+    echo "$prog: $1" >&2
+    notify-send -a "Fill" -u critical "Fill menu failed" "$1" ||
+        echo "$prog: notify-send failed too" >&2
+    exit 1
+}
+
+test -n "${WAYLAND_DISPLAY:-}" || fail "it needs Plasma's Wayland session, where fuzzel runs and KWin can type"
+for tool in tide fuzzel; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool isn't installed; setup installs it"
+done
+
+if ! errs=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/fill-menu.XXXXXX"); then
+    fail "couldn't make a temporary file"
+fi
+trap 'rm -f "$errs"' EXIT
+
+if ! rows=$(tide fill list 2>"$errs"); then
+    fail "couldn't list the snippets and logins: $(cat "$errs")"
+fi
+if test -s "$errs"; then
+    # A snippets file it couldn't read: said, and the rest still listed.
+    cat "$errs" >&2
+fi
+if test -z "$rows"; then
+    notify-send -a "Fill" -t 3000 "Nothing to fill" \
+        "Add snippets to ~/.config/tide/snippets.json, or install rbw for Bitwarden" ||
+        echo "$prog: nothing to fill" >&2
+    exit 0
+fi
+
+# Each row's label, then its detail (the user and folder) in brackets.
+chosen=$(printf '%s\n' "$rows" | while IFS="$tab" read -r _ _ _ label detail; do
+    printf '%s  (%s)\n' "$label" "$detail"
+done | fuzzel --dmenu --index --prompt "Fill: ") || exit 0
+case "$chosen" in
+    '' | *[!0-9]*) fail "fuzzel answered '$chosen', not a line number" ;;
+esac
+row=$(printf '%s\n' "$rows" | sed -n "$((chosen + 1))p")
+test -n "$row" || fail "fuzzel chose line $chosen, which it wasn't given"
+IFS="$tab" read -r kind key field _ <<EOF
+$row
+EOF
+
+case "$kind" in
+    unlock)
+        tide fill unlock 2>"$errs" || fail "couldn't unlock: $(cat "$errs")"
+        exec "$0"
+        ;;
+    snippet) set -- type snippet "$key" ;;
+    login) set -- type login "$key" "$field" ;;
+    *) fail "tide fill listed a row of kind '$kind'" ;;
+esac
+if ! tide fill "$@" 2>"$errs"; then
+    fail "$(sed 's/^tide fill: //' "$errs")"
+fi
