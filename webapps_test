@@ -1,0 +1,58 @@
+#!/bin/bash
+# Tests for the web app scripts that open in browser1: google-calendar,
+# google-meet, youtube-music (and music, its link) and google-music. Each
+# opens its site as an --app window of browser1, so a machine whose
+# browser1 is overridden in ~/scripts.local gets them there too, and none
+# picks its own --user-data-dir: a machine that needs one forks the script
+# into ~/scripts.local.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FAILED=0
+
+# run_app <script>: run the script with only stub browser1 and chrome on
+# PATH, each recording its name and arguments to $calls. HOME is empty, so
+# no real ~/.shrc runs, and CHROME_MUSIC_USER_DATA_DIR is set, so a script
+# still reading it would pass it on.
+run_app() {
+    bin="$(mktemp -d)"
+    log="$bin/calls"
+    : > "$log"
+    for name in browser1 chrome; do
+        printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$name" "$log" > "$bin/$name"
+        chmod +x "$bin/$name"
+    done
+    mkdir "$bin/home"
+    set +e
+    output="$(HOME="$bin/home" PATH="$bin" CHROME_MUSIC_USER_DATA_DIR=/tmp/music-profile \
+        "$SCRIPT_DIR/$1" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$bin"
+}
+
+check() {
+    script="$1"
+    want="$2"
+    run_app "$script"
+    if test "$status" -ne 0; then
+        echo "  FAIL: $script exited $status: $output"
+        FAILED=1
+    elif test "$calls" != "$want"; then
+        echo "  FAIL: $script should run only: $want"
+        echo "  it ran: $calls"
+        FAILED=1
+    else
+        echo "  PASS: $script runs $want"
+    fi
+}
+
+check google-calendar 'browser1 --app=https://calendar.google.com'
+check google-meet 'browser1 --app=https://meet.google.com'
+check youtube-music 'browser1 --app=https://music.youtube.com'
+check music 'browser1 --app=https://music.youtube.com'
+check google-music 'browser1 --app=https://music.google.com'
+
+exit "$FAILED"

@@ -1,4 +1,2 @@
 #!/bin/bash
-# shellcheck source=/dev/null
-. "$HOME"/.shrc
-chrome --app="https://meet.google.com"
+exec browser1 --app="https://meet.google.com"
