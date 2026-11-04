@@ -206,6 +206,7 @@ MOCK
     printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-terminal.json"
+    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-lock.json"
 
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
@@ -947,6 +948,29 @@ test_terminal_rule_without_interrupt_says_so() {
     assert_status 0 &&
     assert_never_says 'the rule starting "Ctrl+Shift+C' &&
     assert_output_contains 'predates "Ctrl+Shift+C interrupts in Terminal and iTerm2"; update the conf repo for it'
+}
+
+# The lock screen's Ctrl+U rule is named last, so it sits above every other,
+# tilemo's included, which would take a Mac keyboard's Command+U there.
+test_names_lock_karabiner_rule_last() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_says 'the rule starting "Ctrl+U clears the password at the lock screen"' &&
+    assert_output_in_order 'the rule starting "Ctrl is Control and Alt is Meta in kitty"' \
+        'the rule starting "Ctrl+U clears the password at the lock screen"'
+}
+
+# A conf checkout from before the lock screen rule: say it's missing, and
+# name the rest.
+test_stale_conf_without_lock_rule_warns() {
+    rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-lock.json"
+    run_macos --wm amethyst --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "pc-lock.json not found" &&
+    assert_output_contains "Ctrl+U won't clear the password at the lock screen" &&
+    assert_never_says 'the rule starting "Ctrl+U clears' &&
+    assert_says 'the rule starting "Ctrl is Control and Alt is Meta in kitty"' &&
+    assert_says "Bring conf's Karabiner rules up to date"
 }
 
 # A conf checkout from before the kitty rule: say it's missing, and name only
@@ -2884,6 +2908,10 @@ run_test "says a terminal rule file predates the interrupt rule" \
     test_terminal_rule_without_interrupt_says_so
 run_test "a conf checkout without the kitty rule warns" \
     test_stale_conf_without_terminal_rule_warns
+run_test "names the lock screen's Ctrl+U rule, last" \
+    test_names_lock_karabiner_rule_last
+run_test "a conf checkout without the lock screen rule warns" \
+    test_stale_conf_without_lock_rule_warns
 run_test "an arrow rule from before Win+Shift+arrow is reported" \
     test_stale_arrow_rule_warns
 run_test "names the Tab Karabiner rule, and Alt+Tab no longer switches applications" \
