@@ -1084,6 +1084,12 @@ install_packages() {
                 info "Installing gdbus (live shortcut updates)"
                 sudo_or_warn apt-get install -y --install-recommends libglib2.0-bin \
                     || warn "libglib2.0-bin unavailable via apt; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
+                # fuzzel is the menu of KDE's Win+V (clipboard-menu), and
+                # wl-copy puts the entry chosen back. Their own step, so a
+                # release without them keeps the rest.
+                info "Installing fuzzel and wl-clipboard (Win+V's clipboard menu)"
+                sudo_or_warn apt-get install -y --install-recommends fuzzel wl-clipboard \
+                    || warn "fuzzel or wl-clipboard unavailable via apt; Win+V on KDE says what's missing"
             fi
             ;;
         redhat)
@@ -1164,6 +1170,9 @@ install_packages() {
                 info "Installing gdbus (live shortcut updates)"
                 sudo_or_warn dnf install -y glib2 \
                     || warn "glib2 unavailable via dnf; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
+                info "Installing fuzzel and wl-clipboard (Win+V's clipboard menu)"
+                sudo_or_warn dnf install -y fuzzel wl-clipboard \
+                    || warn "fuzzel or wl-clipboard unavailable via dnf; Win+V on KDE says what's missing"
             fi
             ;;
         macos)

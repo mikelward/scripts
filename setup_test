@@ -303,6 +303,7 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 #   Leaves $calls set to the package-manager invocations.
 run_linux_packages() {
     linux_os="$1"
+    linux_gui="${2:-0}"
     case "$linux_os" in
         debian) linux_pm=apt-get ;;
         redhat) linux_pm=dnf ;;
@@ -322,7 +323,8 @@ MOCK
         sh -c "set -e
 OS=$linux_os
 NPM=no
-GUI_ENABLED=0
+GUI_ENABLED=$linux_gui
+CROSTINI=0
 sudo_or_warn() { \"\$@\"; }
 $(extract_functions "info warn note_problem install_packages")
 install_packages
@@ -1725,6 +1727,18 @@ test_file_managers_not_in_apt_transaction() {
     assert_calls_lack "recommends lf" &&
     assert_calls_lack "kde-standard" &&
     assert_calls_lack "install -y --install-recommends kitty"
+}
+
+# fuzzel is KDE's Win+V menu (clipboard-menu), and wl-copy puts the entry
+# back, installed with the desktop in a step of their own, so a release
+# without them can't fail the KDE packages.
+test_fuzzel_installed_for_kde() {
+    run_linux_packages debian 1
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --install-recommends fuzzel wl-clipboard" &&
+    run_linux_packages redhat 1 &&
+    assert_status 0 &&
+    assert_calls_contain "dnf install -y fuzzel wl-clipboard"
 }
 
 test_file_managers_not_in_dnf_transaction() {
@@ -3464,6 +3478,8 @@ run_test "lf is not attempted via apt" \
     test_file_managers_not_in_apt_transaction
 run_test "lf is not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
+run_test "fuzzel and wl-clipboard are installed for KDE's Win+V, in their own step" \
+    test_fuzzel_installed_for_kde
 run_test "--purge-obsolete prunes homepkg's retired tools" \
     test_purge_obsolete_prunes_retired_tools
 run_test "a failed prune of retired tools warns and setup continues" \

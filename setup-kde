@@ -5,7 +5,8 @@
 # - Krohnkite tiling window manager
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
-# - Application launch shortcuts (browser, terminal, music, chat, calendar)
+# - Application launch shortcuts (browser, terminal, music, chat, calendar),
+#   and Win+V's clipboard menu, which pastes (clipboard-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
@@ -847,10 +848,13 @@ configure_app_shortcuts() {
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
-    # Chat and Calendar, as on tide and tilemo. Meta+V stays Plasma's own
-    # clipboard popup (Klipper's "Show Clipboard Items at Mouse Position").
+    # Chat and Calendar, as on tide and tilemo.
     add_app_shortcut "google-chat" "Meta+C"
     add_app_shortcut "google-calendar" "Meta+Shift+C"
+    # The clipboard menu, which pastes what you choose, as tide's picker
+    # does; Plasma's own Meta+V popup only copies (configure_keybindings
+    # frees the key).
+    add_app_shortcut "clipboard-menu" "Meta+V"
 }
 
 configure_keybindings() {
@@ -889,6 +893,9 @@ configure_keybindings() {
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
     # not a [kwin] action, so it needs the launch-shortcut form.
     unbind_app_shortcut org.kde.plasma.emojier.desktop "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
+    # Klipper's popup, in plasmashell, holds Meta+V. clipboard-menu opens
+    # it itself in an X11 session, where its fuzzel menu can't run.
+    unbind_shortcut_in plasmashell show-on-mouse-pos              # Meta+V -> clipboard-menu
     n=1
     while test "$n" -le 9; do
         # Meta+1..9 -> Switch to Desktop N (plasmashell grabs these by default).

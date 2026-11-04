@@ -1,0 +1,106 @@
+#!/bin/sh
+#
+# clipboard-menu: KDE Plasma's Win+V. Lists Klipper's clipboard history in
+# fuzzel, and pastes the entry chosen into the window you were in, as tide's
+# picker does on Hyprland and tilemo's on macOS. Plasma's own Win+V menu
+# copies but doesn't paste.
+#
+#   clipboard-menu
+#
+# The history comes from Klipper over D-Bus (busctl's JSON, read with jq).
+# The entry chosen goes back on the clipboard with wl-copy, then
+# tide-kwin-paste (from tide) presses Ctrl+V
+# through KWin's fake-input, which needs Plasma 6.5 or later and the
+# desktop entry tide's `make install-session` installs beside it. Without
+# it, or when it can't, the entry is still on the clipboard and a
+# notification says why it wasn't pasted. Images in the history are left
+# out: Klipper's D-Bus gives only their size.
+#
+# Outside Wayland, as in Plasma's X11 session, it opens Klipper's own
+# popup instead, which copies. Esc in fuzzel does nothing. Any other failure
+# is a notification, and exits 1.
+
+prog=clipboard-menu
+
+fail() {
+    echo "$prog: $1" >&2
+    notify-send -a "Clipboard" -u critical "Clipboard menu failed" "$1" ||
+        echo "$prog: notify-send failed too" >&2
+    exit 1
+}
+
+klipper() {
+    # -- so an entry starting with - is an argument, not an option.
+    busctl --user --json=short -- call org.kde.klipper /klipper org.kde.klipper.klipper "$@"
+}
+
+command -v busctl >/dev/null 2>&1 || fail "busctl isn't installed, so Klipper can't be asked for the history"
+
+# fuzzel and KWin's fake-input are Wayland's. Plasma's X11 session shares
+# the shortcut, so there it opens Klipper's own popup, as Win+V did.
+if test -z "${WAYLAND_DISPLAY:-}"; then
+    if ! err=$(klipper showKlipperPopupMenu 2>&1); then
+        fail "couldn't open Klipper's popup: $err"
+    fi
+    exit 0
+fi
+
+for tool in jq fuzzel wl-copy; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool isn't installed; setup installs it"
+done
+
+if ! history=$(klipper getClipboardHistoryMenu 2>&1); then
+    fail "couldn't read Klipper's history: $history"
+fi
+
+# Each text entry as "INDEX<TAB>PREVIEW": its place in the history, then
+# its text on one line, whitespace folded, cut to 200 characters. Images
+# show as "▨ WxH", which isn't their content.
+if ! entries=$(printf '%s' "$history" | jq -r '
+        .data[0] | to_entries[]
+        | select(.value | test("^▨ [0-9]+x[0-9]+$") | not)
+        | select(.value | test("\\S"))
+        | "\(.key)\t\(.value | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:200])"' 2>&1); then
+    fail "couldn't read Klipper's history: $entries"
+fi
+if test -z "$entries"; then
+    notify-send -a "Clipboard" -t 2000 "Nothing copied yet" ||
+        echo "$prog: nothing copied yet" >&2
+    exit 0
+fi
+
+# fuzzel's --index prints the chosen line's number; Esc prints nothing and
+# exits nonzero.
+chosen=$(printf '%s\n' "$entries" | cut -f 2- | fuzzel --dmenu --index --prompt "Clipboard: ") || exit 0
+case "$chosen" in
+    '' | *[!0-9]*) fail "fuzzel answered '$chosen', not a line number" ;;
+esac
+key=$(printf '%s\n' "$entries" | sed -n "$((chosen + 1))p" | cut -f 1)
+test -n "$key" || fail "fuzzel chose line $chosen, which it wasn't given"
+
+# The whole entry goes back on the clipboard through wl-copy's stdin:
+# Klipper's setClipboardContents would take it as one argument, which
+# Linux caps at 128 KiB. Klipper sees the copy and moves the entry to the
+# top. wl-copy's stderr goes to a file, not $(...): once it owns the
+# clipboard it forks, and the child keeps stderr open until the next copy
+# (wl-copy.c, 2.2.1), so a pipe would wait until then.
+if ! errs=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/clipboard-menu.XXXXXX"); then
+    fail "couldn't make a temporary file"
+fi
+trap 'rm -f "$errs"' EXIT
+if ! printf '%s' "$history" | jq -j --argjson k "$key" '.data[0][$k]' | wl-copy 2>"$errs"; then
+    fail "couldn't put it back on the clipboard: wl-copy: $(cat "$errs")"
+fi
+
+if ! command -v tide-kwin-paste >/dev/null 2>&1; then
+    notify-send -a "Clipboard" -t 3000 "Copied, not pasted" \
+        "tide-kwin-paste isn't installed: setup installs it with tide. Press Ctrl+V." ||
+        echo "$prog: tide-kwin-paste isn't installed, so it's copied, not pasted" >&2
+    exit 0
+fi
+if ! err=$(tide-kwin-paste 2>&1); then
+    echo "$prog: $err" >&2
+    notify-send -a "Clipboard" -t 5000 "Copied, not pasted" "$err. Press Ctrl+V." ||
+        echo "$prog: notify-send failed too" >&2
+    exit 1
+fi

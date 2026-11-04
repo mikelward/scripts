@@ -1,0 +1,183 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for clipboard-menu, KDE's Win+V: it lists Klipper's text history in
+# fuzzel, puts the entry chosen back with wl-copy, and pastes
+# with tide-kwin-paste. Runs the real script, and the real jq, against fake
+# busctl, fuzzel, wl-copy, tide-kwin-paste and notify-send that log their
+# calls. A
+# real Klipper and KWin can only be checked on Plasma.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  for t in jq sed cut cat printf mktemp rm; do
+    ln -s "$(command -v "$t")" "$BIN/$t"
+  done
+  # busctl: the history is $HISTORY_JSON, busctl's JSON for an "as", or
+  # $TEST_TMPDIR/history's, for one too big for the environment.
+  fake busctl 'echo "busctl $*" >> "$CALLS"
+case " $* " in
+  *" getClipboardHistoryMenu "*)
+    test -z "$BUSCTL_FAILS" || { echo "Unit org.kde.klipper not found" >&2; exit 1; }
+    if test -f "$TEST_TMPDIR/history"; then cat "$TEST_TMPDIR/history"; else printf "%s\n" "$HISTORY_JSON"; fi ;;
+esac'
+  # fuzzel: logs what it's shown, and answers $FUZZEL_ANSWER; empty is Esc.
+  fake fuzzel 'cat > "$TEST_TMPDIR/shown"
+echo "fuzzel $*" >> "$CALLS"
+test -n "$FUZZEL_ANSWER" || exit 2
+echo "$FUZZEL_ANSWER"'
+  # wl-copy keeps what it's given, whole, in $TEST_TMPDIR/set.
+  fake wl-copy 'echo "wl-copy $*" >> "$CALLS"
+cat > "$TEST_TMPDIR/set"
+test -z "$SET_FAILS" || { echo "no seat" >&2; exit 1; }'
+  fake tide-kwin-paste 'echo "tide-kwin-paste $*" >> "$CALLS"
+test -z "$PASTE_FAILS" || { echo "KWin offers org_kde_kwin_fake_input version 5, and pasting needs 6" >&2; exit 1; }'
+  fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  export TEST_TMPDIR CALLS
+  unset HISTORY_JSON BUSCTL_FAILS SET_FAILS FUZZEL_ANSWER PASTE_FAILS SESSION_DISPLAY
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run() {
+  set +e
+  OUTPUT=$(env PATH="$BIN" WAYLAND_DISPLAY="${SESSION_DISPLAY-wayland-0}" "$SCRIPT_DIR/clipboard-menu" 2>&1)
+  STATUS=$?
+  set -e
+}
+
+check() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "${@:2}"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo "ok $TESTS_RUN $1"
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "not ok $TESTS_RUN $1"
+    echo "  output: $OUTPUT"
+    echo "  calls: $(cat "$CALLS")"
+  fi
+}
+
+called() { grep -qF -- "$1" "$CALLS"; }
+not_called() { ! grep -qF -- "$1" "$CALLS"; }
+shown() { test "$(cat "$TEST_TMPDIR/shown")" = "$1"; }
+
+# Newest first: a multi-line entry, an image, one starting with -, and
+# whitespace only.
+HISTORY='{"type":"as","data":[["first line\n  second\tline\n","▨ 1280x720","-rf is an option","   "]]}'
+
+setup
+export HISTORY_JSON=$HISTORY FUZZEL_ANSWER=0
+run
+check "choosing an entry exits 0" test "$STATUS" -eq 0
+check "fuzzel shows text entries on one line, without images or blank ones" \
+  shown "$(printf 'first line second line\n-rf is an option')"
+check "fuzzel answers with the line's number" called "fuzzel --dmenu --index"
+check "the whole entry goes back on the clipboard, newlines and all" \
+  test "$(cat "$TEST_TMPDIR/set"; printf x)" = "$(printf 'first line\n  second\tline\nx')"
+check "through wl-copy's stdin, not an argument" called "wl-copy "
+check "after reading the history from Klipper, after -- so nothing's an option" \
+  called "busctl --user --json=short -- call org.kde.klipper /klipper org.kde.klipper.klipper getClipboardHistoryMenu"
+check "then it pastes" called "tide-kwin-paste"
+teardown
+
+setup
+export HISTORY_JSON=$HISTORY FUZZEL_ANSWER=1
+run
+check "the second line shown is the history's fourth-to-last, past the image" \
+  test "$(cat "$TEST_TMPDIR/set")" = "-rf is an option"
+teardown
+
+# Linux caps one argument at 128 KiB, so an entry bigger than that can't
+# go back as an argument.
+setup
+big=$(head -c 200000 /dev/zero | tr '\0' 'a')
+printf '{"type":"as","data":[["%s"]]}\n' "$big" > "$TEST_TMPDIR/history"
+export FUZZEL_ANSWER=0
+run
+check "an entry over 128 KiB goes back whole" test "$(wc -c < "$TEST_TMPDIR/set")" -eq 200000
+check "and is pasted" called "tide-kwin-paste"
+teardown
+
+setup
+export HISTORY_JSON=$HISTORY
+run
+check "Esc exits 0" test "$STATUS" -eq 0
+check "and sets and pastes nothing" not_called "wl-copy"
+check "nor pastes" not_called "tide-kwin-paste"
+teardown
+
+setup
+export HISTORY_JSON='{"type":"as","data":[["▨ 10x10"]]}'
+run
+check "with nothing but images, it says nothing's copied" called "notify-send -a Clipboard -t 2000 Nothing copied yet"
+check "and opens no menu" not_called "fuzzel"
+teardown
+
+setup
+export HISTORY_JSON=$HISTORY FUZZEL_ANSWER=0 PASTE_FAILS=1
+run
+check "a paste that fails exits 1" test "$STATUS" -eq 1
+check "leaving it on the clipboard" test -s "$TEST_TMPDIR/set"
+check "and says why, and to press Ctrl+V" called "Copied, not pasted KWin offers org_kde_kwin_fake_input version 5, and pasting needs 6. Press Ctrl+V."
+teardown
+
+setup
+rm "$BIN/tide-kwin-paste"
+export HISTORY_JSON=$HISTORY FUZZEL_ANSWER=0
+run
+check "without tide-kwin-paste it still copies" test -s "$TEST_TMPDIR/set"
+check "and says it didn't paste" called "Copied, not pasted tide-kwin-paste isn't installed"
+teardown
+
+setup
+export BUSCTL_FAILS=1
+run
+check "no Klipper fails" test "$STATUS" -eq 1
+check "saying why, in a notification" called "Clipboard menu failed couldn't read Klipper's history: Unit org.kde.klipper not found"
+teardown
+
+setup
+export HISTORY_JSON=$HISTORY FUZZEL_ANSWER=0 SET_FAILS=1
+run
+check "a set that fails exits 1, and doesn't paste" test "$STATUS" -eq 1
+check "doesn't paste" not_called "tide-kwin-paste"
+teardown
+
+# Plasma's X11 session shares the shortcut, and fuzzel can't run there.
+setup
+export HISTORY_JSON=$HISTORY SESSION_DISPLAY=
+run
+check "outside Wayland it opens Klipper's own popup" called "showKlipperPopupMenu"
+check "and exits 0" test "$STATUS" -eq 0
+check "with no fuzzel menu" not_called "fuzzel"
+teardown
+
+setup
+rm "$BIN/fuzzel"
+run
+check "without fuzzel it fails, naming it" called "fuzzel isn't installed"
+teardown
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
