@@ -185,17 +185,11 @@ Configure the KDE Plasma 6 desktop environment.
 
 Options:
   --no-install     Skip building/installing Krohnkite; only (re)apply config
-  --no-sudo        Accepted for consistency with setup; setup-kde uses no
-                   sudo, so there's nothing to skip
+  --no-sudo        Accepted for consistency with setup; nothing here uses sudo
   --ignore-errors  Keep going past failures instead of aborting on the first
-  --live-shortcuts The default: also apply the shortcuts to the running
-                   session, so they work without logging out
+  --live-shortcuts Apply the shortcuts to the running session (the default)
   --no-live-shortcuts
-                   Only write the shortcuts and let the next login pick them
-                   up. The live apply calls kglobalaccel, which runs inside
-                   kwin, so a call it mishandles closes every window on
-                   Wayland; use this when the session has too much open to
-                   risk that
+                   Leave the shortcuts for the next login
   -h, --help       Show this help and exit
 USAGE
 }

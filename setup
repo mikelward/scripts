@@ -234,85 +234,40 @@ Usage: setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter]
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
 Options:
-  --gui            Force installation of graphical packages and desktop config
-  --no-gui         Skip all graphical packages and desktop configuration
-  --kde            Accepted for compatibility; KDE Plasma + Krohnkite is
-                   always installed on Linux
-  --tide           The default; state it explicitly. Install the tide
-                   session (Hyprland + uwsm) beside KDE, via setup-tide
-                   (Linux, GUI only), as one more session at the login
-                   screen. Its packages are kept out of --purge-obsolete
+  --gui            Install graphical packages and desktop config
+  --no-gui         Skip graphical packages and desktop config
+  --kde            Accepted for compatibility; KDE Plasma is always installed
+  --tide           Install the tide session beside KDE (the default)
   --no-tide        Install KDE Plasma alone, without tide
   --no-build-hyprland
-                   Use the distro's Hyprland for tide even where it's older
-                   than tide needs, instead of building it
+                   Use the distro's Hyprland for tide, even if it's too old
   --greeter        Make greetd, with tide's greeter, the display manager
-                   from the next boot, in place of GDM or SDDM. Without it
-                   the display manager is left alone, except that a greetd
-                   setup made the display manager is kept up to date
-  --no-greeter     If setup made greetd the display manager, put back the
-                   one it replaced
-  --minimal        Skip heavyweight extras (helix, jj, nushell), installing
-                   only core packages, tools, and dotfiles
+  --no-greeter     Put back the display manager greetd replaced
+  --minimal        Skip the heavyweight extras (helix, jj, nushell)
   --full           Install everything, even when disk space looks tight
-  --brew           Install the heavyweight extras (helix, jj, nushell) from
-                   Homebrew bottles, installing Homebrew if needed
-  --release        Install the heavyweight extras from their GitHub release
-                   artifacts into ~/.local via homepkg
-  --no-install     Skip every install step (packages, fonts, uv, extras, root
-                   config) and only (re)apply config. Forwarded to setup-kde/macos
-  --purge-obsolete Purge the Sway/Hyprland desktop packages an earlier setup
-                   installed (setup now builds KDE Plasma + Krohnkite, and
-                   tide): the compositors, their lock/idle/bg helpers, the
-                   wlroots portals, and the shared bar/launcher/notification
-                   stack (waybar, fuzzel, swaync), less what tide runs on
-                   unless --no-tide is given, and the CLI tools homepkg has
-                   retired (joshuto, yazi) from its env. Off by default; only
-                   removes what's installed, so it's safe to re-run. Leaves
-                   the generic Wayland utilities -- run autoremove for orphans
-  --no-sudo        Run no sudo at all: every privileged command (package
-                   installs included) is skipped up front instead of attempted,
-                   so setup never prompts or stalls. For boxes with no sudo. A
-                   box that allows only "sudo apt" needs nothing special --
-                   leave sudo on and the denials warn and skip themselves.
-                   Forwarded to the desktop setup helpers
-  --no-root        Unprivileged install. Implies --no-sudo, and since the
-                   apt/dnf packages are then skipped, installs the CLI tools
-                   (core set plus extras) into a home prefix with homepkg
-                   instead. For machines where you have no root at all
+  --brew           Install the extras from Homebrew
+  --release        Install the extras from their GitHub releases via homepkg
+  --no-install     Skip every install step and only (re)apply config
+  --purge-obsolete Remove the Sway/Hyprland desktop packages an earlier setup
+                   installed (keeping what tide uses) and retired CLI tools
+  --no-sudo        Run no sudo at all; privileged steps are skipped
+  --no-root        Install the CLI tools into your home directory, without
+                   root. Implies --no-sudo
   --ignore-errors  Keep going past failures instead of aborting on the first
-                   one. Forwarded to setup-kde/macos
-  --live-shortcuts The default; state it explicitly. setup-kde applies the
-                   keyboard shortcuts to the running session, so they work
-                   without logging out. Forwarded to setup-kde
+  --live-shortcuts Apply KDE's keyboard shortcuts to the running session (the
+                   default)
   --no-live-shortcuts
-                   Leave the keyboard shortcuts for the next login. The live
-                   apply calls kglobalaccel, which runs inside kwin, so a call
-                   it mishandles closes every window on Wayland. Forwarded to
-                   setup-kde
+                   Leave KDE's keyboard shortcuts for the next login
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
-  --no-npm         Skip installing Node.js (node/npm) and the TypeScript
-                   compiler (for machines where Node is provided another way;
-                   provide tsc yourself)
-  --github PREFIX  Clone the scripts/conf/root/tide repos, and the tide
-                   session's Quickshell and Hyprland source builds, from
-                   PREFIX instead of github.com -- for an internal GitHub
-                   mirror. PREFIX
-                   is the host or full prefix before OWNER/REPO; its protocol is
-                   taken as given, e.g. an internal SSH host (git@ghe.corp or
-                   git@ghe.corp:) or an HTTPS mirror (https://ghe.corp). A bare
-                   host is treated as SSH. Setting it also points the SSH key
-                   instructions at that host and skips the offer to rewrite the
-                   cloned remotes to SSH. Also settable via the GITHUB_PREFIX
-                   environment variable
+  --no-npm         Skip installing Node.js and the TypeScript compiler
+  --github PREFIX  Clone from PREFIX instead of github.com, e.g.
+                   git@ghe.example.com or https://ghe.example.com. Also
+                   settable via GITHUB_PREFIX
   -h, --help       Show this help and exit
 
-By default graphical components are installed only when a display server
-(X11 or Wayland) is detected, and the heavyweight extras are skipped when
-free disk space is below MIN_DISK_GB (default 15GB), so this runs sensibly
-on headless and small-disk machines. An SSH key is generated only when one
-isn't already loaded in the agent or present on disk.
+Graphical setup runs only when a display is detected, and the extras are
+skipped below MIN_DISK_GB (default 15GB) free.
 USAGE
 }
 
@@ -1267,7 +1222,7 @@ install_packages() {
             # instead of a second copy here. An Intel Mac gets them from
             # homepkg too (install_node_home), as Homebrew would compile them.
             if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
-                info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned (Homebrew has no Intel bottles, so it would compile them)"
+                info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned"
             elif test "$NPM" = yes && test "$ROOT" = yes; then
                 info "Installing Node.js (npm)"
                 brew install node \
@@ -1944,11 +1899,11 @@ install_node_home() {
         warn "homepkg not found in the scripts repo; skipping Node.js and tsc"
         return 0
     fi
-    info "Installing Node.js and tsc from conda-forge via homepkg (~/.local; Homebrew would compile them on an Intel Mac)"
+    info "Installing Node.js and tsc from conda-forge via homepkg (~/.local)"
     "$homepkg" install node typescript \
         || warn "could not install Node.js and tsc via homepkg"
     if command -v brew >/dev/null 2>&1 && brew list --formula --versions node >/dev/null 2>&1; then
-        info "Homebrew's node is still installed and compiles on every upgrade here; 'brew uninstall typescript node' removes it"
+        info "Homebrew's node is still installed; remove it with 'brew uninstall typescript node'"
     fi
 }
 
@@ -2728,8 +2683,7 @@ if test "$INSTALL" = yes; then
         sudo_or_warn make -C "$ROOT_DIR" install \
             || warn "skipping root config installation"
     else
-        info "cargo unavailable; installing the legacy root config from $ROOT_DIR/legacy"
-        info "(install a Rust toolchain -- rustup, or 'brew install rust' -- for the primary Rust root config)"
+        info "cargo unavailable; installing the legacy root config from $ROOT_DIR/legacy (install Rust for the primary one)"
         sudo_or_warn make -C "$ROOT_DIR/legacy" install \
             || warn "skipping legacy root config installation"
     fi

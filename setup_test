@@ -1652,7 +1652,7 @@ test_link_helix_runtime_reports_a_missing_runtime() {
 # remedy), not silent.
 test_legacy_root_config_is_logged() {
     assert_source_contains "installing the legacy root config" &&
-    assert_source_contains "for the primary Rust root config"
+    assert_source_contains "(install Rust for the primary one)"
 }
 
 # Under --no-root the distro npm/tsc install is skipped (apt/dnf need root);
@@ -2043,7 +2043,7 @@ test_intel_mac_says_how_to_remove_homebrew_node() {
     assert_status 0 &&
     assert_calls_contain "homepkg install node typescript" &&
     assert_calls_lack "brew uninstall" &&
-    assert_output_contains "'brew uninstall typescript node' removes it"
+    assert_output_contains "remove it with 'brew uninstall typescript node'"
 }
 
 # Apple Silicon has Homebrew's node already; --no-npm wants none; --no-root got

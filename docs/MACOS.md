@@ -100,10 +100,10 @@ prompts or stalls, so it has to skip rather than try.
 setup-macos
 ```
 
-The run opens with a preflight message listing what has to be done by hand,
-then waits for Enter. Do those steps first — two of them can't be done from a
-script at all, and skipping them looks like a broken keybinding rather than a
-missed step.
+The run opens with the steps to do by hand first — quit System Settings, and
+with Amethyst create nine Spaces — then waits for Enter. It ends with a
+numbered list of what's left for you: Accessibility, Karabiner's setup,
+LinearMouse and logging out. Its own output is a line per step.
 
 | Flag | Effect |
 | --- | --- |
@@ -562,17 +562,8 @@ focus-stealing prevention levels — that part *is* a platform limit.
 [amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
-Two ways to get the cue back, neither installed or configured by the script:
-
-- **JankyBorders** — `brew install borders`. Free and open source. Draws a
-  colored border around the focused window instead of dimming the others.
-  Works with SIP fully enabled because it injects into nothing. This is the
-  practical choice.
-- **HazeOver** — paid (around $10 one-time, also on Setapp). Actually dims
-  the inactive windows, which is closer to the KDE behavior.
-
-Both run as a small always-on process. Neither touches shell startup, so
-there's no latency cost on a new prompt.
+tilemo dims every window but the focused one itself; with Amethyst there's no
+dim.
 
 
 ## Troubleshooting

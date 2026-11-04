@@ -440,8 +440,7 @@ assert_output_lacks() {
 }
 
 # The output with its lines joined by single spaces, so a sentence matches
-# however it's wrapped: the end-of-run list wraps to fit, and the preflight
-# notes are wrapped by hand.
+# however it's wrapped: the end-of-run list wraps to fit.
 flat_output() {
     printf '%s\n' "$output" | tr '\n' ' ' | tr -s ' '
 }
@@ -906,7 +905,8 @@ test_names_terminal_karabiner_rule() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl is Control and Alt is Meta in kitty"' &&
-    assert_says "That order keeps the kitty rule above the arrow rule"
+    assert_output_in_order 'the rule starting "Ctrl+Left/Right moves by word"' \
+        'the rule starting "Ctrl is Control and Alt is Meta in kitty"'
 }
 
 # Home and End on a PC's line ends are the arrow file's second rule;
@@ -998,11 +998,7 @@ test_names_the_tab_karabiner_rule() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_says 'the rule starting "Ctrl+Tab goes to the next tab"' &&
-    assert_output_lacks "Alt+Tab switches applications" &&
-    assert_output_contains "Alt+Tab goes to the next tab too, and no longer switches applications" &&
-    assert_output_contains "Right Ctrl+Tab still does" &&
-    assert_output_lacks "Cmd+Tab still works" &&
-    assert_output_lacks "Alt+Tab is tilemo's: the tilemo rule"
+    assert_output_lacks "Alt+Tab switches applications"
 }
 
 # A conf checkout from before still has the old rule, which works as it
@@ -1199,7 +1195,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
 test_preflight_names_the_manual_steps() {
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_output_contains "Create nine Spaces in Mission Control" &&
+    assert_output_contains "Create nine Spaces: open Mission Control" &&
     assert_output_contains "Quit System Settings" &&
     assert_says "Turn on Accessibility for Amethyst"
 }
@@ -1211,29 +1207,44 @@ test_preflight_names_the_manual_steps() {
 test_preflight_defers_accessibility_until_after_the_run() {
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_says "is listed step by step at the end of the run" &&
+    assert_says "The rest is listed at the end of the run" &&
     assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
     assert_output_in_order "Still to do by hand" "Turn on Accessibility for Amethyst"
 }
 
-# AGENTS.md wants a recommended external dependency to come with its cost and
-# what happens when it isn't there.
-test_preflight_states_focus_cue_cost_and_failure() {
-    run_macos
-    assert_status 0 &&
-    assert_output_contains "free" &&
-    assert_output_contains "one-time" &&
-    assert_output_contains "always-on process" &&
-    assert_output_contains "losing the focus cue"
+# The preflight says only what to do before the run: no prices, no
+# alternatives to install, no account of what each dependency costs. tilemo
+# dims the windows itself, so no dimming app is suggested either.
+assert_preflight_is_only_what_to_do() {
+    _preflight=$(printf '%s\n' "$output" | sed -n '/^Before continuing:/,/^The rest is listed at the end of the run\.$/p')
+    if test -z "$_preflight"; then
+        printf "%s\n" "  FAIL: no preflight in the output"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+    if test "$(printf '%s\n' "$_preflight" | wc -l)" -gt 6; then
+        printf "%s\n" "  FAIL: the preflight runs past 6 lines: $_preflight"
+        TEST_FAILED=1
+        return 1
+    fi
+    for _word in HazeOver JankyBorders "free" "one-time" "\$10" Setapp "open source" \
+            "driver extension" "Optional"; do
+        assert_output_lacks "$_word" || return 1
+    done
 }
 
-# macOS has no dim-inactive equivalent, so the preflight names the two ways to
-# get a focus cue rather than leaving it as an unexplained gap.
-test_preflight_names_the_focus_cue_options() {
-    run_macos
+test_amethyst_preflight_is_only_what_to_do() {
+    run_macos --wm amethyst
     assert_status 0 &&
-    assert_output_contains "JankyBorders" &&
-    assert_output_contains "HazeOver"
+    assert_preflight_is_only_what_to_do
+}
+
+test_tilemo_preflight_is_only_what_to_do() {
+    stage_tilemo_machine
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_preflight_is_only_what_to_do
 }
 
 # The pause only happens on a terminal: setup runs this as part of an
@@ -1248,7 +1259,7 @@ test_preflight_does_not_pause_without_a_terminal() {
 test_yes_skips_the_preflight_pause() {
     run_macos --wm amethyst --yes
     assert_status 0 &&
-    assert_output_contains "Create nine Spaces in Mission Control" &&
+    assert_output_contains "Create nine Spaces: open Mission Control" &&
     assert_output_lacks "stdin is not a terminal"
 }
 
@@ -1536,33 +1547,20 @@ test_says_how_to_enable_the_karabiner_rule() {
     assert_never_says "tilemo then turns on conf's Karabiner rules"
 }
 
-# The preflight has to name the driver approval too: Karabiner is inert until
+# The end-of-run list names the driver approval: Karabiner is inert until
 # its system extension is allowed, which is a GUI-only step.
-test_preflight_names_karabiner_permissions() {
+test_names_karabiner_permissions() {
     run_macos
     assert_status 0 &&
     assert_says "open Karabiner-Elements, from Applications, and click Setup in its sidebar. Allow each item it lists"
 }
 
-# The preflight names the arrow rule the way Karabiner lists it, so it has to
-# follow the rule's rename when Win+Shift+arrow joined it.
-test_preflight_names_the_current_arrow_rule() {
+# The end-of-run list names the arrow rule the way Karabiner lists it, so it
+# has to follow the rule's rename when Win+Shift+arrow joined it.
+test_names_the_current_arrow_rule() {
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_says 'the rule starting "Ctrl+Left/Right moves by word"' &&
-    assert_says "selects by word rather than moving the window a Space"
-}
-
-# AGENTS.md wants cost and reliability stated before an external dependency is
-# recommended, and Karabiner is heavier than most: a driver extension at boot,
-# a background service, and an MDM that may refuse it outright.
-test_preflight_states_karabiner_cost_and_reliability() {
-    run_macos
-    assert_status 0 &&
-    assert_output_contains "free and open source" &&
-    assert_output_contains "driver extension that loads at boot" &&
-    assert_output_contains "managed Mac may refuse" &&
-    assert_output_contains "the keyboard keeps working"
+    assert_says 'the rule starting "Ctrl+Left/Right moves by word"'
 }
 
 # --no-install now skips two applications, so the help has to name both or it
@@ -2265,7 +2263,7 @@ test_help_documents_wm() {
     run_macos --help
     assert_status 0 &&
     assert_output_contains "--wm WM" &&
-    assert_output_contains "tilemo (the default;" &&
+    assert_output_contains "tilemo (the default)" &&
     assert_output_contains "or amethyst"
 }
 
@@ -2767,23 +2765,19 @@ test_tilemo_names_the_karabiner_rule() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says "tilemo then turns on conf's Karabiner rules, such as Ctrl+Tab going to the next tab" &&
-    assert_says "each is On or Off under Keyboard in tide's settings (Tide Settings: Keyboard, in the switcher)" &&
+    assert_says "click Setup in its sidebar" &&
     assert_never_says "Add predefined rule" &&
     assert_never_says 'the rule starting'
 }
 
-# Under tilemo, Alt+Tab is tilemo's swap with the master: the Tab rule is
-# named by its current name, and the run says whose Alt+Tab is.
-test_tilemo_alt_tab_is_tilemos() {
+# Under tilemo the old Tab rule isn't named, and the run doesn't explain
+# whose Alt+Tab is: tilemo's own docs do.
+test_tilemo_does_not_explain_alt_tab() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
     assert_output_lacks "Alt+Tab switches applications" &&
-    assert_output_contains "Alt+Tab is tilemo's: the tilemo rule makes it swap the window with the master" &&
-    assert_output_contains "Alt+Tab is tilemo's: its rule makes it swap the window with the master" &&
-    assert_output_contains "right Ctrl+Tab still switches applications" &&
-    assert_output_lacks "Cmd+Tab still works"
+    assert_output_lacks "Alt+Tab is tilemo's"
 }
 
 # The old rule makes Alt+Tab Cmd+Tab, tilemo's key now, so under tilemo it is
@@ -2814,7 +2808,7 @@ test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/timo.json"
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says "tilemo then turns on conf's Karabiner rules" &&
+    assert_says "click Setup in its sidebar" &&
     assert_output_contains "timo.json predates the rename to tilemo and still works" &&
     assert_output_lacks "tilemo.json not found" &&
     assert_output_contains "macOS configured successfully"
@@ -2833,10 +2827,7 @@ test_tilemo_preflight() {
     assert_output_lacks "Create nine Spaces" &&
     assert_output_contains "Quit System Settings" &&
     assert_says "Turn on Accessibility for Hammerspoon" &&
-    assert_never_says "Turn on Accessibility for Amethyst" &&
-    assert_says 'the rule whose name starts "tilemo:"' &&
-    assert_output_contains "falls back to Option" &&
-    assert_output_contains "Hammerspoon and tilemo are free and open source"
+    assert_never_says "Turn on Accessibility for Amethyst"
 }
 
 # The configured tilemo machine: nothing to warn about.
@@ -2937,14 +2928,14 @@ run_test "no Karabiner steps without Karabiner" test_no_karabiner_steps_without_
 run_test "tilemo: logs out last, for what needs it" test_tilemo_logs_out_last_for_what_needs_it
 run_test "the preflight names the manual steps" \
     test_preflight_names_the_manual_steps
-run_test "the preflight names the current arrow rule" \
-    test_preflight_names_the_current_arrow_rule
-run_test "the preflight names the focus-cue options" \
-    test_preflight_names_the_focus_cue_options
+run_test "names the current arrow rule" \
+    test_names_the_current_arrow_rule
+run_test "amethyst: the preflight is only what to do" \
+    test_amethyst_preflight_is_only_what_to_do
+run_test "tilemo: the preflight is only what to do" \
+    test_tilemo_preflight_is_only_what_to_do
 run_test "the preflight defers Accessibility until after the install" \
     test_preflight_defers_accessibility_until_after_the_run
-run_test "the preflight states focus-cue cost and failure behavior" \
-    test_preflight_states_focus_cue_cost_and_failure
 run_test "no preflight pause without a terminal" \
     test_preflight_does_not_pause_without_a_terminal
 run_test "--yes skips the preflight pause" \
@@ -2988,10 +2979,8 @@ run_test "a missing Karabiner rule warns, not fatal" \
     test_missing_karabiner_rule_warns
 run_test "says how to enable the Karabiner rule" \
     test_says_how_to_enable_the_karabiner_rule
-run_test "the preflight names the Karabiner permissions" \
-    test_preflight_names_karabiner_permissions
-run_test "the preflight states Karabiner's cost and reliability" \
-    test_preflight_states_karabiner_cost_and_reliability
+run_test "names the Karabiner permissions" \
+    test_names_karabiner_permissions
 run_test "--help names the applications --no-install skips" \
     test_help_names_both_installs
 run_test "disables focus follows mouse" test_disables_focus_follows_mouse
@@ -3181,8 +3170,8 @@ run_test "tilemo: an unknown tiler state is reported" \
     test_tilemo_unknown_tiler_state_is_reported
 run_test "tilemo: names the tilemo Karabiner rule" \
     test_tilemo_names_the_karabiner_rule
-run_test "tilemo: Alt+Tab is tilemo's" \
-    test_tilemo_alt_tab_is_tilemos
+run_test "tilemo: the run doesn't explain Alt+Tab" \
+    test_tilemo_does_not_explain_alt_tab
 run_test "tilemo: a Tab rule from before tilemo took Alt+Tab isn't enabled" \
     test_tilemo_old_tab_karabiner_rule_is_not_enabled
 run_test "tilemo: a missing tilemo Karabiner rule warns" \
