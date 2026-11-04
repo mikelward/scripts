@@ -31,7 +31,8 @@
 #   entry, its compositor wrapper, and the tide commands);
 # - enables tide.service, which hangs it off the tide session's
 #   target only, and tide-clipboard.service, which keeps the clipboard
-#   history (with cliphist, installed on its own), and masks the distro's waybar and swaync user units, which
+#   history (with cliphist, installed on its own; rbw too, for the Fill
+#   tab), and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
 # - keeps blueman's applet, which autostarts in every desktop, out of
 #   Plasma (and GNOME, Budgie and COSMIC), which has Bluetooth of its own,
@@ -717,7 +718,7 @@ install_packages() {
     # tide-shell shows the wallpaper with swww, or with swaybg where
     # the distro has no swww (Ubuntu 26.04), so both are asked for.
     common="hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-            waybar swww swaybg fuzzel grim slurp wl-clipboard brightnessctl playerctl jq"
+            waybar swww swaybg fuzzel grim slurp wl-clipboard wtype brightnessctl playerctl jq"
     # A source build replaces the distro's Hyprland rather than sitting
     # beside it.
     if test "$BUILD_NOW" = no; then
@@ -769,11 +770,17 @@ install_packages() {
     elif ! install_all "$nerd_font" >/dev/null; then
         info "couldn't install $nerd_font (it isn't in every release), so waybar shows no icons; install Symbols Nerd Font from nerdfonts.com for them"
     fi
-    # cliphist keeps the clipboard history that Super+C's picker lists
+    # cliphist keeps the clipboard history that Super+V's picker lists
     # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
     # without it still gets the rest.
     if ! install_all cliphist >/dev/null; then
-        warn "couldn't install cliphist, so Super+C's picker keeps no clipboard history; its Characters tab still works"
+        warn "couldn't install cliphist, so Super+V's picker keeps no clipboard history; its Characters tab still works"
+    fi
+    # rbw is the Bitwarden client behind the picker's Fill tab on
+    # Super+Shift+V (tide SPEC.md §8.4). On its own: Fedora doesn't package
+    # it.
+    if ! install_all rbw >/dev/null; then
+        info "couldn't install rbw (Fedora doesn't package it), so Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
     fi
     # The Settings pages' *advanced* buttons open these (tide SPEC.md §16):
     # pavucontrol for Sound, nm-connection-editor for Network,

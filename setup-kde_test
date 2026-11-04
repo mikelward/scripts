@@ -1210,7 +1210,8 @@ test_launch_shortcut_keys() {
     assert_called "--group shortcut-music.desktop --key _launch Meta+Y," &&
     assert_called "--group shortcut-google-chat.desktop --key _launch Meta+C," &&
     assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C," &&
-    assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V,"
+    assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V," &&
+    assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V,"
 }
 
 # Win+V is the clipboard menu, which pastes; Plasma's own popup, which only

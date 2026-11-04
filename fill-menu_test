@@ -1,0 +1,135 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for fill-menu, KDE's Win+Shift+V: it lists `tide fill list`'s rows
+# in fuzzel and types the one chosen with `tide fill type`. Runs the real
+# script against fake tide, fuzzel and notify-send that log their calls.
+# A real vault and KWin can only be checked on Plasma.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+ROWS='snippet	Home address	text	Home address	Snippet
+login	id-1	password	github.com · password	me@example.com · web'
+UNLOCK='unlock	-	-	Unlock Bitwarden	rbw asks for your master password'
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN"
+  : > "$CALLS"
+  for t in sed cat printf mktemp rm; do
+    ln -s "$(command -v "$t")" "$BIN/$t"
+  done
+  # tide: lists $FILL_ROWS, or after an unlock $FILL_AFTER; a type fails
+  # with $TYPE_FAILS.
+  fake tide 'echo "tide $*" >> "$CALLS"
+case "$2" in
+  list)
+    if test -e "$TEST_TMPDIR/unlocked"; then printf "%s\n" "$FILL_AFTER"; else printf "%s\n" "$FILL_ROWS"; fi ;;
+  unlock) : > "$TEST_TMPDIR/unlocked" ;;
+  type) test -z "$TYPE_FAILS" || { echo "tide fill: rbw couldn'"'"'t get the totp: not a totp secret" >&2; exit 1; } ;;
+esac'
+  # fuzzel answers $FUZZEL_ANSWER, then $FUZZEL_AFTER on a second run;
+  # empty is Esc.
+  fake fuzzel 'cat >> "$TEST_TMPDIR/shown"
+echo "fuzzel $*" >> "$CALLS"
+if test -e "$TEST_TMPDIR/asked"; then a=$FUZZEL_AFTER; else a=$FUZZEL_ANSWER; : > "$TEST_TMPDIR/asked"; fi
+test -n "$a" || exit 2
+echo "$a"'
+  fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  export TEST_TMPDIR CALLS
+  unset FILL_ROWS FILL_AFTER FUZZEL_ANSWER FUZZEL_AFTER TYPE_FAILS SESSION_DISPLAY
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run() {
+  set +e
+  OUTPUT=$(env PATH="$BIN" WAYLAND_DISPLAY="${SESSION_DISPLAY-wayland-0}" "$SCRIPT_DIR/fill-menu" 2>&1)
+  STATUS=$?
+  set -e
+}
+
+check() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "${@:2}"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo "ok $TESTS_RUN $1"
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "not ok $TESTS_RUN $1"
+    echo "  output: $OUTPUT"
+    echo "  calls: $(cat "$CALLS")"
+  fi
+}
+
+called() { grep -qF -- "$1" "$CALLS"; }
+not_called() { ! grep -qF -- "$1" "$CALLS"; }
+
+setup
+export FILL_ROWS=$ROWS FUZZEL_ANSWER=1
+run
+check "choosing a row exits 0" test "$STATUS" -eq 0
+check "fuzzel shows each row's label, and its detail in brackets" \
+  test "$(cat "$TEST_TMPDIR/shown")" = "$(printf 'Home address  (Snippet)\ngithub.com · password  (me@example.com · web)')"
+check "and answers with the line's number" called "fuzzel --dmenu --index"
+check "a login's field is typed by tide fill" called "tide fill type login id-1 password"
+teardown
+
+setup
+export FILL_ROWS=$ROWS FUZZEL_ANSWER=0
+run
+check "a snippet is typed by its name" called "tide fill type snippet Home address"
+teardown
+
+setup
+export FILL_ROWS=$ROWS
+run
+check "Esc exits 0" test "$STATUS" -eq 0
+check "and types nothing" not_called "tide fill type"
+teardown
+
+setup
+export FILL_ROWS=$UNLOCK FILL_AFTER=$ROWS FUZZEL_ANSWER=0 FUZZEL_AFTER=1
+run
+check "Unlock unlocks rbw" called "tide fill unlock"
+check "then opens the menu again, with the logins" called "tide fill type login id-1 password"
+teardown
+
+setup
+export FILL_ROWS=$ROWS FUZZEL_ANSWER=1 TYPE_FAILS=1
+run
+check "a type that fails exits 1" test "$STATUS" -eq 1
+check "saying why, in a notification" called "Fill menu failed rbw couldn't get the totp: not a totp secret"
+teardown
+
+setup
+export FILL_ROWS=
+run
+check "nothing to fill says how to add some" called "Nothing to fill Add snippets to ~/.config/tide/snippets.json"
+check "and opens no menu" not_called "fuzzel"
+teardown
+
+setup
+export FILL_ROWS=$ROWS SESSION_DISPLAY=
+run
+check "outside Wayland it says it needs Plasma's Wayland session" called "it needs Plasma's Wayland session"
+check "and lists nothing" not_called "tide fill list"
+teardown
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

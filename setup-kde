@@ -6,7 +6,8 @@
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music, chat, calendar),
-#   and Win+V's clipboard menu, which pastes (clipboard-menu)
+#   Win+V's clipboard menu, which pastes (clipboard-menu), and Win+Shift+V's
+#   snippets and Bitwarden menu, which types (fill-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
@@ -855,6 +856,9 @@ configure_app_shortcuts() {
     # does; Plasma's own Meta+V popup only copies (configure_keybindings
     # frees the key).
     add_app_shortcut "clipboard-menu" "Meta+V"
+    # Snippets and Bitwarden logins, typed where you were, as tide's
+    # picker's Fill tab on Super+Shift+V.
+    add_app_shortcut "fill-menu" "Meta+Shift+V"
 }
 
 configure_keybindings() {

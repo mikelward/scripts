@@ -317,6 +317,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Chat | `Win+C` | `Win+C` | Automator Quick Action |
 | Calendar | `Win+Shift+C` | `Win+Shift+C` | Automator Quick Action |
 | Clipboard history, pasting the entry chosen | `Win+V` (`clipboard-menu`) | `Win+V` | tilemo's picker (with tilemo); not configured without it |
+| Snippets and Bitwarden logins, typing the field chosen | `Win+Shift+V` (`fill-menu`) | — | not yet on macOS |
 | Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
 | Switch applications | `Alt+Tab` | right `Ctrl+Tab` † | the rotation alone; the Tab rule takes only left Ctrl |
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
