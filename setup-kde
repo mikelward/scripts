@@ -5,7 +5,7 @@
 # - Krohnkite tiling window manager
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
-# - Application launch shortcuts (browser, terminal, music)
+# - Application launch shortcuts (browser, terminal, music, chat, calendar)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
@@ -853,6 +853,10 @@ configure_app_shortcuts() {
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
+    # Chat and Calendar, as on tide and tilemo. Meta+V stays Plasma's own
+    # clipboard popup (Klipper's "Show Clipboard Items at Mouse Position").
+    add_app_shortcut "google-chat" "Meta+C"
+    add_app_shortcut "google-calendar" "Meta+Shift+C"
 }
 
 configure_keybindings() {

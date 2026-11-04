@@ -1621,7 +1621,19 @@ test_creates_launcher_workflows() {
     assert_file_exists "$services/Launch Browser1.workflow/Contents/Info.plist" &&
     assert_file_exists "$services/Launch Browser1.workflow/Contents/document.wflow" &&
     assert_file_exists "$services/Launch Terminal on Workstation.workflow/Contents/document.wflow" &&
-    assert_file_exists "$services/Launch Music.workflow/Contents/document.wflow"
+    assert_file_exists "$services/Launch Music.workflow/Contents/document.wflow" &&
+    assert_file_exists "$services/Launch Chat.workflow/Contents/document.wflow" &&
+    assert_file_exists "$services/Launch Calendar.workflow/Contents/document.wflow"
+}
+
+# Win+C is Chat and Win+Shift+C Calendar, as on KDE, tide and tilemo: Option+C
+# and Option+Shift+C once Win sends Option.
+test_chat_and_calendar_keys() {
+    run_macos
+    assert_status 0 &&
+    assert_called 'Launch Chat - runWorkflowAsService' &&
+    assert_called '"key_equivalent" = "~c";' &&
+    assert_called '"key_equivalent" = "~$c";'
 }
 
 # Regression: the workflow name used to be substituted with `sed -i ''`, whose
@@ -2989,6 +3001,7 @@ run_test "a missing amethyst config warns, not fatal" test_missing_amethyst_conf
 run_test "says Amethyst needs Accessibility access" \
     test_mentions_accessibility_permission
 run_test "creates a Quick Action per launcher" test_creates_launcher_workflows
+run_test "binds Win+C to Chat and Win+Shift+C to Calendar" test_chat_and_calendar_keys
 run_test "substitutes the workflow name without sed" \
     test_workflow_name_is_substituted
 run_test "the workflow runs the resolved launcher path" \
