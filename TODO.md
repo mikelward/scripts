@@ -117,6 +117,17 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 
 ## Decisions needing review
 
+- **KDE's Win+V pastes with Ctrl+V into every window** (2026-11-04),
+  terminals included. KWin has no D-Bus call for the focused window's
+  class, so `clipboard-menu` can't pick Ctrl+Shift+V for a terminal, as
+  tide's picker does. conf's kitty pastes on Ctrl+V; Konsole doesn't. The
+  alternative is asking KWin through a loaded script, or `kdotool`.
+  Reversible: one `tide-kwin-paste --shift` in `clipboard-menu`.
+- **clipboard-menu reads Klipper, not cliphist** (2026-11-04), so it lists
+  what Plasma already keeps and needs no service. Images are left out:
+  Klipper's D-Bus gives only their size. Reversible: the history comes
+  from one `busctl` call.
+
 - **setup-tide writes tide-tabs's host manifest for Chrome and Brave**
   (2026-11-01), in each one's `NativeMessagingHosts`, when its config
   directory exists or its command is on `PATH`. It allows the Web Store's
