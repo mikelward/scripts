@@ -81,7 +81,7 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [--wm tilemo|amethyst] [-h | --help]
+#                 [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, and --ignore-errors here.
 # --no-install skips installing tilemo (or Amethyst) and Karabiner-Elements and
@@ -92,6 +92,9 @@
 # pause. --wm picks the tiling window manager: tilemo (or timo, its old name),
 # the default, so a plain setup sets it up, or amethyst. setup doesn't forward
 # --wm, so an Amethyst machine runs this a second time with --wm amethyst.
+# --verbose shows every step and the commands' own output; without it, the
+# run says only what it changed, what's left to do and what went wrong, as
+# setup does, and setup forwards it.
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -174,15 +177,103 @@ WARNINGS=0
 DVORAK_LAYOUT_ID=16300
 DVORAK_INPUT_SOURCE="<dict><key>InputSourceKind</key><string>Keyboard Layout</string><key>KeyboardLayout ID</key><integer>$DVORAK_LAYOUT_ID</integer><key>KeyboardLayout Name</key><string>Dvorak</string></dict>"
 
+# --- What a run prints ---
+
+# setup and the helpers it runs (setup-kde, setup-tide, setup-macos) print
+# what a run changed, what's left for you to do, and what went wrong, and
+# nothing else unless --verbose:
+#   say          a change, or something to do: always shown
+#   info         progress, and what was skipped or already so: --verbose only
+#   warn, error  problems, on stderr, repeated as the run ends
+# Package managers, builds and make run through logged, which keeps their
+# output in $SETUP_LOG. What each install step found is tallied with
+# record_install, and the run ends with a line per source: what was already
+# installed, what it installed or updated, and what failed. The outermost of
+# setup and its helpers makes the log and the tally and prints the summary; a
+# helper it runs inherits both and only adds to them.
+VERBOSE=no
+
+say() {
+    printf "%s\n" "$*"
+}
+
+info() {
+    test "${VERBOSE:-no}" = yes || return 0
+    printf "%s\n" "$*"
+}
+
 # Every warning and error goes to $SETUP_PROBLEMS too, so the run ends by
-# repeating them all: one line among thousands scrolls by unseen. The
-# outermost of setup and its helpers (setup-kde, setup-tide, setup-macos)
-# makes the file and repeats it as it exits, however it exits; a helper it
-# runs inherits the file and only adds to it.
+# repeating them all: one line among thousands scrolls by unseen.
 note_problem() {
     test -n "${SETUP_PROBLEMS:-}" || return 0
     printf '%s\n' "$1" >>"$SETUP_PROBLEMS" ||
         printf "Warning: couldn't add that to %s, so the end of the run won't repeat it\n" "$SETUP_PROBLEMS" >&2
+}
+
+# record_install SOURCE STATE NAME...: tallies NAME... for the summary.
+# SOURCE is where they come from: a package manager (apt, dnf, pacman, brew,
+# npm), homepkg, git (checkouts, and builds from them) or download (an
+# installer fetched with curl). STATE is already (installed before this run),
+# installed, updated, failed-update (a checkout that couldn't be pulled) or
+# failed. record_why SOURCE STATE NAME WHY tallies one NAME with a few words
+# on it, which the summary puts in parentheses after it.
+record_install() {
+    _ri_source=$1
+    _ri_state=$2
+    shift 2
+    for _ri_name in "$@"; do
+        record_why "$_ri_source" "$_ri_state" "$_ri_name" ""
+    done
+}
+
+record_why() {
+    test -n "${SETUP_INSTALLS:-}" || return 0
+    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >>"$SETUP_INSTALLS" ||
+        printf "Warning: couldn't add %s to %s, so the summary leaves it out\n" "$3" "$SETUP_INSTALLS" >&2
+}
+
+# print_installs: the tally as a line per source, in the order they came:
+#   apt: already installed: git jq; newly installed: zoxide; failed: kitty
+# A name tallied twice keeps its best news: newly installed, then updated,
+# then failed to update, then already installed, then failed.
+print_installs() {
+    test -s "${SETUP_INSTALLS:-}" || return 0
+    printf '\n'
+    awk '
+        BEGIN {
+            rank["installed"] = 5; rank["updated"] = 4; rank["failed-update"] = 3
+            rank["already"] = 2; rank["failed"] = 1
+            order[1] = "already"; order[2] = "installed"; order[3] = "updated"
+            order[4] = "failed-update"; order[5] = "failed"
+            words["already"] = "already installed"; words["installed"] = "newly installed"
+            words["updated"] = "updated"; words["failed-update"] = "failed to update"
+            words["failed"] = "failed"
+        }
+        NF >= 3 && ($2 in rank) {
+            if (!($1 in seen)) { seen[$1] = 1; sources[++nsources] = $1 }
+            key = $1 SUBSEP $3
+            why = $0
+            sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", why)
+            if (!(key in state)) names[$1, ++count[$1]] = $3
+            if (!(key in state) || rank[$2] > rank[state[key]]) { state[key] = $2; note[key] = why }
+        }
+        END {
+            for (s = 1; s <= nsources; s++) {
+                src = sources[s]
+                line = ""
+                for (o = 1; o <= 5; o++) {
+                    list = ""
+                    for (i = 1; i <= count[src]; i++) {
+                        key = src SUBSEP names[src, i]
+                        if (state[key] != order[o]) continue
+                        list = list " " names[src, i]
+                        if (note[key] != "") list = list " (" note[key] ")"
+                    }
+                    if (list != "") line = line (line == "" ? "" : ";") " " words[order[o]] ":" list
+                }
+                print src ":" line
+            }
+        }' "$SETUP_INSTALLS"
 }
 
 PROBLEMS_OWNER=no
@@ -195,15 +286,45 @@ start_problem_recap() {
     fi
     export SETUP_PROBLEMS
     PROBLEMS_OWNER=yes
+    start_run_files
 }
 
-# recap_problems STATUS, from the EXIT trap: repeats every warning and error,
-# says if the run stopped early, and keeps STATUS as the exit status.
+# start_run_files: the tally, in $TMPDIR, and the log, in
+# $XDG_STATE_HOME/setup, a fresh one each run, with the last run's kept as
+# setup.log.1.
+start_run_files() {
+    if SETUP_INSTALLS=$(mktemp "${TMPDIR:-/tmp}/setup-installs-XXXXXX"); then
+        export SETUP_INSTALLS
+    else
+        SETUP_INSTALLS=
+        warn "couldn't make a file to tally installs in, so the run won't end with a summary of them"
+    fi
+    _log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/setup"
+    SETUP_LOG="$_log_dir/setup.log"
+    if ! mkdir -p "$_log_dir" \
+            || { test -f "$SETUP_LOG" && ! mv -f "$SETUP_LOG" "$SETUP_LOG.1"; } \
+            || ! printf "" >"$SETUP_LOG"; then
+        warn "couldn't start $SETUP_LOG, so commands' output shows here instead"
+        SETUP_LOG=
+    fi
+    export SETUP_LOG
+}
+
+# recap_problems STATUS, from the EXIT trap: prints the install summary,
+# repeats every warning and error, says if the run stopped early, and keeps
+# STATUS as the exit status.
 recap_problems() {
     test "$PROBLEMS_OWNER" = yes || return "$1"
+    print_installs
+    if test -n "${SETUP_INSTALLS:-}"; then
+        rm -f "$SETUP_INSTALLS"
+    fi
     if test -s "$SETUP_PROBLEMS"; then
         printf '\n%s: the warnings and errors from this run, again:\n' "setup-macos" >&2
         sed 's/^/  /' "$SETUP_PROBLEMS" >&2
+        if test -s "${SETUP_LOG:-}"; then
+            printf "The commands' output is in %s\n" "$SETUP_LOG" >&2
+        fi
     fi
     if test "$1" -ne 0; then
         printf '%s stopped early, with exit status %s\n' "setup-macos" "$1" >&2
@@ -212,12 +333,75 @@ recap_problems() {
     return "$1"
 }
 
-info() {
-    printf "%s\n" "$*"
+# logged COMMAND...: runs COMMAND with its output added to $SETUP_LOG rather
+# than shown, unless --verbose (or there's no log). Its stdin is /dev/null,
+# so it can't wait on a question no one can see: apt's debconf takes its
+# defaults, and sudo, ssh and git ask on the terminal itself, as they always
+# do. A warning from COMMAND, a function, still shows: warn and error write
+# to the terminal through descriptor 3 meanwhile. When COMMAND fails, the end
+# of its output is shown, and where the rest is.
+logged() {
+    if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+        "$@"
+        return
+    fi
+    # A URL's user-info can be a token (https://USER:TOKEN@host/..., from
+    # --github or $TIDE_REPO, say), so neither the log nor what's shown of a
+    # failure keeps it, as redact_url_credentials does for the terminal.
+    _lg_redact='s#(://)[^/@[:space:]]*@#\1***@#g'
+    _lg_cmd=$(printf '%s\n' "$*" | sed -E "$_lg_redact")
+    # Inside another logged command, whose output already goes to the log:
+    # its variables are global, so this one only notes the command and runs
+    # it, and the outer one reports, redacts and restores LOGGING.
+    if test "${LOGGING:-no}" = yes; then
+        printf '+ %s\n' "$_lg_cmd"
+        "$@"
+        return
+    fi
+    _lg_start=$(awk 'END { print NR }' "$SETUP_LOG" 2>/dev/null) || _lg_start=0
+    printf '+ %s\n' "$_lg_cmd" >>"$SETUP_LOG"
+    LOGGING=yes
+    _lg_status=0
+    "$@" </dev/null 3>&2 >>"$SETUP_LOG" 2>&1 || _lg_status=$?
+    LOGGING=no
+    # The command's own output too: git quotes the URL it couldn't reach.
+    if grep -Eq '://[^/@[:space:]]*@' "$SETUP_LOG" 2>/dev/null; then
+        if ! { sed -E "$_lg_redact" "$SETUP_LOG" >"$SETUP_LOG.redacted" \
+                && mv -f "$SETUP_LOG.redacted" "$SETUP_LOG"; }; then
+            rm -f "$SETUP_LOG.redacted"
+            warn "couldn't take a URL's credentials out of $SETUP_LOG; delete it"
+        fi
+    fi
+    if test "$_lg_status" -eq 0; then
+        return 0
+    fi
+    # From "$*" again: a logged command inside this one set _lg_cmd.
+    _lg_what=$(printf '%s\n' "$*" | sed -E "$_lg_redact" | awk '{
+        sub(/^sudo_or_warn /, "sudo ")
+        s = $1
+        for (i = 2; i <= NF && i <= 3; i++) s = s " " $i
+        if (NF > 3) s = s " ..."
+        print s
+    }')
+    _lg_tail=$(sed -n "$((${_lg_start:-0} + 2)),\$p" "$SETUP_LOG" | tail -n 20)
+    if test -n "$_lg_tail"; then
+        printf "%s failed (exit status %s), ending:\n" "$_lg_what" "$_lg_status" >&2
+        printf '%s\n' "$_lg_tail" | sed 's/^/    /' >&2
+    else
+        printf "%s failed (exit status %s)\n" "$_lg_what" "$_lg_status" >&2
+    fi
+    printf "  Its output is in %s\n" "$SETUP_LOG" >&2
+    return "$_lg_status"
 }
 
+# While logged runs a command, stderr is the log, so warn and error write to
+# the terminal through the descriptor logged keeps for them.
 warn() {
-    printf "Warning: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Warning: %s\n" "$*" >&3
+    else
+        printf "Warning: %s\n" "$*" >&2
+    fi
     note_problem "Warning: $*"
     WARNINGS=$((WARNINGS + 1))
 }
@@ -301,18 +485,22 @@ print_todo() {
     if test "$TODO_COUNT" -eq 0 && test -z "$TODO_OPTIONAL"; then
         return 0
     fi
-    info ""
-    info "Still to do by hand -- this script can't:"
+    say ""
+    say "Still to do by hand -- this script can't:"
     printf '%s' "$TODO_STEPS"
     if test -n "$TODO_OPTIONAL"; then
-        info ""
-        info "And if you like:"
+        say ""
+        say "And if you like:"
         printf '%s\n' "$TODO_OPTIONAL"
     fi
 }
 
 error() {
-    printf "Error: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Error: %s\n" "$*" >&3
+    else
+        printf "Error: %s\n" "$*" >&2
+    fi
     note_problem "Error: $*"
     exit 1
 }
@@ -409,7 +597,7 @@ restart_app() {
     case "$_running" in
         0) ;;
         1)
-            info "$_app was not running; it will pick up the new settings when it starts"
+            info "Skipping the restart of $_app: it isn't running, and reads the settings when it starts"
             return 0
             ;;
         *)
@@ -429,17 +617,17 @@ restart_app() {
 # for apps the run installs. tilemo uses one Space per display, so the
 # nine-Spaces step is Amethyst's alone.
 preflight_notes() {
-    info ""
-    info "Before continuing:"
+    say ""
+    say "Before continuing:"
     if test "$WM" = amethyst; then
-        info "  1. Create nine Spaces: open Mission Control and click + until there"
-        info "     are nine."
-        info "  2. Quit System Settings, or it can undo the shortcuts set here."
+        say "  1. Create nine Spaces: open Mission Control and click + until there"
+        say "     are nine."
+        say "  2. Quit System Settings, or it can undo the shortcuts set here."
     else
-        info "  1. Quit System Settings, or it can undo the shortcuts set here."
+        say "  1. Quit System Settings, or it can undo the shortcuts set here."
     fi
-    info "The rest is listed at the end of the run."
-    info ""
+    say "The rest is listed at the end of the run."
+    say ""
 }
 
 preflight() {
@@ -458,14 +646,14 @@ preflight() {
     # for the same reason as the non-terminal case, and end the line the
     # prompt left open so the first step doesn't print onto it.
     if ! read -r _preflight_reply; then
-        info ""
+        say ""
     fi
 }
 
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [--wm tilemo|amethyst] [-h | --help]
+                   [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
 
 Configure the macOS desktop environment.
 
@@ -477,6 +665,8 @@ Options:
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Don't pause before starting
   --wm WM          The tiling window manager: tilemo (the default) or amethyst
+  -v, --verbose    Show every step and the commands' own output, not just
+                   changes, warnings and errors
   -h, --help       Show this help and exit
 USAGE
 }
@@ -510,6 +700,9 @@ while test $# -gt 0; do
             ;;
         -y|--yes)
             ASSUME_YES=yes
+            ;;
+        -v|--verbose)
+            VERBOSE=yes
             ;;
         --wm)
             if test $# -lt 2; then
@@ -1079,45 +1272,6 @@ is_usable_app() {
     test -f "$1/Contents/Info.plist" && test -d "$1/Contents/MacOS"
 }
 
-# --- Quiet Homebrew ---
-
-# brew's own output -- download bars, pour lines, "already installed"
-# warnings, caveats, auto-update news -- goes to one log per run, as apt's
-# would on a quiet Linux run, and the run shows a line or two per step. The
-# outermost of setup and setup-macos starts the log; a helper it runs adds
-# to it, through the exported path.
-start_brew_log() {
-    test -z "${SETUP_BREW_LOG:-}" || return 0
-    SETUP_BREW_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/brew.log"
-    # printf, not :, which is a special builtin: dash exits when its
-    # redirection fails, even under if.
-    if ! mkdir -p "${SETUP_BREW_LOG%/*}" || ! printf "" > "$SETUP_BREW_LOG"; then
-        warn "couldn't make $SETUP_BREW_LOG to keep Homebrew's output in, so it's shown instead"
-        SETUP_BREW_LOG=-
-    fi
-    export SETUP_BREW_LOG
-}
-
-# brew_logged ARGS...: runs brew ARGS with its output added to the log. A
-# failure shows what brew said this time, which is where the reason is; the
-# caller says what's lost. An administrator password a .pkg cask asks for
-# still reaches the terminal: sudo asks on it, not on brew's output.
-brew_logged() {
-    start_brew_log
-    if test "$SETUP_BREW_LOG" = -; then
-        brew "$@"
-        return
-    fi
-    _bl_start=$(($(wc -l < "$SETUP_BREW_LOG") + 1))
-    printf '+ brew %s\n' "$*" >> "$SETUP_BREW_LOG"
-    brew "$@" >> "$SETUP_BREW_LOG" 2>&1 && return 0
-    _bl_status=$?
-    printf "'brew %s' exited with status %s; the end of what it said (all of it is in %s):\n" \
-        "$*" "$_bl_status" "$SETUP_BREW_LOG" >&2
-    tail -n "+$((_bl_start + 1))" "$SETUP_BREW_LOG" | tail -n 20 | sed 's/^/    /' >&2
-    return "$_bl_status"
-}
-
 # Whether Homebrew still lists cask $1 though its app, $2, is missing. If so,
 # this warns with the command that clears the record, followed by $3: what stays
 # broken until then, or what the caller tries next.
@@ -1178,11 +1332,11 @@ install_amethyst_from_bundle() {
     _dest="$APPLICATIONS_DIR"
     if ! test -w "$_dest"; then
         _dest="$USER_APPLICATIONS_DIR"
-        info "$APPLICATIONS_DIR is not writable; installing Amethyst to $_dest"
+        say "$APPLICATIONS_DIR is not writable; installing Amethyst to $_dest"
         try mkdir -p "$_dest"
     fi
 
-    info "Installing Amethyst from bundle: $_bundle"
+    info "Installing Amethyst from $_bundle"
 
     # Extracted beside the destination and moved into place only once it's
     # whole. unzip writes as it goes, so extracting straight into $_dest would
@@ -1251,7 +1405,7 @@ install_amethyst_from_bundle() {
     # bury the staged copy at Amethyst.app/Amethyst.app, leave the broken outer
     # bundle in place, and report success.
     if test -e "$_dest/Amethyst.app"; then
-        info "Replacing the unusable $_dest/Amethyst.app"
+        say "Replacing the unusable $_dest/Amethyst.app"
         if ! rm -rf "$_dest/Amethyst.app"; then
             rm -rf "$_staging"
             warn "could not remove the unusable $_dest/Amethyst.app"
@@ -1265,10 +1419,13 @@ install_amethyst_from_bundle() {
         return 0
     fi
     rm -rf "$_staging"
+    record_install download installed amethyst
 }
 
 install_amethyst() {
-    if amethyst_path >/dev/null; then
+    if _installed=$(amethyst_path); then
+        info "Skipping Amethyst: already installed at $_installed"
+        record_install brew already amethyst
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1280,10 +1437,11 @@ install_amethyst() {
         info "Homebrew not found; looking for a staged Amethyst bundle"
     elif ! stale_cask_record amethyst Amethyst "trying a staged bundle meanwhile"; then
         info "Installing Amethyst"
-        if brew_logged install --cask amethyst; then
+        if logged brew install --cask amethyst; then
+            record_install brew installed amethyst
             return 0
         fi
-        warn "could not install Amethyst via Homebrew; trying a staged bundle"
+        warn "couldn't install Amethyst with Homebrew; trying a staged bundle"
     fi
     install_amethyst_from_bundle
 }
@@ -1348,8 +1506,22 @@ TILEMO_MISSING_EFFECT="nothing will tile and tilemo's workspace keys will do not
 # itself comes from a git clone, so a machine with no network can't get it
 # either way. The cask installs into /Applications without an administrator
 # prompt, so --no-sudo doesn't skip it.
+# install_cask CASK APP EFFECT: brew install --cask CASK, logged and
+# tallied, saying what's lost (EFFECT) if it fails.
+install_cask() {
+    info "Installing $2"
+    if logged brew install --cask "$1"; then
+        record_install brew installed "$1"
+    else
+        record_install brew failed "$1"
+        warn "couldn't install $2; $3 until it is"
+    fi
+}
+
 install_hammerspoon() {
-    if hammerspoon_path >/dev/null; then
+    if _installed=$(hammerspoon_path); then
+        info "Skipping Hammerspoon: already installed at $_installed"
+        record_install brew already hammerspoon
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1363,9 +1535,7 @@ install_hammerspoon() {
     if stale_cask_record hammerspoon Hammerspoon "until then, $TILEMO_MISSING_EFFECT"; then
         return 0
     fi
-    info "Installing Hammerspoon"
-    brew_logged install --cask hammerspoon \
-        || warn "could not install Hammerspoon; $TILEMO_MISSING_EFFECT until it is"
+    install_cask hammerspoon Hammerspoon "$TILEMO_MISSING_EFFECT"
 }
 
 # What a tilemo machine without blueutil loses: tilemo reads whether
@@ -1397,6 +1567,8 @@ install_brew_tool() {
     _tool=$1
     _effect=$2
     if is_command "$_tool"; then
+        info "Skipping $_tool: already installed at $(command -v "$_tool")"
+        record_install brew already "$_tool"
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1408,8 +1580,118 @@ install_brew_tool() {
         return 0
     fi
     info "Installing $_tool"
-    brew_logged install "$_tool" \
-        || warn "could not install $_tool; $_effect until it is"
+    if logged brew install "$_tool"; then
+        record_install brew installed "$_tool"
+    else
+        record_install brew failed "$_tool"
+        warn "couldn't install $_tool; $_effect until it is"
+    fi
+}
+
+# --- Checkouts ---
+
+# default_branch DIR: origin's default branch, as DIR's clone recorded it, or
+# main or master when it recorded none.
+default_branch() {
+    if _db=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+        printf '%s\n' "${_db#origin/}"
+        return 0
+    fi
+    for _db in main master; do
+        if git -C "$1" show-ref --verify --quiet "refs/remotes/origin/$_db"; then
+            printf '%s\n' "$_db"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# git_message OUTPUT: the line of git's OUTPUT that says what went wrong (its
+# first fatal: or error:, or else its first line that isn't the fetch's
+# progress or a hint), with any credentials in a URL taken out.
+git_message() {
+    printf '%s\n' "$1" | awk '
+        NF && first == "" && $0 !~ /^(From |remote: |hint: |[ \t])/ { first = $0 }
+        /^(fatal|error): / && found == "" { found = $0 }
+        END { print (found != "" ? found : first) }' |
+        sed 's#://[^/@ ]*@#://***@#g'
+}
+
+# update_checkout DIR NAME USE [GIT...]: pulls DIR, tallying NAME under git
+# as already (nothing new), updated, or failed to update, with why. USE says
+# what happens next, for the warnings: a checkout that couldn't be pulled is
+# used as it is, and so is one on a branch other than origin's default, which
+# is named even when the pull works. Nothing here switches a branch or drops
+# a change: that's yours to do. GIT... is the command that pulls (default:
+# git -C DIR pull).
+update_checkout() {
+    _uc_dir=$1
+    _uc_name=$2
+    _uc_use=$3
+    shift 3
+    test "$#" -gt 0 || set -- git -C "$_uc_dir" pull
+    # symbolic-ref exits 1 for a detached HEAD, and more when it can't say.
+    _uc_detached=no
+    _uc_branch=$(git -C "$_uc_dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || {
+        test "$?" -ne 1 || _uc_detached=yes
+        _uc_branch=
+    }
+    _uc_default=$(default_branch "$_uc_dir") || _uc_default=
+    _uc_off=
+    if test "$_uc_detached" = yes; then
+        _uc_off="detached at $(git -C "$_uc_dir" rev-parse --short HEAD 2>/dev/null)"
+    elif test -n "$_uc_branch" && test -n "$_uc_default" && test "$_uc_branch" != "$_uc_default"; then
+        _uc_off="on branch $_uc_branch, not $_uc_default"
+    fi
+    _uc_before=$(git -C "$_uc_dir" rev-parse HEAD 2>/dev/null) || _uc_before=
+    info "Updating $_uc_dir"
+    _uc_status=0
+    # Its output is read for why it failed, so it's caught here rather than
+    # by logged, and then logged or shown the same way.
+    _uc_out=$("$@" </dev/null 2>&1) || _uc_status=$?
+    if test -n "$_uc_out"; then
+        if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+            printf '%s\n' "$_uc_out"
+        else
+            printf '+ %s\n%s\n' "$*" "$_uc_out" >>"$SETUP_LOG"
+        fi
+    fi
+    if test "$_uc_status" -ne 0; then
+        if test "$_uc_detached" = yes; then
+            _uc_why=$_uc_off
+        elif test -n "$_uc_branch" && ! git -C "$_uc_dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+            _uc_why="on branch $_uc_branch, no upstream"
+        else
+            case "$_uc_out" in
+                *"Could not resolve host"* | *"Could not read from remote"* | *"unable to access"* \
+                | *"timed out"* | *"Network is unreachable"* | *"Connection refused"*)
+                    _uc_why="can't reach origin" ;;
+                *"local changes"* | *"would be overwritten"* | *"unstaged changes"* \
+                | *"uncommitted changes"* | *"commit or stash"* | *"commit your changes"*)
+                    _uc_why="local changes" ;;
+                *"fast-forward"* | *"divergent"* | *"diverged"*)
+                    _uc_why="diverged from $(git -C "$_uc_dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" ;;
+                *CONFLICT* | *"merge failed"*)
+                    _uc_why="merge conflicts to resolve" ;;
+                *)
+                    _uc_why="git failed" ;;
+            esac
+            case "$_uc_off" in
+                "on branch"*) _uc_why="$_uc_off; $_uc_why" ;;
+            esac
+        fi
+        _uc_said=$(git_message "$_uc_out")
+        warn "couldn't update $_uc_dir: $_uc_why (git pull exited $_uc_status${_uc_said:+: $_uc_said}); $_uc_use"
+        record_why git failed-update "$_uc_name" "$_uc_why"
+        return 1
+    fi
+    if test -n "$_uc_off"; then
+        warn "$_uc_dir is $_uc_off; $_uc_use"
+    fi
+    _uc_after=$(git -C "$_uc_dir" rev-parse HEAD 2>/dev/null) || _uc_after=
+    _uc_state=already
+    test "$_uc_after" = "$_uc_before" || _uc_state=updated
+    record_why git "$_uc_state" "$_uc_name" "${_uc_off%%,*}"
 }
 
 # Clone tilemo if there's no checkout, then copy its modules into
@@ -1427,15 +1709,18 @@ install_brew_tool() {
 # gets told to update.
 install_tilemo() {
     if test "$TILEMO_DIR" = "$TILEMO_OLD_DIR"; then
-        info "Using the checkout in $TILEMO_DIR, cloned before timo was renamed tilemo; rename it to $HOME/tilemo whenever suits"
+        info "Using $TILEMO_DIR, cloned before timo was renamed tilemo; rename it to $HOME/tilemo whenever suits"
     fi
     if test -d "$TILEMO_DIR"; then
         if test "$INSTALL" = no; then
-            info "Installing $TILEMO_DIR as it stands, without pulling it (--no-install)"
+            info "Installing $TILEMO_DIR as it is, without pulling it: --no-install"
         elif ! is_command git; then
-            warn "git not found, so $TILEMO_DIR isn't updated; installing it as it stands"
-        elif ! git -C "$TILEMO_DIR" pull --ff-only; then
-            warn "could not update $TILEMO_DIR (local commits, changes a pull would overwrite, or no network?); installing it as it stands"
+            warn "no git, so $TILEMO_DIR isn't updated; installing it as it is"
+        else
+            # A pull that fails says why, and so does a checkout on a branch
+            # of its own; either way it's installed as it is.
+            update_checkout "$TILEMO_DIR" tilemo "installing it as is" \
+                git -C "$TILEMO_DIR" pull --ff-only || :
         fi
     else
         if test "$INSTALL" = no; then
@@ -1449,18 +1734,20 @@ install_tilemo() {
         info "Cloning tilemo into $TILEMO_DIR"
         # git removes the directory it created when a clone fails, so a failure
         # here leaves nothing for the next run to mistake for a checkout.
-        if ! git clone "$TILEMO_REPO" "$TILEMO_DIR"; then
-            warn "could not clone $TILEMO_REPO into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+        if ! logged git clone "$TILEMO_REPO" "$TILEMO_DIR"; then
+            record_install git failed tilemo
+            warn "couldn't clone $TILEMO_REPO into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
             return 0
         fi
+        record_install git installed tilemo
     fi
     if ! is_command make; then
         warn "make not found, so tilemo can't be installed from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
     info "Installing tilemo from $TILEMO_DIR"
-    if ! make -C "$TILEMO_DIR" install; then
-        warn "could not install tilemo from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+    if ! logged make -C "$TILEMO_DIR" install; then
+        warn "couldn't install tilemo from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
     if ! test -d "$HOME/.hammerspoon/tilemo"; then
@@ -1499,7 +1786,7 @@ configure_hammerspoon_init() {
         esac
         return 0
     fi
-    info "Writing $_hs_init to start tilemo"
+    say "Writing $_hs_init to start tilemo"
     try mkdir -p "$_hs_dir"
     try write_file "$_hs_init" <<'LUA'
 tilemo = require("tilemo")
@@ -1633,7 +1920,9 @@ karabiner_path() {
 # installs a driver extension that needs approving in the GUI anyway, so an
 # offline install would still leave the interactive half undone.
 install_karabiner() {
-    if karabiner_path >/dev/null; then
+    if _installed=$(karabiner_path); then
+        info "Skipping Karabiner-Elements: already installed at $_installed"
+        record_install brew already karabiner-elements
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1654,9 +1943,10 @@ install_karabiner() {
     if stale_cask_record karabiner-elements Karabiner-Elements "until then, $KARABINER_MISSING_EFFECT"; then
         return 0
     fi
-    info "Installing Karabiner-Elements; its installer may ask for your password"
-    brew_logged install --cask karabiner-elements \
-        || warn "could not install Karabiner-Elements; $KARABINER_MISSING_EFFECT until it is"
+    # Its installer asks for an administrator's password, on the terminal,
+    # with what it's for in the log; so it's said here first.
+    say "Installing Karabiner-Elements, whose installer asks for your password"
+    install_cask karabiner-elements Karabiner-Elements "$KARABINER_MISSING_EFFECT"
 }
 
 # The title Karabiner lists rule file $1 under, from its "title", or nothing.
@@ -1697,7 +1987,7 @@ configure_karabiner() {
     elif test -f "$KARABINER_RULE"; then
         # Without tilemo the old rule still works as it always did, so it's
         # named as it is, as the stale arrow rule is below.
-        info "$KARABINER_RULE predates tilemo taking Alt+Tab and still makes Alt+Tab switch applications; update the conf repo and run confinst for the current rule"
+        say "$KARABINER_RULE predates tilemo taking Alt+Tab and still makes Alt+Tab switch applications; update the conf repo and run confinst for the current rule"
         karabiner_rule "Alt+Tab switches applications" "$KARABINER_RULE"
     else
         warn "$KARABINER_RULE not found; run confinst after cloning the conf repo, or Ctrl+Tab keeps switching applications"
@@ -1709,7 +1999,7 @@ configure_karabiner() {
         if grep -qF "$KARABINER_HOME_END" "$KARABINER_ARROW_RULE"; then
             karabiner_rule "$KARABINER_HOME_END" "$KARABINER_ARROW_RULE"
         else
-            info "$KARABINER_ARROW_RULE predates \"$KARABINER_HOME_END\"; update the conf repo for it, or Home and End keep scrolling the document"
+            say "$KARABINER_ARROW_RULE predates \"$KARABINER_HOME_END\"; update the conf repo for it, or Home and End keep scrolling the document"
         fi
     elif test -f "$KARABINER_ARROW_RULE"; then
         # A conf checkout from before the Win+Shift row: re-adding that rule
@@ -1732,7 +2022,7 @@ configure_karabiner() {
         if grep -qF "$KARABINER_INTERRUPT" "$KARABINER_TERMINAL_RULE"; then
             karabiner_rule "$KARABINER_INTERRUPT" "$KARABINER_TERMINAL_RULE"
         else
-            info "$KARABINER_TERMINAL_RULE predates \"$KARABINER_INTERRUPT\"; update the conf repo for it, or Terminal and iTerm2 keep the interrupt on Alt+C"
+            say "$KARABINER_TERMINAL_RULE predates \"$KARABINER_INTERRUPT\"; update the conf repo for it, or Terminal and iTerm2 keep the interrupt on Alt+C"
         fi
     else
         warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
@@ -1742,7 +2032,7 @@ configure_karabiner() {
         if test -f "$KARABINER_TILEMO_RULE"; then
             karabiner_rule "tilemo:" "$KARABINER_TILEMO_RULE"
         elif test -f "$KARABINER_TIMO_RULE"; then
-            info "$KARABINER_TIMO_RULE predates the rename to tilemo and still works; update the conf repo and run confinst to get the \"tilemo:\" rule"
+            say "$KARABINER_TIMO_RULE predates the rename to tilemo and still works; update the conf repo and run confinst to get the \"tilemo:\" rule"
             karabiner_rule "timo:" "$KARABINER_TIMO_RULE"
         else
             warn "$KARABINER_TILEMO_RULE not found; run confinst after updating the conf repo, or tilemo falls back to Option for its Super key"
@@ -1816,7 +2106,9 @@ linearmouse_path() {
 # Homebrew only, like Hammerspoon: the cask is an app, so --no-sudo has
 # nothing to skip.
 install_linearmouse() {
-    if linearmouse_path >/dev/null; then
+    if _installed=$(linearmouse_path); then
+        info "Skipping LinearMouse: already installed at $_installed"
+        record_install brew already linearmouse
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1830,9 +2122,7 @@ install_linearmouse() {
     if stale_cask_record linearmouse LinearMouse "until then, $LINEARMOUSE_MISSING_EFFECT"; then
         return 0
     fi
-    info "Installing LinearMouse"
-    brew_logged install --cask linearmouse \
-        || warn "could not install LinearMouse; $LINEARMOUSE_MISSING_EFFECT until it is"
+    install_cask linearmouse LinearMouse "$LINEARMOUSE_MISSING_EFFECT"
 }
 
 # The config LinearMouse reads: the first of its two places that exists.
@@ -1866,12 +2156,12 @@ configure_linearmouse() {
 
     _lm_config=$(linearmouse_config)
     if linearmouse_config_is_first "$_lm_config"; then
-        info "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration over it"
+        say "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration over it"
         write_linearmouse_config "$_lm_config"
     elif test -e "$_lm_config" || test -L "$_lm_config"; then
         info "$_lm_config exists; leaving LinearMouse's settings as they are"
     else
-        info "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration"
+        say "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration"
         write_linearmouse_config "$_lm_config"
     fi
 
@@ -2134,7 +2424,7 @@ configure_app_shortcuts() {
             # the key equivalent binds nothing.
             stale_workflow="$SERVICES_DIR/$workflow_name.workflow"
             if test -d "$stale_workflow"; then
-                info "Removing the stale Quick Action for $launcher_name"
+                say "Removing the stale Quick Action for $launcher_name"
                 try rm -rf "$stale_workflow"
             fi
             continue
@@ -2235,13 +2525,20 @@ if is_command setup-macos.local; then
 fi
 
 if test "$WARNINGS" -eq 0; then
-    info "macOS configured successfully"
+    info "macOS is configured"
 else
     # Not via warn(): this is the tally, not another problem to count. Only
     # reachable under --ignore-errors, which is the whole point of that flag --
     # so the exit status stays 0 and the caller keeps going.
     printf "macOS configured with %s problem(s); see the warnings above\n" \
         "$WARNINGS" >&2
+fi
+
+# The install summary comes ahead of the steps left by hand when this is the
+# outermost script, so they stay last; under setup, setup prints it at its end.
+if test "$PROBLEMS_OWNER" = yes && test -n "${SETUP_INSTALLS:-}"; then
+    print_installs
+    printf "" > "$SETUP_INSTALLS"
 fi
 
 # Last, so it's what's on screen when the run ends.

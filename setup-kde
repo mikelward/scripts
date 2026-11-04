@@ -42,11 +42,13 @@
 #
 # Usage:
 #     setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-#               [--no-live-shortcuts] [-h | --help]
+#               [--no-live-shortcuts] [-v | --verbose] [-h | --help]
 #
 # --no-install skips building/installing Krohnkite and only (re)applies the
 # KDE configuration. --ignore-errors keeps going past failures instead of
-# aborting on the first one. setup forwards both flags here.
+# aborting on the first one. --verbose shows every step and the commands' own
+# output; without it, the run says only what it changed, what's left to do
+# and what went wrong, as setup does. setup forwards all three here.
 #
 # --no-sudo is accepted (and forwarded by setup) for consistency with the
 # other setup helpers, but has nothing to skip: as noted above this helper
@@ -122,15 +124,103 @@ PYTHON="${PYTHON:-python3}"
 # a logout, for a session with too much open to risk.
 LIVE_SHORTCUTS_MODE=on
 
+# --- What a run prints ---
+
+# setup and the helpers it runs (setup-kde, setup-tide, setup-macos) print
+# what a run changed, what's left for you to do, and what went wrong, and
+# nothing else unless --verbose:
+#   say          a change, or something to do: always shown
+#   info         progress, and what was skipped or already so: --verbose only
+#   warn, error  problems, on stderr, repeated as the run ends
+# Package managers, builds and make run through logged, which keeps their
+# output in $SETUP_LOG. What each install step found is tallied with
+# record_install, and the run ends with a line per source: what was already
+# installed, what it installed or updated, and what failed. The outermost of
+# setup and its helpers makes the log and the tally and prints the summary; a
+# helper it runs inherits both and only adds to them.
+VERBOSE=no
+
+say() {
+    printf "%s\n" "$*"
+}
+
+info() {
+    test "${VERBOSE:-no}" = yes || return 0
+    printf "%s\n" "$*"
+}
+
 # Every warning and error goes to $SETUP_PROBLEMS too, so the run ends by
-# repeating them all: one line among thousands scrolls by unseen. The
-# outermost of setup and its helpers (setup-kde, setup-tide, setup-macos)
-# makes the file and repeats it as it exits, however it exits; a helper it
-# runs inherits the file and only adds to it.
+# repeating them all: one line among thousands scrolls by unseen.
 note_problem() {
     test -n "${SETUP_PROBLEMS:-}" || return 0
     printf '%s\n' "$1" >>"$SETUP_PROBLEMS" ||
         printf "Warning: couldn't add that to %s, so the end of the run won't repeat it\n" "$SETUP_PROBLEMS" >&2
+}
+
+# record_install SOURCE STATE NAME...: tallies NAME... for the summary.
+# SOURCE is where they come from: a package manager (apt, dnf, pacman, brew,
+# npm), homepkg, git (checkouts, and builds from them) or download (an
+# installer fetched with curl). STATE is already (installed before this run),
+# installed, updated, failed-update (a checkout that couldn't be pulled) or
+# failed. record_why SOURCE STATE NAME WHY tallies one NAME with a few words
+# on it, which the summary puts in parentheses after it.
+record_install() {
+    _ri_source=$1
+    _ri_state=$2
+    shift 2
+    for _ri_name in "$@"; do
+        record_why "$_ri_source" "$_ri_state" "$_ri_name" ""
+    done
+}
+
+record_why() {
+    test -n "${SETUP_INSTALLS:-}" || return 0
+    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >>"$SETUP_INSTALLS" ||
+        printf "Warning: couldn't add %s to %s, so the summary leaves it out\n" "$3" "$SETUP_INSTALLS" >&2
+}
+
+# print_installs: the tally as a line per source, in the order they came:
+#   apt: already installed: git jq; newly installed: zoxide; failed: kitty
+# A name tallied twice keeps its best news: newly installed, then updated,
+# then failed to update, then already installed, then failed.
+print_installs() {
+    test -s "${SETUP_INSTALLS:-}" || return 0
+    printf '\n'
+    awk '
+        BEGIN {
+            rank["installed"] = 5; rank["updated"] = 4; rank["failed-update"] = 3
+            rank["already"] = 2; rank["failed"] = 1
+            order[1] = "already"; order[2] = "installed"; order[3] = "updated"
+            order[4] = "failed-update"; order[5] = "failed"
+            words["already"] = "already installed"; words["installed"] = "newly installed"
+            words["updated"] = "updated"; words["failed-update"] = "failed to update"
+            words["failed"] = "failed"
+        }
+        NF >= 3 && ($2 in rank) {
+            if (!($1 in seen)) { seen[$1] = 1; sources[++nsources] = $1 }
+            key = $1 SUBSEP $3
+            why = $0
+            sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", why)
+            if (!(key in state)) names[$1, ++count[$1]] = $3
+            if (!(key in state) || rank[$2] > rank[state[key]]) { state[key] = $2; note[key] = why }
+        }
+        END {
+            for (s = 1; s <= nsources; s++) {
+                src = sources[s]
+                line = ""
+                for (o = 1; o <= 5; o++) {
+                    list = ""
+                    for (i = 1; i <= count[src]; i++) {
+                        key = src SUBSEP names[src, i]
+                        if (state[key] != order[o]) continue
+                        list = list " " names[src, i]
+                        if (note[key] != "") list = list " (" note[key] ")"
+                    }
+                    if (list != "") line = line (line == "" ? "" : ";") " " words[order[o]] ":" list
+                }
+                print src ":" line
+            }
+        }' "$SETUP_INSTALLS"
 }
 
 PROBLEMS_OWNER=no
@@ -143,15 +233,45 @@ start_problem_recap() {
     fi
     export SETUP_PROBLEMS
     PROBLEMS_OWNER=yes
+    start_run_files
 }
 
-# recap_problems STATUS, from the EXIT trap: repeats every warning and error,
-# says if the run stopped early, and keeps STATUS as the exit status.
+# start_run_files: the tally, in $TMPDIR, and the log, in
+# $XDG_STATE_HOME/setup, a fresh one each run, with the last run's kept as
+# setup.log.1.
+start_run_files() {
+    if SETUP_INSTALLS=$(mktemp "${TMPDIR:-/tmp}/setup-installs-XXXXXX"); then
+        export SETUP_INSTALLS
+    else
+        SETUP_INSTALLS=
+        warn "couldn't make a file to tally installs in, so the run won't end with a summary of them"
+    fi
+    _log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/setup"
+    SETUP_LOG="$_log_dir/setup.log"
+    if ! mkdir -p "$_log_dir" \
+            || { test -f "$SETUP_LOG" && ! mv -f "$SETUP_LOG" "$SETUP_LOG.1"; } \
+            || ! printf "" >"$SETUP_LOG"; then
+        warn "couldn't start $SETUP_LOG, so commands' output shows here instead"
+        SETUP_LOG=
+    fi
+    export SETUP_LOG
+}
+
+# recap_problems STATUS, from the EXIT trap: prints the install summary,
+# repeats every warning and error, says if the run stopped early, and keeps
+# STATUS as the exit status.
 recap_problems() {
     test "$PROBLEMS_OWNER" = yes || return "$1"
+    print_installs
+    if test -n "${SETUP_INSTALLS:-}"; then
+        rm -f "$SETUP_INSTALLS"
+    fi
     if test -s "$SETUP_PROBLEMS"; then
         printf '\n%s: the warnings and errors from this run, again:\n' "setup-kde" >&2
         sed 's/^/  /' "$SETUP_PROBLEMS" >&2
+        if test -s "${SETUP_LOG:-}"; then
+            printf "The commands' output is in %s\n" "$SETUP_LOG" >&2
+        fi
     fi
     if test "$1" -ne 0; then
         printf '%s stopped early, with exit status %s\n' "setup-kde" "$1" >&2
@@ -160,17 +280,84 @@ recap_problems() {
     return "$1"
 }
 
-info() {
-    printf "%s\n" "$*"
+# logged COMMAND...: runs COMMAND with its output added to $SETUP_LOG rather
+# than shown, unless --verbose (or there's no log). Its stdin is /dev/null,
+# so it can't wait on a question no one can see: apt's debconf takes its
+# defaults, and sudo, ssh and git ask on the terminal itself, as they always
+# do. A warning from COMMAND, a function, still shows: warn and error write
+# to the terminal through descriptor 3 meanwhile. When COMMAND fails, the end
+# of its output is shown, and where the rest is.
+logged() {
+    if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+        "$@"
+        return
+    fi
+    # A URL's user-info can be a token (https://USER:TOKEN@host/..., from
+    # --github or $TIDE_REPO, say), so neither the log nor what's shown of a
+    # failure keeps it, as redact_url_credentials does for the terminal.
+    _lg_redact='s#(://)[^/@[:space:]]*@#\1***@#g'
+    _lg_cmd=$(printf '%s\n' "$*" | sed -E "$_lg_redact")
+    # Inside another logged command, whose output already goes to the log:
+    # its variables are global, so this one only notes the command and runs
+    # it, and the outer one reports, redacts and restores LOGGING.
+    if test "${LOGGING:-no}" = yes; then
+        printf '+ %s\n' "$_lg_cmd"
+        "$@"
+        return
+    fi
+    _lg_start=$(awk 'END { print NR }' "$SETUP_LOG" 2>/dev/null) || _lg_start=0
+    printf '+ %s\n' "$_lg_cmd" >>"$SETUP_LOG"
+    LOGGING=yes
+    _lg_status=0
+    "$@" </dev/null 3>&2 >>"$SETUP_LOG" 2>&1 || _lg_status=$?
+    LOGGING=no
+    # The command's own output too: git quotes the URL it couldn't reach.
+    if grep -Eq '://[^/@[:space:]]*@' "$SETUP_LOG" 2>/dev/null; then
+        if ! { sed -E "$_lg_redact" "$SETUP_LOG" >"$SETUP_LOG.redacted" \
+                && mv -f "$SETUP_LOG.redacted" "$SETUP_LOG"; }; then
+            rm -f "$SETUP_LOG.redacted"
+            warn "couldn't take a URL's credentials out of $SETUP_LOG; delete it"
+        fi
+    fi
+    if test "$_lg_status" -eq 0; then
+        return 0
+    fi
+    # From "$*" again: a logged command inside this one set _lg_cmd.
+    _lg_what=$(printf '%s\n' "$*" | sed -E "$_lg_redact" | awk '{
+        sub(/^sudo_or_warn /, "sudo ")
+        s = $1
+        for (i = 2; i <= NF && i <= 3; i++) s = s " " $i
+        if (NF > 3) s = s " ..."
+        print s
+    }')
+    _lg_tail=$(sed -n "$((${_lg_start:-0} + 2)),\$p" "$SETUP_LOG" | tail -n 20)
+    if test -n "$_lg_tail"; then
+        printf "%s failed (exit status %s), ending:\n" "$_lg_what" "$_lg_status" >&2
+        printf '%s\n' "$_lg_tail" | sed 's/^/    /' >&2
+    else
+        printf "%s failed (exit status %s)\n" "$_lg_what" "$_lg_status" >&2
+    fi
+    printf "  Its output is in %s\n" "$SETUP_LOG" >&2
+    return "$_lg_status"
 }
 
+# While logged runs a command, stderr is the log, so warn and error write to
+# the terminal through the descriptor logged keeps for them.
 warn() {
-    printf "Warning: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Warning: %s\n" "$*" >&3
+    else
+        printf "Warning: %s\n" "$*" >&2
+    fi
     note_problem "Warning: $*"
 }
 
 error() {
-    printf "Error: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Error: %s\n" "$*" >&3
+    else
+        printf "Error: %s\n" "$*" >&2
+    fi
     note_problem "Error: $*"
     exit 1
 }
@@ -182,7 +369,7 @@ is_command() {
 usage() {
     cat <<'USAGE'
 Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-                 [--no-live-shortcuts] [-h | --help]
+                 [--no-live-shortcuts] [-v | --verbose] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
@@ -193,6 +380,8 @@ Options:
   --live-shortcuts Apply the shortcuts to the running session (the default)
   --no-live-shortcuts
                    Leave the shortcuts for the next login
+  -v, --verbose    Show every step and the commands' own output, not just
+                   changes, warnings and errors
   -h, --help       Show this help and exit
 USAGE
 }
@@ -219,6 +408,9 @@ while test $# -gt 0; do
             ;;
         --no-live-shortcuts)
             LIVE_SHORTCUTS_MODE=off
+            ;;
+        -v|--verbose)
+            VERBOSE=yes
             ;;
         -h|--help)
             usage
@@ -294,10 +486,11 @@ trap cleanup EXIT
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
 if test "$INSTALL" = yes; then
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
+    # Only a fallback needs them, and that says so itself if it's reached.
     command -v git >/dev/null 2>&1 \
-        || warn "git not found; if the Krohnkite release can't be fetched, the source-build fallback will fail"
+        || info "No git: the Krohnkite source build can't run if its release can't be fetched"
     command -v tsc >/dev/null 2>&1 \
-        || warn "tsc not found; if the Krohnkite release can't be fetched, the source-build fallback will fail unless $KROHNKITE_REPO ships a prebuilt .kwinscript"
+        || info "No tsc: the Krohnkite source build can't run if its release can't be fetched, unless $KROHNKITE_REPO has a prebuilt .kwinscript"
 fi
 
 # --- Install Krohnkite ---
@@ -356,14 +549,14 @@ SHIM
     # Makefile is it.
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
-        PATH="$shimdir:$PATH" go-task package
+        logged env PATH="$shimdir:$PATH" go-task package
     elif command -v task >/dev/null 2>&1 \
             && task --version 2>/dev/null | grep -q '^Task version'; then
         info "Building Krohnkite with task"
-        PATH="$shimdir:$PATH" task package
+        logged env PATH="$shimdir:$PATH" task package
     elif test -f Makefile; then
         info "Building Krohnkite with make"
-        PATH="$shimdir:$PATH" make
+        logged env PATH="$shimdir:$PATH" make
     else
         error "Krohnkite checkout has no Taskfile or Makefile to build with"
     fi
@@ -386,10 +579,10 @@ install_krohnkite_from_source() {
 
     if test -n "${KROHNKITE_BRANCH:-}"; then
         info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
-        git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+        logged git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
     else
         info "Cloning Krohnkite from $KROHNKITE_REPO"
-        git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+        logged git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
     fi
 
     cd "$KROHNKITE_DIR"
@@ -402,16 +595,12 @@ install_krohnkite_from_source() {
         kwinscript=$(find . -name '*.kwinscript' -print -quit)
     fi
     if test -n "$kwinscript"; then
-        info "Installing Krohnkite from $kwinscript"
-        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
-            kpackagetool6 -t KWin/Script -i "$kwinscript"
+        install_kwinscript "$kwinscript" git
     else
         pkgdir=$(find . \( -name metadata.json -o -name metadata.desktop \) \
             -printf '%h\n' -quit 2>/dev/null)
         if test -n "$pkgdir"; then
-            info "Installing Krohnkite from $pkgdir"
-            kpackagetool6 -t KWin/Script -u "$pkgdir" 2>/dev/null ||
-                kpackagetool6 -t KWin/Script -i "$pkgdir"
+            install_kwinscript "$pkgdir" git
         else
             error "Could not find installable Krohnkite package"
         fi
@@ -442,11 +631,10 @@ install_krohnkite() {
         # it, so the fetched asset always lands here.
         asset_dir="$HOME/.local/share/homepkg/assets/krohnkite"
 
-        info "Fetching the Krohnkite release via homepkg"
-        if "$homepkg" --backend codeberg install krohnkite; then
+        info "Fetching the Krohnkite release with homepkg"
+        if logged "$homepkg" --backend codeberg install krohnkite; then
             kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
         else
-            warn "could not fetch the Krohnkite release online; trying a staged bundle"
             bundle=""
             for cand in "${HOMEPKG_KROHNKITE_BUNDLE:-}" \
                     "$SCRIPT_DIR/homepkg-krohnkite.tgz" \
@@ -457,30 +645,70 @@ install_krohnkite() {
                 fi
             done
             if test -n "$bundle"; then
-                info "Fetching the Krohnkite release from bundle: $bundle"
-                "$homepkg" install-bundle "$bundle" \
-                    || warn "the Krohnkite bundle didn't provide the release either"
+                info "Installing the Krohnkite release from $bundle"
+                logged "$homepkg" install-bundle "$bundle" \
+                    || info "$bundle didn't have the Krohnkite release either"
             fi
             # Whatever's on disk now -- fresh from the bundle, or whatever
             # was already cached from an earlier successful fetch if the
             # bundle didn't provide it either (or wasn't staged at all).
             kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
+            if test -n "$kwinscript"; then
+                warn "couldn't fetch the Krohnkite release; installing ${kwinscript##*/}, from ${bundle:-an earlier fetch}"
+            fi
         fi
         if test -z "$kwinscript"; then
-            warn "could not fetch the Krohnkite release via homepkg (offline? stage a bundle with 'homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz krohnkite'); falling back to building from source"
+            warn "couldn't fetch the Krohnkite release (offline? stage a bundle: homepkg --backend codeberg bundle -o homepkg-krohnkite.tgz krohnkite); building it from source"
         fi
     else
-        warn "homepkg not found beside this script; falling back to building Krohnkite from source"
+        warn "no homepkg beside setup-kde; building Krohnkite from source"
     fi
 
     if test -n "$kwinscript"; then
-        info "Installing Krohnkite from $kwinscript"
-        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
-            kpackagetool6 -t KWin/Script -i "$kwinscript"
+        install_kwinscript "$kwinscript" homepkg
         return
     fi
 
     install_krohnkite_from_source
+}
+
+# krohnkite_version DIR: the Version in the metadata of the Krohnkite
+# installed in DIR, or nothing.
+krohnkite_version() {
+    sed -n 's/.*"Version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/metadata.json" 2>/dev/null | head -n 1
+}
+
+# install_kwinscript PACKAGE SOURCE: installs Krohnkite into KWin from
+# PACKAGE (a .kwinscript or its directory), upgrading the one there, and
+# tallies it under SOURCE (homepkg for the release, git for a build) as newly
+# installed, updated or, with the same version as before, already installed.
+install_kwinscript() {
+    _ik_dir="${XDG_DATA_HOME:-$HOME/.local/share}/kwin/scripts/krohnkite"
+    _ik_before=$(krohnkite_version "$_ik_dir")
+    _ik_had=no
+    if test -d "$_ik_dir"; then
+        _ik_had=yes
+    fi
+    info "Installing Krohnkite from $1"
+    # -u upgrades the one there, and fails where there's none, for -i.
+    if { if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+            kpackagetool6 -t KWin/Script -u "$1" 2>/dev/null
+        else
+            kpackagetool6 -t KWin/Script -u "$1" >>"$SETUP_LOG" 2>&1
+        fi; } || logged kpackagetool6 -t KWin/Script -i "$1"; then
+        if test "$_ik_had" = no; then
+            record_install "$2" installed krohnkite
+        elif test "$(krohnkite_version "$_ik_dir")" != "$_ik_before"; then
+            record_install "$2" updated krohnkite
+        else
+            record_install "$2" already krohnkite
+        fi
+        return 0
+    else
+        _ik_status=$?
+        record_install "$2" failed krohnkite
+        return "$_ik_status"
+    fi
 }
 
 # --- Enable Krohnkite ---
@@ -613,7 +841,7 @@ disable_drkonqi() {
     info "Masking DrKonqi's crash handler"
     # Not fatal: the rest of the desktop config doesn't depend on it.
     # shellcheck disable=SC2086 # the list is meant to split
-    if ! systemctl --user mask --now $DRKONQI_UNITS; then
+    if ! logged systemctl --user mask --now $DRKONQI_UNITS; then
         warn "couldn't mask $DRKONQI_UNITS; run 'systemctl --user mask --now $DRKONQI_UNITS' from the desktop session"
     fi
 }
@@ -957,7 +1185,7 @@ reload_kwin() {
         qdbus org.kde.KWin /KWin reconfigure \
             || warn "could not reload KWin; changes apply at next login"
     else
-        warn "qdbus not found, please restart KWin manually or log out and back in"
+        warn "no qdbus6 or qdbus, so KWin's new settings wait for a restart of KWin or the next login"
     fi
 }
 
@@ -1010,7 +1238,7 @@ apply_shortcuts_live() {
     if test "$LIVE_SHORTCUTS_MODE" != on; then
         # Not a warning: --no-live-shortcuts asked for exactly this, and the
         # config is correct either way. Only the current session is behind.
-        info "Shortcuts written; they apply at next login (--no-live-shortcuts was given)"
+        say "KDE's shortcuts apply at the next login: --no-live-shortcuts"
         return 0
     fi
 
@@ -1091,7 +1319,7 @@ apply_shortcuts_live() {
 if test "$INSTALL" = yes; then
     install_krohnkite
 else
-    info "Skipping Krohnkite installation (--no-install)"
+    info "Skipping Krohnkite: --no-install"
 fi
 enable_krohnkite
 configure_krohnkite
@@ -1109,7 +1337,7 @@ configure_app_shortcuts
 # components when sycoca changes, which is what lets apply_shortcuts_live bind
 # the launch shortcuts below.
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
-    kbuildsycoca6
+    logged kbuildsycoca6
 fi
 # Reload to apply all changes. Order matters for the last step: Krohnkite has
 # to be loaded before its shortcuts can be pushed into the daemon, since
@@ -1125,4 +1353,4 @@ if is_command setup-kde.local; then
     source setup-kde.local
 fi
 
-info "KDE configured successfully"
+info "KDE Plasma is configured"

@@ -21,6 +21,26 @@ curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 ```
 
+A run prints only what it changed, what's left for you to do, and what went
+wrong, and ends with a line per source saying what was already installed, what
+it installed or updated, and what failed. Packages already installed are
+still upgraded when there's a newer version, and listed as updated:
+
+```text
+apt: already installed: git ripgrep; newly installed: zoxide; updated: jq
+homepkg: already installed: atuin carapace lf
+git: updated: scripts; failed to update: tide (on branch foo, no upstream)
+```
+
+What the package managers, builds and `make` print goes to
+`~/.local/state/setup/setup.log` (the previous run's is `setup.log.1`); a
+command that fails shows the end of its output and points there. A checkout
+that can't be pulled, or isn't on its default branch, is a warning naming
+why, and is used as it is: setup never switches a branch or drops a change.
+Pass `--verbose` (`-v`) to see every step and the commands' own output as they
+happen; `setup` passes it on to `setup-kde`, `setup-tide` and `setup-macos`,
+which take it too.
+
 ## Installing tools without root
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
@@ -64,12 +84,6 @@ homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
 
 `setup` prefers a bundle over the download, so an offline run never waits for
 a fetch that can't succeed.
-
-On a Mac, Homebrew's own output — downloads, pours, an "already installed"
-warning per package on every rerun, caveats — goes to
-`~/.local/state/setup/brew.log`, which `setup` starts afresh each run and
-`setup-macos` adds to. The run says what it installed in one line, and a failed
-install shows the end of what brew said.
 
 **A machine that won't run binaries from `~/.local/bin`** — a managed Mac whose
 policy kills any binary it hasn't approved (exit 137), or a `noexec` home —

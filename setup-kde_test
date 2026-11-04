@@ -317,7 +317,7 @@ MOCK
     run_kde --no-install
     assert_status 0 &&
     assert_not_called "sudo" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # --- installation: release path (the default; homepkg's codeberg backend) ---
@@ -475,7 +475,7 @@ test_homepkg_missing_falls_back_to_source_build() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_output_contains "homepkg not found beside this script" &&
+    assert_output_contains "no homepkg beside setup-kde; building Krohnkite from source" &&
     assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
@@ -492,7 +492,7 @@ MOCK
     chmod +x "$TEST_TMPDIR/isolated/homepkg"
     run_kde
     assert_status 0 &&
-    assert_output_contains "could not fetch the Krohnkite release via homepkg" &&
+    assert_output_contains "couldn't fetch the Krohnkite release (offline?" &&
     assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
@@ -594,7 +594,7 @@ MOCK
     run_kde --no-install
     unset TMPDIR
     assert_status 0 &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     assert_not_called "mktemp -d" &&
     # And nothing was left behind under TMPDIR either.
     ! ls "$TEST_TMPDIR" | grep -q '^krohnkite-'
@@ -613,7 +613,10 @@ test_missing_tsc_warns_but_prebuilt_still_installs() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_output_contains "tsc not found" &&
+    assert_output_lacks "tsc" || return 1
+    run_kde --verbose
+    assert_status 0 &&
+    assert_output_contains "No tsc: the Krohnkite source build can't run" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
 
@@ -710,7 +713,7 @@ MOCK
     run_kde --no-install
     assert_status 0 &&
     assert_output_contains "couldn't mask drkonqi-coredump-launcher.socket" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # Meta+Left/Right step one desktop and Meta+Shift+Left/Right carry the window
@@ -921,7 +924,7 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/python3"
     run_kde --no-install
     assert_status 0 &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     # python3 is legitimate for kdeshortcut.py, which applies the shortcuts to
     # the running session -- so this can't assert python3 went unused, only
     # that the sweep itself didn't reach for it.
@@ -967,11 +970,11 @@ assert_batch_contains() {
 # needed for -- and what made setup-kde look like it did nothing.
 test_live_apply_is_on_by_default() {
     mock_python3 0
-    run_kde --no-install
+    run_kde --no-install --verbose
     assert_status 0 &&
     assert_called "kdeshortcut.py --quiet --journal" &&
     assert_output_contains "Shortcuts are live; no logout needed" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
 
@@ -982,7 +985,7 @@ test_live_shortcuts_flag_is_accepted() {
     run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_called "kdeshortcut.py --quiet --journal" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # --no-live-shortcuts writes the config and stops there: nothing reaches the
@@ -993,8 +996,8 @@ test_no_live_shortcuts_skips_the_running_session() {
     run_kde --no-install --no-live-shortcuts
     assert_status 0 &&
     assert_not_called "kdeshortcut.py" &&
-    assert_output_contains "they apply at next login" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "apply at the next login: --no-live-shortcuts" &&
+    assert_status 0 &&
     # The config is still written in full -- only the live push is skipped.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
@@ -1029,8 +1032,8 @@ test_declined_live_apply_allocates_no_batch() {
     assert_status 0 &&
     assert_output_lacks "could not create a temporary file" &&
     assert_output_lacks "no shortcut batch was recorded" &&
-    assert_output_contains "they apply at next login" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "apply at the next login: --no-live-shortcuts" &&
+    assert_status 0 &&
     assert_not_called "kdeshortcut.py" &&
     # The config writes are unaffected by any of this.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
@@ -1042,7 +1045,7 @@ test_declined_live_apply_allocates_no_batch() {
 test_shortcuts_pushed_to_running_session() {
     add_launcher browser1
     mock_python3 0
-    run_kde --no-install --live-shortcuts
+    run_kde --no-install --live-shortcuts --verbose
     assert_status 0 &&
     assert_called "kdeshortcut.py --quiet --journal" &&
     assert_batch_contains 'kwin\tWindow Close\tMeta+Backspace' &&
@@ -1091,7 +1094,7 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
     assert_status 0 &&
     assert_output_contains "could not create a temporary file" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     # The config writes are the part that must survive.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
@@ -1117,7 +1120,7 @@ test_uncreatable_journal_dir_skips_live_apply() {
     assert_output_contains "could not create the state directory" &&
     assert_output_contains "not applying shortcuts to the running session" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     # Nothing may reach the daemon without the journal.
     assert_not_called "kdeshortcut.py" &&
     # The config writes still happen; only the live push is skipped.
@@ -1174,7 +1177,7 @@ test_missing_python3_falls_back_to_logout_advice() {
     assert_status 0 &&
     assert_output_contains "no-such-python3 not found" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # A shortcut the daemon refuses (status 1) is reported, not swallowed, and the
@@ -1185,7 +1188,7 @@ test_failed_live_apply_warns_and_continues() {
     assert_status 0 &&
     assert_output_contains "some shortcuts could not be applied" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # kglobalaccel unreachable (status 3) is a different message: nothing was
@@ -1195,7 +1198,7 @@ test_unreachable_daemon_warns_and_continues() {
     run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_output_contains "could not reach kglobalaccel" &&
-    assert_output_contains "KDE configured successfully"
+    assert_status 0
 }
 
 # The launcher key map, pinned per launcher. Only browser1's key was asserted
@@ -1266,7 +1269,7 @@ test_missing_launcher_skipped_not_fatal() {
     # home directory the old message leaked.
     assert_output_contains "browser2 not found on PATH or beside this script; skipping its launch shortcut" &&
     assert_output_lacks "$TEST_TMPDIR/isolated" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_status 0 &&
     assert_file_not_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser2.desktop" &&
     assert_file_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
 }
@@ -1309,6 +1312,64 @@ MOCK
     grep -q "Exec=$TEST_TMPDIR/isolated/browser1" "$desktop"
 }
 
+
+# --- What a run prints ---
+
+test_verbose_flag_accepted_and_documented() {
+    run_kde --help
+    assert_status 0 &&
+    assert_output_contains "-v, --verbose" &&
+    run_kde --no-install --verbose &&
+    assert_status 0
+}
+
+# The release installs quietly, and the run ends with it in the summary,
+# under homepkg: newly installed, then already installed on a rerun with the
+# same version, then updated when the version changes.
+test_krohnkite_is_summarized() {
+    add_release_mocks
+    scripts_dir="$TEST_TMPDIR/home/.local/share/kwin/scripts/krohnkite"
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "homepkg: newly installed: krohnkite" &&
+    assert_output_lacks "Installing Krohnkite" || return 1
+    mkdir -p "$scripts_dir"
+    printf '{\n  "KPlugin": {\n    "Version": "0.9.9.3"\n  }\n}\n' > "$scripts_dir/metadata.json"
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "homepkg: already installed: krohnkite" || return 1
+    cat > "$TEST_TMPDIR/bin/kpackagetool6" <<MOCK
+printf "%s\\n" "kpackagetool6 \$*" >> "$CALLS"
+printf '{\\n  "KPlugin": {\\n    "Version": "0.9.9.4"\\n  }\\n}\\n' > "$scripts_dir/metadata.json"
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kpackagetool6"
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "homepkg: updated: krohnkite"
+}
+
+# What KDE's tools print goes to the log, unless --verbose.
+test_kde_tools_output_is_logged() {
+    cat > "$TEST_TMPDIR/bin/kbuildsycoca6" <<MOCK
+printf "%s\\n" "kbuildsycoca6 \$*" >> "$CALLS"
+echo "kbuildsycoca6 running..."
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kbuildsycoca6"
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_lacks "kbuildsycoca6 running" &&
+    assert_file_exists "$TEST_TMPDIR/home/.local/state/setup/setup.log" &&
+    case "$(cat "$TEST_TMPDIR/home/.local/state/setup/setup.log")" in
+        *"kbuildsycoca6 running..."*) ;;
+        *) echo "  FAIL: kbuildsycoca6's output isn't in the log"; return 1 ;;
+    esac
+    run_kde --no-install --verbose
+    assert_status 0 &&
+    assert_output_contains "kbuildsycoca6 running..." &&
+    assert_output_contains "Configuring keybindings"
+}
+
 run_test "help flag" test_help_flag
 run_test "unknown option errors" test_unknown_option
 run_test "--no-sudo is accepted as a no-op" test_no_sudo_accepted_noop
@@ -1345,7 +1406,7 @@ run_test "the source-build directory name is unpredictable (fallback)" \
     test_source_build_dir_is_unpredictable
 run_test "a config-only run creates no build directory" \
     test_config_only_run_creates_no_build_dir
-run_test "missing tsc warns up front but prebuilt still installs (fallback)" \
+run_test "missing tsc is said with --verbose but prebuilt still installs (fallback)" \
     test_missing_tsc_warns_but_prebuilt_still_installs
 run_test "source build without tsc errors instead of remote npm (fallback)" \
     test_source_build_without_tsc_errors
@@ -1416,6 +1477,10 @@ run_test "launcher beside the script is found without PATH" \
     test_sibling_launcher_fallback
 run_test "sibling fallback survives install's cd (relative \$0)" \
     test_sibling_launcher_fallback_survives_install_cd
+
+run_test "--verbose is accepted and documented" test_verbose_flag_accepted_and_documented
+run_test "Krohnkite is in the summary, by what the run did" test_krohnkite_is_summarized
+run_test "KDE's tools' output is logged unless --verbose" test_kde_tools_output_is_logged
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

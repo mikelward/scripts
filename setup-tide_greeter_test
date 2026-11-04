@@ -33,7 +33,7 @@ check "greetd: starts nothing now, which would end this session" lacks "$calls" 
 check "greetd: restarts nothing" lacks "$calls" "restart"
 check "greetd: says when, and the way back" \
     has "$output" "From the next boot, greetd's greeter replaces gdm3.service. If it doesn't come up, press Ctrl+Alt+F3, log in, and run 'sudo systemctl enable --force gdm3.service && sudo systemctl disable greetd.service', or rerun 'setup --no-greeter'"
-check "greetd: says where to pick tide" has "$output" "Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
+check "greetd: says where to pick tide" has "$output" "tide is installed: pick the \"tide\" session at greetd's greeter, beside KDE Plasma"
 check "greetd: gives greetd's user a home outside /etc" \
     has "$calls" "sudo install -d -m 700 -o 999 -g 999 $T/var/lib/tide-greeter"
 check "greetd: and makes it its home" has "$calls" "sudo usermod -d $T/var/lib/tide-greeter _greetd"
@@ -53,7 +53,7 @@ check "--no-greeter: and disables greetd" has "$calls" "sudo systemctl disable g
 check "--no-greeter: GDM is the display manager" test "$(cat "$T/dm")" = gdm3.service
 check "--no-greeter: says so" has "$output" "gdm3.service is the display manager again from the next boot"
 check "--no-greeter: installs no greetd" lacks "$calls" "install -y greetd"
-check "--no-greeter: leaves the session's own greeting" has "$output" "Log out and pick the \"tide\" session"
+check "--no-greeter: says nothing more on a rerun" lacks "$output" "pick the \"tide\" session"
 # And when greetd isn't the display manager, --no-greeter does nothing.
 : > "$CALLS"
 run
@@ -62,7 +62,7 @@ teardown
 
 # Without --greeter or --no-greeter, the display manager is left alone: on
 # a GDM machine, tide is one more session at GDM's login screen.
-setup; ARGS=(); echo gdm3.service > "$T/dm"; run
+setup; ARGS=(--verbose); echo gdm3.service > "$T/dm"; run
 check "default: installs no greetd" lacks "$calls" "install -y greetd"
 check "default: enables no display manager" lacks "$calls" "systemctl enable"
 check "default: GDM stays the display manager" test "$(cat "$T/dm")" = gdm3.service
@@ -70,7 +70,7 @@ check "default: writes no greetd config" test ! -e "$T/etc/greetd/config.toml"
 check "default: notes no display manager" test ! -e "$T/var/lib/setup-tide/previous-display-manager"
 check "default: says how to switch, once" \
     test "$(printf '%s\n' "$output" | grep -c "Leaving gdm3.service as the display manager; 'setup --greeter' makes tide's greeter the login screen")" -eq 1
-check "default: says where to pick tide" has "$output" "Log out and pick the \"tide\" session"
+check "default: says where to pick tide" has "$output" "tide is installed: log out and pick the \"tide\" session"
 check "default: the run succeeds" test "$status" -eq 0
 # Once --greeter has made greetd the display manager, a plain rerun keeps it
 # and puts its config right.
@@ -82,12 +82,12 @@ check "default after --greeter: greetd stays the display manager" test "$(cat "$
 check "default after --greeter: puts GDM back for no boot" lacks "$calls" "enable --force gdm3.service"
 check "default after --greeter: rewrites greetd's config" \
     test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
-check "default after --greeter: says where to pick tide" has "$output" "Pick the \"tide\" session at greetd's greeter"
+check "default after --greeter: says nothing more on a rerun" lacks "$output" "pick the \"tide\" session"
 check "default after --greeter: the run succeeds" test "$status" -eq 0
 teardown
 
 # A greetd that setup didn't make the display manager keeps its own config.
-setup; ARGS=(); echo greetd.service > "$T/dm"
+setup; ARGS=(--verbose); echo greetd.service > "$T/dm"
 mkdir -p "$T/etc/greetd"; echo mine > "$T/etc/greetd/config.toml"
 run
 check "default, greetd by hand: leaves its config" test "$(cat "$T/etc/greetd/config.toml")" = mine

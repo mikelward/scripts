@@ -72,7 +72,7 @@ check "the build checks Hyprland's commit" has "$calls" "git -C $T/src/hyprland-
 : > "$CALLS"
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "the same pins don't rebuild" lacks "$calls" "cmake"
-check "the same pins say so" has "$output" "already built from these pins"
+check "the same pins are already installed" has "$output" "git: already installed: Hyprland"
 # A new commit for the same tag is a new build, checked and built afresh.
 sed 's/ a21e87b878e72ee5dfd375899e8b2ad0d0c4c0e1 / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
 chmod +x "$T/setup-repinned"
@@ -285,9 +285,9 @@ teardown
 # A rerun after a failure resumes from the step that failed.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
 : > "$CALLS"
-run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--verbose); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "a resumed build skips what it finished" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
-check "a resumed build says so" has "$output" "Already built hyprutils v0.14.2"
+check "a resumed build says so" has "$output" "Skipping hyprutils v0.14.2: already built"
 check "a resumed build redoes the failed step" has "$calls" "cmake -S $T/src/hyprland-build/hyprlang "
 check "a resumed build finishes" has "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
 check "a resumed build marks itself complete" test -f "$(inst)/quickspace-pins"
@@ -303,9 +303,9 @@ test "\$*" != -u || { echo 4242; exit 0; }
 exec $real_id "\$@"
 MOCK
 chmod +x "$T/bin/id"; : > "$CALLS"
-run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--verbose); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "another account's partial build is removed" has "$calls" "sudo rm -rf $(inst)"
-check "another account's partial build says so" has "$output" "$(inst) is another account's partial build, so it's started afresh"
+check "another account's partial build says so" has "$output" "Starting $(inst) afresh: it's another account's partial build"
 check "another account's partial build is rebuilt from the start" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
 check "another account's partial build is rebuilt to the end" test -f "$(inst)/quickspace-pins"
 teardown
@@ -314,7 +314,7 @@ teardown
 # marker couldn't be written again.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 rm "$(inst)/quickspace-pins"; : > "$CALLS"
-run FAKE_APT_HYPRLAND=0.53.3+ds-4
+ARGS=(--verbose); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "a build that lost its marker is removed" has "$calls" "sudo rm -rf $(inst)"
 check "a build that lost its marker is rebuilt" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
 check "a build that lost its marker says so" has "$output" "has lost its marker, so it's rebuilt"
@@ -340,7 +340,7 @@ ln -s /usr/bin/true "$T/usr-local-bin/hyprctl.keep"
 ARGS=(--no-build-hyprland); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "--no-build-hyprland removes the build's links" test ! -e "$T/usr-local-bin/Hyprland" -a ! -L "$T/usr-local-bin/hyprctl"
 check "--no-build-hyprland leaves other links" test -L "$T/usr-local-bin/hyprctl.keep"
-check "--no-build-hyprland says so" has "$output" "which point to a source build"
+check "--no-build-hyprland says so" has "$output" "links to a source build: apt's Hyprland is used instead"
 teardown
 
 # A switch back to apt that removes one link but not the other puts the
@@ -454,15 +454,15 @@ teardown
 
 # A failed step stops the build before anything is linked or recorded.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
-check "a failed build step is reported" has "$output" "building Hyprland failed; the sources are in $T/src/hyprland-build"
+check "a failed build step is reported" has "$output" "couldn't build Hyprland; the sources are in $T/src/hyprland-build"
 check "a failed build is fatal" test "$status" -ne 0
-check "a failed build doesn't claim success" lacks "$output" "tide installed"
+check "a failed build doesn't claim success" lacks "$output" "tide is installed"
 check "a failed build stops before Hyprland" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland"
 check "a failed build isn't marked complete" test ! -e "$(inst)/quickspace-pins"
 check "a failed build says a rerun resumes" has "$output" "a rerun resumes from the step that failed"
 check "a failed build links nothing" test ! -e "$T/usr-local-bin/Hyprland"
 ARGS=(--ignore-errors); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
-check "--ignore-errors carries on past a failed build" has "$output" "tide installed"
+check "--ignore-errors carries on past a failed build" has "$output" "tide is installed"
 teardown
 
 finish

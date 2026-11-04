@@ -66,7 +66,8 @@ MOCK
     # pacman refuses the whole command when it names a package in
     # \$FAKE_MISSING. -Si describes every other package, failing, as pacman
     # does, when it names one of them, or answering nothing with
-    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED.
+    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED, and -Q
+    # gives each of them version 1.0.
     cat > "$T/bin/pacman" <<MOCK
 #!/bin/sh
 case "\$1" in
@@ -75,7 +76,7 @@ case "\$1" in
         shift 2
         status=0
         for pkg; do
-            case " \$FAKE_MISSING " in *" \$pkg "*) status=1; continue ;; esac
+            case " \$FAKE_MISSING " in *" \$pkg "*) echo "error: package '\$pkg' was not found" >&2; status=1; continue ;; esac
             printf "Repository      : extra\\nName            : %s\\n\\n" "\$pkg"
         done
         exit \$status
@@ -88,6 +89,10 @@ case "\$1" in
         done
         exit \$status
         ;;
+    -Q)
+        case " \$FAKE_INSTALLED " in *" \$3 "*) printf "%s 1.0\\n" "\$3"; exit 0 ;; esac
+        exit 1
+        ;;
 esac
 printf "%s\\n" "pacman \$*" >> "$CALLS"
 for arg; do
@@ -96,8 +101,32 @@ done
 MOCK
     # dpkg-query reports Qt base's private headers as \$FAKE_QT_VERSION and
     # Qt Declarative's as \$FAKE_QTDECL_VERSION, or Ubuntu 26.04's.
+    # Asked for a package's status, it says installed for those in
+    # \$FAKE_INSTALLED, as rpm -q does, at 1.0, or 2.0 for one in
+    # \$FAKE_UPGRADES once apt-get install has been asked for it.
+    cat > "$T/bin/rpm" <<MOCK
+#!/bin/sh
+for last; do :; done
+case " \$FAKE_INSTALLED " in *" \$last "*) exit 0 ;; esac
+exit 1
+MOCK
     cat > "$T/bin/dpkg-query" <<MOCK
 #!/bin/sh
+case "\$2" in
+    *Status*)
+        case " \$FAKE_INSTALLED " in
+            *" \$3 "*)
+                version=1.0
+                case " \$FAKE_UPGRADES " in
+                    *" \$3 "*) grep -Eq "^apt-get install( .*)? \$3( |\$)" "$CALLS" && version=2.0 ;;
+                esac
+                echo "install ok installed \$version"
+                exit 0
+                ;;
+        esac
+        exit 1
+        ;;
+esac
 printf "%s\\n" "dpkg-query \$*" >> "$CALLS"
 shift 2
 for pkg; do
@@ -243,6 +272,14 @@ if test "\$1" = clone; then
     esac
 fi
 if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
+# The checkout is on main, origin's default branch.
+if test "\$3" = symbolic-ref; then
+    case "\$*" in
+        *origin/HEAD*) echo origin/main ;;
+        *) echo main ;;
+    esac
+    exit 0
+fi
 # rev-parse names the commit a Hyprland pin's checkout was pinned at, or
 # another for the one named in \$FAKE_MOVED_PIN; Quickshell's is its pinned
 # commit, or \$FAKE_QS_COMMIT.
@@ -281,6 +318,8 @@ MOCK
     # \$FAKE_GREETD_RESTART_PREVENT, and stays active after exiting with
     # \$FAKE_GREETD_REMAIN, or no.
     # \$FAKE_UNIT_QUERY_FAILS names a property it won't say.
+    # \$FAKE_USER_ENABLE_FAILS names a user unit systemctl --user enable
+    # can't find.
     # enable --force and disable move
     # display-manager.service as systemd's alias does. Enabling fails with
     # \$FAKE_ENABLE_FAILS, and leaves the alias for greetd with
@@ -293,6 +332,10 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "systemctl \$*" >> "$CALLS"
 test "\$2" != show-environment || exit \${FAKE_NO_USER_MANAGER:-0}
+if test "\$1 \$2" = "--user enable" && test -n "\$FAKE_USER_ENABLE_FAILS" && test "\$3" = "\$FAKE_USER_ENABLE_FAILS"; then
+    echo "Failed to enable unit: Unit file \$3 does not exist." >&2
+    exit 1
+fi
 if test "\$1" = show; then
     case "\$4:\${2#--property=}" in
         display-manager.service:LoadState)

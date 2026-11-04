@@ -321,7 +321,7 @@ teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_ENABLE_FAILS=1
 check "greetd: a failed switch is named" has "$output" "not making greetd the display manager, so gdm3.service stays: systemctl couldn't enable greetd"
 check "greetd: a failed switch isn't fatal" test "$status" -eq 0
-check "greetd: a failed switch leaves the old greeting" has "$output" "Log out and pick the \"tide\" session"
+check "greetd: a failed switch leaves the old greeting" has "$output" "tide is installed: log out and pick the \"tide\" session"
 teardown
 # A greetd unit without Alias=display-manager.service, enabled, would start
 # beside the display manager, so it's disabled again.

@@ -68,6 +68,15 @@ assert_eq() {
     fi
 }
 
+# verbosely COMMAND...: runs a harness as --verbose would, for the tests of
+# what a step says it skipped or found.
+verbosely() {
+    VERBOSE=yes
+    export VERBOSE
+    "$@"
+    unset VERBOSE
+}
+
 # Run setup's sudo wrapper in isolation against a controlled sudo mock. This
 # tests the diagnostics without executing the bootstrap's system changes.
 run_sudo_helper() {
@@ -117,7 +126,15 @@ sudo_or_warn apt-get update" 2>&1)"
 # can -- given mocks for what it shells out to and stubs for the helpers it
 # calls. Generalizes what run_sudo_helper does by hand above.
 extract_functions() {
-    awk -v names="$1" '
+    # The output helpers every step calls (say, info, warn, logged and the
+    # install tally), and the install and checkout helpers built on them,
+    # come along, so a test needn't list them.
+    extract_helpers="say info warn error note_problem record_install record_why print_installs logged"
+    extract_helpers="$extract_helpers pkg_source brew_has brew_version brew_warm brew_forget pkg_has pkg_version install_pkgs install_tsc_npm"
+    extract_helpers="$extract_helpers apt_conffile_options report_new_conffiles"
+    extract_helpers="$extract_helpers homepkg_bin homepkg_present homepkg_tally homepkg_install"
+    extract_helpers="$extract_helpers default_branch git_message update_checkout"
+    awk -v names="$1 $extract_helpers" '
         BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
         /^[a-z_]+\(\) \{$/ { fname = $0; sub(/\(\) \{$/, "", fname); copying = want[fname] }
         copying { print }
@@ -206,6 +223,26 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$terminal_tmpdir"
 }
 
+# with_run_files COMMAND...: runs a harness with the log and the install
+# tally a run's outermost script would make, then sets $summary to the
+# summary print_installs makes of the tally (without its leading blank line)
+# and $log to the log.
+with_run_files() {
+    rf_tmpdir="$(mktemp -d)"
+    SETUP_INSTALLS="$rf_tmpdir/installs"
+    SETUP_LOG="$rf_tmpdir/setup.log"
+    : > "$SETUP_INSTALLS"
+    : > "$SETUP_LOG"
+    export SETUP_INSTALLS SETUP_LOG
+    "$@"
+    summary="$(sh -c "$(extract_functions "")
+print_installs" | sed '/^$/d')"
+    log="$(cat "$SETUP_LOG")"
+    log_path="$SETUP_LOG"
+    unset SETUP_INSTALLS SETUP_LOG
+    rm -rf "$rf_tmpdir"
+}
+
 # Run install_packages' macOS arm against a brew that always fails, or against
 # an unavailable Homebrew. Asserting the run survives is the whole point: this
 # arm used to abort the bootstrap under set -e, so the tests run with set -e on
@@ -219,7 +256,8 @@ run_macos_packages() {
     macos_tmpdir="$(mktemp -d)"
     macos_calls="$macos_tmpdir/calls"
     # brew_mode: fail (the default) fails every call, saying why as brew
-    # would; ok installs, chattering as brew does, and lists what it has.
+    # would; ok installs, chattering as brew does, and lists what it has, at
+    # version 1.0.
     brew_mode="${3:-fail}"
     cat > "$macos_tmpdir/brew" <<MOCK
 #!/bin/sh
@@ -229,7 +267,18 @@ if test "$brew_mode" = fail; then
     exit 1
 fi
 case "\$1" in
-    list) cat "$macos_tmpdir/installed" 2>/dev/null ;;
+    list)
+        # brew list NAME, or --versions NAME, fails for one not installed.
+        for _last; do :; done
+        case "\$_last" in
+            -*) ;;
+            *) grep -qxF "\$_last" "$macos_tmpdir/installed" 2>/dev/null || exit 1 ;;
+        esac
+        case " \$* " in
+            *" --versions "*) sed 's/\$/ 1.0/' "$macos_tmpdir/installed" 2>/dev/null ;;
+            *) cat "$macos_tmpdir/installed" 2>/dev/null ;;
+        esac
+        ;;
     install)
         for _name; do
             case "\$_name" in
@@ -248,7 +297,7 @@ MOCK
     write_mock_uname "$macos_tmpdir" "$macos_arch"
 
     set +e
-    output="$(PATH="$macos_tmpdir:$PATH" XDG_STATE_HOME="$macos_tmpdir/state" SETUP_BREW_LOG="" \
+    output="$(PATH="$macos_tmpdir:$PATH" \
         sh -c "set -e
 $(extract_homebrew_env)
 OS=macos
@@ -257,13 +306,12 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn note_problem is_intel_mac start_brew_log brew_logged brew_inventory brew_report install_packages")
+$(extract_functions "info warn note_problem is_intel_mac install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$macos_calls" 2>/dev/null)"
-    brew_log="$(cat "$macos_tmpdir/state/setup/brew.log" 2>/dev/null)"
     rm -rf "$macos_tmpdir"
 }
 
@@ -333,20 +381,75 @@ run_linux_packages() {
     esac
     linux_tmpdir="$(mktemp -d)"
     linux_calls="$linux_tmpdir/calls"
+    # The package manager chatters as apt does, and fails for the names in
+    # \$LINUX_FAILS. The package queries say a package is installed when
+    # \$LINUX_INSTALLED names it, or is "all" and \$LINUX_MISSING doesn't, or
+    # the mock installed it.
     cat > "$linux_tmpdir/$linux_pm" <<MOCK
 #!/bin/sh
 printf '%s\n' "$linux_pm \$*" >> "$linux_calls"
+echo "Reading package lists... Done"
+for arg; do
+    case " \${LINUX_FAILS:-} " in
+        *" \$arg "*) echo "E: Unable to locate package \$arg" >&2; exit 100 ;;
+    esac
+done
+test "\$1" != install || printf ' %s ' "\$@" >> "$linux_tmpdir/installed"
+# With \$LINUX_NEW_CONFFILE, dpkg keeps that config file of yours and
+# leaves the package's new version beside it.
+if test "\$1" = install && test -n "\${LINUX_NEW_CONFFILE:-}"; then
+    mkdir -p "$linux_tmpdir/etc"
+    : > "$linux_tmpdir/etc/\$LINUX_NEW_CONFFILE.dpkg-dist"
+fi
+echo "\$*: is already the newest version"
 exit 0
 MOCK
-    chmod +x "$linux_tmpdir/$linux_pm"
+    # A package's version is 1.0, or 2.0 once the mock has installed one
+    # named in \$LINUX_UPGRADES: apt-get install upgrades it.
+    for linux_query in dpkg-query rpm; do
+        cat > "$linux_tmpdir/$linux_query" <<MOCK
+#!/bin/sh
+for last; do :; done
+version=1.0
+case " \$(cat "$linux_tmpdir/installed" 2>/dev/null) " in
+    *" \$last "*) case " \${LINUX_UPGRADES:-} " in *" \$last "*) version=2.0 ;; esac ;;
+esac
+case " \$(cat "$linux_tmpdir/installed" 2>/dev/null) \${LINUX_INSTALLED:-} " in
+    *" \$last "*) echo "install ok installed \$version"; exit 0 ;;
+esac
+case " \${LINUX_INSTALLED:-} " in
+    *" all "*)
+        case " \${LINUX_MISSING:-} " in
+            *" \$last "*) ;;
+            *) echo "install ok installed \$version"; exit 0 ;;
+        esac
+        ;;
+esac
+exit 1
+MOCK
+    done
+    # apt-cache knows every package but node-typescript, as on a release
+    # without it, unless \$LINUX_APT_HAS_NODE_TYPESCRIPT; npm records what
+    # it's asked to install.
+    cat > "$linux_tmpdir/apt-cache" <<MOCK
+#!/bin/sh
+test "\$2" != node-typescript || test -n "\${LINUX_APT_HAS_NODE_TYPESCRIPT:-}"
+MOCK
+    cat > "$linux_tmpdir/npm" <<MOCK
+#!/bin/sh
+printf '%s\n' "npm \$*" >> "$linux_calls"
+MOCK
+    chmod +x "$linux_tmpdir/$linux_pm" "$linux_tmpdir/dpkg-query" "$linux_tmpdir/rpm" \
+        "$linux_tmpdir/apt-cache" "$linux_tmpdir/npm"
 
     set +e
-    output="$(PATH="$linux_tmpdir:$PATH" \
+    output="$(PATH="$linux_tmpdir:${LINUX_PATH:-$PATH}" \
         sh -c "set -e
 OS=$linux_os
-NPM=no
+NPM=${LINUX_NPM:-no}
 GUI_ENABLED=$linux_gui
 CROSTINI=0
+SETUP_ETC=$linux_tmpdir/etc
 sudo_or_warn() { \"\$@\"; }
 $(extract_functions "info warn note_problem install_packages")
 install_packages
@@ -631,20 +734,22 @@ run_install_extras_brew() {
     extras_home="$extras_tmpdir/home"
     extras_calls="$extras_tmpdir/calls"
     mkdir -p "$extras_home/.config"
-    extras_bin="$(stub_path "$extras_tmpdir/bin" sh rm wc awk tail sed mkdir)"
+    extras_bin="$(stub_path "$extras_tmpdir/bin" sh rm tr awk)"
+    # Nothing is installed yet, as brew list says.
     cat > "$extras_bin/brew" <<MOCK
 #!/bin/sh
 printf '%s\n' "brew \$*" >> "$extras_calls"
+test "\$1" != list || exit 1
 MOCK
     chmod +x "$extras_bin/brew"
     extras_path="$(stub_jj_path "$extras_home" "$extras_bin" "$brew_jj")"
 
     set +e
-    output="$(PATH="$extras_path" XDG_STATE_HOME="$extras_tmpdir/state" SETUP_BREW_LOG="" sh -c "set -e
+    output="$(PATH="$extras_path" sh -c "set -e
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info warn note_problem start_brew_log brew_logged brew_inventory brew_report system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "info warn note_problem system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -988,8 +1093,8 @@ echo CROSTINI=\$CROSTINI" 2>&1)"
 }
 
 test_crostini_detected_by_its_markers() {
-    run_is_crostini milestone && assert_output_contains "CROSTINI=1" &&
-        assert_output_contains "ChromeOS Linux (Crostini)" || return 1
+    verbosely run_is_crostini milestone && assert_output_contains "CROSTINI=1" &&
+        assert_output_contains "ChromeOS (Crostini) owns them" || return 1
     run_is_crostini containers && assert_output_contains "CROSTINI=1"
 }
 
@@ -1002,13 +1107,13 @@ test_crostini_not_detected_elsewhere() {
 
 test_crostini_skips_the_keyboard() {
     set +e
-    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem configure_keyboard")
+    output="$(VERBOSE=yes CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem configure_keyboard")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
     set -e
     assert_status 0 &&
-    assert_output_contains "Skipping keyboard configuration (Crostini" &&
+    assert_output_contains "Skipping the keyboard: ChromeOS (Crostini) sets the layout" &&
     assert_output_lacks "SUDO"
 }
 
@@ -1024,24 +1129,24 @@ test_crostini_skips_the_display_card() {
 
 test_crostini_minimal_profile_says_how_to_grow_the_disk() {
     set +e
-    output="$(CROSTINI=1 MINIMAL=auto MIN_DISK_GB=15 sh -c "$(extract_functions "info resolve_minimal")
+    output="$(VERBOSE=yes CROSTINI=1 MINIMAL=auto MIN_DISK_GB=15 sh -c "$(extract_functions "info resolve_minimal")
 available_disk_gb() { echo 8; }
 resolve_minimal" 2>&1)"
     status=$?
     set -e
-    assert_output_contains "Install profile: minimal (8GB free < 15GB" &&
+    assert_output_contains "Install profile: minimal (8GB free, under 15GB" &&
     assert_output_contains "Settings > About ChromeOS > Linux development environment > Disk size"
 }
 
 test_crostini_skips_kde_tide_and_the_root_group() {
     # KDE's packages, setup-kde and tide, and the root group each stand aside.
-    assert_source_contains 'info "Skipping KDE graphical packages (Crostini)"' &&
-    assert_source_contains 'info "Skipping the KDE and tide desktop (Crostini)"' &&
-    assert_source_contains 'info "Skipping root-group membership (Crostini)"' &&
+    assert_source_contains 'info "Skipping KDE Plasma.s packages: Crostini"' &&
+    assert_source_contains 'info "Skipping KDE Plasma and tide: Crostini"' &&
+    assert_source_contains 'info "Skipping the root group: Crostini"' &&
     assert_source_contains '^resolve_crostini$'
     # kitty is still installed, ahead of the KDE skip.
-    kitty=$(grep -n 'info "Installing kitty"' "$SETUP" | head -1 | cut -d: -f1)
-    skip=$(grep -n 'Skipping KDE graphical packages (Crostini)' "$SETUP" | cut -d: -f1)
+    kitty=$(grep -n 'install_pkgs kitty' "$SETUP" | head -1 | cut -d: -f1)
+    skip=$(grep -n 'Skipping KDE Plasma.s packages: Crostini' "$SETUP" | cut -d: -f1)
     if test -z "$kitty" || test -z "$skip" || test "$kitty" -ge "$skip"; then
         echo "  FAIL: kitty isn't installed before the Crostini KDE skip"
         TEST_FAILED=1
@@ -1071,36 +1176,64 @@ run_test() {
 
 # Every warning and error is repeated as setup exits, and a helper it runs
 # (setup-tide, here a nested sh) adds its own to the same list instead of
-# repeating them itself.
+# repeating them itself. So with the install summary, which comes first, and
+# the log the commands' output went to, which the recap points at.
 test_problems_recapped_at_exit() {
     recap_tmpdir="$(mktemp -d)"
+    mkdir "$recap_tmpdir/tmp"
     set +e
-    output="$(TMPDIR="$recap_tmpdir" sh -c "PROBLEMS_OWNER=no
-$(extract_functions "warn error note_problem start_problem_recap recap_problems")
+    output="$(TMPDIR="$recap_tmpdir/tmp" XDG_STATE_HOME="$recap_tmpdir/state" sh -c "PROBLEMS_OWNER=no
+$(extract_functions "start_problem_recap start_run_files recap_problems")
 start_problem_recap
 trap 'recap_problems \"\$?\"' EXIT
 warn first
+record_install apt already git
 sh -c \"\$1\" helper
 error second
 echo LAST_STEP
 exit 3" sh "PROBLEMS_OWNER=no
-$(extract_functions "warn note_problem start_problem_recap recap_problems")
+$(extract_functions "start_problem_recap start_run_files recap_problems")
 start_problem_recap
 trap 'recap_problems \"\$?\"' EXIT
-warn from-helper" 2>&1)"
+warn from-helper
+logged sh -c 'echo noise'
+record_install apt installed zoxide" 2>&1)"
     status=$?
     set -e
-    leftover="$(ls -A "$recap_tmpdir")"
+    leftover="$(ls -A "$recap_tmpdir/tmp")"
+    recap_log="$(cat "$recap_tmpdir/state/setup/setup.log")"
     rm -rf "$recap_tmpdir"
     assert_status 3 &&
     assert_eq "$(printf '%s\n' "$output" | sed -n '/^LAST_STEP$/,$p')" "LAST_STEP
+
+apt: already installed: git; newly installed: zoxide
 
 setup: the warnings and errors from this run, again:
   Warning: first
   Warning: from-helper
   Error: second
+The commands' output is in $recap_tmpdir/state/setup/setup.log
 setup stopped early, with exit status 3" &&
-    assert_eq "$leftover" ""
+    assert_eq "$leftover" "" &&
+    assert_eq "$recap_log" "+ sh -c echo noise
+noise"
+}
+
+# Each run starts a fresh log, keeping the last run's beside it.
+test_each_run_starts_a_fresh_log() {
+    log_tmpdir="$(mktemp -d)"
+    for run in first second; do
+        XDG_STATE_HOME="$log_tmpdir/state" TMPDIR="$log_tmpdir" sh -c "PROBLEMS_OWNER=no
+$(extract_functions "start_problem_recap start_run_files recap_problems")
+start_problem_recap
+trap 'recap_problems \"\$?\"' EXIT
+logged echo $run" >/dev/null 2>&1
+    done
+    assert_eq "$(cat "$log_tmpdir/state/setup/setup.log")" "+ echo second
+second" &&
+    assert_eq "$(cat "$log_tmpdir/state/setup/setup.log.1")" "+ echo first
+first"
+    rm -rf "$log_tmpdir"
 }
 
 # --- usage and help ---
@@ -1206,12 +1339,12 @@ test_tide_gets_no_prefix_for_github() {
 
 # --no-tide sets up KDE alone, and says so.
 test_no_tide_skips_tide() {
-    run_linux_desktop no
+    verbosely run_linux_desktop no
     assert_status 0 &&
     assert_calls_contain "setup-kde" &&
     assert_calls_lack "setup-tide" &&
     assert_calls_lack "clone_or_pull" &&
-    assert_output_contains "Skipping the tide session (--no-tide)"
+    assert_output_contains "Skipping tide: --no-tide"
 }
 
 # setup takes --greeter and hands it to setup-tide.
@@ -1265,7 +1398,7 @@ test_purge_obsolete_keeps_tide_stack() {
 test_typescript_installed_from_distro() {
     assert_source_contains "node-typescript" &&
     assert_source_contains "npm install -g typescript" &&
-    assert_source_contains "brew_logged install typescript"
+    assert_source_contains "install_pkgs typescript"
 }
 
 # sudo failures are warnings rather than fatal set -e exits. Use stderr when
@@ -1305,10 +1438,10 @@ test_sudo_calls_are_guarded() {
         TEST_FAILED=1
         return 1
     fi
-    assert_source_contains "if ! sudo_or_warn apt-get update" &&
-    assert_source_contains "if sudo_or_warn tee /etc/default/keyboard" &&
-    assert_source_contains "if sudo_or_warn localectl set-keymap" &&
-    assert_source_contains "if sudo_or_warn gpasswd"
+    assert_source_contains "if logged sudo_or_warn apt-get update" &&
+    assert_source_contains 'elif printf .*| sudo_or_warn tee "$keyboard_file"' &&
+    assert_source_contains "if logged sudo_or_warn localectl set-keymap" &&
+    assert_source_contains "if logged sudo_or_warn gpasswd"
 }
 
 # --- unzip ---
@@ -1327,7 +1460,7 @@ test_unzip_installed() {
 # the manual-install hint for unsupported OSes.
 test_atool_installed() {
     test "$(grep -c '^ *atool \\$' "$SETUP")" -eq 3 &&
-    assert_source_contains "Please install manually: atool bat curl"
+    assert_source_contains "install these yourself: atool bat curl"
 }
 
 # --- fnm ---
@@ -1345,7 +1478,7 @@ test_fnm_installed() {
     assert_source_contains "https://fnm.vercel.app/install -o" &&
     assert_source_contains "skip-shell" &&
     assert_source_not_contains "fnm.vercel.app/install | bash" &&
-    assert_source_contains "fnm comes from homepkg under --no-root" &&
+    assert_source_contains "no-root gets fnm from homepkg" &&
     # fnm must not drive the Node/tsc install anymore -- no fnm-based provisioning.
     assert_source_not_contains "fnm install --lts" &&
     assert_source_not_contains "fnm use lts-latest"
@@ -1375,9 +1508,9 @@ test_no_source_builds() {
 test_uv_installs_without_modifying_path() {
     assert_source_contains "uv/install.sh | sh -s -- --no-modify-path" &&
     assert_source_not_contains "uv/install.sh | sh$" &&
-    assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update" &&
-    assert_source_contains "could not update uv" &&
-    assert_source_contains "could not install uv"
+    assert_source_contains "env UV_NO_MODIFY_PATH=1 uv self update" &&
+    assert_source_contains "couldn't update uv" &&
+    assert_source_contains "couldn't install uv"
 }
 
 # --- Extras backends ---
@@ -1418,21 +1551,21 @@ test_extras_brew_formulae() {
 # left alone: installing another would leave two copies, one of them shadowing
 # the other on PATH, updating on different schedules.
 test_extras_brew_skips_an_installed_jj() {
-    run_install_extras_brew system
+    verbosely run_install_extras_brew system
     assert_status 0 &&
     assert_calls_lack "brew install jj" &&
     assert_calls_contain "brew install helix" &&
     assert_calls_contain "brew install nushell" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_contains "Skipping jj: already installed at "
 }
 
 # ...but a jj under ~/.local is setup's own, from an earlier release or
 # homepkg install, so it's still setup's to keep up to date.
 test_extras_brew_installs_over_its_own_jj() {
-    run_install_extras_brew home
+    verbosely run_install_extras_brew home
     assert_status 0 &&
     assert_calls_contain "brew install jj" &&
-    assert_output_lacks "jj is already installed at"
+    assert_output_lacks "Skipping jj"
 }
 
 # shpool has no prebuilt artifact anywhere -- no release binaries, no bottle,
@@ -1446,7 +1579,7 @@ test_shpool_not_installed_with_todo() {
     assert_source_contains "TODO: install shpool again" &&
     assert_source_contains 'command -v shpool' &&
     assert_source_contains 'shpool_bin=$(command -v shpool)' &&
-    assert_source_contains "Enabling and starting shpool service"
+    assert_source_contains "logged systemctl --user enable --now shpool.service"
 }
 
 # --- The shpool systemd user service ---
@@ -1456,21 +1589,21 @@ test_shpool_not_installed_with_todo() {
 # ~/.config/systemd/user would override it, since user config outranks /usr/lib,
 # so setup writes nothing and enables nothing.
 test_shpool_service_skipped_when_a_unit_file_exists() {
-    run_start_services cat
+    verbosely run_start_services cat
     assert_status 0 &&
     assert_eq "$services_unit_written" no &&
-    assert_output_contains "already set up; leaving it alone" &&
-    assert_output_lacks "Creating shpool systemd user service"
+    assert_output_contains "Skipping shpool.service: already set up" &&
+    assert_output_lacks "Writing"
 }
 
 # `systemctl --user cat` only sees file-backed units, so a service that's merely
 # loaded -- what `list-units` reports on a box where something already set it up
 # -- has to count as existing too.
 test_shpool_service_skipped_when_the_unit_is_loaded() {
-    run_start_services loaded
+    verbosely run_start_services loaded
     assert_status 0 &&
     assert_eq "$services_unit_written" no &&
-    assert_output_contains "already set up; leaving it alone"
+    assert_output_contains "Skipping shpool.service: already set up"
 }
 
 # With no shpool.service anywhere, setup still provides one for an shpool that
@@ -1480,7 +1613,7 @@ test_shpool_service_written_when_absent() {
     run_start_services none
     assert_status 0 &&
     assert_eq "$services_unit_written" yes &&
-    assert_output_contains "Creating shpool systemd user service" &&
+    assert_output_contains "Enabled shpool.service (" &&
     assert_calls_contain "systemctl --user daemon-reload" &&
     assert_calls_contain "systemctl --user enable --now shpool.service"
 }
@@ -1494,7 +1627,7 @@ test_shpool_service_skipped_without_a_user_manager() {
     run_start_services none nobus
     assert_status 0 &&
     assert_eq "$services_unit_written" no &&
-    assert_output_contains "no systemd user manager to query" &&
+    assert_output_contains "no systemd user manager, so shpool.service isn't set up" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -1504,7 +1637,7 @@ test_shpool_unit_file_untouched_without_a_user_manager() {
     run_start_services none nobus yes
     assert_status 0 &&
     assert_eq "$services_unit_body" "the unit that was already here" &&
-    assert_output_contains "no systemd user manager to query"
+    assert_output_contains "no systemd user manager, so shpool.service isn't set up"
 }
 
 # A manager that answers and then fails the enable anyway must not take the
@@ -1513,7 +1646,7 @@ test_shpool_service_failure_is_reported_not_fatal() {
     run_start_services none enable-fails
     assert_status 0 &&
     assert_eq "$services_unit_written" yes &&
-    assert_output_contains "could not enable it" &&
+    assert_output_contains "couldn't enable it, so sessions use tmux" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -1531,10 +1664,10 @@ test_extras_release_uses_homepkg_github() {
 # drops out of the release install rather than being shadowed by a second copy
 # in ~/.local/bin.
 test_extras_release_skips_an_installed_jj() {
-    run_install_extras_release 0 yes system
+    verbosely run_install_extras_release 0 yes system
     assert_status 0 &&
     assert_eq "$calls" "homepkg --backend github install helix nu" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_contains "Skipping jj: already installed at "
 }
 
 # A jj in ~/.local/bin is the one this path installed last time, so it's
@@ -1550,7 +1683,7 @@ test_extras_release_refreshes_its_own_jj() {
 test_extras_release_failure_is_not_fatal() {
     run_install_extras_release 1 no
     assert_status 0 &&
-    assert_output_contains "could not be installed from their releases" &&
+    assert_output_contains "couldn't install some of helix jj nu from their releases" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -1577,7 +1710,7 @@ test_extras_release_leaves_an_env_hx_runtime_alone() {
 # release artifacts.
 test_extras_brew_falls_back_to_release() {
     assert_source_contains "install_extras_release" &&
-    assert_source_contains "Homebrew unavailable; installing the extras from their release artifacts"
+    assert_source_contains "no Homebrew, so the extras come from their GitHub releases"
 }
 
 # install_homebrew handles the Linuxbrew prefixes too, not just the macOS
@@ -1597,7 +1730,7 @@ test_clear_helix_runtime_drops_a_cargo_symlink() {
     run_helix_runtime_helper clear_managed_helix_runtime cargo
     assert_status 0 &&
     assert_eq "$helix_link_target" "" &&
-    assert_output_contains "Removing the Helix runtime symlink"
+    assert_output_contains "/.config/helix/runtime, an earlier install's"
 }
 
 test_clear_helix_runtime_drops_a_release_symlink() {
@@ -1615,7 +1748,7 @@ test_clear_helix_runtime_keeps_a_release_symlink_a_release_hx_needs() {
     run_helix_runtime_helper clear_managed_helix_runtime release yes release-file
     assert_status 0 &&
     assert_eq "$helix_link_target" "$helix_home/.local/share/helix/runtime" &&
-    assert_output_contains "keeping the Helix runtime" &&
+    assert_output_contains "keeping ~/.config/helix/runtime for the release hx" &&
     assert_output_lacks "$helix_home"
 }
 
@@ -1666,7 +1799,7 @@ test_link_helix_runtime_replaces_a_cargo_symlink() {
 test_link_helix_runtime_reports_a_missing_runtime() {
     run_helix_runtime_helper 'link_helix_runtime "$HOME/.local"' none no
     assert_status 0 &&
-    assert_output_contains "its runtime directory is missing" &&
+    assert_output_contains "hx has no runtime directory" &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_output_lacks "$helix_home"
 }
@@ -1675,8 +1808,8 @@ test_link_helix_runtime_reports_a_missing_runtime() {
 # back to the legacy build. That downgrade must be logged explicitly (with the
 # remedy), not silent.
 test_legacy_root_config_is_logged() {
-    assert_source_contains "installing the legacy root config" &&
-    assert_source_contains "(install Rust for the primary one)"
+    assert_source_contains "Installing the legacy root config from" &&
+    assert_source_contains "no cargo for the main one"
 }
 
 # Under --no-root the distro npm/tsc install is skipped (apt/dnf need root);
@@ -1699,13 +1832,11 @@ test_zoxide_is_a_core_package() {
     # In its own best-effort transaction per platform, never in the core
     # package list: apt/dnf reject the whole request on one unknown name,
     # and zoxide is missing from older releases -- which would take git and
-    # make down with it. Three install steps (apt, dnf, brew -- whose is
-    # quiet, see brew_logged) plus the manual-install hint and the homepkg
-    # core set.
-    test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 2 &&
-    assert_source_contains "brew_logged install zoxide" &&
+    # make down with it. Three install steps (apt, dnf, brew) plus the
+    # manual-install hint and the homepkg core set.
+    test "$(grep -c '^ *install_pkgs zoxide \\$' "$SETUP")" -eq 3 &&
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
-    assert_source_contains "could not install zoxide" &&
+    assert_source_contains "couldn't install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
     assert_source_contains 'tools="ripgrep fd bat fzf jq delta gh fnm zoxide lf go"'
 }
@@ -1717,10 +1848,9 @@ test_zsh_autosuggestions_is_a_best_effort_package() {
     # Three install steps (apt, dnf, a quiet brew), never a bare entry in a core
     # package list: one unknown name aborts the whole apt/dnf transaction, and
     # older releases may not carry it. Plus the manual-install hint.
-    test "$(grep -c '^ *info "Installing zsh-autosuggestions"$' "$SETUP")" -eq 2 &&
-    assert_source_contains "brew_logged install zsh-autosuggestions" &&
+    test "$(grep -c '^ *install_pkgs zsh-autosuggestions \\$' "$SETUP")" -eq 3 &&
     test "$(grep -c '^ *zsh-autosuggestions \\$' "$SETUP")" -eq 0 &&
-    assert_source_contains "could not install zsh-autosuggestions" &&
+    assert_source_contains "couldn't install zsh-autosuggestions" &&
     assert_source_contains "zoxide zsh zsh-autosuggestions"
 }
 
@@ -1806,7 +1936,7 @@ test_failed_prune_warns_and_continues() {
     run_prune_retired_tools 1
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_output_contains "couldn't remove the tools homepkg has retired"
+    assert_output_contains "couldn't remove the tools homepkg retired"
 }
 
 test_retired_tools_pruned_only_on_purge_obsolete_after_the_clone() {
@@ -1863,7 +1993,7 @@ test_purge_obsolete_purges_uwsm_debian() {
 test_purge_obsolete_reports_held_not_purged() {
     run_purge_obsolete debian "waybar" "" "fuzzel"
     assert_status 0 &&
-    assert_output_contains "held, not purging" &&
+    assert_output_contains "not purging these, which are held" &&
     assert_output_contains "fuzzel" &&
     assert_calls_contain "apt-get purge -y" &&
     assert_calls_contain "waybar" &&
@@ -1875,7 +2005,7 @@ test_purge_obsolete_reports_held_not_purged() {
 test_purge_obsolete_query_failure_is_reported() {
     run_purge_obsolete debian "waybar" "sway"
     assert_status 0 &&
-    assert_output_contains "querying package sway failed" &&
+    assert_output_contains "couldn't ask about package sway" &&
     assert_calls_contain "waybar" &&
     assert_calls_lack "sway"
 }
@@ -1884,7 +2014,7 @@ test_purge_obsolete_query_failure_is_reported() {
 test_purge_obsolete_nothing_installed_debian() {
     run_purge_obsolete debian ""
     assert_status 0 &&
-    assert_output_contains "No obsolete Sway/Hyprland packages to purge" &&
+    assert_output_lacks "purge" &&
     assert_calls_lack "apt-get purge"
 }
 
@@ -1923,9 +2053,9 @@ test_file_managers_install_via_homepkg() {
 # ...and it's a no-op where lf is already present (macOS via Homebrew, or the
 # --no-root path via install_home_tools) -- no second copy in ~/.local/bin.
 test_file_managers_skipped_when_present() {
-    run_install_file_managers both
+    verbosely run_install_file_managers both
     assert_status 0 &&
-    assert_output_contains "already installed" &&
+    assert_output_contains "Skipping lf: already installed" &&
     test -z "$calls"
 }
 
@@ -1969,16 +2099,16 @@ test_kde_terminal_set_on_fedora() {
 test_terminal_failures_are_reported_not_swallowed() {
     run_terminal_helper debian fail
     assert_status 0 &&
-    assert_output_contains "could not set kitty as the KDE terminal application" &&
-    assert_output_contains "could not set kitty as the KDE terminal service" &&
+    assert_output_contains "couldn't make kitty KDE's terminal (TerminalApplication)" &&
+    assert_output_contains "couldn't make kitty KDE's terminal (TerminalService)" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
 test_fedora_terminal_failures_are_reported() {
     run_terminal_helper redhat fail
     assert_status 0 &&
-    assert_output_contains "could not register kitty as the terminal scheme handler" &&
-    assert_output_contains "could not set kitty as the KDE terminal application" &&
+    assert_output_contains "couldn't make kitty the terminal scheme handler" &&
+    assert_output_contains "couldn't make kitty KDE's terminal (TerminalApplication)" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -1991,14 +2121,14 @@ test_macos_brew_failures_are_not_fatal() {
     run_macos_packages 0
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_output_contains "some core Homebrew packages could not be installed" &&
-    assert_output_contains "could not install zoxide" &&
-    assert_output_contains "could not install lf" &&
-    assert_output_contains "could not install node" &&
-    assert_output_contains "could not install tsc" &&
-    assert_output_contains "could not install android-platform-tools" &&
-    assert_output_contains "skipping kitty installation" &&
-    assert_output_contains "some macOS applications could not be installed"
+    assert_output_contains "couldn't install some of the core Homebrew packages" &&
+    assert_output_contains "couldn't install zoxide" &&
+    assert_output_contains "couldn't install lf" &&
+    assert_output_contains "couldn't install node" &&
+    assert_output_contains "couldn't install tsc" &&
+    assert_output_contains "couldn't install android-platform-tools" &&
+    assert_output_contains "couldn't install kitty" &&
+    assert_output_contains "couldn't install iTerm2"
 }
 
 # A failing brew must not stop the arm early either: the later steps have to
@@ -2012,38 +2142,58 @@ test_macos_brew_failure_still_attempts_later_steps() {
     assert_calls_contain "brew install kitty"
 }
 
-# brew prints a screenful per package, and an "already installed" warning
-# for each one on every rerun, where apt on a quiet Linux run says little.
-# Its output goes to the log, and the arm says what it installed in a line.
+# brew prints a screenful per package, where apt on a quiet Linux run says
+# little. Its output goes to the run's log, as apt's does, and the summary
+# says what it installed.
 test_macos_brew_output_is_logged_and_summarized() {
-    run_macos_packages 0 arm64 ok
+    with_run_files run_macos_packages 0 arm64 ok
     assert_status 0 &&
     assert_output_lacks "Pouring" &&
-    assert_output_contains "Installed from Homebrew: atool, autoconf," &&
-    assert_output_contains "iterm2" &&
-    case "$brew_log" in
+    case "$log" in
         *"+ brew install zoxide"*"==> Pouring zoxide--1.0"*) ;;
-        *) echo "brew's output isn't in the log: $brew_log"; return 1 ;;
+        *) echo "  FAIL: brew's output isn't in the log: $log"; TEST_FAILED=1; return 1 ;;
+    esac
+    case "$summary" in
+        "brew: newly installed: atool autoconf "*iterm2*) ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
     esac
 }
 
-# A log that can't be made is a warning, and brew's output is shown instead:
-# under dash, a failed redirection on : used to end the whole bootstrap.
-test_unwritable_brew_log_is_not_fatal() {
+# The summary's version checks ask brew for its inventory once before and
+# once after each install, not once for each package: every brew launch is
+# slow, and the core list alone is some 20 packages.
+test_macos_version_checks_ask_brew_once_per_install() {
+    with_run_files run_macos_packages 0 arm64 ok
+    n_install=$(printf '%s\n' "$calls" | grep -c '^brew install ')
+    n_inventory=$(printf '%s\n' "$calls" | grep -c '^brew list --formula --versions ')
+    assert_status 0 &&
+    test "$n_install" -gt 0 &&
+    if test "$n_inventory" -gt "$((2 * n_install))"; then
+        echo "  FAIL: $n_inventory inventory queries for $n_install installs"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# A log that can't be made is a warning, and the commands' output is shown
+# instead: under dash, a failed redirection on : ends the whole run, even
+# inside an if.
+test_unwritable_log_is_not_fatal() {
     log_tmpdir="$(mktemp -d)"
-    mkdir -p "$log_tmpdir/setup/brew.log"
-    printf '#!/bin/sh\necho "==> Pouring $2"\n' > "$log_tmpdir/brew"
-    chmod +x "$log_tmpdir/brew"
+    mkdir -p "$log_tmpdir/state/setup/setup.log"
     set +e
-    output="$(PATH="$log_tmpdir:$PATH" XDG_STATE_HOME="$log_tmpdir" SETUP_BREW_LOG="" sh -c "set -e
-$(extract_functions "info warn note_problem start_brew_log brew_logged")
-brew_logged install zoxide
+    output="$(XDG_STATE_HOME="$log_tmpdir/state" TMPDIR="$log_tmpdir" sh -c "set -e
+PROBLEMS_OWNER=no
+$(extract_functions "start_problem_recap start_run_files recap_problems")
+start_problem_recap
+start_run_files
+logged echo '==> Pouring zoxide'
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     rm -rf "$log_tmpdir"
     assert_status 0 &&
-    assert_output_contains "to keep Homebrew's output in, so it's shown instead" &&
+    assert_output_contains "setup.log, so commands' output shows here instead" &&
     assert_output_contains "==> Pouring zoxide" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
@@ -2051,11 +2201,11 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 # A failed install shows what brew said, since that's the reason, and where
 # the rest of it is.
 test_macos_brew_failure_shows_what_brew_said() {
-    run_macos_packages 0
+    with_run_files run_macos_packages 0
     assert_status 0 &&
-    assert_output_contains "'brew install zoxide' exited with status 1" &&
+    assert_output_contains "brew install zoxide failed (exit status 1), ending:" &&
     assert_output_contains "    Error: No available formula with the name zoxide." &&
-    assert_output_contains "Nothing new from Homebrew"
+    assert_output_contains "  Its output is in $log_path"
 }
 
 # setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
@@ -2108,7 +2258,7 @@ test_intel_mac_leaves_node_to_homepkg() {
     assert_calls_lack "brew install node" &&
     assert_calls_lack "brew install typescript" &&
     assert_calls_contain "brew install zoxide" &&
-    assert_output_contains "Intel Mac: Node.js and tsc come from homepkg" &&
+    assert_output_lacks "node" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -2128,7 +2278,7 @@ test_intel_mac_says_how_to_remove_homebrew_node() {
     assert_status 0 &&
     assert_calls_contain "homepkg install node typescript" &&
     assert_calls_lack "brew uninstall" &&
-    assert_output_contains "remove it with 'brew uninstall typescript node'"
+    assert_output_contains "'brew uninstall typescript node' removes it"
 }
 
 # Apple Silicon has Homebrew's node already; --no-npm wants none; --no-root got
@@ -2148,7 +2298,7 @@ test_node_home_only_runs_on_a_privileged_intel_mac() {
 test_macos_without_homebrew_skips_the_arm() {
     run_macos_packages 1
     assert_status 0 &&
-    assert_output_contains "Homebrew unavailable; skipping macOS package installation" &&
+    assert_output_contains "no Homebrew, so no macOS packages" &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     test -z "$calls"
 }
@@ -2160,7 +2310,7 @@ test_no_unguarded_brew_install_remains() {
     test "$(grep -c '^ *brew install kitty$' "$SETUP")" -eq 0 &&
     test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0 &&
     # ...nor one whose output reaches the terminal: each goes through
-    # brew_logged, which keeps it in the log.
+    # logged, which keeps it in the log.
     test "$(grep -cE '^ *(if ! )?brew install' "$SETUP")" -eq 0
 }
 
@@ -2173,9 +2323,9 @@ test_no_unguarded_brew_install_remains() {
 test_missing_homepkg_warnings_name_no_absolute_path() {
     run_missing_homepkg_warnings
     assert_status 0 &&
-    assert_output_contains "homepkg not found in the scripts repo; skipping home-prefix tool install" &&
-    assert_output_contains "homepkg not found in the scripts repo; skipping atuin and carapace" &&
-    assert_output_contains "homepkg not found in the scripts repo; skipping helix, jj, and nushell" &&
+    assert_output_contains "no homepkg in the scripts repo, so no tools in ~/.local" &&
+    assert_output_contains "no homepkg in the scripts repo, so no atuin or carapace" &&
+    assert_output_contains "no homepkg in the scripts repo, so no helix, jj or nushell" &&
     assert_output_lacks "$missing_scripts_dir" &&
     assert_output_lacks "/home/testuser"
 }
@@ -2188,9 +2338,8 @@ test_missing_homepkg_warnings_name_no_absolute_path() {
 test_shell_tools_install_from_github_releases() {
     assert_source_contains "install_shell_tools" &&
     assert_source_contains 'for tool in atuin carapace' &&
-    assert_source_contains '"$homepkg" --backend github install $shell_tools' &&
-    assert_source_contains "the shell config skips whichever is missing" &&
-    assert_source_contains "already installed" &&
+    assert_source_contains 'homepkg_install --backend github $shell_tools' &&
+    assert_source_contains "Skipping atuin and carapace: already installed" &&
     # homepkg installs into ~/.local/bin, which setup's own PATH need not
     # have, so the presence check looks there as well.
     assert_source_contains 'test -x "$HOME/.local/bin/$tool"'
@@ -2201,7 +2350,7 @@ test_shell_tools_install_from_github_releases() {
 # recomputed after a successful bundle install, and whatever is left falls
 # through to the release download rather than being silently skipped.
 test_shell_tools_reconcile_after_bundle() {
-    assert_source_contains "the bundle did not provide" &&
+    assert_source_contains "from their releases: \$shell_bundle lacks them" &&
     # Recomputed twice: once up front, once after the bundle install.
     test "$(grep -c 'shell_tools="$(missing_shell_tools)"' "$SETUP")" -eq 2
 }
@@ -2214,12 +2363,12 @@ test_shell_tools_install_from_a_bundle_offline() {
     assert_source_contains 'HOMEPKG_SHELL_BUNDLE' &&
     assert_source_contains 'homepkg-shell-tools.tgz' &&
     assert_source_contains '"$homepkg" install-bundle "$shell_bundle"' &&
-    assert_source_contains "falling back to the release download" &&
+    assert_source_contains "didn't have everything; downloading the rest" &&
     assert_source_contains "backend github bundle -o homepkg-shell-tools.tgz atuin carapace" &&
     # The bundle is tried first: a machine with no network must not have to
     # wait for the download to fail.
     test "$(grep -n 'install-bundle "\$shell_bundle"' "$SETUP" | cut -d: -f1)" \
-        -lt "$(grep -n 'backend github install \$shell_tools' "$SETUP" | cut -d: -f1)"
+        -lt "$(grep -n 'homepkg_install --backend github \$shell_tools' "$SETUP" | cut -d: -f1)"
 }
 
 # They're small static binaries, so unlike the heavyweight extras they're
@@ -2274,8 +2423,8 @@ test_local_bin_blocked_skips_and_cleans_up() {
     run_local_bin_check killed
     assert_status 0 &&
     assert_output_contains "this machine doesn't run binaries from ~/.local/bin (a copy of $lb_tmpdir/killed there exited 137); installing nothing there" &&
-    assert_output_contains "Skipping atuin and carapace: this machine doesn't run binaries" &&
-    assert_output_contains "Removing ~/.local/bin/atuin, which this machine won't run" &&
+    assert_output_lacks "Skipping atuin and carapace" &&
+    assert_output_contains "Removed ~/.local/bin/atuin, which this machine won't run" &&
     assert_output_contains "blocked=yes" &&
     assert_eq "$calls" "" &&
     assert_eq "$(test -e "$lb_home/.local/bin/atuin" && echo there || echo gone)" "gone" &&
@@ -2290,7 +2439,7 @@ test_local_bin_runs_installs_as_before() {
     run_local_bin_check ok
     assert_status 0 &&
     assert_output_contains "blocked=no" &&
-    assert_output_contains "Installing atuin via homepkg" &&
+    assert_output_lacks "Installing atuin" &&
     assert_eq "$(printf '%s\n' "$calls" | head -1)" "homepkg --backend github install atuin" &&
     assert_eq "$(ls -A "$lb_home/.local/bin" | grep -c setup-probe)" "0"
     rm -rf "$lb_tmpdir"
@@ -2318,7 +2467,7 @@ test_local_bin_check_gates_every_home_install() {
 test_ssh_key_prompt_covers_github_and_codeberg() {
     assert_source_contains "https://github.com/settings/ssh/new" &&
     assert_source_contains "https://codeberg.org/user/settings/keys" &&
-    assert_source_contains 'add the key to $GITHUB_HOST and Codeberg'
+    assert_source_contains 'add it to $GITHUB_HOST and Codeberg yourself'
 }
 
 # --ssh promises to generate a key even when one is already available, so
@@ -2326,8 +2475,8 @@ test_ssh_key_prompt_covers_github_and_codeberg() {
 # that check and skips only to avoid clobbering the id_ed25519 it would write.
 test_ssh_flag_overrides_existing_key_check() {
     assert_source_contains 'test "$SSH" = auto' &&
-    assert_source_contains "pass --ssh to create one anyway" &&
-    assert_source_contains "not overwriting"
+    assert_source_contains "(--ssh makes one anyway)" &&
+    assert_source_contains 'Skipping the SSH key: $HOME/.ssh/id_ed25519 exists'
 }
 
 # After cloning the repos, setup offers to flip their remotes to SSH via the
@@ -2382,10 +2531,10 @@ echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
 # chosen because SSH isn't the way in. So the offer is skipped outright --
 # gittossh is never run, and the bootstrap continues.
 test_mirror_skips_ssh_remote_offer() {
-    run_offer_ssh_remotes yes present
+    verbosely run_offer_ssh_remotes yes present
     assert_status 0 &&
-    assert_output_contains "Cloned from ghe.corp.example.com" &&
-    assert_output_contains "leaving repo remotes as-is" &&
+    assert_output_contains "Skipping the SSH remotes: cloned from ghe.corp.example.com" &&
+    assert_output_lacks "Switch your repo remotes" &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_eq "$calls" ""
 }
@@ -2473,6 +2622,14 @@ case "$1" in
         test -n "${MOCK_ORIGIN:-}" || exit 1
         printf '%s\n' "$MOCK_ORIGIN"
         ;;
+    symbolic-ref)
+        # On main, origin's default branch.
+        case "$*" in
+            *origin/HEAD*) echo origin/main ;;
+            *) echo main ;;
+        esac
+        ;;
+    rev-parse) echo 0123456789abcdef0123456789abcdef01234567 ;;
 esac
 exit 0
 MOCK
@@ -2500,7 +2657,7 @@ test_existing_checkout_mismatch_warns() {
         "https://ghe.corp.example.com/mikelward/scripts.git"
     assert_status 0 &&
     assert_output_contains "is cloned from git@github.com:mikelward/scripts.git" &&
-    assert_output_contains "leaving the remote as-is" &&
+    assert_output_contains "leaving it (git -C" &&
     assert_output_contains "remote set-url origin" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
@@ -2700,7 +2857,7 @@ test_no_root_implies_no_sudo() {
 test_no_root_installs_via_homepkg() {
     assert_source_contains "install_home_tools" &&
     assert_source_contains 'elif test "$ROOT" = no; then' &&
-    assert_source_contains '"$homepkg" install $tools' &&
+    assert_source_contains 'homepkg_install $tools' &&
     assert_source_contains "ripgrep fd bat fzf jq delta gh" &&
     assert_source_contains 'tools="$tools $EXTRAS_TOOLS"'
 }
@@ -2709,12 +2866,16 @@ test_no_root_installs_via_homepkg() {
 # has to hold there too -- the tools go into ~/.local/bin, which the conf repo
 # puts ahead of /usr/bin, so an unwanted jj there shadows the packaged one.
 test_home_tools_skips_an_installed_jj() {
-    run_home_tools_helix absent system
+    verbosely run_home_tools_helix absent system
     assert_status 0 &&
     assert_calls_contain "homepkg install ripgrep" &&
     assert_calls_lack " jj" &&
     assert_calls_contain " helix nu" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_contains "Skipping jj: already installed at " || return 1
+    # Without --verbose, that's not news.
+    run_home_tools_helix absent system
+    assert_status 0 &&
+    assert_output_lacks "jj"
 }
 
 test_home_tools_installs_jj_when_absent() {
@@ -2735,15 +2896,15 @@ test_no_root_accepted_and_documented() {
 # The homepkg tool install degrades: a missing homepkg or a failed install
 # warns and continues rather than aborting the bootstrap.
 test_home_tools_install_degrades() {
-    assert_source_contains "homepkg not found in the scripts repo" &&
-    assert_source_contains "some CLI tools could not be installed via homepkg"
+    assert_source_contains "no homepkg in the scripts repo, so no tools in ~/.local" &&
+    assert_source_contains "couldn't install some of \$tools with homepkg"
 }
 
 # shpool has no prebuilt artifact, so the homepkg path can't provide it either.
 # The full --no-root run must say so explicitly rather than silently dropping a
 # tool the shell config expects to prefer.
-test_home_tools_warns_about_shpool() {
-    assert_source_contains "shpool is not installed by setup"
+test_home_tools_says_shpool_is_skipped() {
+    assert_source_contains 'info "Skipping shpool: it has no prebuilt release, so sessions use tmux"'
 }
 
 # The homepkg hx keeps its runtime inside the conda env, so a symlink another
@@ -2754,7 +2915,7 @@ test_home_tools_clears_stale_helix_runtime() {
     run_home_tools_helix env-link
     assert_status 0 &&
     assert_eq "$helix_link_target" "" &&
-    assert_output_contains "Removing the Helix runtime symlink"
+    assert_output_contains "/.config/helix/runtime, an earlier install's"
 }
 
 # ...but homepkg leaves a conflicting regular file in ~/.local/bin alone, so on a
@@ -2785,7 +2946,7 @@ test_home_tools_uses_bundle_optimistically() {
     assert_source_contains '"$homepkg" install-bundle "$bundle"' &&
     assert_source_contains 'HOMEPKG_BUNDLE' &&
     assert_source_contains 'homepkg-bundle.tgz' &&
-    assert_source_contains "a bundle unpacks its full contents additively" &&
+    assert_source_contains "and --no-npm don't trim a bundle" &&
     # A staged bundle wins outright -- no env gate, no conda-meta probe.
     assert_source_contains 'if test -n "$bundle"; then' &&
     assert_source_not_contains 'conda-meta' &&
@@ -2803,38 +2964,14 @@ test_home_tools_uses_bundle_optimistically() {
 test_home_tools_provisioned_by_a_partial_bundle() {
     assert_source_contains 'rc=$?' &&
     assert_source_contains 'if test "$rc" -eq 2; then' &&
-    assert_source_contains "the bundle didn't provide everything (offline?); using what it did unpack" &&
-    assert_source_contains "falling back to the online install" &&
+    assert_source_contains "didn't have everything; using what it had" &&
+    assert_source_contains "installing online instead" &&
     assert_source_contains 'if test "$provisioned" = no; then' &&
     # provisioned=yes on bundle-success, partial (rc 2), and online-success --
     # the three PATH-carrying outcomes.
     test "$(grep -c '^ *provisioned=yes$' "$SETUP")" -ge 3
 }
 
-# A failed pull on an EXISTING checkout (e.g. offline) must warn and continue,
-# not abort under set -e -- otherwise the offline "setup --no-root" bootstrap
-# dies on the scripts/conf pull before reaching the homepkg bundle install. A
-# failed clone (no checkout to fall back to) stays fatal, so success is never
-# faked when there's nothing usable on disk.
-test_clone_or_pull_degrades_offline() {
-    assert_source_contains "could not pull" &&
-    assert_source_contains "using the existing checkout" || return 1
-    # Within clone_or_pull: other steps clone optional extras whose failure
-    # is rightly only a warning.
-    clone_src="$(extract_functions clone_or_pull)"
-    if test -z "$clone_src"; then
-        echo "  FAIL: clone_or_pull not found in setup"
-        TEST_FAILED=1
-        return 1
-    fi
-    case "$clone_src" in
-        *"could not clone"*)
-            echo "  FAIL: clone_or_pull downgrades a failed clone to a warning"
-            TEST_FAILED=1
-            return 1
-            ;;
-    esac
-}
 
 # --- --github internal-mirror flag ---
 
@@ -3147,7 +3284,7 @@ test_display_gpu_foreign_rule_left_alone() {
     assert_calls_lack "80-display-gpu-awake.rules" &&
     assert_eq "$gpu_rule_body" "# somebody's own rule" &&
     assert_eq "$gpu_controls" "0000:61:00.0=on" &&
-    assert_output_contains "setup didn't write it, so the display card can power itself down again after a reboot" ||
+    assert_output_contains "which setup didn't write, so the display card can power down again after a reboot" ||
         { echo "  (AMD card)"; return 1; }
 }
 
@@ -3195,8 +3332,8 @@ test_display_gpu_sudo_denial_is_not_fatal() {
     run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto" denied
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_output_contains "could not hold the display card at 0000:61:00.0 powered for this boot" &&
-    assert_output_contains "can power itself down again after a reboot" &&
+    assert_output_contains "couldn't hold the display card at 0000:61:00.0 powered for this boot" &&
+    assert_output_contains "can power down again after a reboot" &&
     assert_eq "$gpu_controls" "0000:61:00.0=auto" &&
     assert_no_display_gpu_rule
 }
@@ -3330,7 +3467,7 @@ test_zsh_autosuggestions_failed_clone_not_fatal() {
     run_install_zsh_autosuggestions_home none missing
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_output_contains "could not clone zsh-autosuggestions" &&
+    assert_output_contains "couldn't clone zsh-autosuggestions" &&
     assert_eq "$zas_state" absent
 }
 
@@ -3339,9 +3476,9 @@ test_zsh_autosuggestions_existing_copy_used() {
     run_install_zsh_autosuggestions_home checkout
     assert_status 0 &&
     assert_eq "$zas_state" kept || { echo "  (earlier checkout)"; return 1; }
-    run_install_zsh_autosuggestions_home system
+    verbosely run_install_zsh_autosuggestions_home system
     assert_status 0 &&
-    assert_output_contains "already installed in /usr/share/zsh-autosuggestions" &&
+    assert_output_contains "Skipping zsh-autosuggestions: already in /usr/share/zsh-autosuggestions" &&
     assert_eq "$zas_state" absent || { echo "  (distro package)"; return 1; }
 }
 
@@ -3425,8 +3562,6 @@ run_test "--no-root prefers a prebuilt bundle, then refreshes online" \
     test_home_tools_uses_bundle_optimistically
 run_test "a partial bundle provisions the run even with no network" \
     test_home_tools_provisioned_by_a_partial_bundle
-run_test "clone_or_pull warns and continues on an offline failure" \
-    test_clone_or_pull_degrades_offline
 run_test "--no-root installs CLI tools into a home prefix via homepkg" \
     test_no_root_installs_via_homepkg
 run_test "--no-root is accepted and documented" \
@@ -3438,7 +3573,7 @@ run_test "the home-prefix install includes jj when there is none" \
 run_test "home-prefix tool install degrades on failure" \
     test_home_tools_install_degrades
 run_test "home-prefix full install warns that shpool is unavailable" \
-    test_home_tools_warns_about_shpool
+    test_home_tools_says_shpool_is_skipped
 run_test "home-prefix path clears the Helix runtime symlink for the env hx" \
     test_home_tools_clears_stale_helix_runtime
 run_test "home-prefix path keeps the runtime of a release hx it left alone" \
@@ -3601,7 +3736,8 @@ run_test "a failing brew still attempts the later macOS steps" \
 run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
 run_test "setup logs brew's output on a Mac and says what it installed" test_macos_brew_output_is_logged_and_summarized
 run_test "a failed brew install shows what brew said" test_macos_brew_failure_shows_what_brew_said
-run_test "a brew log that can't be made isn't fatal" test_unwritable_brew_log_is_not_fatal
+run_test "a log that can't be made isn't fatal" test_unwritable_log_is_not_fatal
+run_test "version checks ask brew once per install, not per package" test_macos_version_checks_ask_brew_once_per_install
 run_test "brew installs don't stop for confirmation" \
     test_brew_installs_do_not_ask_for_confirmation
 run_test "the Homebrew installer can still ask for the admin password" \
@@ -3703,6 +3839,497 @@ run_test "Crostini skips KDE, tide and the root group, keeping kitty" \
     test_crostini_skips_kde_tide_and_the_root_group
 run_test "Crostini says what to set in ChromeOS" \
     test_crostini_settings_point_at_chromeos
+
+# --- What a run prints ---
+
+
+# run_logged SCRIPT: runs SCRIPT, which may call logged and the output
+# helpers, in sh.
+run_logged() {
+    set +e
+    output="$(sh -c "$(extract_functions "")
+$1" 2>&1)"
+    status=$?
+    set -e
+}
+
+test_logged_keeps_a_commands_output_out_of_sight() {
+    with_run_files run_logged 'logged sh -c "echo Reading package lists... Done; echo chatter >&2"
+echo NEXT'
+    assert_status 0 &&
+    assert_eq "$output" "NEXT" &&
+    assert_eq "$log" '+ sh -c echo Reading package lists... Done; echo chatter >&2
+Reading package lists... Done
+chatter'
+}
+
+test_logged_shows_the_end_of_a_failure_and_where_the_rest_is() {
+    with_run_files run_logged 'logged sh -c "echo early; echo E: Unable to locate package zoxide >&2; exit 100" ||
+    echo "status $?"'
+    assert_status 0 &&
+    assert_output_contains "sh -c echo ... failed (exit status 100), ending:
+    early
+    E: Unable to locate package zoxide
+  Its output is in $log_path" &&
+    assert_output_contains "status 100"
+}
+
+# A URL's user-info can be a token (--github, $TIDE_REPO): it reaches
+# neither the log nor the terminal, from the command line or the command's
+# own output, while the command still gets the real URL.
+test_logged_keeps_a_urls_credentials_out_of_the_log() {
+    with_run_files run_logged 'fake_clone() { echo "got $1"; echo "fatal: unable to access '"'"'$1'"'"'" >&2; return 128; }
+logged fake_clone https://user:s3cret-token@example.com/owner/repo.git dir || echo "status $?"'
+    assert_status 0 &&
+    assert_output_contains "fake_clone https://***@example.com/owner/repo.git dir failed (exit status 128), ending:" &&
+    assert_output_contains "status 128" &&
+    assert_eq "$(printf '%s\n' "$output" "$log" | grep -c s3cret-token)" "0" &&
+    assert_eq "$log" "+ fake_clone https://***@example.com/owner/repo.git dir
+got https://***@example.com/owner/repo.git
+fatal: unable to access 'https://***@example.com/owner/repo.git'"
+}
+
+# A logged command inside another doesn't rewrite the log under it, so the
+# outer one's later output isn't lost.
+test_a_nested_logged_loses_no_output() {
+    with_run_files run_logged 'outer() { logged echo https://tok@example.com/inner; echo outer-after; return 3; }
+logged outer || echo "status $?"
+warn after'
+    assert_status 0 &&
+    assert_eq "$log" "+ outer
++ echo https://***@example.com/inner
+https://***@example.com/inner
+outer-after" &&
+    assert_output_contains "outer failed (exit status 3), ending:" &&
+    assert_output_contains "status 3" &&
+    assert_output_contains "Warning: after"
+}
+
+test_logged_lets_a_functions_warning_through() {
+    with_run_files run_logged 'noisy() { echo noise; warn "from inside"; }
+logged noisy'
+    assert_status 0 &&
+    assert_eq "$output" "Warning: from inside" &&
+    assert_eq "$log" '+ noisy
+noise'
+}
+
+test_logged_shows_everything_with_verbose() {
+    with_run_files verbosely run_logged 'logged sh -c "echo chatter"'
+    assert_status 0 &&
+    assert_eq "$output" "chatter" &&
+    assert_eq "$log" ""
+}
+
+test_info_is_for_verbose_and_say_for_always() {
+    run_logged 'info progress; say change'
+    assert_eq "$output" "change" &&
+    verbosely run_logged 'info progress; say change' &&
+    assert_eq "$output" "progress
+change"
+}
+
+# Installed packages still go to apt, as before, which upgrades any with a
+# newer version; with none to upgrade, the run prints nothing.
+test_a_run_of_installed_packages_prints_nothing() {
+    LINUX_INSTALLED=all with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_eq "$output" "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "apt-get update -qq" &&
+    assert_calls_contain "apt-get install -y --install-recommends adb atool bat" &&
+    assert_calls_contain "apt-get install -y --install-recommends zoxide" &&
+    case "$log" in
+        *"Reading package lists... Done"*) ;;
+        *) echo "  FAIL: apt's output isn't in the log: $log"; TEST_FAILED=1; return 1 ;;
+    esac
+    assert_eq "$summary" "apt: already installed: adb atool bat build-essential curl fd-find fzf gh git git-delta git-email golang jq mercurial micro p7zip-full python3 python3-pip python3-venv ripgrep shellcheck unzip vim zsh zoxide zsh-autosuggestions"
+}
+
+# A quiet install reads /dev/null, where dpkg's question about a config file
+# you've changed would fail the install: it keeps yours, and says where the
+# package's new version is. --verbose asks, as before.
+test_a_quiet_upgrade_keeps_your_config_and_says_so() {
+    LINUX_INSTALLED=all LINUX_NEW_CONFFILE=gitconfig with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --install-recommends adb atool" &&
+    assert_calls_contain "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold" &&
+    assert_output_contains "/etc/gitconfig; the package's new version is " &&
+    assert_output_contains "/etc/gitconfig.dpkg-dist, to merge by hand"
+}
+
+test_a_verbose_upgrade_lets_dpkg_ask() {
+    LINUX_INSTALLED=all with_run_files verbosely run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_lack "force-conf"
+}
+
+# An installed package apt has a newer version of is upgraded, and the
+# summary says so.
+test_an_installed_package_is_upgraded_and_summarized() {
+    LINUX_INSTALLED=all LINUX_UPGRADES="git jq" with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_eq "$output" "BOOTSTRAP_CONTINUED" &&
+    case "$summary" in
+        "apt: already installed: adb atool bat build-essential curl fd-find fzf gh git-delta git-email golang mercurial "*"; updated: git jq") ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+test_a_package_install_is_logged_and_summarized() {
+    LINUX_INSTALLED=all LINUX_MISSING="zoxide" with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_eq "$output" "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$(printf '%s\n' "$calls" | grep -c '^apt-get update')" "1" &&
+    assert_calls_contain "apt-get install -y --install-recommends zoxide" &&
+    assert_output_lacks "Reading package lists" &&
+    case "$log" in
+        *"Reading package lists... Done"*) ;;
+        *) echo "  FAIL: apt's output isn't in the log: $log"; TEST_FAILED=1; return 1 ;;
+    esac
+    case "$summary" in
+        "apt: already installed: adb "*" zsh zsh-autosuggestions; newly installed: zoxide") ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+test_a_failed_package_install_says_why_and_where() {
+    LINUX_INSTALLED=all LINUX_MISSING="zoxide" LINUX_FAILS=zoxide with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "sudo apt-get install ... failed (exit status 100), ending:" &&
+    assert_output_contains "    E: Unable to locate package zoxide" &&
+    assert_output_contains "  Its output is in $log_path" &&
+    assert_output_contains "Warning: couldn't install zoxide, so z and zi don't work" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    case "$summary" in
+        "apt: already installed: "*"; failed: zoxide") ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+test_verbose_shows_the_package_managers_output() {
+    LINUX_INSTALLED=all LINUX_MISSING="zoxide" with_run_files verbosely run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "Installing or upgrading adb atool" &&
+    assert_output_contains "Installing or upgrading zoxide" &&
+    assert_output_contains "Reading package lists... Done" &&
+    assert_eq "$log" ""
+}
+
+# tsc comes from node-typescript or, where apt hasn't got it, npm: either
+# will do, so a release without the package isn't a failure.
+test_tsc_from_npm_where_apt_has_none() {
+    # The PATH without any tsc the machine running the tests has.
+    no_tsc_path=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+        test -x "$dir/tsc" || printf '%s:' "$dir"
+    done)
+    LINUX_PATH=${no_tsc_path%:} LINUX_NPM=yes LINUX_INSTALLED=all LINUX_MISSING="node-typescript" \
+        with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_lack "node-typescript" &&
+    assert_calls_contain "npm install -g typescript" &&
+    assert_output_lacks "node-typescript" &&
+    case "$summary" in
+        *"npm: newly installed: typescript"*) ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+    case "$summary" in
+        *failed*) echo "  FAIL: summary has a failure: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# A node-typescript apt has but won't install falls back to npm, as before.
+test_tsc_from_npm_when_apts_package_fails() {
+    no_tsc_path=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r dir; do
+        test -x "$dir/tsc" || printf '%s:' "$dir"
+    done)
+    LINUX_PATH=${no_tsc_path%:} LINUX_NPM=yes LINUX_INSTALLED=all LINUX_MISSING="node-typescript" \
+        LINUX_APT_HAS_NODE_TYPESCRIPT=yes LINUX_FAILS=node-typescript \
+        with_run_files run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --install-recommends node-typescript" &&
+    assert_calls_contain "npm install -g typescript" &&
+    assert_output_lacks "couldn't install tsc" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    case "$summary" in
+        *"failed: node-typescript"*"npm: newly installed: typescript"*) ;;
+        *) echo "  FAIL: summary: $summary"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+test_the_summary_is_a_line_per_source() {
+    with_run_files run_logged 'record_install apt already git jq
+record_install apt installed zoxide
+record_install homepkg already lf
+record_install apt failed kitty
+record_why git failed-update tide "on branch foo, no upstream"
+record_install git updated scripts
+record_install git already conf
+record_install apt already zoxide
+record_install apt failed jq'
+    assert_status 0 &&
+    assert_eq "$summary" "apt: already installed: git jq; newly installed: zoxide; failed: kitty
+homepkg: already installed: lf
+git: already installed: conf; updated: scripts; failed to update: tide (on branch foo, no upstream)"
+}
+
+test_an_empty_tally_prints_no_summary() {
+    with_run_files run_logged 'true'
+    assert_eq "$summary" ""
+}
+
+test_verbose_flag_accepted_and_documented() {
+    run_setup --verbose --help
+    assert_status 0 &&
+    assert_output_contains "-v, --verbose" &&
+    run_setup -v --help &&
+    assert_status 0 &&
+    assert_source_contains 'DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --verbose"'
+}
+
+# --- Checkouts ---
+
+# A throwaway origin with a commit on main, and a clone of it in
+# $co_tmpdir/tide, with git configured by nothing outside it.
+co_git() {
+    HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com \
+        GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.com git "$@"
+}
+
+make_checkout() {
+    co_tmpdir="$(mktemp -d)"
+    co_git init -q --bare "$co_tmpdir/origin.git"
+    co_git -C "$co_tmpdir/origin.git" symbolic-ref HEAD refs/heads/main
+    co_git init -q "$co_tmpdir/seed"
+    co_git -C "$co_tmpdir/seed" checkout -q -b main
+    echo one > "$co_tmpdir/seed/file"
+    co_git -C "$co_tmpdir/seed" add file
+    co_git -C "$co_tmpdir/seed" commit -q -m one
+    co_git -C "$co_tmpdir/seed" push -q "$co_tmpdir/origin.git" main
+    co_git clone -q "$co_tmpdir/origin.git" "$co_tmpdir/tide"
+}
+
+# advance_origin: a new commit on origin's main, making file "two".
+advance_origin() {
+    echo two > "$co_tmpdir/seed/file"
+    co_git -C "$co_tmpdir/seed" commit -q -am two
+    co_git -C "$co_tmpdir/seed" push -q "$co_tmpdir/origin.git" main
+}
+
+# Runs update_checkout on the clone, with the run's files, under set -e.
+run_update_checkout() {
+    set +e
+    output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
+$(extract_functions "")
+update_checkout '$co_tmpdir/tide' tide 'installing it as is' || echo NOT_UPDATED
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+}
+
+test_an_up_to_date_checkout_says_nothing() {
+    make_checkout
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_eq "$output" "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$summary" "git: already installed: tide"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_checkout_that_moves_is_summarized_as_updated() {
+    make_checkout
+    advance_origin
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_eq "$output" "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$summary" "git: updated: tide" &&
+    assert_eq "$(cat "$co_tmpdir/tide/file")" "two" &&
+    case "$log" in
+        "+ git -C $co_tmpdir/tide pull"*"Fast-forward"*) ;;
+        *) echo "  FAIL: the pull isn't in the log: $log"; TEST_FAILED=1 ;;
+    esac
+    rm -rf "$co_tmpdir"
+}
+
+test_a_branch_with_no_upstream_is_a_warning_and_a_failed_update() {
+    make_checkout
+    co_git -C "$co_tmpdir/tide" checkout -q -b foo
+    advance_origin
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/tide: on branch foo, no upstream (git pull exited 1: There is no tracking information for the current branch.); installing it as is" &&
+    assert_output_contains "NOT_UPDATED" &&
+    assert_eq "$summary" "git: failed to update: tide (on branch foo, no upstream)" &&
+    assert_eq "$(co_git -C "$co_tmpdir/tide" symbolic-ref --short HEAD)" "foo" &&
+    assert_eq "$(cat "$co_tmpdir/tide/file")" "one"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_checkout_off_its_default_branch_is_named_when_it_pulls() {
+    make_checkout
+    co_git -C "$co_tmpdir/tide" checkout -q -b foo --track origin/main
+    advance_origin
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_eq "$output" "Warning: $co_tmpdir/tide is on branch foo, not main; installing it as is
+BOOTSTRAP_CONTINUED" &&
+    assert_eq "$summary" "git: updated: tide (on branch foo)" &&
+    assert_eq "$(co_git -C "$co_tmpdir/tide" symbolic-ref --short HEAD)" "foo"
+    rm -rf "$co_tmpdir"
+}
+
+test_an_unreachable_origin_says_so() {
+    make_checkout
+    co_git -C "$co_tmpdir/tide" remote set-url origin "$co_tmpdir/gone.git"
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/tide: can't reach origin (git pull exited 1: fatal: " &&
+    assert_eq "$summary" "git: failed to update: tide (can't reach origin)"
+    rm -rf "$co_tmpdir"
+}
+
+test_local_changes_in_the_way_say_so_and_stay() {
+    make_checkout
+    echo mine > "$co_tmpdir/tide/file"
+    advance_origin
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/tide: local changes (git pull exited 1: error: Your local changes to the following files would be overwritten by merge:" &&
+    assert_eq "$summary" "git: failed to update: tide (local changes)" &&
+    assert_eq "$(cat "$co_tmpdir/tide/file")" "mine"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_diverged_checkout_says_so() {
+    make_checkout
+    echo mine > "$co_tmpdir/tide/other"
+    co_git -C "$co_tmpdir/tide" add other
+    co_git -C "$co_tmpdir/tide" commit -q -m mine
+    advance_origin
+    with_run_files run_update_checkout
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/tide: diverged from origin/main (git pull exited 128: fatal: " &&
+    assert_eq "$summary" "git: failed to update: tide (diverged from origin/main)"
+    rm -rf "$co_tmpdir"
+}
+
+test_verbose_shows_the_pull() {
+    make_checkout
+    advance_origin
+    with_run_files verbosely run_update_checkout
+    assert_status 0 &&
+    assert_output_contains "Updating $co_tmpdir/tide" &&
+    assert_output_contains "Fast-forward"
+    rm -rf "$co_tmpdir"
+}
+
+# clone_or_pull hands its existing checkouts to update_checkout, so a stale
+# one is a warning rather than a line lost in the noise.
+test_clone_or_pull_warns_and_continues_when_a_pull_fails() {
+    make_checkout
+    co_git -C "$co_tmpdir/tide" checkout -q -b foo
+    set +e
+    output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
+GITHUB_MIRROR=no
+$(extract_functions "redact_url_credentials canonical_remote clone_or_pull")
+clone_or_pull '$co_tmpdir/origin.git' '$co_tmpdir/tide' yes
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "couldn't update $co_tmpdir/tide: on branch foo, no upstream" &&
+    assert_output_contains "; using it as is" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+    rm -rf "$co_tmpdir"
+}
+
+# A failed clone has no checkout to fall back to, so it stays an error.
+test_clone_or_pull_fails_when_a_clone_does() {
+    co_tmpdir="$(mktemp -d)"
+    set +e
+    output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
+GITHUB_MIRROR=no
+$(extract_functions "redact_url_credentials canonical_remote clone_or_pull")
+clone_or_pull '$co_tmpdir/gone.git' '$co_tmpdir/tide' yes
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    assert_status 1 &&
+    assert_output_contains "Error: couldn't clone $co_tmpdir/gone.git into $co_tmpdir/tide" &&
+    assert_output_lacks "BOOTSTRAP_CONTINUED"
+    rm -rf "$co_tmpdir"
+}
+
+# The remote-switch question is only asked when a remote is HTTPS.
+test_ssh_remotes_offer_needs_an_https_remote() {
+    verbosely run_offer_ssh_remotes no present
+    assert_status 0 &&
+    assert_output_contains "Skipping the SSH remotes: none are HTTPS" &&
+    assert_output_lacks "Switch your repo remotes" &&
+    assert_calls_contain "gittossh --dry-run"
+}
+
+run_test "each run starts a fresh log, keeping the last" \
+    test_each_run_starts_a_fresh_log
+run_test "logged keeps a command's output out of sight" \
+    test_logged_keeps_a_commands_output_out_of_sight
+run_test "logged shows the end of a failure and where the rest is" \
+    test_logged_shows_the_end_of_a_failure_and_where_the_rest_is
+run_test "logged lets a function's warning through" \
+    test_logged_lets_a_functions_warning_through
+run_test "logged keeps a URL's credentials out of the log and the terminal" \
+    test_logged_keeps_a_urls_credentials_out_of_the_log
+run_test "a nested logged loses no output" \
+    test_a_nested_logged_loses_no_output
+run_test "logged shows everything with --verbose" \
+    test_logged_shows_everything_with_verbose
+run_test "info is for --verbose, say for always" \
+    test_info_is_for_verbose_and_say_for_always
+run_test "a run of installed packages prints nothing" \
+    test_a_run_of_installed_packages_prints_nothing
+run_test "a quiet upgrade keeps your config file and says so" \
+    test_a_quiet_upgrade_keeps_your_config_and_says_so
+run_test "a verbose upgrade lets dpkg ask" \
+    test_a_verbose_upgrade_lets_dpkg_ask
+run_test "an installed package is upgraded and summarized" \
+    test_an_installed_package_is_upgraded_and_summarized
+run_test "a package install is logged and summarized" \
+    test_a_package_install_is_logged_and_summarized
+run_test "a failed package install says why and where" \
+    test_a_failed_package_install_says_why_and_where
+run_test "--verbose shows the package manager's output" \
+    test_verbose_shows_the_package_managers_output
+run_test "tsc comes from npm where apt has no node-typescript" \
+    test_tsc_from_npm_where_apt_has_none
+run_test "tsc comes from npm when apt's node-typescript won't install" \
+    test_tsc_from_npm_when_apts_package_fails
+run_test "the summary is a line per source" \
+    test_the_summary_is_a_line_per_source
+run_test "an empty tally prints no summary" \
+    test_an_empty_tally_prints_no_summary
+run_test "--verbose is accepted, documented and forwarded" \
+    test_verbose_flag_accepted_and_documented
+run_test "an up-to-date checkout says nothing" \
+    test_an_up_to_date_checkout_says_nothing
+run_test "a checkout that moves is summarized as updated" \
+    test_a_checkout_that_moves_is_summarized_as_updated
+run_test "a branch with no upstream is a warning and a failed update" \
+    test_a_branch_with_no_upstream_is_a_warning_and_a_failed_update
+run_test "a checkout off its default branch is named when it pulls" \
+    test_a_checkout_off_its_default_branch_is_named_when_it_pulls
+run_test "an unreachable origin says so" \
+    test_an_unreachable_origin_says_so
+run_test "local changes in the way say so, and stay" \
+    test_local_changes_in_the_way_say_so_and_stay
+run_test "a diverged checkout says so" \
+    test_a_diverged_checkout_says_so
+run_test "--verbose shows the pull" \
+    test_verbose_shows_the_pull
+run_test "clone_or_pull warns and continues when a pull fails" \
+    test_clone_or_pull_warns_and_continues_when_a_pull_fails
+run_test "clone_or_pull fails when a clone does" \
+    test_clone_or_pull_fails_when_a_clone_does
+run_test "the SSH remote question needs an HTTPS remote" \
+    test_ssh_remotes_offer_needs_an_https_remote
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

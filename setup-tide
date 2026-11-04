@@ -75,7 +75,7 @@
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
 #                      [--no-build-hyprland] [--greeter | --no-greeter]
-#                      [--github PREFIX] [-h | --help]
+#                      [--github PREFIX] [-v | --verbose] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -90,6 +90,9 @@
 # a mirror instead, as setup's --github does for its own repos, and setup
 # passes its prefix on. Only the host changes: each source build still
 # checks out its pinned commit, so a mirror can't swap what's built.
+# --verbose shows every step and the commands' own output; without it, the
+# run says only what it changed, what's left to do and what went wrong, as
+# setup does (see "What a run prints"), and setup passes it on.
 
 INSTALL=yes
 SUDO=yes
@@ -282,15 +285,103 @@ PREVIOUS_DM_FILE="$STATE_DIR/previous-display-manager"
 GO="${GO:-go}"
 MIN_GO=1.22
 
+# --- What a run prints ---
+
+# setup and the helpers it runs (setup-kde, setup-tide, setup-macos) print
+# what a run changed, what's left for you to do, and what went wrong, and
+# nothing else unless --verbose:
+#   say          a change, or something to do: always shown
+#   info         progress, and what was skipped or already so: --verbose only
+#   warn, error  problems, on stderr, repeated as the run ends
+# Package managers, builds and make run through logged, which keeps their
+# output in $SETUP_LOG. What each install step found is tallied with
+# record_install, and the run ends with a line per source: what was already
+# installed, what it installed or updated, and what failed. The outermost of
+# setup and its helpers makes the log and the tally and prints the summary; a
+# helper it runs inherits both and only adds to them.
+VERBOSE=no
+
+say() {
+    printf "%s\n" "$*"
+}
+
+info() {
+    test "${VERBOSE:-no}" = yes || return 0
+    printf "%s\n" "$*"
+}
+
 # Every warning and error goes to $SETUP_PROBLEMS too, so the run ends by
-# repeating them all: one line among thousands scrolls by unseen. The
-# outermost of setup and its helpers (setup-kde, setup-tide, setup-macos)
-# makes the file and repeats it as it exits, however it exits; a helper it
-# runs inherits the file and only adds to it.
+# repeating them all: one line among thousands scrolls by unseen.
 note_problem() {
     test -n "${SETUP_PROBLEMS:-}" || return 0
     printf '%s\n' "$1" >>"$SETUP_PROBLEMS" ||
         printf "Warning: couldn't add that to %s, so the end of the run won't repeat it\n" "$SETUP_PROBLEMS" >&2
+}
+
+# record_install SOURCE STATE NAME...: tallies NAME... for the summary.
+# SOURCE is where they come from: a package manager (apt, dnf, pacman, brew,
+# npm), homepkg, git (checkouts, and builds from them) or download (an
+# installer fetched with curl). STATE is already (installed before this run),
+# installed, updated, failed-update (a checkout that couldn't be pulled) or
+# failed. record_why SOURCE STATE NAME WHY tallies one NAME with a few words
+# on it, which the summary puts in parentheses after it.
+record_install() {
+    _ri_source=$1
+    _ri_state=$2
+    shift 2
+    for _ri_name in "$@"; do
+        record_why "$_ri_source" "$_ri_state" "$_ri_name" ""
+    done
+}
+
+record_why() {
+    test -n "${SETUP_INSTALLS:-}" || return 0
+    printf '%s %s %s %s\n' "$1" "$2" "$3" "$4" >>"$SETUP_INSTALLS" ||
+        printf "Warning: couldn't add %s to %s, so the summary leaves it out\n" "$3" "$SETUP_INSTALLS" >&2
+}
+
+# print_installs: the tally as a line per source, in the order they came:
+#   apt: already installed: git jq; newly installed: zoxide; failed: kitty
+# A name tallied twice keeps its best news: newly installed, then updated,
+# then failed to update, then already installed, then failed.
+print_installs() {
+    test -s "${SETUP_INSTALLS:-}" || return 0
+    printf '\n'
+    awk '
+        BEGIN {
+            rank["installed"] = 5; rank["updated"] = 4; rank["failed-update"] = 3
+            rank["already"] = 2; rank["failed"] = 1
+            order[1] = "already"; order[2] = "installed"; order[3] = "updated"
+            order[4] = "failed-update"; order[5] = "failed"
+            words["already"] = "already installed"; words["installed"] = "newly installed"
+            words["updated"] = "updated"; words["failed-update"] = "failed to update"
+            words["failed"] = "failed"
+        }
+        NF >= 3 && ($2 in rank) {
+            if (!($1 in seen)) { seen[$1] = 1; sources[++nsources] = $1 }
+            key = $1 SUBSEP $3
+            why = $0
+            sub(/^[^ ]+ [^ ]+ [^ ]+ ?/, "", why)
+            if (!(key in state)) names[$1, ++count[$1]] = $3
+            if (!(key in state) || rank[$2] > rank[state[key]]) { state[key] = $2; note[key] = why }
+        }
+        END {
+            for (s = 1; s <= nsources; s++) {
+                src = sources[s]
+                line = ""
+                for (o = 1; o <= 5; o++) {
+                    list = ""
+                    for (i = 1; i <= count[src]; i++) {
+                        key = src SUBSEP names[src, i]
+                        if (state[key] != order[o]) continue
+                        list = list " " names[src, i]
+                        if (note[key] != "") list = list " (" note[key] ")"
+                    }
+                    if (list != "") line = line (line == "" ? "" : ";") " " words[order[o]] ":" list
+                }
+                print src ":" line
+            }
+        }' "$SETUP_INSTALLS"
 }
 
 PROBLEMS_OWNER=no
@@ -303,15 +394,45 @@ start_problem_recap() {
     fi
     export SETUP_PROBLEMS
     PROBLEMS_OWNER=yes
+    start_run_files
 }
 
-# recap_problems STATUS, from the EXIT trap: repeats every warning and error,
-# says if the run stopped early, and keeps STATUS as the exit status.
+# start_run_files: the tally, in $TMPDIR, and the log, in
+# $XDG_STATE_HOME/setup, a fresh one each run, with the last run's kept as
+# setup.log.1.
+start_run_files() {
+    if SETUP_INSTALLS=$(mktemp "${TMPDIR:-/tmp}/setup-installs-XXXXXX"); then
+        export SETUP_INSTALLS
+    else
+        SETUP_INSTALLS=
+        warn "couldn't make a file to tally installs in, so the run won't end with a summary of them"
+    fi
+    _log_dir="${XDG_STATE_HOME:-$HOME/.local/state}/setup"
+    SETUP_LOG="$_log_dir/setup.log"
+    if ! mkdir -p "$_log_dir" \
+            || { test -f "$SETUP_LOG" && ! mv -f "$SETUP_LOG" "$SETUP_LOG.1"; } \
+            || ! printf "" >"$SETUP_LOG"; then
+        warn "couldn't start $SETUP_LOG, so commands' output shows here instead"
+        SETUP_LOG=
+    fi
+    export SETUP_LOG
+}
+
+# recap_problems STATUS, from the EXIT trap: prints the install summary,
+# repeats every warning and error, says if the run stopped early, and keeps
+# STATUS as the exit status.
 recap_problems() {
     test "$PROBLEMS_OWNER" = yes || return "$1"
+    print_installs
+    if test -n "${SETUP_INSTALLS:-}"; then
+        rm -f "$SETUP_INSTALLS"
+    fi
     if test -s "$SETUP_PROBLEMS"; then
         printf '\n%s: the warnings and errors from this run, again:\n' "setup-tide" >&2
         sed 's/^/  /' "$SETUP_PROBLEMS" >&2
+        if test -s "${SETUP_LOG:-}"; then
+            printf "The commands' output is in %s\n" "$SETUP_LOG" >&2
+        fi
     fi
     if test "$1" -ne 0; then
         printf '%s stopped early, with exit status %s\n' "setup-tide" "$1" >&2
@@ -320,17 +441,84 @@ recap_problems() {
     return "$1"
 }
 
-info() {
-    printf "%s\n" "$*"
+# logged COMMAND...: runs COMMAND with its output added to $SETUP_LOG rather
+# than shown, unless --verbose (or there's no log). Its stdin is /dev/null,
+# so it can't wait on a question no one can see: apt's debconf takes its
+# defaults, and sudo, ssh and git ask on the terminal itself, as they always
+# do. A warning from COMMAND, a function, still shows: warn and error write
+# to the terminal through descriptor 3 meanwhile. When COMMAND fails, the end
+# of its output is shown, and where the rest is.
+logged() {
+    if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+        "$@"
+        return
+    fi
+    # A URL's user-info can be a token (https://USER:TOKEN@host/..., from
+    # --github or $TIDE_REPO, say), so neither the log nor what's shown of a
+    # failure keeps it, as redact_url_credentials does for the terminal.
+    _lg_redact='s#(://)[^/@[:space:]]*@#\1***@#g'
+    _lg_cmd=$(printf '%s\n' "$*" | sed -E "$_lg_redact")
+    # Inside another logged command, whose output already goes to the log:
+    # its variables are global, so this one only notes the command and runs
+    # it, and the outer one reports, redacts and restores LOGGING.
+    if test "${LOGGING:-no}" = yes; then
+        printf '+ %s\n' "$_lg_cmd"
+        "$@"
+        return
+    fi
+    _lg_start=$(awk 'END { print NR }' "$SETUP_LOG" 2>/dev/null) || _lg_start=0
+    printf '+ %s\n' "$_lg_cmd" >>"$SETUP_LOG"
+    LOGGING=yes
+    _lg_status=0
+    "$@" </dev/null 3>&2 >>"$SETUP_LOG" 2>&1 || _lg_status=$?
+    LOGGING=no
+    # The command's own output too: git quotes the URL it couldn't reach.
+    if grep -Eq '://[^/@[:space:]]*@' "$SETUP_LOG" 2>/dev/null; then
+        if ! { sed -E "$_lg_redact" "$SETUP_LOG" >"$SETUP_LOG.redacted" \
+                && mv -f "$SETUP_LOG.redacted" "$SETUP_LOG"; }; then
+            rm -f "$SETUP_LOG.redacted"
+            warn "couldn't take a URL's credentials out of $SETUP_LOG; delete it"
+        fi
+    fi
+    if test "$_lg_status" -eq 0; then
+        return 0
+    fi
+    # From "$*" again: a logged command inside this one set _lg_cmd.
+    _lg_what=$(printf '%s\n' "$*" | sed -E "$_lg_redact" | awk '{
+        sub(/^sudo_or_warn /, "sudo ")
+        s = $1
+        for (i = 2; i <= NF && i <= 3; i++) s = s " " $i
+        if (NF > 3) s = s " ..."
+        print s
+    }')
+    _lg_tail=$(sed -n "$((${_lg_start:-0} + 2)),\$p" "$SETUP_LOG" | tail -n 20)
+    if test -n "$_lg_tail"; then
+        printf "%s failed (exit status %s), ending:\n" "$_lg_what" "$_lg_status" >&2
+        printf '%s\n' "$_lg_tail" | sed 's/^/    /' >&2
+    else
+        printf "%s failed (exit status %s)\n" "$_lg_what" "$_lg_status" >&2
+    fi
+    printf "  Its output is in %s\n" "$SETUP_LOG" >&2
+    return "$_lg_status"
 }
 
+# While logged runs a command, stderr is the log, so warn and error write to
+# the terminal through the descriptor logged keeps for them.
 warn() {
-    printf "Warning: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Warning: %s\n" "$*" >&3
+    else
+        printf "Warning: %s\n" "$*" >&2
+    fi
     note_problem "Warning: $*"
 }
 
 error() {
-    printf "Error: %s\n" "$*" >&2
+    if test "${LOGGING:-no}" = yes; then
+        printf "Error: %s\n" "$*" >&3
+    else
+        printf "Error: %s\n" "$*" >&2
+    fi
     note_problem "Error: $*"
     exit 1
 }
@@ -363,6 +551,10 @@ sudo_or_warn() {
     else
         _sudo_status=$?
     fi
+    # Under logged, stderr is the log, which then has all of it.
+    if test "${LOGGING:-no}" = yes; then
+        cat "$_sudo_stderr" >&2
+    fi
     _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
     rm -f "$_sudo_stderr"
 
@@ -388,7 +580,7 @@ usage() {
     cat <<'USAGE'
 Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
                   [--no-build-hyprland] [--greeter | --no-greeter]
-                  [--github PREFIX] [-h | --help]
+                  [--github PREFIX] [-v | --verbose] [-h | --help]
 
 Install the tide session (Hyprland + uwsm) beside KDE Plasma. The display
 manager stays as it is, with tide as one more session, unless --greeter is
@@ -410,6 +602,8 @@ Options:
                    https://ghe.corp/) instead of github.com: tide, and the
                    Quickshell and Hyprland source builds. A bare host is
                    treated as SSH. Also settable via GITHUB_PREFIX
+  -v, --verbose    Show every step and the commands' own output, not just
+                   changes, warnings and errors
   -h, --help       Show this help and exit
 USAGE
 }
@@ -421,6 +615,7 @@ while test $# -gt 0; do
         --sudo) SUDO=yes ;;
         --no-sudo) SUDO=no ;;
         --ignore-errors) IGNORE_ERRORS=yes ;;
+        -v|--verbose) VERBOSE=yes ;;
         --fetch) FETCH=yes ;;
         --no-fetch) FETCH=no ;;
         --build-hyprland) BUILD_HYPRLAND=yes ;;
@@ -531,12 +726,94 @@ detect_os() {
 
 # --- Packages ---
 
-# pkg_install installs packages with the distro's package manager.
+# apt_conffile_options: dpkg's answer for a quiet install to the question it
+# asks about a config file you've changed that the package changed too: keep
+# yours, or take the package's default where it names one. A quiet install
+# reads /dev/null, where dpkg's question would fail the install, leaving the
+# package unconfigured; --verbose asks on the terminal, as before. The new
+# version is left beside yours, and report_new_conffiles says where.
+apt_conffile_options() {
+    if test "${VERBOSE:-no}" != yes && test -n "${SETUP_LOG:-}"; then
+        printf '%s\n' -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+    fi
+}
+
+# report_new_conffiles MARKER: warns about each new config file dpkg left
+# beside one of yours (FILE.dpkg-dist), since MARKER was made, so the
+# package's changes to it aren't lost without a word. $SETUP_ETC stands in
+# for /etc in the tests.
+report_new_conffiles() {
+    find "${SETUP_ETC:-/etc}" -name '*.dpkg-dist' -newer "$1" 2>/dev/null | while IFS= read -r _rn_file; do
+        warn "kept your ${_rn_file%.dpkg-dist}; the package's new version is $_rn_file, to merge by hand"
+    done
+}
+
+# pkg_install installs packages with the distro's package manager, its
+# output logged (see logged).
 pkg_install() {
     case "$(detect_os)" in
-        debian) sudo_or_warn apt-get install -y "$@" ;;
-        redhat) sudo_or_warn dnf install -y "$@" ;;
-        arch) sudo_or_warn pacman -S --needed --noconfirm "$@" ;;
+        debian)
+            _pi_status=0
+            _pi_marker=$(mktemp "${TMPDIR:-/tmp}/setup-apt-XXXXXX") || _pi_marker=
+            # shellcheck disable=SC2046  # none or four options, without spaces
+            logged sudo_or_warn apt-get install -y "$@" $(apt_conffile_options) || _pi_status=$?
+            if test -n "$_pi_marker"; then
+                report_new_conffiles "$_pi_marker"
+                rm -f "$_pi_marker"
+            fi
+            return "$_pi_status"
+            ;;
+        redhat) logged sudo_or_warn dnf install -y "$@" ;;
+        arch) logged sudo_or_warn pacman -S --needed --noconfirm "$@" ;;
+        *) return 1 ;;
+    esac
+}
+
+# pkg_source: the package manager's name, for the summary.
+pkg_source() {
+    case "$(detect_os)" in
+        debian) echo apt ;;
+        redhat) echo dnf ;;
+        arch) echo pacman ;;
+        *) echo packages ;;
+    esac
+}
+
+# pkg_has NAME: whether the package manager has NAME installed.
+pkg_has() {
+    case "$(detect_os)" in
+        debian)
+            _ph_status=$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null) || return 1
+            case "$_ph_status" in
+                *" installed") return 0 ;;
+            esac
+            return 1
+            ;;
+        redhat) rpm -q --whatprovides "$1" >/dev/null 2>&1 ;;
+        arch) pacman -Qq -- "$1" >/dev/null 2>&1 ;;
+        *) return 1 ;;
+    esac
+}
+
+# pkg_version NAME: prints the version of NAME the package manager has
+# installed ("installed" where it doesn't say which), failing when it
+# hasn't.
+pkg_version() {
+    case "$(detect_os)" in
+        debian)
+            _pv=$(dpkg-query -W -f='${Status} ${Version}\n' "$1" 2>/dev/null) || return 1
+            printf '%s\n' "$_pv" | awk '$3 == "installed" { print ($4 == "" ? "installed" : $4); found = 1; exit }
+                END { exit !found }'
+            ;;
+        redhat)
+            _pv=$(rpm -q --whatprovides --qf '%{VERSION}-%{RELEASE}\n' "$1" 2>/dev/null) || return 1
+            printf '%s\n' "${_pv:-installed}"
+            ;;
+        arch)
+            _pv=$(pacman -Q -- "$1" 2>/dev/null) || return 1
+            _pv=${_pv#* }
+            printf '%s\n' "${_pv:-installed}"
+            ;;
         *) return 1 ;;
     esac
 }
@@ -572,14 +849,18 @@ dnf_known() {
 
 # pacman_known prints the name of each of its arguments in pacman's sync
 # databases. pacman -Si fails when any name is unknown, so its status can't
-# tell that from a failed query; only an answer naming nothing is taken as
-# one. Asked in the C locale, whose labels it parses.
+# tell that from a failed query; only an answer naming nothing, and not
+# saying each name was not found, is taken as one. Asked in the C locale,
+# whose labels it parses.
 pacman_known() {
     # Unknown names are expected here, and pacman says so on stderr; the
     # names it found are the answer, whatever its status.
-    _info=$(LC_ALL=C pacman -Si -- "$@" 2>/dev/null) || :
+    _info=$(LC_ALL=C pacman -Si -- "$@" 2>&1) || :
     _names=$(printf '%s\n' "$_info" | awk '$1 == "Name" && $2 == ":" { print $3 }')
-    test -n "$_names" || return 1
+    if test -z "$_names"; then
+        test "$(printf '%s\n' "$_info" | grep -c "^error: package '.*' was not found")" -eq "$#" || return 1
+        return 0
+    fi
     printf '%s\n' "$_names"
 }
 
@@ -595,10 +876,13 @@ enable_copr() {
 # install_all installs the packages it can and prints the ones it couldn't,
 # failing if there are any. apt, dnf and pacman all refuse the lot over one
 # name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so it asks
-# which exist first, and installs those in one go. On Arch a package
-# installed from outside the repositories (the AUR) is left as it is:
-# pacman -S would refuse it too. The package manager's own output goes to
-# stderr, so stdout carries only the list.
+# which exist first, and installs those in one go, which also upgrades any
+# already installed that have a newer version. On Arch a package installed
+# from outside the repositories (the AUR) is left as it is: pacman -S would
+# refuse it too. Each package it has, or tried, is tallied for the summary
+# as newly installed, updated (its version moved) or already installed; one
+# the distro hasn't got is left to the caller, which knows whether that
+# matters. stdout carries only the list.
 install_all() {
     _install="$*"
     _missing=
@@ -638,15 +922,39 @@ install_all() {
             if printf '%s\n' "$_known" | grep -qxF -e "$_pkg"; then
                 _install="$_install $_pkg"
             elif printf '%s\n' "$_local" | grep -qxF -e "$_pkg"; then
-                :
+                record_install "$(pkg_source)" already "$_pkg"
             else
                 _missing="$_missing $_pkg"
             fi
         done
     fi
     if test -n "$_install"; then
+        # Each one's version before, to tell an install or upgrade from a
+        # package left as it was.
+        _before=
+        for _pkg in $_install; do
+            _before="$_before$_pkg=$(pkg_version "$_pkg" || :)
+"
+        done
+        info "Installing or upgrading$_install" >&2
+        # One transaction: when it fails, only what's there afterwards made it.
+        _installed=yes
         # shellcheck disable=SC2086  # word-split the package list
-        pkg_install $_install >&2 || _missing="$_missing $_install"
+        pkg_install $_install >&2 || _installed=no
+        for _pkg in $_install; do
+            _was=$(printf '%s' "$_before" | awk -F= -v n="$_pkg" '$1 == n { sub(/^[^=]*=/, ""); print; exit }')
+            _now=$(pkg_version "$_pkg") || _now=
+            if test -z "$_now" && test "$_installed" = no; then
+                record_install "$(pkg_source)" failed "$_pkg"
+                _missing="$_missing $_pkg"
+            elif test -z "$_was"; then
+                record_install "$(pkg_source)" installed "$_pkg"
+            elif test "$_now" != "$_was"; then
+                record_install "$(pkg_source)" updated "$_pkg"
+            else
+                record_install "$(pkg_source)" already "$_pkg"
+            fi
+        done
     fi
     printf '%s\n' "${_missing# }"
     test -z "$_missing"
@@ -754,7 +1062,7 @@ install_packages() {
     # installed. It's asked for on its own: not every distro packages it,
     # and dnf and pacman refuse a whole transaction over one unknown name.
     if ! install_all satty >/dev/null; then
-        info "couldn't install satty; screenshots offer Annotate once it's installed"
+        info "Skipping satty: couldn't install it; screenshots offer Annotate once it's installed"
     fi
     # waybar, the bar while tide's own can't run, draws its icons with Nerd
     # Font symbols, from Symbols Nerd Font, the icons-only font (conf's
@@ -766,21 +1074,22 @@ install_packages() {
         *) nerd_font= ;;
     esac
     if test -z "$nerd_font"; then
-        info "This distro doesn't package Symbols Nerd Font, so waybar shows no icons; install it from nerdfonts.com for them"
+        info "Skipping Symbols Nerd Font: not packaged here, so waybar shows no icons (nerdfonts.com has it)"
     elif ! install_all "$nerd_font" >/dev/null; then
-        info "couldn't install $nerd_font (it isn't in every release), so waybar shows no icons; install Symbols Nerd Font from nerdfonts.com for them"
+        info "Skipping $nerd_font: couldn't install it (not every release has it), so waybar shows no icons (nerdfonts.com has it)"
     fi
     # cliphist keeps the clipboard history that Super+V's picker lists
     # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
     # without it still gets the rest.
     if ! install_all cliphist >/dev/null; then
-        warn "couldn't install cliphist, so Super+V's picker keeps no clipboard history; its Characters tab still works"
+        record_install "$(pkg_source)" failed cliphist
+        warn "couldn't install cliphist, so Super+V's picker keeps no clipboard history"
     fi
     # rbw is the Bitwarden client behind the picker's Fill tab on
     # Super+Shift+V (tide SPEC.md §8.4). On its own: Fedora doesn't package
     # it.
     if ! install_all rbw >/dev/null; then
-        info "couldn't install rbw (Fedora doesn't package it), so Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
+        info "Skipping rbw: couldn't install it (Fedora doesn't package it), so Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
     fi
     # The Settings pages' *advanced* buttons open these (tide SPEC.md §16):
     # pavucontrol for Sound, nm-connection-editor for Network,
@@ -792,19 +1101,43 @@ install_packages() {
     esac
     for tool in pavucontrol "$nm_editor" blueman nwg-displays; do
         if ! install_all "$tool" >/dev/null; then
-            info "couldn't install $tool; its Settings page's advanced button works once it's installed"
+            info "Skipping $tool: couldn't install it; its Settings page's advanced button works once it's installed"
         fi
     done
-    if test "$installed" = no; then
+    # swww and swaybg each draw the wallpaper, so either is enough: only
+    # both missing is a loss.
+    case " $missing " in
+        *" swww "*)
+            case " $missing " in
+                *" swaybg "*) warn "without swww or swaybg there's no wallpaper" ;;
+                *)
+                    # shellcheck disable=SC2086  # word-split the package list
+                    missing=$(without swww $missing)
+                    info "Skipping swww: couldn't install it; swaybg draws the wallpaper"
+                    ;;
+            esac
+            ;;
+        *" swaybg "*)
+            # shellcheck disable=SC2086  # word-split the package list
+            missing=$(without swaybg $missing)
+            info "Skipping swaybg: couldn't install it; swww draws the wallpaper"
+            ;;
+    esac
+    if test "$installed" = no && test -n "$missing"; then
         # shellcheck disable=SC2086  # word-split the package list
-        warn "could not install:$(printf ' %s' $missing); install them manually"
-        case " $missing " in
-            *" swaybg "*) case " $missing " in
-                *" swww "*) warn "without swww or swaybg there's no wallpaper" ;;
-            esac ;;
-            *" swww "*) info "swww isn't packaged here; swaybg shows the wallpaper instead" ;;
-        esac
+        record_install "$(pkg_source)" failed $missing
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "couldn't install:$(printf ' %s' $missing); install them yourself"
     fi
+}
+
+# without WORD LIST...: LIST, without WORD.
+without() {
+    _wo_word=$1
+    shift
+    for _wo; do
+        test "$_wo" = "$_wo_word" || printf '%s ' "$_wo"
+    done
 }
 
 # join_video_group adds this user to the video group. brightnessctl writes
@@ -817,8 +1150,8 @@ join_video_group() {
     case " $(id -nG "$_user") " in
         *" video "*) return 0 ;;
     esac
-    if sudo_or_warn usermod -aG video "$_user"; then
-        info "Added $_user to the video group, so the brightness keys can change the backlight; log out and back in for it to take effect"
+    if logged sudo_or_warn usermod -aG video "$_user"; then
+        say "Added $_user to the video group, for the brightness keys; log out and back in for it to take effect"
     else
         warn "couldn't add $_user to the video group, so the brightness keys won't change the backlight"
     fi
@@ -885,7 +1218,10 @@ install_or_build_quickshell() {
                 warn "$why, and building it needs Qt $MIN_QUICKSHELL_QT, but apt's Qt is ${qt:-missing}; tide's bar won't run, and waybar stays the bar"
                 return 0
             fi
-            build_quickshell "$why" || warn "building Quickshell failed, so tide's bar won't run yet; waybar stays the bar. Rerun setup-tide to retry"
+            if ! build_quickshell "$why"; then
+                record_install git failed Quickshell
+                warn "couldn't build Quickshell, so tide's bar won't run yet and waybar stays the bar; rerun setup-tide to retry"
+            fi
             return 0
         fi
     fi
@@ -931,7 +1267,7 @@ make_build_dir() {
             return 1
         fi
         test -z "$_mine" || return 0
-        info "$1 is another account's partial build, so it's started afresh"
+        info "Starting $1 afresh: it's another account's partial build"
         if ! sudo_or_warn rm -rf "$1"; then
             warn "couldn't remove $1 to rebuild it"
             return 1
@@ -1008,8 +1344,11 @@ remove_legacy_builds() {
         fi
         set -- "$old"/.built-*
         test -f "$old/$marker" || test -e "$1" || continue
-        info "Removing $old, an earlier build the greeter can't run"
-        rm -rf "$old" || warn "couldn't remove the earlier build in $old"
+        if rm -rf "$old"; then
+            say "Removed $old, an earlier build the greeter can't run"
+        else
+            warn "couldn't remove the earlier build in $old"
+        fi
     done
     if test -L "$legacy/current"; then
         rm -f "$legacy/current" || warn "couldn't remove $legacy/current"
@@ -1056,10 +1395,10 @@ build_logged() {
 # packages it uses privately, a new one builds afresh, and a rerun with
 # none changed only relinks.
 build_quickshell() {
-    info "$1; building $QUICKSHELL_TAG from source"
+    info "Quickshell from source: $1"
     # shellcheck disable=SC2086  # word-split the package list
     if ! missing=$(install_all $QUICKSHELL_BUILD_DEPS); then
-        warn "could not install Quickshell's build dependencies:$(printf ' %s' $missing)"
+        warn "couldn't install Quickshell's build dependencies:$(printf ' %s' $missing)"
         return 1
     fi
     # shellcheck disable=SC2086  # word-split the package list
@@ -1078,8 +1417,10 @@ build_quickshell() {
     # Named for tide's old name, like Hyprland's quickspace-pins.
     qs_marker="$qs_dir/quickspace-build"
     if test -f "$qs_marker"; then
-        info "Quickshell $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
+        info "Skipping the Quickshell build: $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
+        record_install git already Quickshell
     else
+        say "Building Quickshell $QUICKSHELL_TAG from source: $1"
         src="$QUICKSHELL_SRC/quickshell"
         # A stale clone or partial install left in place would be built into
         # and then marked complete. The partial install is in root's prefix,
@@ -1108,6 +1449,7 @@ build_quickshell() {
             warn "couldn't write $qs_marker"
             return 1
         }
+        record_install git installed Quickshell
     fi
     link_quickshell || return 1
     remove_old_quickshell_builds
@@ -1197,7 +1539,7 @@ unlink_quickshell() {
         link="$QUICKSHELL_BIN_DIR/$cmd"
         test -L "$link" || continue
         is_setup_link "$(readlink "$link")" "$QUICKSHELL_PREFIX" "$LEGACY_QUICKSHELL_PREFIX" || continue
-        info "Removing $link, which points to a source build: $_why"
+        say "Removing $link, a link to a source build: $_why"
         if ! sudo_or_warn rm -f "$link"; then
             warn "couldn't remove $link; it still points to the source-built Quickshell"
             _unlinked=no
@@ -1217,16 +1559,17 @@ unlink_quickshell() {
 build_hyprland() {
     set_install_dir
     if test -f "$pins_file"; then
-        info "Hyprland is already built from these pins in $install_dir"
+        info "Skipping the Hyprland build: already built from these pins in $install_dir"
+        record_install git already Hyprland
         link_hyprland || return 1
         remove_old_builds
         remove_legacy_builds "$LEGACY_HYPRLAND_PREFIX" quickspace-pins "$HYPRLAND_BIN_DIR" "$HYPRLAND_COMMANDS"
         return
     fi
-    info "Building Hyprland from source into $install_dir (apt's is older than $MIN_HYPRLAND; this takes a while)"
+    say "Building Hyprland from source into $install_dir, as apt's is older than $MIN_HYPRLAND; this takes a while"
     # shellcheck disable=SC2086  # word-split the package list
     if ! missing=$(install_all $HYPRLAND_BUILD_DEPS); then
-        warn "could not install Hyprland's build dependencies:$(printf ' %s' $missing)"
+        warn "couldn't install Hyprland's build dependencies:$(printf ' %s' $missing)"
         return 1
     fi
     # Our own libraries come first, ahead of any the distro has.
@@ -1257,14 +1600,16 @@ build_hyprland() {
         test -n "$name" || continue
         stamp="$install_dir/.built-$name"
         if test -f "$stamp"; then
-            info "Already built $name $tag"
+            info "Skipping $name $tag: already built"
             continue
         fi
         build_component "$name" "$url" "$tag" "$commit" "$kind" && : > "$stamp" || exit 1
     done || {
-        warn "building Hyprland failed; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
+        record_install git failed Hyprland
+        warn "couldn't build Hyprland; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
         return 1
     }
+    record_install git installed Hyprland
     info "Built Hyprland; the build's output is in $build_log"
     # Marked complete before linking, so a failed link is retried rather
     # than the build.
@@ -1365,7 +1710,7 @@ unlink_hyprland() {
         fi
     done
     test $# -gt 0 || return 0
-    info "Removing $*, which point to a source build; using apt's Hyprland"
+    say "Removing $*, links to a source build: apt's Hyprland is used instead"
     # Both go in one command, and anything a failure half-removed is put
     # back, so the commands never come from different builds.
     sudo_or_warn rm -f "$@" && return 0
@@ -1444,6 +1789,110 @@ check_hyprland_version() {
 
 # --- The tide repo ---
 
+# default_branch DIR: origin's default branch, as DIR's clone recorded it, or
+# main or master when it recorded none.
+default_branch() {
+    if _db=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+        printf '%s\n' "${_db#origin/}"
+        return 0
+    fi
+    for _db in main master; do
+        if git -C "$1" show-ref --verify --quiet "refs/remotes/origin/$_db"; then
+            printf '%s\n' "$_db"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# git_message OUTPUT: the line of git's OUTPUT that says what went wrong (its
+# first fatal: or error:, or else its first line that isn't the fetch's
+# progress or a hint), with any credentials in a URL taken out.
+git_message() {
+    printf '%s\n' "$1" | awk '
+        NF && first == "" && $0 !~ /^(From |remote: |hint: |[ \t])/ { first = $0 }
+        /^(fatal|error): / && found == "" { found = $0 }
+        END { print (found != "" ? found : first) }' |
+        sed 's#://[^/@ ]*@#://***@#g'
+}
+
+# update_checkout DIR NAME USE [GIT...]: pulls DIR, tallying NAME under git
+# as already (nothing new), updated, or failed to update, with why. USE says
+# what happens next, for the warnings: a checkout that couldn't be pulled is
+# used as it is, and so is one on a branch other than origin's default, which
+# is named even when the pull works. Nothing here switches a branch or drops
+# a change: that's yours to do. GIT... is the command that pulls (default:
+# git -C DIR pull).
+update_checkout() {
+    _uc_dir=$1
+    _uc_name=$2
+    _uc_use=$3
+    shift 3
+    test "$#" -gt 0 || set -- git -C "$_uc_dir" pull
+    # symbolic-ref exits 1 for a detached HEAD, and more when it can't say.
+    _uc_detached=no
+    _uc_branch=$(git -C "$_uc_dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || {
+        test "$?" -ne 1 || _uc_detached=yes
+        _uc_branch=
+    }
+    _uc_default=$(default_branch "$_uc_dir") || _uc_default=
+    _uc_off=
+    if test "$_uc_detached" = yes; then
+        _uc_off="detached at $(git -C "$_uc_dir" rev-parse --short HEAD 2>/dev/null)"
+    elif test -n "$_uc_branch" && test -n "$_uc_default" && test "$_uc_branch" != "$_uc_default"; then
+        _uc_off="on branch $_uc_branch, not $_uc_default"
+    fi
+    _uc_before=$(git -C "$_uc_dir" rev-parse HEAD 2>/dev/null) || _uc_before=
+    info "Updating $_uc_dir"
+    _uc_status=0
+    # Its output is read for why it failed, so it's caught here rather than
+    # by logged, and then logged or shown the same way.
+    _uc_out=$("$@" </dev/null 2>&1) || _uc_status=$?
+    if test -n "$_uc_out"; then
+        if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+            printf '%s\n' "$_uc_out"
+        else
+            printf '+ %s\n%s\n' "$*" "$_uc_out" >>"$SETUP_LOG"
+        fi
+    fi
+    if test "$_uc_status" -ne 0; then
+        if test "$_uc_detached" = yes; then
+            _uc_why=$_uc_off
+        elif test -n "$_uc_branch" && ! git -C "$_uc_dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+            _uc_why="on branch $_uc_branch, no upstream"
+        else
+            case "$_uc_out" in
+                *"Could not resolve host"* | *"Could not read from remote"* | *"unable to access"* \
+                | *"timed out"* | *"Network is unreachable"* | *"Connection refused"*)
+                    _uc_why="can't reach origin" ;;
+                *"local changes"* | *"would be overwritten"* | *"unstaged changes"* \
+                | *"uncommitted changes"* | *"commit or stash"* | *"commit your changes"*)
+                    _uc_why="local changes" ;;
+                *"fast-forward"* | *"divergent"* | *"diverged"*)
+                    _uc_why="diverged from $(git -C "$_uc_dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" ;;
+                *CONFLICT* | *"merge failed"*)
+                    _uc_why="merge conflicts to resolve" ;;
+                *)
+                    _uc_why="git failed" ;;
+            esac
+            case "$_uc_off" in
+                "on branch"*) _uc_why="$_uc_off; $_uc_why" ;;
+            esac
+        fi
+        _uc_said=$(git_message "$_uc_out")
+        warn "couldn't update $_uc_dir: $_uc_why (git pull exited $_uc_status${_uc_said:+: $_uc_said}); $_uc_use"
+        record_why git failed-update "$_uc_name" "$_uc_why"
+        return 1
+    fi
+    if test -n "$_uc_off"; then
+        warn "$_uc_dir is $_uc_off; $_uc_use"
+    fi
+    _uc_after=$(git -C "$_uc_dir" rev-parse HEAD 2>/dev/null) || _uc_after=
+    _uc_state=already
+    test "$_uc_after" = "$_uc_before" || _uc_state=updated
+    record_why git "$_uc_state" "$_uc_name" "${_uc_off%%,*}"
+}
+
 # $TIDE_REPO only steers a fresh clone; an existing checkout pulls from
 # its own origin.
 fetch_tide() {
@@ -1451,19 +1900,23 @@ fetch_tide() {
         test -d "$TIDE_DIR/.git" \
             || error "no tide checkout at $TIDE_DIR (--no-fetch)"
     elif test -d "$TIDE_DIR/.git"; then
-        info "Updating $TIDE_DIR"
-        # The existing checkout is enough to install, so a failed pull (no
-        # network, say) warns rather than ending the run. A checkout cloned
-        # through the mirror still names GitHub as its origin, so the pull
-        # goes through the mirror too.
-        git_github -C "$TIDE_DIR" pull --ff-only \
-            || warn "could not update $TIDE_DIR; installing the existing checkout"
+        # The existing checkout is enough to install, so a failed pull warns,
+        # saying why, rather than ending the run. A checkout cloned through
+        # the mirror still names GitHub as its origin, so the pull goes
+        # through the mirror too.
+        update_checkout "$TIDE_DIR" tide "installing it as is" \
+            git_github -C "$TIDE_DIR" pull --ff-only || :
     else
         # Not naming the URL: one passed with credentials in it would land in
         # the terminal and any captured log.
         info "Cloning tide into $TIDE_DIR"
         mkdir -p "$(dirname "$TIDE_DIR")"
-        git_github clone "$TIDE_REPO" "$TIDE_DIR"
+        if ! logged git_github clone "$TIDE_REPO" "$TIDE_DIR"; then
+            record_install git failed tide
+            warn "couldn't clone tide into $TIDE_DIR"
+            return 1
+        fi
+        record_install git installed tide
     fi
 }
 
@@ -1480,11 +1933,11 @@ install_tide() {
         error "tide needs Go $MIN_GO or newer to build tide-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
     fi
     info "Installing tide's user files"
-    make -C "$TIDE_DIR" install GO="$GO"
+    logged make -C "$TIDE_DIR" install GO="$GO"
     if test "$INSTALL" = yes; then
         info "Installing the tide session entry and commands under /usr"
-        sudo_or_warn make -C "$TIDE_DIR" install-session PREFIX=/usr \
-            || warn "could not install the session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
+        logged sudo_or_warn make -C "$TIDE_DIR" install-session PREFIX=/usr \
+            || warn "couldn't install tide's session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
     fi
 }
 
@@ -1544,7 +1997,7 @@ mask_distro_units() {
         warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking $units without stopping them, so a running one lasts until the next login"
     fi
     # shellcheck disable=SC2086  # word-split the unit list
-    systemctl --user mask $now $units \
+    logged systemctl --user mask $now $units \
         || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take tide's notifications"
 }
 
@@ -1646,7 +2099,7 @@ keep_blueman_out_of_plasma() {
         warn "couldn't write $_bm_copy, so blueman's applet may start in Plasma too"
         return 0
     fi
-    info "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $_bm_copy"
+    say "Wrote $_bm_copy, which keeps blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC"
 }
 
 # --- Launcher entries for the app scripts ---
@@ -1858,7 +2311,7 @@ tabs_browser_dirs() {
 install_tabs_host() {
     _th_dirs=$(tabs_browser_dirs)
     if test -z "$_th_dirs"; then
-        info "No Chrome or Brave here, so no host for tide's browser tabs"
+        info "Skipping tide's browser-tabs host: no Chrome or Brave"
         return 0
     fi
     if ! test -x "$TABS_HOST"; then
@@ -1907,7 +2360,7 @@ $_th_dirs
 EOF2
     rm -f "$_th_err"
     test -f "$TILECO_DIR/manifest.json" \
-        || info "For tabs in tide's switcher, install tide (tileco) from the Chrome Web Store, or clone mikelward/tileco to $TILECO_DIR, load it unpacked, and run setup again"
+        || info "For browser tabs in tide's switcher, install tide (tileco) from the Chrome Web Store, or clone mikelward/tileco to $TILECO_DIR, load it unpacked, and rerun setup"
 }
 
 enable_unit() {
@@ -1915,13 +2368,54 @@ enable_unit() {
         warn "no systemd user manager; run 'systemctl --user enable tide.service tide-clipboard.service' in your session"
         return 0
     fi
-    systemctl --user daemon-reload
-    systemctl --user enable tide.service
+    logged systemctl --user daemon-reload
+    # A failure ends the run by name, as set -e would have; --ignore-errors
+    # carries on past it, as it does past any other.
+    if ! enable_user_unit tide.service; then
+        if test "$IGNORE_ERRORS" = yes; then
+            warn "couldn't enable tide.service, so the tide session won't start its shell"
+        else
+            error "couldn't enable tide.service, so the tide session won't start its shell"
+        fi
+    fi
     # The clipboard history behind Super+C's picker (tide SPEC.md §8.4).
     # Apart from tide.service, so a tide checkout too old to ship it costs
     # only the history.
-    systemctl --user enable tide-clipboard.service \
+    enable_user_unit tide-clipboard.service \
         || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup again"
+}
+
+# enable_user_unit UNIT: systemctl --user enable UNIT, logged, saying so when
+# that enabled it: systemctl names each link it creates, and creates none
+# for a unit already enabled. When it fails, what systemctl said shows, as
+# logged shows a failure.
+enable_user_unit() {
+    _eu_status=0
+    _eu_out=$(systemctl --user enable "$1" 2>&1) || _eu_status=$?
+    _eu_shown=no
+    if test -n "$_eu_out"; then
+        if test "${VERBOSE:-no}" = yes || test -z "${SETUP_LOG:-}"; then
+            printf '%s\n' "$_eu_out" >&2
+            _eu_shown=yes
+        else
+            printf '+ systemctl --user enable %s\n%s\n' "$1" "$_eu_out" >>"$SETUP_LOG"
+        fi
+    fi
+    if test "$_eu_status" -ne 0; then
+        if test "$_eu_shown" = no; then
+            if test -n "$_eu_out"; then
+                printf 'systemctl --user enable %s failed (exit status %s), saying:\n' "$1" "$_eu_status" >&2
+                printf '%s\n' "$_eu_out" | sed 's/^/    /' >&2
+                printf '  Its output is in %s\n' "$SETUP_LOG" >&2
+            else
+                printf 'systemctl --user enable %s failed (exit status %s)\n' "$1" "$_eu_status" >&2
+            fi
+        fi
+        return "$_eu_status"
+    fi
+    case "$_eu_out" in
+        *"Created symlink"*) say "Enabled $1" ;;
+    esac
 }
 
 # --- logind ---
@@ -1930,7 +2424,7 @@ remove_old_lid_dropins() {
     removed=no
     for f in "$LOGIND_DIR/10-hypr-lid.conf" "$LOGIND_DIR/10-sway-lid.conf"; do
         if test -e "$f"; then
-            info "Removing $f (tide leaves the lid to logind's defaults)"
+            say "Removing $f: tide leaves the lid to logind's defaults"
             if sudo_or_warn rm -f "$f"; then
                 removed=yes
             else
@@ -2015,7 +2509,7 @@ banner-message-text='$host'" || {
         return 0
     }
     if test "$changed" = yes; then
-        info "GDM's login screen now shows $host"
+        say "GDM's login screen now shows $host"
         sudo_or_warn dconf update \
             || warn "dconf update failed, so GDM won't show the hostname until it succeeds; run 'sudo dconf update'"
     fi
@@ -5020,7 +5514,7 @@ greeter_home() {
         return 0
     fi
     test "$_home" != "$GREETER_HOME" || return 0
-    info "Giving greetd's user $greeter the home $GREETER_HOME, in place of $_home"
+    say "Giving greetd's user $greeter the home $GREETER_HOME, in place of $_home"
     sudo_or_warn usermod -d "$GREETER_HOME" "$greeter" \
         || warn "couldn't give $greeter the home $GREETER_HOME, so the greeter won't remember the last login"
 }
@@ -5154,7 +5648,7 @@ ${_add%
     fi
     changed=no
     if install_text "$_pam" "$_fixed"; then
-        info "greetd's PAM stack now unlocks the keyring at login"
+        test "$changed" = no || say "greetd's PAM stack now unlocks the keyring at login"
     else
         warn "couldn't add pam_gnome_keyring to $_pam, so logging in won't unlock the keyring"
     fi
@@ -5212,9 +5706,9 @@ restore_display_manager() {
         return 1
     fi
     if test "$1" = none; then
-        info "greetd is no longer the display manager; from the next boot, log in on a text console"
+        say "greetd is no longer the display manager; from the next boot, log in on a text console"
     else
-        info "$1 is the display manager again from the next boot"
+        say "$1 is the display manager again from the next boot"
     fi
 }
 
@@ -5255,7 +5749,7 @@ not_switching() {
 # a second query that failed would skip what that pass is for.
 setup_greeter() {
     if ! is_command systemctl; then
-        info "No systemd, so the display manager is left alone"
+        info "Skipping the display manager: no systemd"
         return 0
     fi
     if test "${1-}" = early; then
@@ -5324,7 +5818,7 @@ setup_greeter() {
         not_switching "couldn't write $GREETD_DIR/config.toml"
         return 0
     fi
-    test "$changed" = no || info "greetd now runs tide's greeter as $greeter"
+    test "$changed" = no || say "greetd now runs tide's greeter as $greeter"
     greeter_home
     greeter_keyring
     if test "$dm_before" = greetd.service; then
@@ -5360,7 +5854,7 @@ setup_greeter() {
         return 0
     fi
     GREETER_ACTIVE=yes
-    info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --no-greeter'"
+    say "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --no-greeter'"
 }
 
 # early_greeter runs before anything that can end the run, so a failure
@@ -5455,9 +5949,9 @@ if test "$SUDO" != no; then
 fi
 
 if test "$INSTALL" = no; then
-    info "Skipping tide packages (--no-install)"
+    info "Skipping tide's packages: --no-install"
 elif test "$SUDO" = no; then
-    info "Skipping tide packages (needs sudo; --no-sudo)"
+    info "Skipping tide's packages: --no-sudo"
 else
     decide_hyprland_build
     install_packages
@@ -5480,6 +5974,10 @@ else
 fi
 check_hyprland_version
 fetch_tide
+# Whether this run is the one that puts tide at the login screen, which is
+# when to say how to log in to it.
+FIRST_SESSION=yes
+test ! -f "$SESSION_ENTRY" || FIRST_SESSION=no
 install_tide
 enable_unit
 if is_command systemctl; then
@@ -5490,7 +5988,7 @@ install_launcher_entries
 install_tabs_host
 GREETER_ACTIVE=no
 if test "$SUDO" = no; then
-    info "Leaving the logind lid drop-ins, GDM and the display manager alone (needs sudo; --no-sudo)"
+    info "Skipping the logind lid drop-ins, GDM and the display manager: --no-sudo"
 else
     remove_old_lid_dropins
     gdm_hostname_banner
@@ -5498,9 +5996,11 @@ else
 fi
 
 if ! check_session; then
-    info "tide installed, but its session isn't ready: see the warnings above."
+    info "tide is installed, but its session isn't ready: see the warnings"
+elif test "$FIRST_SESSION" = no; then
+    info "tide is installed"
 elif test "$GREETER_ACTIVE" = yes; then
-    info "tide installed. Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
+    say "tide is installed: pick the \"tide\" session at greetd's greeter, beside KDE Plasma"
 else
-    info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+    say "tide is installed: log out and pick the \"tide\" session, beside KDE Plasma"
 fi

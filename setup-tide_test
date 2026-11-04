@@ -54,10 +54,12 @@ teardown
 
 # Fedora has no swww, and dnf refuses the lot over one unknown name, so dnf
 # is asked first and the rest, Hyprland too, install together.
-setup; ARGS=(); run SETUP_OS=redhat FAKE_MISSING=swww
+setup; ARGS=(); run SETUP_OS=redhat FAKE_MISSING=grim
 check "Fedora: a missing package isn't fatal" test "$status" -eq 0
-check "Fedora: a missing package is named" has "$output" "could not install: swww"
-check "Fedora: the rest install in one go" has "$calls" "dnf install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+check "Fedora: a missing package is named" has "$output" "couldn't install: grim"
+check "Fedora: the rest are summarized as installed" has "$output" "dnf: newly installed: hyprland hypridle "
+check "Fedora: and it as failed" has "$output" "; failed: grim"
+check "Fedora: the rest install in one go" has "$calls" "dnf install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swww swaybg fuzzel slurp"
 teardown
 
 setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_QUERY_FAILS=1
@@ -182,11 +184,17 @@ check "the Quickshell build is current" test "$(readlink -f "$T/opt/quickshell/c
 check "the Quickshell build links qs onto PATH, through current" \
     test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
 check "the Quickshell build doesn't warn" lacks "$output" "waybar stays the bar"
-check "the Quickshell build says why" has "$output" "apt has no Quickshell; building v0.3.1 from source"
+check "the Quickshell build says why" has "$output" "Building Quickshell v0.3.1 from source: apt has no Quickshell"
+check "the Quickshell build is summarized" has "$output" "git: newly installed: Quickshell"
 : > "$CALLS"
 run FAKE_MISSING=quickshell
 check "the same Quickshell and Qt don't rebuild" lacks "$calls" "cmake -S"
-check "the same Quickshell and Qt say so" has "$output" "already built for Qt 6.10.2+dfsg-7"
+check "the same Quickshell and Qt are already installed" has "$output" "git: already installed: Quickshell"
+check "the same Quickshell and Qt say nothing more" lacks "$output" "Building Quickshell"
+ARGS=(--verbose)
+run FAKE_MISSING=quickshell
+check "the same Quickshell and Qt say so with --verbose" has "$output" "already built for Qt 6.10.2+dfsg-7"
+ARGS=()
 first=$(qs_inst)
 : > "$CALLS"
 run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1
@@ -212,8 +220,10 @@ setup; ARGS=(); run FAKE_MISSING=quickshell
 check "quiet build: Quickshell's build output isn't shown" lacks "$output" "CMake Warning"
 check "quiet build: it's in the log" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "CMake Warning: the link target"
 check "quiet build: the log names each command" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "+ cmake --build $T/src/quickshell-build/quickshell/build"
-check "quiet build: the run says it built, and where its output is" \
-    has "$output" "Built Quickshell v0.3.1; the build's output is in $T/home/.local/state/setup-tide/quickshell-build.log"
+check "quiet build: the run says it's building" \
+    has "$output" "Building Quickshell v0.3.1 from source: apt has no Quickshell"
+check "quiet build: and names no log for a build that worked" \
+    lacks "$output" "the build's output is in"
 check "quiet build: Quickshell builds without assuming strict aliasing" has "$calls" "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing"
 teardown
 
@@ -230,7 +240,7 @@ teardown
 setup; ARGS=(); run FAKE_APT_QS=0.2.1-3
 check "apt's old Quickshell isn't fatal" test "$status" -eq 0
 check "apt's old Quickshell isn't installed" lacks "$calls" "apt-get install -y quickshell"
-check "apt's old Quickshell is named" has "$output" "apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0; building v0.3.1 from source"
+check "apt's old Quickshell is named" has "$output" "Building Quickshell v0.3.1 from source: apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0"
 check "apt's old Quickshell is replaced by the build" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
 check "the build replacing it is linked onto PATH" \
     test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
@@ -437,11 +447,13 @@ teardown
 # satty, which not every distro packages, goes in a transaction of its own.
 setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=satty
 check "a missing satty isn't fatal" test "$status" -eq 0
-check "a missing satty is said" has "$output" "couldn't install satty"
+check "a missing satty isn't news" lacks "$output" "satty"
+ARGS=(--verbose); run SETUP_OS=arch FAKE_MISSING=satty
+check "a missing satty is said with --verbose" has "$output" "Skipping satty: couldn't install it"
 check "a missing satty leaves the rest installed" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
 main=$(printf '%s\n' "$calls" | grep 'hypridle')
 check "satty isn't in the main transaction" lacks "$main" "satty"
-check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfirm satty"
+check "satty, which pacman doesn't know, isn't asked for" lacks "$calls" "pacman -S --needed --noconfirm satty"
 check "cliphist is asked for on its own" has "$calls" "pacman -S --needed --noconfirm cliphist"
 check "cliphist isn't in the main transaction" lacks "$main" "cliphist"
 check "wtype, which types the picker's Fill, is in the main transaction" has "$main" " wtype "
@@ -454,30 +466,30 @@ setup; ARGS=(); run
 check "nerd font: Debian installs the icons-only font" has "$calls" "apt-get install -y fonts-nerd-symbols"
 check "nerd font: not in the main transaction" lacks "$(printf '%s\n' "$calls" | grep 'hypridle')" "fonts-nerd-symbols"
 teardown
-setup; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols
+setup; ARGS=(--verbose); run FAKE_MISSING=fonts-nerd-symbols
 check "nerd font: a release without it isn't fatal" test "$status" -eq 0
-check "nerd font: and says what it costs" has "$output" "couldn't install fonts-nerd-symbols (it isn't in every release), so waybar shows no icons"
+check "nerd font: and says what it costs" has "$output" "Skipping fonts-nerd-symbols: couldn't install it (not every release has it), so waybar shows no icons"
 teardown
 setup; ARGS=(); run SETUP_OS=arch
 check "nerd font: Arch installs its package" has "$calls" "pacman -S --needed --noconfirm ttf-nerd-fonts-symbols"
 teardown
-setup; ARGS=(); run SETUP_OS=redhat
-check "nerd font: Fedora, which doesn't package it, says where to get it" has "$output" "doesn't package Symbols Nerd Font, so waybar shows no icons"
+setup; ARGS=(--verbose); run SETUP_OS=redhat
+check "nerd font: Fedora, which doesn't package it, says where to get it" has "$output" "Skipping Symbols Nerd Font: not packaged here, so waybar shows no icons (nerdfonts.com has it)"
 check "nerd font: and asks dnf for nothing" lacks "$calls" "nerd"
 teardown
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=nwg-displays
+setup; ARGS=(--verbose); run SETUP_OS=arch FAKE_MISSING=nwg-displays
 check "a missing nwg-displays isn't fatal" test "$status" -eq 0
-check "a missing nwg-displays is said" has "$output" "couldn't install nwg-displays"
+check "a missing nwg-displays is said" has "$output" "Skipping nwg-displays: couldn't install it"
 main=$(printf '%s\n' "$calls" | grep 'hypridle')
 check "nwg-displays isn't in the main transaction" lacks "$main" "nwg-displays"
-check "nwg-displays is asked for on its own" has "$calls" "pacman -S --needed --noconfirm nwg-displays"
+check "nwg-displays, which pacman doesn't know, isn't asked for" lacks "$calls" "pacman -S --needed --noconfirm nwg-displays"
 for tool in pavucontrol nm-connection-editor blueman; do
     check "$tool is asked for on its own" has "$calls" "pacman -S --needed --noconfirm $tool"
     check "$tool isn't in the main transaction" lacks "$main" "$tool"
 done
 teardown
 
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=rbw
+setup; ARGS=(--verbose); run SETUP_OS=arch FAKE_MISSING=rbw
 check "a missing rbw isn't fatal" test "$status" -eq 0
 check "a missing rbw is said, with what it costs and how to add it" has "$output" "Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
 teardown
@@ -490,10 +502,24 @@ teardown
 
 # Arch, like Fedora, refuses the lot over one unknown name, so pacman is
 # asked first and the rest install together.
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=grim
 check "Arch: a missing package isn't fatal" test "$status" -eq 0
-check "Arch: a missing package is named" has "$output" "could not install: swww"
-check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+check "Arch: a missing package is named" has "$output" "couldn't install: grim"
+check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swww swaybg fuzzel slurp"
+teardown
+
+# Installed packages still go to apt-get install, as before, which upgrades
+# any with a newer version, and the summary says which moved.
+setup; ARGS=(); run FAKE_INSTALLED="waybar fuzzel" FAKE_UPGRADES=fuzzel
+check "installed packages are still asked for, to upgrade them" \
+    grep -Eq "^apt-get install -y .* waybar .* fuzzel( |$)" "$CALLS"
+check "one left as it was is already installed, one upgraded is updated" \
+    has "$output" "apt: already installed: waybar; newly installed: "
+check "and the upgraded one is updated" has "$output" "; updated: fuzzel"
+# A quiet install reads /dev/null, where dpkg's question about a config file
+# you've changed would fail it: dpkg keeps yours instead.
+check "a quiet install keeps your config files" \
+    grep -Eq "^apt-get install -y .* -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold$" "$CALLS"
 teardown
 
 # An AUR package isn't in the sync databases, and pacman -S refuses it too.
@@ -517,15 +543,29 @@ teardown
 
 # A package the distro lacks (swww on Ubuntu 26.04) would make apt refuse
 # the lot, so apt is asked first and the rest install together.
-setup; ARGS=(); run FAKE_MISSING=swww
+setup; ARGS=(); run FAKE_MISSING=grim
 check "a missing package isn't fatal" test "$status" -eq 0
-check "a missing package is named" has "$output" "could not install: swww"
-check "a missing swww names the stand-in" has "$output" "swaybg shows the wallpaper instead"
+check "a missing package is named" has "$output" "couldn't install: grim; install them yourself"
+teardown
+
+# swww and swaybg each draw the wallpaper, so one missing is no loss.
+setup; ARGS=(); run FAKE_MISSING=swww
+check "a missing swww isn't a warning while swaybg is there" lacks "$output" "swww"
+check "nor a failure in the summary" lacks "$output" "failed"
 check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
 check "the rest install in one go, notify-send, Go and python3 too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang python3"
 check "satty is asked for, for the screenshot's Annotate" has "$calls" "apt-get install -y satty"
 check "Debian gets nm-connection-editor from network-manager-gnome" has "$calls" "apt-get install -y network-manager-gnome"
 check "a missing package is never asked for" lacks "$calls" "swww"
+ARGS=(--verbose); run FAKE_MISSING=swww
+check "a missing swww names the stand-in with --verbose" has "$output" "Skipping swww: couldn't install it; swaybg draws the wallpaper"
+teardown
+setup; ARGS=(); run FAKE_MISSING=swaybg
+check "a missing swaybg isn't a warning while swww is there" lacks "$output" "swaybg"
+teardown
+setup; ARGS=(); run FAKE_MISSING="swww swaybg"
+check "both missing is a warning" has "$output" "Warning: without swww or swaybg there's no wallpaper"
+check "and names them" has "$output" "couldn't install: swww swaybg; install them yourself"
 teardown
 
 setup; ARGS=(); run FAKE_MISSING="swww swaybg"
@@ -537,7 +577,8 @@ teardown
 # package.
 setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1
 check "a failed apt is reported once" test "$(printf '%s\n' "$calls" | grep -c '^apt-get install -y hyprland')" -eq 1
-check "a failed apt names what didn't install" has "$output" "could not install: hyprland hypridle"
+check "a failed apt names what didn't install" has "$output" "couldn't install: hyprland hypridle"
+check "a failed apt shows its output's end and where the rest is" has "$output" "  Its output is in $T/home/.local/state/setup/setup.log"
 teardown
 
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run
@@ -547,7 +588,8 @@ teardown
 
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run FAKE_PULL_FAILS=1
 check "a failed pull still installs" test "$status" -eq 0
-check "a failed pull is reported" has "$output" "could not update $T/src/tide"
+check "a failed pull is reported" has "$output" "Warning: couldn't update $T/src/tide: git failed (git pull exited 1); installing it as is"
+check "and is in the summary" has "$output" "git: failed to update: tide (git failed)"
 check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/tide install"
 teardown
 
@@ -595,6 +637,29 @@ teardown
 
 setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.57.0
 check "a newer Hyprland is fine" lacks "$output" "older than"
+teardown
+
+# A tide.service systemctl can't enable stops the run, saying what
+# systemctl said, not just that it stopped.
+setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide.service
+check "a tide.service that won't enable stops the run" test "$status" -ne 0
+check "and shows what systemctl said" has "$output" "systemctl --user enable tide.service failed (exit status 1), saying:
+    Failed to enable unit: Unit file tide.service does not exist."
+check "and says what that costs" has "$output" "Error: couldn't enable tide.service, so the tide session won't start its shell"
+teardown
+
+# --ignore-errors carries on past it, still saying so.
+setup; ARGS=(--ignore-errors); run FAKE_USER_ENABLE_FAILS=tide.service
+check "--ignore-errors carries on past a tide.service that won't enable" test "$status" -eq 0
+check "and warns about it" has "$output" "Warning: couldn't enable tide.service, so the tide session won't start its shell"
+check "and still enables the clipboard history" has "$calls" "systemctl --user enable tide-clipboard.service"
+teardown
+
+# One that won't enable tide-clipboard.service warns and carries on.
+setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-clipboard.service
+check "a tide-clipboard.service that won't enable doesn't stop the run" test "$status" -eq 0
+check "and shows what systemctl said" has "$output" "Failed to enable unit: Unit file tide-clipboard.service does not exist."
+check "and warns" has "$output" "couldn't enable tide-clipboard.service"
 teardown
 
 setup; ARGS=(); run FAKE_NO_USER_MANAGER=1
@@ -724,7 +789,7 @@ setup; ARGS=(--ignore-errors); rm "$T/usr-bin/uwsm"; run
 check "session: --ignore-errors carries on past it" test "$status" -eq 0
 check "session: --ignore-errors still says why" has "$output" "it's listed only where uwsm is installed"
 check "session: --ignore-errors says the session isn't ready" \
-    has "$output" "tide installed, but its session isn't ready: see the warnings above."
+    lacks "$output" "tide is installed"
 teardown
 
 setup; ARGS=(); run FAKE_NO_ENTRY=1
@@ -839,7 +904,7 @@ check "blueman: it skips Plasma and the others with Bluetooth of their own" \
     test "$(grep -c '^NotShowIn=KDE;GNOME;Budgie;COSMIC;$' "$copy")" -eq 1
 check "blueman: and keeps the rest of the entry" \
     test "$(sed -e 1d -e '/^NotShowIn=/d' "$copy")" = "$(cat "$T/xdg/autostart/blueman.desktop")"
-check "blueman: says so" has "$output" "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $copy"
+check "blueman: says so" has "$output" "Wrote $copy, which keeps blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC"
 run
 check "blueman: a rerun says nothing more" lacks "$output" "Keeping blueman's applet"
 teardown
@@ -912,7 +977,7 @@ check "launcher: another app gets its theme icon" has "$(entry notepad)" "Icon=t
 check "launcher: another app names no window class" lacks "$(entry notepad)" "StartupWMClass"
 check "launcher: a command-line tool gets no entry" test ! -e "$T/$apps_dir/scripts-args.desktop"
 check "launcher: a listed script that isn't here gets no entry" test ! -e "$T/$apps_dir/scripts-irc.desktop"
-check "launcher: says how many it listed" has "$output" "Listing 2 app scripts in the launcher"
+check "launcher: doesn't say how many it listed" lacks "$output" "Listing 2 app scripts in the launcher"
 # A rerun reuses the icon rather than fetching it again.
 : > "$CALLS"; run
 check "launcher: a rerun fetches no icon it has" lacks "$calls" "curl"
@@ -1020,7 +1085,7 @@ tabs_host() { mkdir -p "$T/usr-bin"; printf '#!/bin/sh\n' > "$T/usr-bin/tide-tab
 
 # Chrome and Brave each get the manifest, naming the host and the store's ID.
 setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/home/.config/BraveSoftware/Brave-Browser"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+ARGS=(--verbose); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
 check "tabs: exits 0" test "$status" -eq 0
 for b in google-chrome BraveSoftware/Brave-Browser; do
     check "tabs: $b's manifest names the host" has "$(tabs_manifest "$b")" '"name": "io.github.mikelward.tide.tabs"'
@@ -1037,9 +1102,9 @@ setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
 ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
 check "tabs: no Brave, no Brave manifest" test ! -e "$T/home/.config/BraveSoftware"
 teardown
-setup; tabs_host; ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
+setup; tabs_host; ARGS=(--verbose); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
 check "tabs: no browser, nothing written" test ! -e "$T/home/.config/google-chrome"
-check "tabs: no browser, says so" has "$output" "No Chrome or Brave here"
+check "tabs: no browser, says so" has "$output" "Skipping tide's browser-tabs host: no Chrome or Brave"
 teardown
 
 # Brave found by its command alone, before it has ever run.
@@ -1118,12 +1183,15 @@ teardown
 
 # Every warning and error is repeated at the end, where it's seen: a
 # warning in the middle scrolls away among thousands of lines.
-setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=swww
+setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=grim
 check "recap: the run ends by repeating its warnings" \
-    has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
-  Warning: could not install: swww; install them manually"
+    test "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" = "setup-tide: the warnings and errors from this run, again:
+  Warning: couldn't install: grim; install them yourself
+The commands' output is in $T/home/.local/state/setup/setup.log"
 check "recap: a warning still shows where it happened too" \
-    test "$(printf '%s\n' "$output" | grep -c 'Warning: could not install: swww')" -eq 2
+    test "$(printf '%s\n' "$output" | grep -c "Warning: couldn't install: grim")" -eq 2
+check "recap: the summary comes before it" \
+    has "$(printf '%s\n' "$output" | sed -n '/^dnf: .*; failed: grim$/,$p')" "setup-tide: the warnings and errors from this run, again:"
 check "recap: a run that went on still exits 0" test "$status" -eq 0
 check "recap: leaves no file behind" test -z "$(ls -A "$T/tmp")"
 teardown
@@ -1141,9 +1209,12 @@ teardown
 
 # Run from setup, which made the file: add to it and leave the repeat to
 # setup, at the very end.
-setup; ARGS=(); : > "$T/problems"; run SETUP_OS=redhat FAKE_MISSING=swww SETUP_PROBLEMS="$T/problems"
+setup; ARGS=(); : > "$T/problems"; : > "$T/installs"
+run SETUP_OS=redhat FAKE_MISSING=grim SETUP_PROBLEMS="$T/problems" SETUP_INSTALLS="$T/installs"
 check "recap: a helper adds to setup's file" \
-    has "$(cat "$T/problems")" "Warning: could not install: swww; install them manually"
+    has "$(cat "$T/problems")" "Warning: couldn't install: grim; install them yourself"
+check "recap: and to setup's tally" has "$(cat "$T/installs")" "dnf failed grim"
+check "recap: and leaves the summary to setup" lacks "$output" "dnf: "
 check "recap: and doesn't repeat it itself" lacks "$output" "from this run, again"
 check "recap: nor removes setup's file" test -f "$T/problems"
 teardown

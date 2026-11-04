@@ -373,6 +373,7 @@ run_macos() {
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         TILEMO_DIR="${TILEMO_DIR:-}" \
         TIMO_DIR="${TIMO_DIR:-}" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         PATH="$TEST_TMPDIR/bin:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
     status=$?
@@ -402,6 +403,7 @@ run_macos_without() {
         AMETHYST_BUNDLE="${AMETHYST_BUNDLE:-}" \
         TILEMO_DIR="${TILEMO_DIR:-}" \
         TIMO_DIR="${TIMO_DIR:-}" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         PATH="$TEST_TMPDIR/reduced:$TEST_TMPDIR/sysbin" \
         "$MACOS_SCRIPT" "$@" </dev/null 2>&1)"
     status=$?
@@ -635,7 +637,7 @@ test_does_not_re_add_dvorak() {
         "KeyboardLayout Name" = Dvorak;
     }
 )'
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_not_called "AppleEnabledInputSources -array-add" &&
     assert_output_contains "already an enabled input source"
@@ -672,7 +674,7 @@ MOCK
     assert_status 0 &&
     assert_output_contains "could not tell whether Finder is running" &&
     assert_output_lacks "Finder was not running" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # Under --ignore-errors set -e is off, so a failed write's status went nowhere:
@@ -688,7 +690,7 @@ test_unwritable_file_is_reported() {
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "failed (exit 1): write_file" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # The cleanup path itself: a write that gets as far as the temporary file and
@@ -723,7 +725,7 @@ test_failed_write_counts_under_ignore_errors() {
     assert_status 0 &&
     assert_output_contains "failed (exit 1): defaults write" &&
     assert_output_contains "problem(s)" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # Without --ignore-errors the same failure aborts -- but named, rather than as
@@ -1075,7 +1077,7 @@ test_warns_when_too_few_spaces() {
 
 test_no_spaces_warning_when_all_nine_exist() {
     stage_spaces 9
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
     assert_output_contains "Spaces per display: 9" &&
     assert_output_lacks "will do nothing"
@@ -1136,9 +1138,9 @@ test_spaces_config_without_a_display_is_reported() {
 # so it's on screen when the run ends: every line after its heading is the
 # list's, indented, or its "And if you like:".
 test_steps_left_come_last() {
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
-    assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
+    assert_output_in_order "macOS is configured" "Still to do by hand" &&
     _after=$(printf '%s\n' "$output" | sed -n '/^Still to do by hand/,$p' | sed '1d' | grep -v '^$' | grep -v '^ ' | grep -v '^And if you like:$')
     if test -n "$_after"; then
         printf "%s\n" "  FAIL: not the list's, after it: $_after"
@@ -1229,10 +1231,10 @@ test_preflight_names_the_manual_steps() {
 # The preflight says the rest comes at the end, and it does: after the
 # run's own output, where it doesn't scroll away.
 test_preflight_defers_accessibility_until_after_the_run() {
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
     assert_says "The rest is listed at the end of the run" &&
-    assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
+    assert_output_in_order "macOS is configured" "Still to do by hand" &&
     assert_output_in_order "Still to do by hand" "Turn on Accessibility for Amethyst"
 }
 
@@ -1274,10 +1276,10 @@ test_tilemo_preflight_is_only_what_to_do() {
 # The pause only happens on a terminal: setup runs this as part of an
 # unattended bootstrap, where a prompt would block forever.
 test_preflight_does_not_pause_without_a_terminal() {
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
     assert_output_contains "stdin is not a terminal" &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_contains "macOS is configured"
 }
 
 test_yes_skips_the_preflight_pause() {
@@ -1300,8 +1302,9 @@ test_installs_linearmouse_when_missing() {
     assert_called "brew install --cask linearmouse"
 }
 
-# brew's download and install chatter goes to the log, not the run's output,
-# and an app that's already there takes no line at all, as on Linux.
+# brew's download and install chatter goes to the run's log, not its output,
+# and an app that's already there takes no line at all, as on Linux; the
+# summary says what was installed.
 test_brew_output_goes_to_the_log() {
     remove_linearmouse
     cat > "$TEST_TMPDIR/bin/brew" <<MOCK
@@ -1315,11 +1318,11 @@ MOCK
     run_macos
     assert_status 0 &&
     assert_called "brew install --cask linearmouse" &&
-    assert_output_contains "Installing LinearMouse" &&
+    printf '%s\n' "$output" | grep -q '^brew: .*newly installed: .*linearmouse' &&
     assert_output_lacks "Downloading" &&
     assert_output_lacks "already installed at" &&
     grep -q "Downloading https://example.invalid/LinearMouse.dmg" \
-        "$TEST_TMPDIR/home/.local/state/setup/brew.log"
+        "$TEST_TMPDIR/home/.local/state/setup/setup.log"
 }
 
 # A failed install shows the end of what brew said, the reason.
@@ -1333,9 +1336,9 @@ exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/brew"
     run_macos --ignore-errors
-    assert_output_contains "'brew install --cask linearmouse' exited with status 1" &&
+    assert_output_contains "brew install --cask ... failed (exit status 1), ending:" &&
     assert_output_contains "    Error: Download failed on Cask 'linearmouse'" &&
-    assert_output_contains "could not install LinearMouse"
+    assert_output_contains "couldn't install LinearMouse"
 }
 
 # The same stale record as Karabiner's (see stale_cask_record): brew lists the
@@ -1351,10 +1354,10 @@ test_stale_linearmouse_record_names_the_fix() {
 }
 
 test_does_not_reinstall_linearmouse() {
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_not_called "brew install --cask linearmouse" &&
-    assert_output_lacks "LinearMouse is already installed"
+    assert_output_contains "Skipping LinearMouse: already installed"
 }
 
 test_no_install_skips_linearmouse() {
@@ -1384,7 +1387,7 @@ test_writes_linearmouse_config() {
 test_keeps_existing_linearmouse_config() {
     mkdir -p "$TEST_TMPDIR/home/.config/linearmouse"
     printf '%s\n' '{"schemes": []}' > "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_file_contains "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" '{"schemes": []}' &&
     assert_output_contains "leaving LinearMouse's settings as they are"
@@ -1421,7 +1424,7 @@ test_keeps_linearmouse_config_with_a_scheme() {
     _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
     mkdir -p "$(dirname "$_config")"
     printf '%s\n' '{"$schema": "x", "schemes": [{"scrolling": {"reverse": {"vertical": true}}}]}' > "$_config"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_file_contains "$_config" '"reverse"' &&
     assert_file_lacks "$_config" '"vertical": 9' &&
@@ -1444,7 +1447,7 @@ test_keeps_linearmouse_support_config() {
     _support="$TEST_TMPDIR/home/Library/Application Support/linearmouse/linearmouse.json"
     mkdir -p "$(dirname "$_support")"
     printf '%s\n' '{"schemes": [{"pointer": {"acceleration": 0}}]}' > "$_support"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_file_lacks "$_support" '"vertical": 9' &&
     test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" &&
@@ -1843,11 +1846,11 @@ printf "%s\\n" "pgrep \$*" >> "$CALLS"
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
-    assert_output_contains "Finder was not running" &&
+    assert_output_contains "Skipping the restart of Finder: it isn't running" &&
     assert_not_called "killall Finder" &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_contains "macOS is configured"
 }
 
 # The other half of the same point: a killall that fails for any reason other
@@ -1865,7 +1868,7 @@ MOCK
     assert_output_contains "could not restart Finder" &&
     assert_output_contains "could not restart Dock" &&
     assert_output_lacks "Finder was not running" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 test_missing_pgrep_warns_about_restarting() {
@@ -1885,9 +1888,9 @@ test_installs_amethyst_when_missing() {
 }
 
 test_does_not_reinstall_amethyst_when_present() {
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
-    assert_output_lacks "Amethyst is already installed" &&
+    assert_output_contains "Skipping Amethyst: already installed" &&
     assert_not_called "brew install"
 }
 
@@ -1899,7 +1902,7 @@ test_no_install_skips_amethyst() {
     assert_status 0 &&
     assert_not_called "brew install" &&
     assert_output_contains "the tiling settings below will have no effect" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # The offline path, mirroring setup-kde's staged Krohnkite bundle.
@@ -1912,10 +1915,10 @@ printf "%s\\n" "brew \$*" >> "$CALLS"
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/brew"
-    run_macos --wm amethyst --ignore-errors
+    run_macos --verbose --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "trying a staged bundle" &&
-    assert_output_contains "Installing Amethyst from bundle" &&
+    assert_output_contains "Installing Amethyst from " &&
     assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
 }
 
@@ -1938,7 +1941,7 @@ test_stale_amethyst_record_names_the_fix_and_tries_the_bundle() {
 test_installs_amethyst_from_bundle_without_brew() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/home/amethyst.zip"
-    run_macos_without brew --wm amethyst --ignore-errors
+    run_macos_without brew --verbose --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "Homebrew not found" &&
     assert_file_exists "$APPLICATIONS_DIR/Amethyst.app/Contents/Info.plist"
@@ -1950,7 +1953,7 @@ test_amethyst_bundle_env_var_is_honored() {
     remove_amethyst
     stage_amethyst_bundle "$TEST_TMPDIR/elsewhere.zip"
     AMETHYST_BUNDLE="$TEST_TMPDIR/elsewhere.zip"
-    run_macos_without brew --wm amethyst --ignore-errors
+    run_macos_without brew --verbose --wm amethyst --ignore-errors
     AMETHYST_BUNDLE=
     assert_status 0 &&
     assert_output_contains "elsewhere.zip" &&
@@ -2021,7 +2024,7 @@ MOCK
     assert_status 0 &&
     assert_output_contains "could not unpack" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_output_lacks "macOS configured successfully" &&
+    assert_output_lacks "macOS is configured" &&
     if ls -d "$APPLICATIONS_DIR"/.amethyst-install.* >/dev/null 2>&1; then
         echo "  FAIL: a staging directory was left behind"
         TEST_FAILED=1
@@ -2059,7 +2062,7 @@ MOCK
     assert_status 0 &&
     assert_output_contains "could not clear" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # A zip can contain a directory named Amethyst.app with nothing runnable in
@@ -2077,7 +2080,7 @@ test_bundle_without_info_plist_is_rejected() {
     assert_status 0 &&
     assert_output_contains "did not contain a usable Amethyst.app" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # `mv src dir` moves the source *into* an existing directory and returns 0, so
@@ -2115,7 +2118,7 @@ MOCK
     assert_status 0 &&
     assert_output_contains "could not clear the quarantine attribute" &&
     assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # An interrupted copy can leave an Info.plist with no executable directory. It
@@ -2152,7 +2155,7 @@ test_no_brew_and_no_bundle_says_how_to_stage_one() {
     run_macos_without brew --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "brew fetch --cask amethyst" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # --- the local hook and the closing summary ---
@@ -2163,7 +2166,7 @@ test_sources_local_hook() {
 echo "local hook ran"
 MOCK
     chmod +x "$TEST_TMPDIR/bin/setup-macos.local"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_output_contains "Sourcing setup-macos.local" &&
     assert_output_contains "local hook ran"
@@ -2183,7 +2186,7 @@ MOCK
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "failed (exit 3): setup-macos.local" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 test_failing_local_hook_aborts_without_ignore_errors() {
@@ -2227,13 +2230,13 @@ MOCK
     run_macos --ignore-errors
     assert_status 0 &&
     assert_output_contains "failed (exit 1): rm -rf" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 test_reports_success_when_nothing_warned() {
-    run_macos --wm amethyst
+    run_macos --verbose --wm amethyst
     assert_status 0 &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_contains "macOS is configured"
 }
 
 # Regression: with --ignore-errors the run used to print "configured
@@ -2242,7 +2245,7 @@ test_reports_problems_instead_of_success() {
     isolate_script
     run_macos --ignore-errors
     assert_status 0 &&
-    assert_output_lacks "macOS configured successfully" &&
+    assert_output_lacks "macOS is configured" &&
     assert_output_contains "problem(s); see the warnings above"
 }
 
@@ -2254,7 +2257,7 @@ test_reports_problems_instead_of_success() {
 # loaded by Hammerspoon, with tilemo's Mission Control writes and none of
 # Amethyst's.
 test_default_wm_is_tilemo() {
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_output_contains "Configuring tilemo" &&
     assert_called "git clone https://github.com/mikelward/tilemo.git $TEST_TMPDIR/home/tilemo" &&
@@ -2284,7 +2287,7 @@ test_wm_amethyst_keeps_amethyst_bindings() {
 
 
 test_wm_equals_syntax() {
-    run_macos --wm=tilemo
+    run_macos --verbose --wm=tilemo
     assert_status 0 &&
     assert_hotkey 64 true 32 49 1048576 &&
     assert_output_contains "Configuring tilemo"
@@ -2293,7 +2296,7 @@ test_wm_equals_syntax() {
 # timo is tilemo's name from before its repo was renamed, kept so an old
 # command line or note still sets tilemo up.
 test_wm_timo_is_an_alias_for_tilemo() {
-    run_macos --wm timo
+    run_macos --verbose --wm timo
     assert_status 0 &&
     assert_hotkey 64 true 32 49 1048576 &&
     assert_output_contains "Configuring tilemo" &&
@@ -2301,7 +2304,7 @@ test_wm_timo_is_an_alias_for_tilemo() {
 }
 
 test_wm_equals_timo_is_an_alias_for_tilemo() {
-    run_macos --wm=timo
+    run_macos --verbose --wm=timo
     assert_status 0 &&
     assert_output_contains "Configuring tilemo"
 }
@@ -2388,7 +2391,7 @@ test_tilemo_does_not_ask_for_nine_spaces() {
 }
 
 test_tilemo_turns_off_stage_manager_and_tiling() {
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_called "defaults write com.apple.WindowManager GloballyEnabled -bool false" &&
     assert_called "defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false" &&
@@ -2398,7 +2401,8 @@ test_tilemo_turns_off_stage_manager_and_tiling() {
 }
 
 test_tilemo_hands_mission_control_to_its_overview() {
-    run_macos --wm tilemo
+    # --verbose: the step's own line is progress, which a quiet run leaves out.
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_hotkey 32 false 65535 126 8650752 &&
     assert_hotkey 33 false 65535 125 8650752 &&
@@ -2436,7 +2440,7 @@ test_amethyst_leaves_mission_control_alone() {
 }
 
 test_tilemo_keeps_the_menu_bar_shown_for_its_bar() {
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool false" &&
     assert_not_called "_HIHideMenuBar -bool true" &&
@@ -2466,10 +2470,10 @@ test_tilemo_stale_hammerspoon_record_names_the_fix() {
 
 test_tilemo_does_not_reinstall_hammerspoon() {
     add_app Hammerspoon
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install --cask hammerspoon" &&
-    assert_output_lacks "Hammerspoon is already installed"
+    assert_output_contains "Skipping Hammerspoon: already installed"
 }
 
 test_tilemo_no_install_skips_hammerspoon() {
@@ -2483,7 +2487,7 @@ test_tilemo_missing_brew_warns_about_hammerspoon() {
     run_macos_without brew --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "Homebrew not found, so Hammerspoon can't be installed" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 # Hammerspoon's cask is an app, not a .pkg, so --no-sudo has nothing to skip.
@@ -2503,8 +2507,8 @@ MOCK
     stage_tilemo_machine
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not install Hammerspoon; nothing will tile" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_contains "couldn't install Hammerspoon; nothing will tile" &&
+    assert_output_lacks "macOS is configured"
 }
 
 # tilemo's bar reads whether Bluetooth is on through blueutil; without it the
@@ -2518,10 +2522,10 @@ test_tilemo_installs_blueutil_when_missing() {
 test_tilemo_does_not_reinstall_blueutil() {
     printf '#!/bin/sh\nexit 0\n' > "$TEST_TMPDIR/bin/blueutil"
     chmod +x "$TEST_TMPDIR/bin/blueutil"
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install blueutil" &&
-    assert_output_lacks "blueutil is already installed"
+    assert_output_contains "Skipping blueutil: already installed"
 }
 
 test_tilemo_no_install_skips_blueutil() {
@@ -2551,8 +2555,8 @@ MOCK
     add_app Hammerspoon
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not install blueutil; tilemo's bar won't show whether Bluetooth is on until it is" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_contains "couldn't install blueutil; tilemo's bar won't show whether Bluetooth is on until it is" &&
+    assert_output_lacks "macOS is configured"
 }
 
 # A monitor's speakers have no volume macOS reads; tilemo's bar asks the
@@ -2582,10 +2586,10 @@ test_tilemo_does_not_reinstall_m1ddc() {
     fake_arch arm64
     printf '#!/bin/sh\nexit 0\n' > "$TEST_TMPDIR/bin/m1ddc"
     chmod +x "$TEST_TMPDIR/bin/m1ddc"
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install m1ddc" &&
-    assert_output_lacks "m1ddc is already installed"
+    assert_output_contains "Skipping m1ddc: already installed"
 }
 
 test_tilemo_failed_ddc_install_is_counted() {
@@ -2603,8 +2607,8 @@ MOCK
     add_app Hammerspoon
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not install m1ddc; tilemo's bar won't show a monitor's speaker volume until it is" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_contains "couldn't install m1ddc; tilemo's bar won't show a monitor's speaker volume until it is" &&
+    assert_output_lacks "macOS is configured"
 }
 
 # Amethyst's setup has no bar to show it on.
@@ -2638,11 +2642,11 @@ test_tilemo_updates_an_existing_checkout() {
 # stands, unpulled.
 test_tilemo_no_install_doesnt_pull() {
     mkdir -p "$TEST_TMPDIR/home/tilemo"
-    run_macos --wm tilemo --no-install
+    run_macos --verbose --wm tilemo --no-install
     assert_status 0 &&
     assert_not_called "git " &&
     assert_called "make -C $TEST_TMPDIR/home/tilemo install" &&
-    assert_output_contains "without pulling it (--no-install)"
+    assert_output_contains "without pulling it: --no-install"
 }
 
 # One a pull can't fast-forward (commits of its own, changes in the way, no
@@ -2652,8 +2656,8 @@ test_tilemo_installs_a_checkout_it_cant_update() {
     touch "$TEST_TMPDIR/git_fails"
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not update $TEST_TMPDIR/home/tilemo" &&
-    assert_output_contains "installing it as it stands" &&
+    assert_output_contains "couldn't update $TEST_TMPDIR/home/tilemo: git failed (git pull exited 128); installing it as is" &&
+    assert_output_contains "git: failed to update: tilemo (git failed)" &&
     assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
@@ -2670,13 +2674,13 @@ test_tilemo_dir_overrides_the_checkout() {
 test_tilemo_uses_a_checkout_from_before_the_rename() {
     mkdir -p "$TEST_TMPDIR/home/timo"
     stage_tilemo_machine
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_not_called "git clone" &&
     assert_called "git -C $TEST_TMPDIR/home/timo pull --ff-only" &&
     assert_called "make -C $TEST_TMPDIR/home/timo install" &&
-    assert_output_contains "Using the checkout in $TEST_TMPDIR/home/timo, cloned before timo was renamed tilemo" &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_contains "Using $TEST_TMPDIR/home/timo, cloned before timo was renamed tilemo" &&
+    assert_output_contains "macOS is configured"
 }
 
 test_tilemo_prefers_its_own_checkout_to_the_old_one() {
@@ -2706,7 +2710,7 @@ test_tilemo_flags_a_checkout_that_installs_no_tilemo() {
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
     assert_output_contains "$TEST_TMPDIR/home/timo installed no $TEST_TMPDIR/home/.hammerspoon/tilemo, so it predates the rename from timo; update it (git -C $TEST_TMPDIR/home/timo pull)" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 test_tilemo_no_install_skips_the_clone() {
@@ -2721,17 +2725,17 @@ test_tilemo_failed_clone_is_counted() {
     touch "$TEST_TMPDIR/git_fails"
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not clone https://github.com/mikelward/tilemo.git" &&
+    assert_output_contains "couldn't clone https://github.com/mikelward/tilemo.git" &&
     assert_not_called "make -C" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_lacks "macOS is configured"
 }
 
 test_tilemo_failed_make_install_is_counted() {
     touch "$TEST_TMPDIR/make_fails"
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not install tilemo from $TEST_TMPDIR/home/tilemo" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_output_contains "couldn't install tilemo from $TEST_TMPDIR/home/tilemo" &&
+    assert_output_lacks "macOS is configured"
 }
 
 test_tilemo_missing_git_is_reported() {
@@ -2765,7 +2769,7 @@ test_tilemo_accepts_an_init_that_loads_tilemo() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' "local t = require 'tilemo'" 't.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_output_contains "already loads tilemo" &&
     assert_output_lacks "doesn't load tilemo" &&
@@ -2778,7 +2782,7 @@ test_tilemo_accepts_an_init_that_loads_it_by_its_old_name() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' 'timo = require("timo")' 'timo.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tilemo
+    run_macos --verbose --wm tilemo
     assert_status 0 &&
     assert_output_contains "already loads tilemo" &&
     assert_output_lacks "doesn't load tilemo" &&
@@ -2912,7 +2916,7 @@ test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
     assert_says "click Setup in its sidebar" &&
     assert_output_contains "timo.json predates the rename to tilemo and still works" &&
     assert_output_lacks "tilemo.json not found" &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_lacks "see the warnings above"
 }
 
 test_amethyst_does_not_mention_the_tilemo_rule() {
@@ -2934,9 +2938,65 @@ test_tilemo_preflight() {
 # The configured tilemo machine: nothing to warn about.
 test_tilemo_reports_success_on_a_clean_run() {
     stage_tilemo_machine
+    run_macos --verbose --wm tilemo
+    assert_status 0 &&
+    assert_output_contains "macOS is configured"
+}
+
+
+# --- What a run prints ---
+
+test_verbose_flag_accepted_and_documented() {
+    run_macos --help
+    assert_status 0 &&
+    assert_output_contains "-v, --verbose"
+}
+
+# A clean run on a configured machine says only what's left by hand: the
+# steps it took are --verbose's.
+test_a_configured_machine_prints_no_steps() {
+    remove_amethyst
+    stage_not_running Amethyst
+    stage_not_running Rectangle
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_output_contains "macOS configured successfully"
+    assert_output_lacks "Configuring" &&
+    assert_output_lacks "Skipping" &&
+    assert_output_lacks "macOS is configured" &&
+    assert_output_contains "Still to do by hand"
+}
+
+# The install summary comes before the steps left by hand, which stay last.
+test_the_summary_comes_before_the_steps_left() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_output_in_order "brew: already installed: amethyst" "Still to do by hand"
+}
+
+# A checkout on a branch of its own is named, even when it pulls, and used
+# as it is.
+test_tilemo_off_its_default_branch_is_named() {
+    mkdir -p "$TEST_TMPDIR/home/tilemo"
+    cat > "$TEST_TMPDIR/bin/git" <<MOCK
+#!/bin/sh
+printf "%s\\n" "git \$*" >> "$CALLS"
+case "\$3" in
+    symbolic-ref)
+        case "\$*" in
+            *origin/HEAD*) echo origin/main ;;
+            *) echo mine ;;
+        esac
+        ;;
+    rev-parse) echo 0123456789abcdef ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/git"
+    run_macos --wm tilemo --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "Warning: $TEST_TMPDIR/home/tilemo is on branch mine, not main; installing it as is" &&
+    assert_output_contains "git: already installed: tilemo (on branch mine)" &&
+    assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 
 run_test "--help exits 0 and prints usage" test_help_flag
@@ -3308,6 +3368,11 @@ run_test "tilemo: ddcctl is installed on Intel" test_tilemo_installs_ddcctl_on_i
 run_test "tilemo: m1ddc isn't reinstalled" test_tilemo_does_not_reinstall_m1ddc
 run_test "tilemo: a failed DDC tool install is counted" test_tilemo_failed_ddc_install_is_counted
 run_test "amethyst: blueutil and the DDC tools aren't installed" test_amethyst_does_not_install_blueutil
+
+run_test "--verbose is accepted and documented" test_verbose_flag_accepted_and_documented
+run_test "a configured machine prints no steps" test_a_configured_machine_prints_no_steps
+run_test "the summary comes before the steps left by hand" test_the_summary_comes_before_the_steps_left
+run_test "tilemo: a checkout off its default branch is named" test_tilemo_off_its_default_branch_is_named
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
