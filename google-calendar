@@ -1,2 +1,2 @@
 #!/bin/bash
-chrome --app="https://calendar.google.com"
+exec browser1 --app="https://calendar.google.com"
