@@ -134,13 +134,21 @@ QUICKSHELL_TAG=v0.3.1
 # clone must check out exactly this before its build files are run.
 QUICKSHELL_COMMIT=1a4716cde794a59928d9d9fc15f2afc7a95de360
 QUICKSHELL_PREFIX="${QUICKSHELL_PREFIX:-/opt/quickshell}"
+# Where each source build's output goes, Quickshell's and Hyprland's, one
+# log each, so the run shows a line per build, not thousands of upstream
+# warnings that bury the one failure (see build_logged).
+BUILD_LOG_DIR="${SETUP_BUILD_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/setup-tide}"
 LEGACY_QUICKSHELL_PREFIX="${LEGACY_QUICKSHELL_PREFIX:-$HOME/.local/opt/quickshell}"
 QUICKSHELL_SRC="${QUICKSHELL_SRC:-$HOME/src/quickshell-build}"
 QUICKSHELL_BIN_DIR="${QUICKSHELL_BIN_DIR:-/usr/local/bin}"
 QUICKSHELL_COMMANDS="qs quickshell"
 # Ubuntu has no cpptrace, so the crash handler is left out; systemd
 # restarts the shell instead.
-QUICKSHELL_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCRASH_HANDLER=OFF"
+# -fno-strict-aliasing: GCC finds code in Quickshell and the Qt headers it
+# includes that reads memory through another type, which -O2 may otherwise
+# reorder or drop. Without the assumption there's nothing to miscompile, and
+# nothing to warn about. It's in the build's record, so a change rebuilds.
+QUICKSHELL_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCRASH_HANDLER=OFF -DCMAKE_CXX_FLAGS=-fno-strict-aliasing"
 # The oldest Quickshell tide's shell loads in: 0.3.0 added IdleInhibitor,
 # IdleMonitor and Quickshell.Networking, and an older qs can't load a file
 # that names one. tide's tide-shell and tide doctor check the same. All
@@ -1004,6 +1012,33 @@ remove_legacy_builds() {
     fi
 }
 
+# --- Logged builds ---
+
+# start_build_log NAME: makes an empty $BUILD_LOG_DIR/NAME-build.log for a
+# build to write to, and sets build_log to it.
+start_build_log() {
+    build_log="$BUILD_LOG_DIR/$1-build.log"
+    if ! mkdir -p "$BUILD_LOG_DIR" || ! : > "$build_log"; then
+        warn "couldn't make $build_log to keep the $1 build's output in"
+        return 1
+    fi
+}
+
+# build_logged NAME COMMAND...: runs COMMAND with its output added to
+# $build_log. A failure says which command failed, with the log's last
+# lines, which is where the reason is.
+build_logged() {
+    _bl_name=$1
+    shift
+    printf '+ %s\n' "$*" >> "$build_log"
+    "$@" >> "$build_log" 2>&1 && return 0
+    _bl_status=$?
+    warn "building $_bl_name failed: '$1' exited with status $_bl_status; its output is in $build_log"
+    printf '  The last lines of %s:\n' "$build_log" >&2
+    tail -n 30 "$build_log" | sed 's/^/    /' >&2
+    return "$_bl_status"
+}
+
 # --- Quickshell from source ---
 
 # build_quickshell builds QUICKSHELL_TAG into its own directory under
@@ -1048,7 +1083,8 @@ build_quickshell() {
         fi
         mkdir -p "$QUICKSHELL_SRC" || return 1
         make_build_dir "$qs_dir" || return 1
-        git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
+        start_build_log quickshell || return 1
+        build_logged Quickshell git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$QUICKSHELL_TAG" "$QUICKSHELL_REPO" "$src" || return 1
         commit=$(git -C "$src" rev-parse HEAD) || return 1
         if test "$commit" != "$QUICKSHELL_COMMIT"; then
             warn "Quickshell's $QUICKSHELL_TAG tag is commit $commit, not the pinned $QUICKSHELL_COMMIT; not building it"
@@ -1056,10 +1092,11 @@ build_quickshell() {
             return 1
         fi
         # shellcheck disable=SC2086  # word-split the flags
-        cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_INSTALL_PREFIX="$qs_dir" \
+        build_logged Quickshell cmake -S "$src" -B "$src/build" -G Ninja -DCMAKE_INSTALL_PREFIX="$qs_dir" \
             $QUICKSHELL_CMAKE_FLAGS -DDISTRIBUTOR="setup-tide (source build)" \
-            && cmake --build "$src/build" \
-            && cmake --install "$src/build" || return 1
+            && build_logged Quickshell cmake --build "$src/build" \
+            && build_logged Quickshell cmake --install "$src/build" || return 1
+        info "Built Quickshell $QUICKSHELL_TAG; the build's output is in $build_log"
         printf '%s\n' "$qs_record" > "$qs_marker" || {
             warn "couldn't write $qs_marker"
             return 1
@@ -1206,6 +1243,7 @@ build_hyprland() {
         fi
     fi
     make_build_dir "$install_dir" || return 1
+    start_build_log hyprland || return 1
     # A failed build keeps what it finished, stamped, so a rerun picks up
     # where it stopped. Nothing uses it until it's complete and current.
     printf '%s\n' "$HYPRLAND_PINS" | while read -r name url tag commit kind; do
@@ -1220,6 +1258,7 @@ build_hyprland() {
         warn "building Hyprland failed; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
         return 1
     }
+    info "Built Hyprland; the build's output is in $build_log"
     # Marked complete before linking, so a failed link is retried rather
     # than the build.
     hyprland_pins_record > "$pins_file" || {
@@ -1336,7 +1375,7 @@ build_component() {
     rm -rf "$dir"
     # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
     # profiling, so it isn't fetched; a mirror without it can't fail the clone.
-    git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    build_logged "$1" git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
     head=$(git -C "$dir" rev-parse HEAD) || return 1
     if test "$head" != "$4"; then
         warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
@@ -1361,21 +1400,21 @@ build_component() {
     esac
     case "$5" in
         meson)
-            CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
-                && meson compile -C "$dir/build" \
-                && meson install -C "$dir/build"
+            build_logged "$1" env CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
+                && build_logged "$1" meson compile -C "$dir/build" \
+                && build_logged "$1" meson install -C "$dir/build"
             ;;
         cmake)
             # The run path is how Hyprland finds these libraries, since
             # $install_dir/lib isn't in the system's library path.
-            cmake -S "$dir" -B "$dir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            build_logged "$1" cmake -S "$dir" -B "$dir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX="$install_dir" -DCMAKE_INSTALL_LIBDIR=lib \
                 -DCMAKE_PREFIX_PATH="$install_dir" -DCMAKE_INSTALL_RPATH="$install_dir/lib" \
                 -DCMAKE_C_COMPILER="gcc-$HYPRLAND_GCC" -DCMAKE_CXX_COMPILER="g++-$HYPRLAND_GCC" \
                 ${re2:+"-Dpkgcfg_lib_deps_re2=$re2"} ${re2:+"-Dpkgcfg_lib_hyprctl_deps_re2=$re2"} \
                 -DBUILD_TESTING=OFF \
-                && cmake --build "$dir/build" \
-                && cmake --install "$dir/build"
+                && build_logged "$1" cmake --build "$dir/build" \
+                && build_logged "$1" cmake --install "$dir/build"
             ;;
     esac
 }

@@ -179,6 +179,8 @@ for arg; do
     esac
 done
 printf "%s\\n" "cmake finds \$(command -v hyprwayland-scanner)" >> "$CALLS"
+# A real build's flood of upstream warnings, which the run mustn't show.
+echo "CMake Warning: the link target Qt6::quickwindow does not exist (from cmake \$1 \$2)"
 if test -n "\$FAKE_CMAKE_FAILS"; then
     case "\$*" in *"/\$FAKE_CMAKE_FAILS "*) exit 1 ;; esac
 fi
@@ -612,7 +614,8 @@ run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         XDG_CONFIG_HOME="$T/home/.config" XDG_CONFIG_DIRS="$T/xdg" \
-        XDG_DATA_HOME="$T/home/.local/share" SETUP_SCRIPTS_DIR="$T/scripts" \
+        XDG_DATA_HOME="$T/home/.local/share" XDG_STATE_HOME="$T/home/.local/state" SETUP_BUILD_LOG_DIR= \
+        SETUP_SCRIPTS_DIR="$T/scripts" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \

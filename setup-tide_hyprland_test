@@ -270,6 +270,18 @@ setup; ARGS=(); legacy_hyprland; run
 check "apt's Hyprland removes links into the old prefix" test ! -L "$T/usr-local-bin/Hyprland"
 teardown
 
+# Its output goes to a log, as Quickshell's does; a failure names the step,
+# shows the log's last lines, and is repeated at the end.
+setup; ARGS=(--ignore-errors); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
+check "quiet build: Hyprland's build output isn't shown as it runs" \
+    test "$(printf '%s\n' "$output" | grep -c '^CMake Warning')" -eq 0
+check "quiet build: it's in Hyprland's log" has "$(cat "$T/home/.local/state/setup-tide/hyprland-build.log")" "+ cmake -S $T/src/hyprland-build/hyprlang"
+check "quiet build: a failed step is named, with the log" \
+    has "$output" "building hyprlang failed: 'cmake' exited with status 1; its output is in $T/home/.local/state/setup-tide/hyprland-build.log"
+check "quiet build: and is repeated at the end" \
+    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "building hyprlang failed"
+teardown
+
 # A rerun after a failure resumes from the step that failed.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
 : > "$CALLS"
