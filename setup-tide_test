@@ -919,6 +919,24 @@ check "launcher: a rerun fetches no icon it has" lacks "$calls" "curl"
 check "launcher: a rerun still uses it" has "$(entry gmail)" "Icon=$T/home/.local/share/icons/scripts/gmail.png"
 teardown
 
+# A fork in ~/scripts.local runs instead, as it does on PATH, and its own
+# --app URL names the window class. A file there that can't run doesn't
+# count, and once the fork goes, a rerun points back at ~/scripts.
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; app_script notepad 'scite "$@"'
+mkdir -p "$T/home/scripts.local"
+printf '#!/bin/bash\nbrowser2 --app="https://mail.example.com"\n' > "$T/home/scripts.local/gmail"
+chmod +x "$T/home/scripts.local/gmail"
+printf '#!/bin/sh\n' > "$T/home/scripts.local/notepad"
+ARGS=(); run
+check "launcher: runs a scripts.local fork" has "$(entry gmail)" "Exec=\"$T/home/scripts.local/gmail\""
+check "launcher: hides it if the fork goes" has "$(entry gmail)" "TryExec=$T/home/scripts.local/gmail"
+check "launcher: a fork's class is its own site's" has "$(entry gmail)" "StartupWMClass=chrome-mail.example.com__-Default"
+check "launcher: a fork that can't run isn't used" has "$(entry notepad)" "Exec=\"$T/scripts/notepad\""
+rm "$T/home/scripts.local/gmail"; run
+check "launcher: without the fork, runs the script here again" has "$(entry gmail)" "Exec=\"$T/scripts/gmail\""
+check "launcher: and its class is this one's" has "$(entry gmail)" "StartupWMClass=chrome-mail.google.com__-Default"
+teardown
+
 # A path past the host goes into the class, each / a _.
 setup; app_script discord 'chrome --app="https://discord.com/app"'; ARGS=(); run
 check "launcher: a site's path is in its class" has "$(entry discord)" "StartupWMClass=chrome-discord.com__app-Default"
