@@ -1233,6 +1233,16 @@ check "quiet: without it, and without input" has "$(cat "$T/apt-asks")" "apt-get
 check "quiet: and without a warning" lacks "$output" "Warning:"
 teardown
 
+# An install that keeps a config file you'd changed, writing the package's
+# version beside it, says so, to merge by hand.
+setup; ARGS=(); run FAKE_KEPT_CONFIG=frob.conf
+check "a kept config file is a warning" \
+    has "$output" "Warning: kept your $T/etc/frob.conf; the package's new version is $T/etc/frob.conf.dpkg-dist, to merge by hand"
+teardown
+setup; ARGS=(); run
+check "with none kept, there's no such warning" lacks "$output" "to merge by hand"
+teardown
+
 # With a terminal, and apt-utils to read the packages' questions, debconf's
 # questions about what apt installs are asked there, in its plain text
 # frontend, by a hook apt runs before it installs; without a terminal, or

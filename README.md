@@ -93,7 +93,9 @@ before the packages are installed. A question already answered isn't asked
 again. Everything else apt would ask takes its default, since the question
 would land in the log, and so does every question when there's no terminal or
 no apt-utils, or when sudo won't let setup set `DEBIAN_FRONTEND`. A config
-file changed on the machine keeps that version, apt's own default answer.
+file changed on the machine keeps that version, apt's own default answer,
+and a warning names the package's new version beside it, to merge by hand:
+`FILE.dpkg-dist`, or dnf's `FILE.rpmnew` and pacman's `FILE.pacnew`.
 
 A checkout `setup` can't pull (this repo, conf, tide, tilemo) is used as it
 is, with a warning that says why: it can't reach origin, local changes are in

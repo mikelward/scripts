@@ -184,6 +184,8 @@ MOCK
     # none, as Debian's package does. What it installs goes in
     # $T/installed, for dpkg-query, and it says so, as apt does, a line or
     # two a package. Whether it could ask anything goes in $T/apt-asks.
+    # With \$FAKE_KEPT_CONFIG, an install keeps that config file, under
+    # $T/etc, and writes the package's version beside it, as dpkg does.
     cat > "$T/bin/apt-get" <<MOCK
 #!/bin/sh
 if test "\$1" = --version; then
@@ -192,6 +194,9 @@ if test "\$1" = --version; then
     exit 0
 fi
 printf "%s\\n" "apt-get \$*" >> "$CALLS"
+if test "\$1" = install && test -n "\$FAKE_KEPT_CONFIG"; then
+    mkdir -p "$T/etc" && : > "$T/etc/\$FAKE_KEPT_CONFIG.dpkg-dist"
+fi
 if test -t 0; then in=terminal; else in=\$(cat); fi
 printf "%s\\n" "apt-get \$1 DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-unset} stdin=\$in" >> "$T/apt-asks"
 echo "Reading package lists..."
@@ -749,7 +754,7 @@ run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         XDG_CONFIG_HOME="$T/home/.config" XDG_CONFIG_DIRS="$T/xdg" \
-        XDG_DATA_HOME="$T/home/.local/share" XDG_STATE_HOME="$T/home/.local/state" SETUP_LOG= APT_TTY="${APT_TTY:-/nonexistent/tty}" \
+        XDG_DATA_HOME="$T/home/.local/share" XDG_STATE_HOME="$T/home/.local/state" SETUP_LOG= APT_TTY="${APT_TTY:-/nonexistent/tty}" SETUP_ETC="$T/etc" \
         SETUP_SCRIPTS_DIR="$T/scripts" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \

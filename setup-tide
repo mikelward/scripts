@@ -849,7 +849,7 @@ pacman_install() {
 # any package whose version moved; Failed names each package asked for in
 # a failed install that still isn't there -- one unknown name fails a whole
 # apt, dnf or pacman transaction, but the rest may have been installed
-# before.
+# before. Then pkg_kept_configs names the config files the installs kept.
 pkg_end() {
     test -n "${_pkg_manager:-}" || return 0
     pkg_versions "$_pkg_manager" | ASKED="$_pkg_asked" FAILED="$_pkg_failed" awk '
@@ -907,8 +907,29 @@ pkg_end() {
             if (nfail) print "Failed: " list(failed, nfail, 0)
             if (!nnew && !deps && !nup && !nfail) print "Nothing new to install"
         }' "$_pkg_before" -
+    pkg_kept_configs
     rm -f "$_pkg_before"
     _pkg_manager=
+}
+
+# pkg_kept_configs: a warning for each config file an install since
+# pkg_begin kept as you'd changed it, with the package's new version beside
+# it to merge by hand: dpkg keeps yours and writes FILE.dpkg-dist (see
+# sudo_logged), as dnf writes FILE.rpmnew and pacman FILE.pacnew. They're
+# found by when they were made, since the package sets when they were
+# changed; a directory under /etc you can't read is passed over.
+# $SETUP_ETC stands in for /etc in the tests.
+pkg_kept_configs() {
+    case "$_pkg_manager" in
+        apt) _pk_suffix=.dpkg-dist ;;
+        dnf) _pk_suffix=.rpmnew ;;
+        pacman) _pk_suffix=.pacnew ;;
+        *) return 0 ;;
+    esac
+    find "${SETUP_ETC:-/etc}" -name "*$_pk_suffix" -cnewer "$_pkg_before" 2>/dev/null | sort |
+        while IFS= read -r _pk_new; do
+            warn "kept your ${_pk_new%"$_pk_suffix"}; the package's new version is $_pk_new, to merge by hand"
+        done
 }
 
 # --- Packages ---
