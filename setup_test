@@ -130,10 +130,14 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="apt_frontend_allowed start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end install_os_packages"
+QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
+# No terminal to ask debconf's questions on, wherever the tests run, unless
+# a test gives one.
+APT_TTY=/nonexistent/tty
+export APT_TTY
 
 extract_functions() {
     awk -v names="$1" '
@@ -2240,6 +2244,58 @@ test_apt_runs_where_sudo_wont_set_its_frontend() {
     assert_calls_contain "apt-get install -y --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=unset] [stdin=]"
 }
 
+# With a terminal, and apt-utils to read the packages' questions, apt runs
+# a hook before it installs that asks debconf's questions there; without a
+# terminal, or where sudo won't set DEBIAN_FRONTEND, there's no hook, and
+# nothing is asked.
+test_apt_asks_debconfs_questions_on_the_terminal() {
+    ask_tmpdir="$(mktemp -d)"
+    : > "$ask_tmpdir/tty"
+    printf '#!/bin/sh\nexit 0\n' > "$ask_tmpdir/apt-extracttemplates"
+    chmod +x "$ask_tmpdir/apt-extracttemplates"
+    PATH="$ask_tmpdir:$PATH" APT_TTY="$ask_tmpdir/tty" run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$ask_tmpdir/tty >$ask_tmpdir/tty 2>&1 || true [DEBIAN_FRONTEND=noninteractive]" &&
+    assert_output_lacks "Setting up" &&
+    PATH="$ask_tmpdir:$PATH" run_linux_packages debian &&
+    assert_calls_lack "Pre-Install-Pkgs" &&
+    PATH="$ask_tmpdir:$PATH" APT_TTY="$ask_tmpdir/tty" LINUX_NO_SETENV=1 run_linux_packages debian &&
+    assert_calls_lack "Pre-Install-Pkgs"
+    _ask_status=$?
+    rm -rf "$ask_tmpdir"
+    return "$_ask_status"
+}
+
+# The hook hands dpkg-preconfigure each .deb apt gives it, a line each, in
+# debconf's plain text frontend, on the terminal; with none it runs nothing,
+# and a dpkg-preconfigure that fails doesn't stop apt.
+test_the_ask_hook_preconfigures_what_apt_installs() {
+    hook_tmpdir="$(mktemp -d)"
+    : > "$hook_tmpdir/tty"
+    cat > "$hook_tmpdir/dpkg-preconfigure" <<MOCK
+#!/bin/sh
+printf '[%s]\n' "\$@" >> "$hook_tmpdir/calls"
+echo "frontend=\$DEBIAN_FRONTEND"
+exit \${HOOK_FAILS:-0}
+MOCK
+    chmod +x "$hook_tmpdir/dpkg-preconfigure"
+    hook=$(APT_TTY="$hook_tmpdir/tty" DPKG_PRECONFIGURE="$hook_tmpdir/dpkg-preconfigure" sh -c "
+$(extract_functions "apt_ask_hook")
+apt_ask_hook")
+    printf '%s\n' /var/cache/apt/archives/zoxide_0.9.3-1_amd64.deb "/tmp/a b.deb" | sh -c "$hook"
+    assert_eq "$?" 0 &&
+    assert_eq "$(cat "$hook_tmpdir/calls")" "[/var/cache/apt/archives/zoxide_0.9.3-1_amd64.deb]
+[/tmp/a b.deb]" &&
+    assert_eq "$(cat "$hook_tmpdir/tty")" "frontend=readline" &&
+    rm "$hook_tmpdir/calls" &&
+    sh -c "$hook" </dev/null &&
+    test ! -e "$hook_tmpdir/calls" &&
+    printf '%s\n' x.deb | HOOK_FAILS=1 sh -c "$hook"
+    _hook_status=$?
+    rm -rf "$hook_tmpdir"
+    return "$_hook_status"
+}
+
 # confinst says a line a link, which the run counts instead. It can fail to
 # make one and still exit 0, so what else it says is a warning, and the
 # count leaves the failed link out.
@@ -4076,6 +4132,8 @@ run_test "apt is quiet and asks nothing" test_apt_is_quiet_and_asks_nothing
 run_test "--verbose shows what the installers print" test_verbose_shows_what_the_installers_print
 run_test "--verbose is taken and passed on" test_verbose_is_forwarded
 run_test "apt runs where sudo won't set its frontend" test_apt_runs_where_sudo_wont_set_its_frontend
+run_test "apt asks debconf's questions on the terminal, when there is one" test_apt_asks_debconfs_questions_on_the_terminal
+run_test "the ask hook preconfigures what apt installs" test_the_ask_hook_preconfigures_what_apt_installs
 run_test "confinst's links are counted and its errors shown" test_confinst_is_counted_and_its_errors_shown
 run_test "a brew log that can't be made isn't fatal" test_unwritable_brew_log_is_not_fatal
 run_test "brew installs don't stop for confirmation" \
