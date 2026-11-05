@@ -332,7 +332,14 @@ warn() {
 # need this: leave sudo on and the reactive path below warns and skips on the
 # denials by itself.)
 sudo_or_warn() {
-    _sudo_name=${1##*/}
+    # Named for the command, after any VAR=value sudo sets for it.
+    _sudo_name=
+    for _sudo_arg; do
+        case "$_sudo_arg" in
+            *=*) ;;
+            *) _sudo_name=${_sudo_arg##*/}; break ;;
+        esac
+    done
     if test "$SUDO" = no; then
         warn "skipping 'sudo $_sudo_name' (--no-sudo)"
         return 1
@@ -342,13 +349,17 @@ sudo_or_warn() {
         return 1
     }
 
-    if sudo "$@" 2>"$_sudo_stderr"; then
-        cat "$_sudo_stderr" >&2
+    # sudo_logged sets _sudo_out to the log, for all of the output, which
+    # is the user's to write, not root's.
+    # shellcheck disable=SC2024
+    if sudo "$@" >>"${_sudo_out:-/dev/stdout}" 2>"$_sudo_stderr"; then
+        cat "$_sudo_stderr" >>"${_sudo_out:-/dev/stderr}"
         rm -f "$_sudo_stderr"
         return 0
     else
         _sudo_status=$?
     fi
+    test -z "${_sudo_out:-}" || cat "$_sudo_stderr" >>"$_sudo_out"
     _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
     rm -f "$_sudo_stderr"
 
@@ -660,7 +671,7 @@ clone_or_pull() {
     from_prefix="${3:-no}"
 
     if test -d "$dir/.git"; then
-        info "$dir already exists, pulling latest changes"
+        info "Updating $dir"
         # The prefix only steers fresh clones; an existing checkout keeps
         # whatever remote it was cloned with. Say so when they disagree, rather
         # than letting --github look like it took effect on a re-run. Only
@@ -690,8 +701,8 @@ clone_or_pull() {
         # offline "setup --no-root" reach the homepkg bundle install, which runs
         # after these repo refreshes -- warn and continue rather than exiting
         # under set -e.
-        if git -C "$dir" pull; then
-            git -C "$dir" submodule update --init --recursive \
+        if git -C "$dir" pull --quiet; then
+            git -C "$dir" submodule update --quiet --init --recursive \
                 || warn "could not update submodules in $dir; using the existing checkout"
         else
             warn "could not pull $dir (offline?); using the existing checkout"
@@ -703,8 +714,33 @@ clone_or_pull() {
         # Redacted for the same reason as the mismatch warning above: a prefix
         # passed with credentials shouldn't be echoed into a bootstrap log.
         info "Cloning $(redact_url_credentials "$repo") into $dir"
-        git clone --recurse-submodules "$repo" "$dir"
+        git clone --quiet --recurse-submodules "$repo" "$dir"
     fi
+}
+
+# run_confinst: links the conf repo's files into $HOME, saying how many it
+# linked and naming each file it moved aside to make room, not every link.
+# Anything else it says is a problem -- it can fail to make a link and still
+# exit 0 -- so each such line is a warning.
+run_confinst() {
+    info "Linking the conf repo's files"
+    run_logged "$SCRIPTS_DIR/confinst" || return
+    test "$SETUP_LOG" = - && return 0
+    _rc_summary=$(tail -n "+$_log_start" "$SETUP_LOG" | awk '
+        /^Linking / { linked++; next }
+        /^Moving / { print "info Moved " substr($0, 8); next }
+        /^Error creating / { failed++ }
+        NF { print "warn confinst: " $0 }
+        END {
+            linked -= failed
+            if (linked > 0) print "info Linked " linked " file" (linked == 1 ? "" : "s")
+        }')
+    printf '%s\n' "$_rc_summary" | while IFS= read -r _rc_line; do
+        case "$_rc_line" in
+            "info "*) info "${_rc_line#info }" ;;
+            "warn "*) warn "${_rc_line#warn }" ;;
+        esac
+    done
 }
 
 # --- Detect OS ---
@@ -938,64 +974,267 @@ install_homebrew() {
     command -v brew >/dev/null 2>&1
 }
 
-# --- Quiet Homebrew ---
+# --- Quiet installs ---
 
-# brew's own output -- download bars, pour lines, "already installed"
-# warnings, caveats, auto-update news -- goes to one log per run, as apt's
-# would on a quiet Linux run, and the run shows a line or two per step. The
-# outermost of setup and setup-macos starts the log; a helper it runs adds
-# to it, through the exported path.
-start_brew_log() {
-    test -z "${SETUP_BREW_LOG:-}" || return 0
-    SETUP_BREW_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/brew.log"
+# What the package managers and builds say -- apt's and dnf's lines per
+# package, brew's download bars and caveats, micromamba's solver progress,
+# cargo's compile lines -- goes to one log per run, and the run shows a line
+# or two per step. The outermost of setup and setup-macos starts the log; a
+# helper it runs adds to it, through the exported path.
+start_setup_log() {
+    test -z "${SETUP_LOG:-}" || return 0
+    SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
     # printf, not :, which is a special builtin: dash exits when its
     # redirection fails, even under if.
-    if ! mkdir -p "${SETUP_BREW_LOG%/*}" || ! printf "" > "$SETUP_BREW_LOG"; then
-        warn "couldn't make $SETUP_BREW_LOG to keep Homebrew's output in, so it's shown instead"
-        SETUP_BREW_LOG=-
+    if ! mkdir -p "${SETUP_LOG%/*}" || ! printf "" > "$SETUP_LOG"; then
+        warn "couldn't make $SETUP_LOG to keep the installers' output in, so it's shown instead"
+        SETUP_LOG=-
     fi
-    export SETUP_BREW_LOG
+    export SETUP_LOG
 }
 
-# brew_logged ARGS...: runs brew ARGS with its output added to the log. A
-# failure shows what brew said this time, which is where the reason is; the
-# caller says what's lost. An administrator password a .pkg cask asks for
-# still reaches the terminal: sudo asks on it, not on brew's output.
-brew_logged() {
-    start_brew_log
-    if test "$SETUP_BREW_LOG" = -; then
-        brew "$@"
+# log_mark DESCRIPTION: notes in the log what runs next, and sets _log_start
+# to where its output begins, for log_failure.
+log_mark() {
+    _log_start=$(($(wc -l < "$SETUP_LOG") + 2))
+    printf '+ %s\n' "$1" >> "$SETUP_LOG"
+}
+
+# log_failure DESCRIPTION STATUS: shows the end of what the command
+# log_mark noted said, which is where the reason is.
+log_failure() {
+    printf "'%s' exited with status %s; the end of what it said (all of it is in %s):\n" \
+        "$1" "$2" "$SETUP_LOG" >&2
+    tail -n "+$_log_start" "$SETUP_LOG" | tail -n 5 | sed 's/^/    /' >&2
+}
+
+# run_logged COMMAND...: runs COMMAND with its output added to the log. A
+# failure shows what it said; the caller says what's lost. An administrator
+# password a .pkg cask asks for still reaches the terminal: sudo asks on
+# it, not on the command's output.
+run_logged() {
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        "$@"
         return
     fi
-    _bl_start=$(($(wc -l < "$SETUP_BREW_LOG") + 1))
-    printf '+ brew %s\n' "$*" >> "$SETUP_BREW_LOG"
-    brew "$@" >> "$SETUP_BREW_LOG" 2>&1 && return 0
-    _bl_status=$?
-    printf "'brew %s' exited with status %s; the end of what it said (all of it is in %s):\n" \
-        "$*" "$_bl_status" "$SETUP_BREW_LOG" >&2
-    tail -n "+$((_bl_start + 1))" "$SETUP_BREW_LOG" | tail -n 20 | sed 's/^/    /' >&2
-    return "$_bl_status"
+    log_mark "$*"
+    "$@" >> "$SETUP_LOG" 2>&1 && return 0
+    _rl_status=$?
+    log_failure "$*" "$_rl_status"
+    return "$_rl_status"
 }
 
-# brew_inventory: the formulae and casks Homebrew has installed, one a line,
-# or nothing when brew can't say.
-brew_inventory() {
-    brew list --formula -1 2>/dev/null || :
-    brew list --cask -1 2>/dev/null || :
+brew_logged() {
+    run_logged brew "$@"
 }
 
-# brew_report BEFORE: one line for a run of brew_logged installs, naming
-# what's new since BEFORE, an earlier brew_inventory -- dependencies too,
-# since they're installed as well -- instead of a line or more each.
-brew_report() {
-    _br_new=$(brew_inventory | BREW_BEFORE="$1" awk '
-        BEGIN { n = split(ENVIRON["BREW_BEFORE"], had, "\n"); for (i = 1; i <= n; i++) was[had[i]] = 1 }
-        NF && !was[$0] { printf "%s%s", sep, $0; sep = ", " }')
-    if test -n "$_br_new"; then
-        info "Installed from Homebrew: $_br_new"
-    else
-        info "Nothing new from Homebrew"
+# sudo_logged COMMAND...: sudo_or_warn COMMAND, with its output in the log.
+# apt-get runs without asking anything: nobody would see the question in
+# the log. A config file changed here and in the package keeps the version
+# here, apt's own default answer.
+sudo_logged() {
+    #
+    # debconf's questions are kept away with DEBIAN_FRONTEND, which goes to
+    # sudo as an argument so that apt-get stays the command it runs: a sudo
+    # rule that allows only apt-get still lets it. Such a rule may not let
+    # the variable be set, though, so apt_frontend_allowed asks once, and
+    # without it apt gets no input, which is the most that's left (apt's
+    # dpkg-preconfigure opens the terminal itself). dpkg's questions about
+    # changed config files take the default answer the options name. sudo
+    # asks for a password on the terminal, not on stdin.
+    if test "$1" = apt-get; then
+        set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+        if apt_frontend_allowed; then
+            set -- DEBIAN_FRONTEND=noninteractive "$@"
+        fi
     fi
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        sudo_or_warn "$@" </dev/null
+        return
+    fi
+    log_mark "sudo $*"
+    _sudo_out=$SETUP_LOG
+    sudo_or_warn "$@" </dev/null && _sl_status=0 || _sl_status=$?
+    _sudo_out=
+    test "$_sl_status" -eq 0 && return 0
+    # --no-sudo ran nothing, so there's nothing to show.
+    test "$SUDO" = no || log_failure "sudo $*" "$_sl_status"
+    return "$_sl_status"
+}
+
+# apt_frontend_allowed: whether sudo lets apt-get run with DEBIAN_FRONTEND
+# set, asked once with a command that changes nothing.
+apt_frontend_allowed() {
+    if test -z "${_apt_frontend:-}"; then
+        if test "$SUDO" != no \
+                && sudo DEBIAN_FRONTEND=noninteractive apt-get --version </dev/null >/dev/null 2>&1; then
+            _apt_frontend=yes
+        else
+            _apt_frontend=no
+        fi
+    fi
+    test "$_apt_frontend" = yes
+}
+
+# --- Package summaries ---
+
+# A run of installs from one package manager shows a header, then what
+# changed, rather than a screenful a package:
+#
+#   Installing apt packages
+#   Installed: zoxide zsh-autosuggestions (and 3 dependencies)
+#   Upgraded: git
+#   Failed: frob
+#
+# pkg_begin MANAGER [HEADER] starts one, for apt, dnf or brew; apt_install,
+# dnf_install and brew_install install into it; pkg_end says what changed.
+
+# pkg_versions MANAGER: "name version" for each installed package, one a
+# line, or nothing when the package manager can't say.
+pkg_versions() {
+    case "$1" in
+        apt)
+            { dpkg-query -W -f '${db:Status-Abbrev} ${Package} ${Version}\n' 2>/dev/null || :; } \
+                | awk '$1 == "ii" { print $2, $3 }'
+            ;;
+        dnf) rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}\n' 2>/dev/null || : ;;
+        brew)
+            brew list --formula --versions 2>/dev/null || :
+            brew list --cask --versions 2>/dev/null || :
+            ;;
+    esac
+}
+
+pkg_begin() {
+    _pkg_manager=$1
+    case "$1" in
+        brew) _pkg_label=Homebrew ;;
+        *) _pkg_label=$1 ;;
+    esac
+    info "${2:-Installing $_pkg_label packages}"
+    # A file, not a variable for awk's environment: a workstation's list of
+    # packages can be longer than Linux lets one environment string be.
+    if ! _pkg_before=$(mktemp "${TMPDIR:-/tmp}/setup-packages-XXXXXX"); then
+        warn "couldn't make a file to list the installed packages in, so the run won't say what changed"
+        _pkg_manager=
+        return 0
+    fi
+    pkg_versions "$1" > "$_pkg_before"
+    _pkg_asked=
+    _pkg_failed=
+}
+
+# pkg_note LIST NAME...: adds the names among NAME, not the options, to
+# _pkg_asked or _pkg_failed.
+pkg_note() {
+    _pn_list=$1
+    shift
+    for _pn_name; do
+        case "$_pn_name" in
+            -*) ;;
+            *)
+                if test "$_pn_list" = asked; then
+                    _pkg_asked="$_pkg_asked $_pn_name"
+                else
+                    _pkg_failed="$_pkg_failed $_pn_name"
+                fi
+                ;;
+        esac
+    done
+}
+
+# apt_install, dnf_install, brew_install NAME...: install NAME, quietly
+# (see run_logged), for pkg_end to report.
+apt_install() {
+    pkg_note asked "$@"
+    sudo_logged apt-get install -y --install-recommends "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+dnf_install() {
+    pkg_note asked "$@"
+    sudo_logged dnf install -y "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+brew_install() {
+    pkg_note asked "$@"
+    brew_logged install "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+# pkg_end: says what the installs since pkg_begin changed. Installed names
+# the packages asked for, and counts what they pulled in; Upgraded names
+# any package whose version moved; Failed names each package asked for in
+# a failed install that still isn't there -- one unknown name fails a whole
+# apt or dnf transaction, but the rest may have been installed before.
+pkg_end() {
+    test -n "${_pkg_manager:-}" || return 0
+    pkg_versions "$_pkg_manager" | ASKED="$_pkg_asked" FAILED="$_pkg_failed" awk '
+        # The names, or how many when there are more than cap (0: no cap).
+        function list(names, n, cap,    i, out) {
+            if (cap && n > cap) return n " packages"
+            for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") names[i]
+            return out
+        }
+        BEGIN {
+            nasked = split(ENVIRON["ASKED"], asked, " ")
+            for (i = 1; i <= nasked; i++) wanted[asked[i]] = 1
+            nfailed = split(ENVIRON["FAILED"], failedasked, " ")
+        }
+        # The first file is the list from before. A name can come with
+        # more than one version -- Fedora keeps several kernels -- so each
+        # name has a set of versions, and it changed when the set did.
+        FILENAME != "-" && NF {
+            version = $0; sub(/^[^ ]+ ?/, "", version)
+            had[$1] = 1
+            if (!before[$1, version]++) nbefore[$1]++
+            next
+        }
+        NF {
+            name = $1; version = $0; sub(/^[^ ]+ ?/, "", version)
+            if (!now[name]++) names[++nnames] = name
+            if (!after[name, version]++) {
+                nafter[name]++
+                if (!before[name, version]) moved[name] = 1
+            }
+        }
+        END {
+            for (i = 1; i <= nasked; i++) {
+                name = asked[i]
+                if (now[name] && !had[name] && !counted[name]++) new[++nnew] = name
+            }
+            for (i = 1; i <= nnames; i++) {
+                name = names[i]
+                if (!had[name]) {
+                    if (!wanted[name]) deps++
+                } else if (moved[name] || nafter[name] != nbefore[name]) {
+                    up[++nup] = name
+                }
+            }
+            for (i = 1; i <= nfailed; i++) {
+                name = failedasked[i]
+                if (!now[name] && !gone[name]++) failed[++nfail] = name
+            }
+            if (nnew || deps) {
+                line = "Installed: " (nnew ? list(new, nnew, 0) : "")
+                if (deps) line = line (nnew ? " (and " : "") deps (deps == 1 ? " dependency" : " dependencies") (nnew ? ")" : "")
+                print line
+            }
+            if (nup) print "Upgraded: " list(up, nup, 15)
+            if (nfail) print "Failed: " list(failed, nfail, 0)
+            if (!nnew && !deps && !nup && !nfail) print "Nothing new to install"
+        }' "$_pkg_before" -
+    rm -f "$_pkg_before"
+    _pkg_manager=
 }
 
 # --- Go ---
@@ -1047,16 +1286,36 @@ check_go() {
 
 # --- Install system packages ---
 
+# install_packages: the distro's or Homebrew's packages, summarized (see
+# pkg_end) after install_os_packages installs them.
 install_packages() {
     case "$OS" in
+        debian) pkg_begin apt ;;
+        redhat) pkg_begin dnf ;;
+        macos)
+            # Every brew step warns and continues rather than aborting,
+            # matching the apt/dnf branches: one renamed formula or one tap
+            # outage shouldn't take the whole bootstrap down under set -e.
+            if ! install_homebrew; then
+                warn "Homebrew unavailable; skipping macOS package installation"
+                return 0
+            fi
+            pkg_begin brew
+            ;;
+    esac
+    install_os_packages && _ip_status=0 || _ip_status=$?
+    pkg_end
+    return "$_ip_status"
+}
+
+install_os_packages() {
+    case "$OS" in
         debian)
-            info "Updating package lists"
-            if ! sudo_or_warn apt-get update -qq; then
+            if ! sudo_logged apt-get update -qq; then
                 warn "skipping Debian package installation because apt-get update failed"
                 return 0
             fi
-            info "Installing system packages"
-            if ! sudo_or_warn apt-get install -y --install-recommends \
+            if ! apt_install \
                     adb \
                     atool \
                     bat \
@@ -1089,15 +1348,13 @@ install_packages() {
             # name -- which would take git/make down with it. Its own
             # best-effort step keeps that contained; the shell config skips
             # zoxide when it isn't installed.
-            info "Installing zoxide"
-            sudo_or_warn apt-get install -y --install-recommends zoxide \
+            apt_install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # zsh-autosuggestions (inline history ghost text) gets its own
             # best-effort step for the same reason as zoxide: apt aborts the
             # whole transaction on one unknown name, and older releases may not
             # package it. The shell config skips it when it's missing.
-            info "Installing zsh-autosuggestions"
-            sudo_or_warn apt-get install -y --install-recommends zsh-autosuggestions \
+            apt_install zsh-autosuggestions \
                 || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) isn't in the Debian/Ubuntu repos, so
             # it's not attempted here -- install_file_managers installs it from
@@ -1108,21 +1365,18 @@ install_packages() {
             # apt is skipped above, and these come from conda-forge via
             # homepkg instead (install_home_tools).
             if test "$NPM" = yes; then
-                info "Installing npm"
-                sudo_or_warn apt-get install -y --install-recommends npm \
+                apt_install npm \
                     || warn "could not install the distro npm package; continuing with the TypeScript attempt"
                 # tsc lets setup-kde's fallback build Krohnkite from source
                 # without fetching typescript from the npm registry at build
                 # time. Debian/Ubuntu package it as node-typescript; fall
                 # back to a one-time global npm install where unavailable.
-                info "Installing TypeScript (tsc)"
-                sudo_or_warn apt-get install -y --install-recommends node-typescript \
-                    || sudo_or_warn npm install -g typescript \
+                apt_install node-typescript \
+                    || sudo_logged npm install -g typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
-                info "Installing kitty"
-                sudo_or_warn apt-get install -y --install-recommends kitty \
+                apt_install kitty \
                     || warn "skipping kitty installation"
                 if test "$CROSTINI" -eq 1; then
                     # Gigabytes the container's small disk can't spare, for a
@@ -1130,8 +1384,7 @@ install_packages() {
                     info "Skipping KDE graphical packages (Crostini)"
                     return 0
                 fi
-                info "Installing KDE graphical packages"
-                sudo_or_warn apt-get install -y --install-recommends \
+                apt_install \
                     kde-standard \
                     kwin-dev \
                     plasma-desktop plasma-sdk \
@@ -1141,20 +1394,17 @@ install_packages() {
                 # the next login -- see kdeshortcut.py. Its own step, because
                 # apt rejects a whole transaction on one unknown name, and
                 # because it's usually already pulled in by the desktop.
-                info "Installing gdbus (live shortcut updates)"
-                sudo_or_warn apt-get install -y --install-recommends libglib2.0-bin \
+                apt_install libglib2.0-bin \
                     || warn "libglib2.0-bin unavailable via apt; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
                 # fuzzel is the menu of KDE's Win+V (clipboard-menu), and
                 # wl-copy puts the entry chosen back. Their own step, so a
                 # release without them keeps the rest.
-                info "Installing fuzzel and wl-clipboard (Win+V's clipboard menu)"
-                sudo_or_warn apt-get install -y --install-recommends fuzzel wl-clipboard \
+                apt_install fuzzel wl-clipboard \
                     || warn "fuzzel or wl-clipboard unavailable via apt; Win+V on KDE says what's missing"
             fi
             ;;
         redhat)
-            info "Installing system packages"
-            if ! sudo_or_warn dnf install -y \
+            if ! dnf_install \
                     '@development-tools' \
                     android-tools \
                     atool \
@@ -1184,13 +1434,11 @@ install_packages() {
             fi
             # Its own transaction, for the same reason as the Debian branch:
             # dnf aborts the lot when one name is unknown.
-            info "Installing zoxide"
-            sudo_or_warn dnf install -y zoxide \
+            dnf_install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Its own step, as with zoxide: dnf aborts the lot on one unknown
             # name, and the shell config skips it when it's missing.
-            info "Installing zsh-autosuggestions"
-            sudo_or_warn dnf install -y zsh-autosuggestions \
+            dnf_install zsh-autosuggestions \
                 || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) isn't in the base Fedora repos, so
             # it's not attempted here; install_file_managers installs it from
@@ -1201,23 +1449,19 @@ install_packages() {
             # dnf is skipped above, and these come from conda-forge via
             # homepkg instead (install_home_tools).
             if test "$NPM" = yes; then
-                info "Installing npm"
-                sudo_or_warn dnf install -y npm \
+                dnf_install npm \
                     || warn "could not install the distro npm package; continuing with the TypeScript attempt"
                 # tsc lets setup-kde's fallback build Krohnkite from source
                 # without fetching typescript from the npm registry at build
                 # time. Fedora ships no typescript rpm, so this is a one-time
                 # global npm install during bootstrap.
-                info "Installing TypeScript (tsc)"
-                sudo_or_warn npm install -g typescript \
+                sudo_logged npm install -g typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
-                info "Installing kitty"
-                sudo_or_warn dnf install -y kitty \
+                dnf_install kitty \
                     || warn "skipping kitty installation"
-                info "Installing KDE graphical packages"
-                sudo_or_warn dnf install -y \
+                dnf_install \
                     '@kde-desktop-environment' \
                     kwin-devel \
                     plasma-desktop \
@@ -1227,28 +1471,14 @@ install_packages() {
                 # shortcuts to the running session instead of deferring them to
                 # the next login -- see kdeshortcut.py. Its own step so one
                 # unavailable name can't take the desktop packages down with it.
-                info "Installing gdbus (live shortcut updates)"
-                sudo_or_warn dnf install -y glib2 \
+                dnf_install glib2 \
                     || warn "glib2 unavailable via dnf; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
-                info "Installing fuzzel and wl-clipboard (Win+V's clipboard menu)"
-                sudo_or_warn dnf install -y fuzzel wl-clipboard \
+                dnf_install fuzzel wl-clipboard \
                     || warn "fuzzel or wl-clipboard unavailable via dnf; Win+V on KDE says what's missing"
             fi
             ;;
         macos)
-            # Every brew step below warns and continues rather than aborting,
-            # matching the apt/dnf branches: one renamed formula or one tap
-            # outage shouldn't take the whole bootstrap down under set -e.
-            if ! install_homebrew; then
-                warn "Homebrew unavailable; skipping macOS package installation"
-                return 0
-            fi
-            # One line before and one after, as on a quiet Linux run: brew's
-            # own output goes to the log (see brew_logged), and a failure
-            # still warns, naming what it costs.
-            info "Installing Homebrew packages"
-            _brew_before=$(brew_inventory)
-            if ! brew_logged install \
+            if ! brew_install \
                 atool \
                 autoconf \
                 automake \
@@ -1274,15 +1504,15 @@ install_packages() {
             fi
             # Separate, so a formula rename or a tap outage can't take the
             # core package list down with it.
-            brew_logged install zoxide \
+            brew_install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Its own step, matching zoxide; the shell config skips it when
             # it's missing.
-            brew_logged install zsh-autosuggestions \
+            brew_install zsh-autosuggestions \
                 || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) is a CLI tool, not graphical, so
             # install it regardless of --no-gui (matching the Linux paths).
-            brew_logged install lf || warn "could not install lf"
+            brew_install lf || warn "could not install lf"
             # Node.js + tsc from Homebrew on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). brew needs no
@@ -1294,29 +1524,28 @@ install_packages() {
             if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
                 info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned"
             elif test "$NPM" = yes && test "$ROOT" = yes; then
-                brew_logged install node \
+                brew_install node \
                     || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
                 # tsc lets setup-kde's fallback build Krohnkite from source
                 # without fetching typescript from the npm registry at build
                 # time. Installed on macOS too so the toolchain matches Linux.
-                brew_logged install typescript \
+                brew_install typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
             # Linux paths which keep adb/android-tools as core packages.
-            brew_logged install --cask android-platform-tools \
+            brew_install --cask android-platform-tools \
                 || warn "could not install android-platform-tools; adb/fastboot will be unavailable"
             if test "$GUI_ENABLED" -eq 1; then
-                brew_logged install kitty \
+                brew_install kitty \
                     || warn "skipping kitty installation"
                 # No Amethyst or Rectangle: setup-macos sets up tilemo, which
                 # they'd fight over keys and windows. `setup-macos --wm
                 # amethyst` installs Amethyst itself.
-                brew_logged install --cask iterm2 \
+                brew_install --cask iterm2 \
                     || warn "some macOS applications could not be installed"
             fi
-            brew_report "$_brew_before"
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
@@ -1459,13 +1688,13 @@ purge_obsolete_packages() {
     case "$OS" in
         debian)
             # shellcheck disable=SC2086  # word-split the collected package list
-            sudo_or_warn apt-get purge -y $installed \
+            sudo_logged apt-get purge -y $installed \
                 || warn "could not purge some obsolete packages; purge them manually"
             info "Run 'sudo apt-get autoremove --purge' to sweep up any orphaned dependencies"
             ;;
         redhat)
             # shellcheck disable=SC2086  # word-split the collected package list
-            sudo_or_warn dnf remove -y $installed \
+            sudo_logged dnf remove -y $installed \
                 || warn "could not remove some obsolete packages; remove them manually"
             info "Run 'sudo dnf autoremove' to sweep up any orphaned dependencies"
             ;;
@@ -1706,10 +1935,9 @@ install_extras_brew() {
     # One formula at a time so a single failure doesn't block the rest.
     helix_installed=no
     set_extras_tools nushell
-    info "Installing $EXTRAS_TOOLS from Homebrew"
-    _brew_before=$(brew_inventory)
+    pkg_begin brew "Installing $EXTRAS_TOOLS from Homebrew"
     for formula in $EXTRAS_TOOLS; do
-        if brew_logged install "$formula"; then
+        if brew_install "$formula"; then
             test "$formula" = helix && helix_installed=yes
         else
             warn "could not install $formula via Homebrew"
@@ -1720,7 +1948,7 @@ install_extras_brew() {
     if test "$helix_installed" = yes; then
         clear_managed_helix_runtime
     fi
-    brew_report "$_brew_before"
+    pkg_end
 }
 
 # The release-artifact path: the prebuilt binaries each project publishes with
@@ -1744,7 +1972,7 @@ install_extras_release() {
     set_extras_tools nu
     info "Installing the extras from their GitHub release artifacts: $EXTRAS_TOOLS"
     # shellcheck disable=SC2086  # $EXTRAS_TOOLS is a space-separated list expanded into multiple args
-    "$homepkg" --backend github install $EXTRAS_TOOLS \
+    run_logged "$homepkg" --backend github install $EXTRAS_TOOLS \
         || warn "some of the extras could not be installed from their releases (offline?)"
     # A partial run can still have landed helix, so wire up its runtime on the
     # strength of the binary being there rather than of homepkg's exit status.
@@ -1851,7 +2079,7 @@ install_home_tools() {
         # so --minimal/--no-npm don't trim it.
         info "Installing CLI tools from bundle (offline-capable): $bundle"
         info "  a bundle unpacks its full contents additively; --minimal/--no-npm don't trim it"
-        if "$homepkg" install-bundle "$bundle"; then
+        if run_logged "$homepkg" install-bundle "$bundle"; then
             provisioned=yes
         else
             rc=$?
@@ -1876,7 +2104,7 @@ install_home_tools() {
             || info "Skipping heavyweight CLI extras (helix, jj, nushell); minimal profile"
         info "Installing CLI tools into a home prefix via homepkg: $tools"
         # shellcheck disable=SC2086  # $tools is a space-separated list expanded into multiple args
-        if "$homepkg" install $tools; then
+        if run_logged "$homepkg" install $tools; then
             provisioned=yes
         else
             warn "some CLI tools could not be installed via homepkg"
@@ -1940,7 +2168,7 @@ install_file_managers() {
         return 0
     fi
     info "Installing lf from conda-forge via homepkg (~/.local, no root)"
-    "$homepkg" install lf \
+    run_logged "$homepkg" install lf \
         || warn "could not install lf via homepkg; install manually if you want it"
 }
 
@@ -1969,7 +2197,7 @@ install_node_home() {
         return 0
     fi
     info "Installing Node.js and tsc from conda-forge via homepkg (~/.local)"
-    "$homepkg" install node typescript \
+    run_logged "$homepkg" install node typescript \
         || warn "could not install Node.js and tsc via homepkg"
     if command -v brew >/dev/null 2>&1 && brew list --formula --versions node >/dev/null 2>&1; then
         info "Homebrew's node is still installed; remove it with 'brew uninstall typescript node'"
@@ -2125,7 +2353,7 @@ install_shell_tools() {
         # A bundle installs its full contents, so it can't be trimmed to the
         # missing tools; re-installing one that's already present is harmless.
         info "Installing$shell_tools from $shell_bundle"
-        if "$homepkg" install-bundle "$shell_bundle"; then
+        if run_logged "$homepkg" install-bundle "$shell_bundle"; then
             # It only installs what its manifest carries, so a partial or
             # stale bundle can still leave tools missing. Recheck, and let
             # whatever it didn't provide fall through to the download.
@@ -2143,7 +2371,7 @@ install_shell_tools() {
 
     info "Installing$shell_tools via homepkg"
     # shellcheck disable=SC2086  # deliberate word split: one flag per tool
-    "$homepkg" --backend github install $shell_tools \
+    run_logged "$homepkg" --backend github install $shell_tools \
         || warn "could not install$shell_tools (offline? stage a bundle with 'homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace'); the shell config skips whichever is missing"
 }
 
@@ -2209,7 +2437,7 @@ install_uv() {
         info "Updating uv"
         # uv self update reruns the installer, which edits the shell rc/profile
         # files unless UV_NO_MODIFY_PATH is set; PATH is managed by the conf repo.
-        UV_NO_MODIFY_PATH=1 uv self update \
+        run_logged env UV_NO_MODIFY_PATH=1 uv self update \
             || warn "could not update uv (offline?); keeping the installed version"
     elif local_bin_blocked; then
         info "Skipping uv: $LOCAL_BIN_WHY"
@@ -2666,8 +2894,7 @@ fi
 clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR" yes
 clone_or_pull "$CONF_REPO" "$CONF_DIR" yes
 
-info "Running confinst"
-"$SCRIPTS_DIR/confinst"
+run_confinst
 
 if test "$INSTALL" = no; then
     info "Skipping heavyweight extras (helix, jj, nushell); --no-install"
@@ -2748,12 +2975,13 @@ if test "$INSTALL" = yes; then
         . "$HOME/.cargo/env"
     fi
     if command -v cargo >/dev/null 2>&1; then
-        make -C "$ROOT_DIR"
-        sudo_or_warn make -C "$ROOT_DIR" install \
+        info "Building root"
+        run_logged make -C "$ROOT_DIR"
+        sudo_logged make -C "$ROOT_DIR" install \
             || warn "skipping root config installation"
     else
         info "cargo unavailable; installing the legacy root config from $ROOT_DIR/legacy (install Rust for the primary one)"
-        sudo_or_warn make -C "$ROOT_DIR/legacy" install \
+        sudo_logged make -C "$ROOT_DIR/legacy" install \
             || warn "skipping legacy root config installation"
     fi
 else

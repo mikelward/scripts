@@ -116,6 +116,14 @@ sudo_or_warn apt-get update" 2>&1)"
 # isolation. The full bootstrap can't run in CI, but an individual function
 # can -- given mocks for what it shells out to and stubs for the helpers it
 # calls. Generalizes what run_sudo_helper does by hand above.
+# The quiet-install helpers, which most of what a harness runs calls, and
+# one log for every harness that doesn't check its own, so none writes to
+# the real ~/.local/state.
+QUIET_FUNCTIONS="apt_frontend_allowed start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end install_os_packages"
+SETUP_LOG=$(mktemp)
+export SETUP_LOG
+trap 'rm -f "$SETUP_LOG"' EXIT
+
 extract_functions() {
     awk -v names="$1" '
         BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
@@ -157,7 +165,7 @@ MOCK
 
     set +e
     output="$(PATH="$brew_tmpdir" \
-        sh -c "$(extract_functions "info warn note_problem install_homebrew")
+        sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS install_homebrew")
 install_homebrew" 2>&1)"
     status=$?
     set -e
@@ -197,7 +205,7 @@ MOCK
         sh -c "set -e
 OS=$terminal_os
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn note_problem set_kde_default_terminal set_default_terminal")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS set_kde_default_terminal set_default_terminal")
 set_default_terminal
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -248,7 +256,7 @@ MOCK
     write_mock_uname "$macos_tmpdir" "$macos_arch"
 
     set +e
-    output="$(PATH="$macos_tmpdir:$PATH" XDG_STATE_HOME="$macos_tmpdir/state" SETUP_BREW_LOG="" \
+    output="$(PATH="$macos_tmpdir:$PATH" XDG_STATE_HOME="$macos_tmpdir/state" SETUP_LOG="" \
         sh -c "set -e
 $(extract_homebrew_env)
 OS=macos
@@ -257,13 +265,13 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn note_problem is_intel_mac start_brew_log brew_logged brew_inventory brew_report install_packages")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS is_intel_mac install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$macos_calls" 2>/dev/null)"
-    brew_log="$(cat "$macos_tmpdir/state/setup/brew.log" 2>/dev/null)"
+    brew_log="$(cat "$macos_tmpdir/state/setup/setup.log" 2>/dev/null)"
     rm -rf "$macos_tmpdir"
 }
 
@@ -307,13 +315,34 @@ OS=macos
 NPM=$2
 ROOT=$3
 SCRIPTS_DIR='$node_tmpdir/scripts'
-$(extract_functions "info warn note_problem is_intel_mac install_node_home")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS is_intel_mac install_node_home")
 install_node_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$node_calls" 2>/dev/null)"
     rm -rf "$node_tmpdir"
+}
+
+# Write a sudo into directory $1 that runs its command, noting in file $2
+# which command it ran. It sets the VAR=value it's given, unless
+# $LINUX_NO_SETENV stands for a sudo rule that allows apt-get but not
+# setting variables for it.
+write_mock_sudo() {
+    cat > "$1/sudo" <<MOCK
+#!/bin/sh
+while case "\$1" in *=*) true ;; *) false ;; esac; do
+    if test -n "${LINUX_NO_SETENV:-}"; then
+        echo "sudo: sorry, you are not allowed to set the following environment variables: \${1%%=*}" >&2
+        exit 1
+    fi
+    export "\$1"
+    shift
+done
+printf 'sudo runs %s\n' "\$1" >> "$2"
+exec "\$@"
+MOCK
+    chmod +x "$1/sudo"
 }
 
 # Run install_packages' Linux arm ($1: debian|redhat) against a mock package
@@ -333,28 +362,66 @@ run_linux_packages() {
     esac
     linux_tmpdir="$(mktemp -d)"
     linux_calls="$linux_tmpdir/calls"
+    # It chatters as the real ones do, and records whether apt may ask.
     cat > "$linux_tmpdir/$linux_pm" <<MOCK
 #!/bin/sh
-printf '%s\n' "$linux_pm \$*" >> "$linux_calls"
+printf '%s\n' "$linux_pm \$* [DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-unset}] [stdin=\$(cat)]" >> "$linux_calls"
+echo "Setting up \$*"
 exit 0
 MOCK
-    chmod +x "$linux_tmpdir/$linux_pm"
+    write_mock_sudo "$linux_tmpdir" "$linux_calls"
+    chmod +x "$linux_tmpdir/$linux_pm" "$linux_tmpdir/sudo"
 
     set +e
-    output="$(PATH="$linux_tmpdir:$PATH" \
+    # An answer waits on stdin, for a package manager that asks anything.
+    output="$(printf 'y\n' | PATH="$linux_tmpdir:$PATH" \
         sh -c "set -e
+unset DEBIAN_FRONTEND
 OS=$linux_os
 NPM=no
 GUI_ENABLED=$linux_gui
 CROSTINI=0
-sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn note_problem install_packages")
+SUDO=yes
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS sudo_or_warn install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$linux_calls" 2>/dev/null)"
     rm -rf "$linux_tmpdir"
+}
+
+assert_output_is() {
+    if test "$output" != "$1"; then
+        echo "  FAIL: output is not what was expected"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# Run pkg_begin, one install per name in $1 and pkg_end, against a package
+# list that's $2 ("name version" lines) before the installs and $3 after;
+# an install of frob fails.
+run_pkg_summary() {
+    summary_tmpdir="$(mktemp -d)"
+    printf '%s\n' "$2" > "$summary_tmpdir/versions"
+    printf '%s\n' "$3" > "$summary_tmpdir/after"
+    set +e
+    output="$(sh -c "set -e
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
+pkg_versions() { cat '$summary_tmpdir/versions'; }
+sudo_logged() {
+    cp '$summary_tmpdir/after' '$summary_tmpdir/versions'
+    case \"\$*\" in *frob*) return 100 ;; esac
+}
+pkg_begin apt
+for name in $1; do apt_install \"\$name\" || :; done
+pkg_end
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$summary_tmpdir"
 }
 
 # Run purge_obsolete_packages' Linux arm ($1: debian|redhat) against a mock
@@ -426,12 +493,13 @@ MOCK
     fi
 
     set +e
+    write_mock_sudo "$purge_tmpdir" "$purge_tmpdir/sudo-calls"
     output="$(PATH="$purge_tmpdir:$PATH" \
         sh -c "set -e
 OS=$purge_os
 TIDE=${PURGE_TIDE:-no}
-sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn note_problem obsolete_pkg_installed purge_obsolete_packages")
+SUDO=yes
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS sudo_or_warn obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -464,7 +532,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
-$(extract_functions "info warn note_problem lf_missing install_file_managers")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
 install_file_managers
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -492,7 +560,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$prune_tmpdir/home'
 SCRIPTS_DIR='$prune_scripts'
-$(extract_functions "info warn note_problem prune_retired_tools")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS prune_retired_tools")
 prune_retired_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -511,7 +579,7 @@ run_missing_homepkg_warnings() {
 
     set +e
     output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
-$(extract_functions "info warn note_problem install_home_tools install_shell_tools install_extras_release")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS install_home_tools install_shell_tools install_extras_release")
 install_home_tools
 install_shell_tools
 install_extras_release" 2>&1)"
@@ -573,7 +641,7 @@ run_helix_runtime_helper() {
 HOME='$helix_home'
 XDG_CONFIG_HOME='$helix_config'
 SRC_DIR='$helix_home/src'
-$(extract_functions "info warn note_problem link_helix_runtime clear_managed_helix_runtime")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS link_helix_runtime clear_managed_helix_runtime")
 $helix_call
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -640,11 +708,11 @@ MOCK
     extras_path="$(stub_jj_path "$extras_home" "$extras_bin" "$brew_jj")"
 
     set +e
-    output="$(PATH="$extras_path" XDG_STATE_HOME="$extras_tmpdir/state" SETUP_BREW_LOG="" sh -c "set -e
+    output="$(PATH="$extras_path" XDG_STATE_HOME="$extras_tmpdir/state" SETUP_LOG="" sh -c "set -e
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info warn note_problem start_brew_log brew_logged brew_inventory brew_report system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -704,7 +772,7 @@ HOME='$release_home'
 XDG_CONFIG_HOME='$release_home/.config'
 SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
-$(extract_functions "info warn note_problem system_jj set_extras_tools link_helix_runtime install_extras_release")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -782,7 +850,7 @@ MOCK
 OS=debian
 HOME='$services_home'
 XDG_CONFIG_HOME='$services_home/.config'
-$(extract_functions "info warn note_problem systemd_user_available shpool_service_exists start_services")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS systemd_user_available shpool_service_exists start_services")
 start_services
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -849,7 +917,7 @@ SRC_DIR='$ht_home/src'
 SCRIPTS_DIR='$ht_home/scripts'
 MINIMAL_ENABLED=0
 NPM=yes
-$(extract_functions "info warn note_problem system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
 install_home_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -906,7 +974,7 @@ run_check_go() {
         chmod +x "$go_tmpdir/go"
     fi
     set +e
-    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn note_problem go_at_least check_go")
+    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS go_at_least check_go")
 check_go" 2>&1)"
     status=$?
     set -e
@@ -1002,7 +1070,7 @@ test_crostini_not_detected_elsewhere() {
 
 test_crostini_skips_the_keyboard() {
     set +e
-    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem configure_keyboard")
+    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS configure_keyboard")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
@@ -1040,7 +1108,7 @@ test_crostini_skips_kde_tide_and_the_root_group() {
     assert_source_contains 'info "Skipping root-group membership (Crostini)"' &&
     assert_source_contains '^resolve_crostini$'
     # kitty is still installed, ahead of the KDE skip.
-    kitty=$(grep -n 'info "Installing kitty"' "$SETUP" | head -1 | cut -d: -f1)
+    kitty=$(grep -n 'apt_install kitty' "$SETUP" | head -1 | cut -d: -f1)
     skip=$(grep -n 'Skipping KDE graphical packages (Crostini)' "$SETUP" | cut -d: -f1)
     if test -z "$kitty" || test -z "$skip" || test "$kitty" -ge "$skip"; then
         echo "  FAIL: kitty isn't installed before the Crostini KDE skip"
@@ -1167,7 +1235,7 @@ TIDE_REPO=https://example.com/mikelward/tide.git
 GITHUB_MIRROR='${DESKTOP_MIRROR:-no}'
 GITHUB_PREFIX='${DESKTOP_PREFIX:-git@github.com:}'
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
-$(extract_functions "info warn note_problem configure_linux_desktop")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS configure_linux_desktop")
 configure_linux_desktop" 2>&1)"
     status=$?
     set -e
@@ -1265,7 +1333,7 @@ test_purge_obsolete_keeps_tide_stack() {
 test_typescript_installed_from_distro() {
     assert_source_contains "node-typescript" &&
     assert_source_contains "npm install -g typescript" &&
-    assert_source_contains "brew_logged install typescript"
+    assert_source_contains "brew_install typescript"
 }
 
 # sudo failures are warnings rather than fatal set -e exits. Use stderr when
@@ -1305,7 +1373,7 @@ test_sudo_calls_are_guarded() {
         TEST_FAILED=1
         return 1
     fi
-    assert_source_contains "if ! sudo_or_warn apt-get update" &&
+    assert_source_contains "if ! sudo_logged apt-get update" &&
     assert_source_contains "if sudo_or_warn tee /etc/default/keyboard" &&
     assert_source_contains "if sudo_or_warn localectl set-keymap" &&
     assert_source_contains "if sudo_or_warn gpasswd"
@@ -1702,8 +1770,9 @@ test_zoxide_is_a_core_package() {
     # make down with it. Three install steps (apt, dnf, brew -- whose is
     # quiet, see brew_logged) plus the manual-install hint and the homepkg
     # core set.
-    test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 2 &&
-    assert_source_contains "brew_logged install zoxide" &&
+    assert_source_contains "apt_install zoxide" &&
+    assert_source_contains "dnf_install zoxide" &&
+    assert_source_contains "brew_install zoxide" &&
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
@@ -1717,8 +1786,9 @@ test_zsh_autosuggestions_is_a_best_effort_package() {
     # Three install steps (apt, dnf, a quiet brew), never a bare entry in a core
     # package list: one unknown name aborts the whole apt/dnf transaction, and
     # older releases may not carry it. Plus the manual-install hint.
-    test "$(grep -c '^ *info "Installing zsh-autosuggestions"$' "$SETUP")" -eq 2 &&
-    assert_source_contains "brew_logged install zsh-autosuggestions" &&
+    assert_source_contains "apt_install zsh-autosuggestions" &&
+    assert_source_contains "dnf_install zsh-autosuggestions" &&
+    assert_source_contains "brew_install zsh-autosuggestions" &&
     test "$(grep -c '^ *zsh-autosuggestions \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zsh-autosuggestions" &&
     assert_source_contains "zoxide zsh zsh-autosuggestions"
@@ -2019,31 +2089,149 @@ test_macos_brew_output_is_logged_and_summarized() {
     run_macos_packages 0 arm64 ok
     assert_status 0 &&
     assert_output_lacks "Pouring" &&
-    assert_output_contains "Installed from Homebrew: atool, autoconf," &&
-    assert_output_contains "iterm2" &&
+    assert_output_contains "Installing Homebrew packages" &&
+    assert_output_contains "Installed: atool autoconf automake" &&
+    assert_output_contains " iterm2" &&
+    assert_output_lacks "Failed:" &&
     case "$brew_log" in
         *"+ brew install zoxide"*"==> Pouring zoxide--1.0"*) ;;
         *) echo "brew's output isn't in the log: $brew_log"; return 1 ;;
     esac
 }
 
+# A run of installs says what changed in a line or three, not a screenful
+# a package: which packages asked for are new, with a count of what they
+# pulled in, which packages moved to a new version, and which of those asked
+# for still aren't there after a failed install.
+test_package_summary_says_what_changed() {
+    run_pkg_summary "zoxide git frob" "git 1:2.43.0-1
+vim 2:9.1" "git 1:2.43.0-2
+vim 2:9.1
+zoxide 0.9.3-1
+libzoxide 0.9.3-1"
+    assert_status 0 &&
+    assert_output_is "Installing apt packages
+Installed: zoxide (and 1 dependency)
+Upgraded: git
+Failed: frob
+BOOTSTRAP_CONTINUED"
+}
+
+# A workstation's package list is longer than one environment string may
+# be on Linux (128 KiB); the summary still has to come out.
+test_package_summary_of_a_long_package_list() {
+    long_list=$(awk 'BEGIN { for (i = 0; i < 5000; i++) printf "package-with-a-long-name-%05d 1.0.0-1ubuntu0.24.04.1\n", i }')
+    run_pkg_summary "zoxide" "$long_list" "$long_list
+zoxide 0.9.3-1"
+    assert_status 0 &&
+    assert_output_is "Installing apt packages
+Installed: zoxide
+BOOTSTRAP_CONTINUED"
+}
+
+# Fedora keeps several kernels, so one name can have several versions: a
+# rerun that changes none of them upgrades nothing, and a new one is an
+# upgrade, not a new package.
+test_package_summary_with_several_versions_of_one_package() {
+    kernels="kernel-core 6.17.1-300.fc43
+kernel-core 6.17.4-300.fc43"
+    run_pkg_summary "git" "$kernels" "$kernels" &&
+    assert_output_is "Installing apt packages
+Nothing new to install
+BOOTSTRAP_CONTINUED" &&
+    run_pkg_summary "git" "$kernels" "$kernels
+kernel-core 6.17.7-300.fc43" &&
+    assert_output_is "Installing apt packages
+Upgraded: kernel-core
+BOOTSTRAP_CONTINUED"
+}
+
+# ...and a rerun with nothing to do says so in one line.
+test_package_summary_with_nothing_new() {
+    run_pkg_summary "git vim" "git 1:2.43.0-1
+vim 2:9.1" "git 1:2.43.0-1
+vim 2:9.1"
+    assert_status 0 &&
+    assert_output_is "Installing apt packages
+Nothing new to install
+BOOTSTRAP_CONTINUED"
+}
+
+# apt's output goes to the log, so it mustn't ask anything there: debconf
+# runs noninteractive, apt gets no input, and a package whose config file
+# changed here keeps the version here, dpkg's own default. apt-get is still
+# the command sudo runs, for a sudo rule that allows only that.
+test_apt_is_quiet_and_asks_nothing() {
+    run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "Installing apt packages" &&
+    assert_output_lacks "Setting up" &&
+    assert_calls_contain "apt-get update -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=noninteractive] [stdin=]" &&
+    assert_calls_contain "sudo runs apt-get" &&
+    assert_calls_lack "sudo runs env" &&
+    run_linux_packages redhat &&
+    assert_output_contains "Installing dnf packages" &&
+    assert_output_lacks "Setting up"
+}
+
+# A sudo rule that allows apt-get but not setting DEBIAN_FRONTEND for it
+# still installs: apt runs without the variable, and without input.
+test_apt_runs_where_sudo_wont_set_its_frontend() {
+    LINUX_NO_SETENV=1 run_linux_packages debian
+    assert_status 0 &&
+    assert_output_lacks "Warning:" &&
+    assert_calls_contain "apt-get install -y --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=unset] [stdin=]"
+}
+
+# confinst says a line a link, which the run counts instead. It can fail to
+# make one and still exit 0, so what else it says is a warning, and the
+# count leaves the failed link out.
+test_confinst_is_counted_and_its_errors_shown() {
+    confinst_tmpdir="$(mktemp -d)"
+    cat > "$confinst_tmpdir/confinst" <<'MOCK'
+#!/bin/sh
+echo "Linking /home/user/.zshrc to /home/user/conf/zshrc" >&2
+echo "Moving /home/user/.bashrc to /home/user/.bashrc.20261105" >&2
+echo "Linking /home/user/.bashrc to /home/user/conf/bashrc" >&2
+echo "Linking /home/user/.vimrc to /home/user/conf/vimrc" >&2
+echo "Error creating /home/user/.vimrc, skipping /home/user/conf/vimrc" >&2
+exit 0
+MOCK
+    chmod +x "$confinst_tmpdir/confinst"
+    set +e
+    output="$(XDG_STATE_HOME="$confinst_tmpdir/state" SETUP_LOG="" sh -c "set -e
+SCRIPTS_DIR='$confinst_tmpdir'
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS run_confinst")
+run_confinst
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$confinst_tmpdir"
+    assert_status 0 &&
+    assert_output_is "Linking the conf repo's files
+Moved /home/user/.bashrc to /home/user/.bashrc.20261105
+Warning: confinst: Error creating /home/user/.vimrc, skipping /home/user/conf/vimrc
+Linked 2 files
+BOOTSTRAP_CONTINUED"
+}
+
 # A log that can't be made is a warning, and brew's output is shown instead:
 # under dash, a failed redirection on : used to end the whole bootstrap.
 test_unwritable_brew_log_is_not_fatal() {
     log_tmpdir="$(mktemp -d)"
-    mkdir -p "$log_tmpdir/setup/brew.log"
+    mkdir -p "$log_tmpdir/setup/setup.log"
     printf '#!/bin/sh\necho "==> Pouring $2"\n' > "$log_tmpdir/brew"
     chmod +x "$log_tmpdir/brew"
     set +e
-    output="$(PATH="$log_tmpdir:$PATH" XDG_STATE_HOME="$log_tmpdir" SETUP_BREW_LOG="" sh -c "set -e
-$(extract_functions "info warn note_problem start_brew_log brew_logged")
+    output="$(PATH="$log_tmpdir:$PATH" XDG_STATE_HOME="$log_tmpdir" SETUP_LOG="" sh -c "set -e
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
 brew_logged install zoxide
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     rm -rf "$log_tmpdir"
     assert_status 0 &&
-    assert_output_contains "to keep Homebrew's output in, so it's shown instead" &&
+    assert_output_contains "to keep the installers' output in, so it's shown instead" &&
     assert_output_contains "==> Pouring zoxide" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
@@ -2055,7 +2243,8 @@ test_macos_brew_failure_shows_what_brew_said() {
     assert_status 0 &&
     assert_output_contains "'brew install zoxide' exited with status 1" &&
     assert_output_contains "    Error: No available formula with the name zoxide." &&
-    assert_output_contains "Nothing new from Homebrew"
+    assert_output_contains "Failed: atool autoconf" &&
+    assert_output_contains " zoxide zsh-autosuggestions lf node typescript android-platform-tools kitty iterm2"
 }
 
 # setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
@@ -2257,7 +2446,7 @@ run_local_bin_check() {
     fi
     set +e
     output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
-$(extract_functions "info warn note_problem local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
 install_shell_tools
 install_shell_tools
 echo \"blocked=\$LOCAL_BIN_BLOCKED\"" 2>&1)"
@@ -2368,7 +2557,7 @@ GITHUB_HOST=ghe.corp.example.com
 SCRIPTS_DIR='$offer_tmpdir/scripts'
 CONF_DIR='$offer_tmpdir/conf'
 ROOT_DIR='$offer_tmpdir/src/root'
-$(extract_functions "info warn note_problem offer_ssh_remotes")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS offer_ssh_remotes")
 offer_ssh_remotes
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2429,7 +2618,7 @@ SSH=yes
 GITHUB_MIRROR=yes
 GITHUB_HOST=ghe.corp.example.com
 GITHUB_PREFIX_SSH=no
-$(extract_functions "info warn note_problem generate_ssh_key")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2482,7 +2671,7 @@ MOCK
     output="$(PATH="$cop_tmpdir/bin:$PATH" MOCK_ORIGIN="$cop_origin" \
         sh -c "set -e
 GITHUB_MIRROR=$cop_mirror
-$(extract_functions "info warn note_problem redact_url_credentials canonical_remote clone_or_pull")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS redact_url_credentials canonical_remote clone_or_pull")
 clone_or_pull '$cop_repo' '$cop_tmpdir/scripts' $cop_from_prefix
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3026,7 +3215,7 @@ SPEC
     output="$(GPU_CALLS="$gpu_tmpdir/calls" SETUP_SYSFS="$gpu_sys" SETUP_UDEV_RULES="$gpu_rules" \
         sh -c "set -e
 OS=$gpu_os
-$(extract_functions "info warn note_problem has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
 $gpu_stub
 keep_display_gpu_awake
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -3283,7 +3472,7 @@ OS=$zas_os
 $zas_consts
 ZSH_AUTOSUGGESTIONS_REPO='file://$zas_tmp/repo'
 ZSH_AUTOSUGGESTIONS_COMMIT='$zas_pinned'
-$(extract_functions "info warn note_problem install_zsh_autosuggestions_home")
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS install_zsh_autosuggestions_home")
 install_zsh_autosuggestions_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3601,6 +3790,13 @@ run_test "a failing brew still attempts the later macOS steps" \
 run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
 run_test "setup logs brew's output on a Mac and says what it installed" test_macos_brew_output_is_logged_and_summarized
 run_test "a failed brew install shows what brew said" test_macos_brew_failure_shows_what_brew_said
+run_test "a package run says what it installed, upgraded and failed" test_package_summary_says_what_changed
+run_test "a package run with nothing new says so" test_package_summary_with_nothing_new
+run_test "a long package list is still summarized" test_package_summary_of_a_long_package_list
+run_test "several versions of one package aren't an upgrade" test_package_summary_with_several_versions_of_one_package
+run_test "apt is quiet and asks nothing" test_apt_is_quiet_and_asks_nothing
+run_test "apt runs where sudo won't set its frontend" test_apt_runs_where_sudo_wont_set_its_frontend
+run_test "confinst's links are counted and its errors shown" test_confinst_is_counted_and_its_errors_shown
 run_test "a brew log that can't be made isn't fatal" test_unwritable_brew_log_is_not_fatal
 run_test "brew installs don't stop for confirmation" \
     test_brew_installs_do_not_ask_for_confirmation
