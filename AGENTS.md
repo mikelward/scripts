@@ -1,7 +1,7 @@
 ---
 trigger: always_on
 alwaysApply: true
-last_modified: 2026-10-26
+last_modified: 2026-11-05
 ---
 
 # scripts
@@ -100,6 +100,8 @@ Shared by every mikelward repo and the user-level agent config; canonical in mik
 - **Privacy**. No user data (personal paths, hostnames, tokens, keys, private remotes)
   leaves this machine; use placeholders.
 - **Portability**. Flag anything that won't run on Linux and macOS.
+- **UI text**. Words a person would say, as few as do the job. Say what a setting does;
+  leave out what works by default, what the screen already shows, and how it works.
 
 ## Project
 
