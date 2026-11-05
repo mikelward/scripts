@@ -36,6 +36,9 @@ check "the build is current" test "$(readlink -f "$T/opt/tidewm/current")" = "$(
 check "tidewm is linked onto PATH, through current" \
     test "$(readlink "$T/usr-local-bin/tidewm")" = "$T/opt/tidewm/current/bin/tidewm"
 check "the build is root's once it's linked" has "$calls" "sudo chown -R 0:0 $(build)"
+check "its build dependencies are a package step" has "$output" "Installing tidewm's build dependencies
+Installed: "
+check "its build's output isn't shown" lacks "$output" "install -m 644"
 # A second run with the same pin doesn't rebuild.
 : > "$CALLS"
 run
@@ -72,6 +75,13 @@ check "a failed make doesn't fail setup" test "$status" -eq 0
 check "a failed make is reported" has "$output" "building tidewm failed"
 check "a failed make leaves nothing linked" test ! -e "$T/usr-local-bin/tidewm"
 check "a failed make leaves no marker" test -z "$(find "$T/opt/tidewm" -name setup-tide-build 2>/dev/null)"
+teardown
+
+# Build dependencies that won't install are named, and nothing is built.
+setup; ARGS=(--tidewm); run FAKE_APT_GET_FAILS=1
+check "failed build dependencies are named" \
+    has "$output" "could not install tidewm's build dependencies: build-essential pkgconf git libwlroots-0.20-dev"
+check "and tidewm isn't built" lacks "$calls" "git clone --quiet https://github.com/mikelward/tidewm.git"
 teardown
 
 # Ubuntu 26.04 has no wlroots 0.20, so tidewm isn't built there.

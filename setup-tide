@@ -9,8 +9,10 @@
 #   and GTK portals, Go (to build tide-grant), and, until the
 #   Quickshell shell lands, the transitional owners (waybar, swaync) and the
 #   tools conf's Hyprland config calls. A package the distro doesn't have
-#   (swww on Ubuntu 26.04) is reported and the rest still install. Fedora
-#   gets Hyprland and uwsm from the lionheartp/Hyprland COPR;
+#   is reported and the rest still install; swww and swaybg each draw the
+#   wallpaper, so one missing beside the other (swww on Ubuntu 26.04) isn't
+#   reported. Fedora gets Hyprland and uwsm from the lionheartp/Hyprland
+#   COPR;
 # - adds you to the video group, which the brightness keys need where
 #   brightnessctl writes the backlight itself (Debian, Ubuntu);
 # - installs Quickshell, which draws tide's own shell (the bar so far),
@@ -96,6 +98,21 @@
 # a mirror instead, as setup's --github does for its own repos, and setup
 # passes its prefix on. Only the host changes: each source build still
 # checks out its pinned commit, so a mirror can't swap what's built.
+#
+# What the package managers, tide's make and systemctl say goes to
+# ~/.local/state/setup/setup.log, the log setup starts each run and this
+# adds to (it starts the log itself when it's run on its own), and each step
+# shows a line or two. The Quickshell and Hyprland source builds keep their
+# own logs, in ~/.local/state/setup-tide, as before. A package step shows a header and what
+# changed, as setup's do:
+#
+#   Installing tide's apt packages
+#   Installed: hyprland uwsm waybar (and 12 dependencies)
+#   Upgraded: jq
+#   Failed: frob
+#
+# A failed command shows the end of what it said, and where the rest is.
+# Warnings, errors and what's left for you to do show as before.
 
 INSTALL=yes
 SUDO=yes
@@ -376,7 +393,14 @@ is_command() {
 # --no-sudo skip is handled by the caller's SUDO guard below, so this wrapper
 # only needs the reactive path -- but it still honours SUDO=no defensively.
 sudo_or_warn() {
-    _sudo_name=${1##*/}
+    # Named for the command, after any VAR=value sudo sets for it.
+    _sudo_name=
+    for _sudo_arg; do
+        case "$_sudo_arg" in
+            *=*) ;;
+            *) _sudo_name=${_sudo_arg##*/}; break ;;
+        esac
+    done
     if test "$SUDO" = no; then
         warn "skipping 'sudo $_sudo_name' (--no-sudo)"
         return 1
@@ -386,13 +410,26 @@ sudo_or_warn() {
         return 1
     }
 
-    if sudo "$@" 2>"$_sudo_stderr"; then
-        cat "$_sudo_stderr" >&2
+    # sudo_logged sets _sudo_out to the log, for all of the output, which
+    # is the user's to write, not root's. Without it, stdout is left as it
+    # is.
+    _sudo_status=0
+    if test -n "${_sudo_out:-}"; then
+        # shellcheck disable=SC2024
+        sudo "$@" >>"$_sudo_out" 2>"$_sudo_stderr" || _sudo_status=$?
+    else
+        sudo "$@" 2>"$_sudo_stderr" || _sudo_status=$?
+    fi
+    if test "$_sudo_status" -eq 0; then
+        if test -n "${_sudo_out:-}"; then
+            cat "$_sudo_stderr" >>"$_sudo_out"
+        else
+            cat "$_sudo_stderr" >&2
+        fi
         rm -f "$_sudo_stderr"
         return 0
-    else
-        _sudo_status=$?
     fi
+    test -z "${_sudo_out:-}" || cat "$_sudo_stderr" >>"$_sudo_out"
     _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
     rm -f "$_sudo_stderr"
 
@@ -564,14 +601,283 @@ detect_os() {
     fi
 }
 
+# --- Quiet installs ---
+
+# What the package managers and the rest say -- apt's, dnf's and pacman's
+# lines per package, tide's make, systemctl's links -- goes to one log per
+# run (the source builds keep their own; see build_logged), and the run
+# shows a line or two per step. These are setup's own: the outermost of setup
+# and setup-tide starts the log, and when setup runs this, it adds to
+# setup's, through the exported path.
+start_setup_log() {
+    test -z "${SETUP_LOG:-}" || return 0
+    SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
+    # printf, not :, which is a special builtin: dash exits when its
+    # redirection fails, even under if.
+    if ! mkdir -p "${SETUP_LOG%/*}" || ! printf "" > "$SETUP_LOG"; then
+        warn "couldn't make $SETUP_LOG to keep the installers' output in, so it's shown instead"
+        SETUP_LOG=-
+    fi
+    export SETUP_LOG
+}
+
+# log_mark DESCRIPTION: notes in the log what runs next, and sets _log_start
+# to where its output begins, for log_failure.
+log_mark() {
+    _log_start=$(($(wc -l < "$SETUP_LOG") + 2))
+    printf '+ %s\n' "$1" >> "$SETUP_LOG"
+}
+
+# log_failure DESCRIPTION STATUS: shows the end of what the command
+# log_mark noted said, which is where the reason is.
+log_failure() {
+    printf "'%s' exited with status %s; the end of what it said (all of it is in %s):\n" \
+        "$1" "$2" "$SETUP_LOG" >&2
+    tail -n "+$_log_start" "$SETUP_LOG" | tail -n 5 | sed 's/^/    /' >&2
+}
+
+# run_logged COMMAND...: runs COMMAND with its output added to the log. A
+# failure shows what it said; the caller says what's lost.
+run_logged() {
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        "$@"
+        return
+    fi
+    log_mark "$*"
+    "$@" >> "$SETUP_LOG" 2>&1 && return 0
+    _rl_status=$?
+    log_failure "$*" "$_rl_status"
+    return "$_rl_status"
+}
+
+# sudo_logged COMMAND...: sudo_or_warn COMMAND, with its output in the log.
+# apt-get runs without asking anything: nobody would see the question in
+# the log. A config file changed here and in the package keeps the version
+# here, apt's own default answer.
+sudo_logged() {
+    #
+    # debconf's questions are kept away with DEBIAN_FRONTEND, which goes to
+    # sudo as an argument so that apt-get stays the command it runs: a sudo
+    # rule that allows only apt-get still lets it. Such a rule may not let
+    # the variable be set, though, so apt_frontend_allowed asks once, and
+    # without it apt gets no input, which is the most that's left (apt's
+    # dpkg-preconfigure opens the terminal itself). dpkg's questions about
+    # changed config files take the default answer the options name. sudo
+    # asks for a password on the terminal, not on stdin.
+    if test "$1" = apt-get; then
+        set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+        if apt_frontend_allowed; then
+            set -- DEBIAN_FRONTEND=noninteractive "$@"
+        fi
+    fi
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        sudo_or_warn "$@" </dev/null
+        return
+    fi
+    log_mark "sudo $*"
+    _sudo_out=$SETUP_LOG
+    sudo_or_warn "$@" </dev/null && _sl_status=0 || _sl_status=$?
+    _sudo_out=
+    test "$_sl_status" -eq 0 && return 0
+    # --no-sudo ran nothing, so there's nothing to show.
+    test "$SUDO" = no || log_failure "sudo $*" "$_sl_status"
+    return "$_sl_status"
+}
+
+# apt_frontend_allowed: whether sudo lets apt-get run with DEBIAN_FRONTEND
+# set, asked once with a command that changes nothing.
+apt_frontend_allowed() {
+    if test -z "${_apt_frontend:-}"; then
+        if test "$SUDO" != no \
+                && sudo DEBIAN_FRONTEND=noninteractive apt-get --version </dev/null >/dev/null 2>&1; then
+            _apt_frontend=yes
+        else
+            _apt_frontend=no
+        fi
+    fi
+    test "$_apt_frontend" = yes
+}
+
+# --- Package summaries ---
+
+# A run of installs from one package manager shows a header, then what
+# changed, rather than a screenful a package, as setup's do:
+#
+#   Installing tide's apt packages
+#   Installed: hyprland uwsm waybar (and 12 dependencies)
+#   Upgraded: jq
+#   Failed: frob
+#
+# pkg_begin MANAGER [HEADER] starts one, for apt, dnf or pacman;
+# apt_install, dnf_install and pacman_install install into it; pkg_end says
+# what changed.
+
+# pkg_manager: the package manager here, as pkg_begin names it, or nothing
+# where there's none setup-tide knows.
+pkg_manager() {
+    case "$(detect_os)" in
+        debian) echo apt ;;
+        redhat) echo dnf ;;
+        arch) echo pacman ;;
+    esac
+}
+
+# pkg_versions MANAGER: "name version" for each installed package, one a
+# line, or nothing when the package manager can't say.
+pkg_versions() {
+    case "$1" in
+        apt)
+            { dpkg-query -W -f '${db:Status-Abbrev} ${Package} ${Version}\n' 2>/dev/null || :; } \
+                | awk '$1 == "ii" { print $2, $3 }'
+            ;;
+        dnf) rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}\n' 2>/dev/null || : ;;
+        pacman) pacman -Q 2>/dev/null || : ;;
+    esac
+}
+
+# pkg_begin MANAGER [HEADER]: says HEADER, or "Installing MANAGER packages",
+# and notes what's installed, for pkg_end. A MANAGER of nothing (see
+# pkg_manager) starts nothing.
+pkg_begin() {
+    _pkg_manager=$1
+    test -n "$_pkg_manager" || return 0
+    _pkg_label=$1
+    info "${2:-Installing $_pkg_label packages}"
+    # A file, not a variable for awk's environment: a workstation's list of
+    # packages can be longer than Linux lets one environment string be.
+    if ! _pkg_before=$(mktemp "${TMPDIR:-/tmp}/setup-packages-XXXXXX"); then
+        warn "couldn't make a file to list the installed packages in, so the run won't say what changed"
+        _pkg_manager=
+        return 0
+    fi
+    pkg_versions "$1" > "$_pkg_before"
+    _pkg_asked=
+    _pkg_failed=
+}
+
+# pkg_note LIST NAME...: adds the names among NAME, not the options, to
+# _pkg_asked or _pkg_failed.
+pkg_note() {
+    _pk_list=$1
+    shift
+    for _pk_name; do
+        case "$_pk_name" in
+            -*) ;;
+            *)
+                if test "$_pk_list" = asked; then
+                    _pkg_asked="$_pkg_asked $_pk_name"
+                else
+                    _pkg_failed="$_pkg_failed $_pk_name"
+                fi
+                ;;
+        esac
+    done
+}
+
+# apt_install, dnf_install, pacman_install NAME...: install NAME, quietly
+# (see sudo_logged), for pkg_end to report.
+apt_install() {
+    pkg_note asked "$@"
+    sudo_logged apt-get install -y "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+dnf_install() {
+    pkg_note asked "$@"
+    sudo_logged dnf install -y "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+pacman_install() {
+    pkg_note asked "$@"
+    sudo_logged pacman -S --needed --noconfirm "$@" && return 0
+    _pi_status=$?
+    pkg_note failed "$@"
+    return "$_pi_status"
+}
+
+# pkg_end: says what the installs since pkg_begin changed. Installed names
+# the packages asked for, and counts what they pulled in; Upgraded names
+# any package whose version moved; Failed names each package asked for in
+# a failed install that still isn't there -- one unknown name fails a whole
+# apt, dnf or pacman transaction, but the rest may have been installed
+# before.
+pkg_end() {
+    test -n "${_pkg_manager:-}" || return 0
+    pkg_versions "$_pkg_manager" | ASKED="$_pkg_asked" FAILED="$_pkg_failed" awk '
+        # The names, or how many when there are more than cap (0: no cap).
+        function list(names, n, cap,    i, out) {
+            if (cap && n > cap) return n " packages"
+            for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") names[i]
+            return out
+        }
+        BEGIN {
+            nasked = split(ENVIRON["ASKED"], asked, " ")
+            for (i = 1; i <= nasked; i++) wanted[asked[i]] = 1
+            nfailed = split(ENVIRON["FAILED"], failedasked, " ")
+        }
+        # The first file is the list from before. A name can come with
+        # more than one version -- Fedora keeps several kernels -- so each
+        # name has a set of versions, and it changed when the set did.
+        FILENAME != "-" && NF {
+            version = $0; sub(/^[^ ]+ ?/, "", version)
+            had[$1] = 1
+            if (!before[$1, version]++) nbefore[$1]++
+            next
+        }
+        NF {
+            name = $1; version = $0; sub(/^[^ ]+ ?/, "", version)
+            if (!now[name]++) names[++nnames] = name
+            if (!after[name, version]++) {
+                nafter[name]++
+                if (!before[name, version]) moved[name] = 1
+            }
+        }
+        END {
+            for (i = 1; i <= nasked; i++) {
+                name = asked[i]
+                if (now[name] && !had[name] && !counted[name]++) new[++nnew] = name
+            }
+            for (i = 1; i <= nnames; i++) {
+                name = names[i]
+                if (!had[name]) {
+                    if (!wanted[name]) deps++
+                } else if (moved[name] || nafter[name] != nbefore[name]) {
+                    up[++nup] = name
+                }
+            }
+            for (i = 1; i <= nfailed; i++) {
+                name = failedasked[i]
+                if (!now[name] && !gone[name]++) failed[++nfail] = name
+            }
+            if (nnew || deps) {
+                line = "Installed: " (nnew ? list(new, nnew, 0) : "")
+                if (deps) line = line (nnew ? " (and " : "") deps (deps == 1 ? " dependency" : " dependencies") (nnew ? ")" : "")
+                print line
+            }
+            if (nup) print "Upgraded: " list(up, nup, 15)
+            if (nfail) print "Failed: " list(failed, nfail, 0)
+            if (!nnew && !deps && !nup && !nfail) print "Nothing new to install"
+        }' "$_pkg_before" -
+    rm -f "$_pkg_before"
+    _pkg_manager=
+}
+
 # --- Packages ---
 
-# pkg_install installs packages with the distro's package manager.
+# pkg_install installs packages with the distro's package manager, quietly,
+# for pkg_end to report.
 pkg_install() {
     case "$(detect_os)" in
-        debian) sudo_or_warn apt-get install -y "$@" ;;
-        redhat) sudo_or_warn dnf install -y "$@" ;;
-        arch) sudo_or_warn pacman -S --needed --noconfirm "$@" ;;
+        debian) apt_install "$@" ;;
+        redhat) dnf_install "$@" ;;
+        arch) pacman_install "$@" ;;
         *) return 1 ;;
     esac
 }
@@ -624,16 +930,16 @@ pacman_known() {
 # dnf-command(copr), and installing it again is a no-op.
 enable_copr() {
     pkg_install 'dnf-command(copr)' || return 1
-    sudo_or_warn dnf copr enable -y "$1" || return 2
+    sudo_logged dnf copr enable -y "$1" || return 2
 }
 
-# install_all installs the packages it can and prints the ones it couldn't,
-# failing if there are any. apt, dnf and pacman all refuse the lot over one
-# name they don't know (swww isn't in Ubuntu 26.04 or Fedora), so it asks
-# which exist first, and installs those in one go. On Arch a package
-# installed from outside the repositories (the AUR) is left as it is:
-# pacman -S would refuse it too. The package manager's own output goes to
-# stderr, so stdout carries only the list.
+# install_all installs the packages it can and sets not_installed to the
+# ones it couldn't, failing if there are any. apt, dnf and pacman all refuse
+# the lot over one name they don't know (swww isn't in Ubuntu 26.04 or
+# Fedora), so it asks which exist first, and installs those in one go. On
+# Arch a package installed from outside the repositories (the AUR) is left
+# as it is: pacman -S would refuse it too. It runs in this shell, not
+# $(...), so pkg_end hears what it asked for (see pkg_note).
 install_all() {
     _install="$*"
     _missing=
@@ -681,9 +987,9 @@ install_all() {
     fi
     if test -n "$_install"; then
         # shellcheck disable=SC2086  # word-split the package list
-        pkg_install $_install >&2 || _missing="$_missing $_install"
+        pkg_install $_install || _missing="$_missing $_install"
     fi
-    printf '%s\n' "${_missing# }"
+    not_installed=${_missing# }
     test -z "$_missing"
 }
 
@@ -741,9 +1047,10 @@ decide_hyprland_build() {
 }
 
 # install_packages sets DISTRO_HYPRLAND to yes when it installed the
-# distro's Hyprland.
+# distro's Hyprland. It's one package step, summarized (see pkg_end).
 install_packages() {
     DISTRO_HYPRLAND=no
+    pkg_begin "$(pkg_manager)" "Installing tide's $(pkg_manager) packages"
     # hyprlock is the lock outside the tide session, and in it the
     # fallback for a tide-lock that can't run (tide SPEC.md §10). It's a
     # separate program, so the distro's works beside a source-built
@@ -778,9 +1085,9 @@ install_packages() {
             return 0
             ;;
     esac
-    installed=yes
     # shellcheck disable=SC2086  # word-split the package list
-    missing=$(install_all $common $extra) || installed=no
+    install_all $common $extra || :
+    missing=$not_installed
     case " $missing " in
         *" hyprland "*) ;;
         *) test "$BUILD_NOW" = yes || DISTRO_HYPRLAND=yes ;;
@@ -788,7 +1095,7 @@ install_packages() {
     # satty is screenshot's Annotate action, offered only where it's
     # installed. It's asked for on its own: not every distro packages it,
     # and dnf and pacman refuse a whole transaction over one unknown name.
-    if ! install_all satty >/dev/null; then
+    if ! install_all satty; then
         info "couldn't install satty; screenshots offer Annotate once it's installed"
     fi
     # waybar, the bar while tide's own can't run, draws its icons with Nerd
@@ -802,19 +1109,19 @@ install_packages() {
     esac
     if test -z "$nerd_font"; then
         info "This distro doesn't package Symbols Nerd Font, so waybar shows no icons; install it from nerdfonts.com for them"
-    elif ! install_all "$nerd_font" >/dev/null; then
+    elif ! install_all "$nerd_font"; then
         info "couldn't install $nerd_font (it isn't in every release), so waybar shows no icons; install Symbols Nerd Font from nerdfonts.com for them"
     fi
     # cliphist keeps the clipboard history that Super+V's picker lists
     # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
     # without it still gets the rest.
-    if ! install_all cliphist >/dev/null; then
+    if ! install_all cliphist; then
         warn "couldn't install cliphist, so Super+V's picker keeps no clipboard history; its Characters tab still works"
     fi
     # rbw is the Bitwarden client behind the picker's Fill tab on
     # Super+Shift+V (tide SPEC.md §8.4). On its own: Fedora doesn't package
     # it.
-    if ! install_all rbw >/dev/null; then
+    if ! install_all rbw; then
         info "couldn't install rbw (Fedora doesn't package it), so Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
     fi
     # The Settings pages' *advanced* buttons open these (tide SPEC.md §16):
@@ -826,20 +1133,34 @@ install_packages() {
         *) nm_editor=nm-connection-editor ;;
     esac
     for tool in pavucontrol "$nm_editor" blueman nwg-displays; do
-        if ! install_all "$tool" >/dev/null; then
+        if ! install_all "$tool"; then
             info "couldn't install $tool; its Settings page's advanced button works once it's installed"
         fi
     done
-    if test "$installed" = no; then
+    # swww and swaybg each draw the wallpaper, so either is enough: one
+    # missing beside the other (swww, on Ubuntu 26.04 and Fedora) isn't a
+    # loss, and isn't named. Only both missing is.
+    wallpaper=both
+    case " $missing " in
+        *" swww "*) case " $missing " in *" swaybg "*) wallpaper=none ;; *) wallpaper=one ;; esac ;;
+        *" swaybg "*) wallpaper=one ;;
+    esac
+    if test "$wallpaper" = one; then
+        kept=
+        for pkg in $missing; do
+            case "$pkg" in
+                swww | swaybg) ;;
+                *) kept="$kept $pkg" ;;
+            esac
+        done
+        missing=${kept# }
+    fi
+    if test -n "$missing"; then
         # shellcheck disable=SC2086  # word-split the package list
         warn "could not install:$(printf ' %s' $missing); install them manually"
-        case " $missing " in
-            *" swaybg "*) case " $missing " in
-                *" swww "*) warn "without swww or swaybg there's no wallpaper" ;;
-            esac ;;
-            *" swww "*) info "swww isn't packaged here; swaybg shows the wallpaper instead" ;;
-        esac
+        test "$wallpaper" != none || warn "without swww or swaybg there's no wallpaper"
     fi
+    pkg_end
 }
 
 # join_video_group adds this user to the video group. brightnessctl writes
@@ -860,9 +1181,12 @@ join_video_group() {
 }
 
 # install_quickshell installs Quickshell in a step of its own, so a distro
-# that doesn't package it costs only tide's bar, not the rest.
+# that doesn't package it costs only tide's bar, not the rest. Installed
+# from the distro, it's a package step (see pkg_end); built, the build
+# installs its dependencies in a step of their own.
 install_quickshell() {
     install_or_build_quickshell
+    pkg_end
     # Whichever way that ended, a source build made for a Qt that's since
     # changed would crash rather than let waybar take over.
     if test "$(detect_os)" = debian && ! current_quickshell_matches_qt; then
@@ -886,6 +1210,8 @@ install_or_build_quickshell() {
         debian) effects=qml6-module-qtquick-effects ;;
         arch) ;;
         redhat)
+            # The COPR's plugin is a package too.
+            pkg_begin dnf "Installing Quickshell"
             copr_status=0
             enable_copr "$QUICKSHELL_COPR" || copr_status=$?
             case $copr_status in
@@ -924,8 +1250,10 @@ install_or_build_quickshell() {
             return 0
         fi
     fi
+    test "$(detect_os)" = redhat || pkg_begin "$(pkg_manager)" "Installing Quickshell"
     # shellcheck disable=SC2086  # $effects is one name or none
-    missing=$(install_all quickshell $effects) && return_ok=yes || return_ok=no
+    install_all quickshell $effects && return_ok=yes || return_ok=no
+    missing=$not_installed
     # The packaged qs, in /usr/bin, would lose to links from a build, even
     # when an optional module didn't install beside it.
     case " $missing " in
@@ -1057,10 +1385,11 @@ remove_legacy_builds() {
 # --- Logged builds ---
 
 # start_build_log NAME: makes an empty $BUILD_LOG_DIR/NAME-build.log for a
-# build to write to, and sets build_log to it.
+# build to write to, and sets build_log to it. printf, not :, which is a
+# special builtin: dash exits when its redirection fails, even under if.
 start_build_log() {
     build_log="$BUILD_LOG_DIR/$1-build.log"
-    if ! mkdir -p "$BUILD_LOG_DIR" || ! : > "$build_log"; then
+    if ! mkdir -p "$BUILD_LOG_DIR" || ! printf "" > "$build_log"; then
         warn "couldn't make $build_log to keep the $1 build's output in"
         return 1
     fi
@@ -1092,9 +1421,14 @@ build_logged() {
 # none changed only relinks.
 build_quickshell() {
     info "$1; building $QUICKSHELL_TAG from source"
+    pkg_begin apt "Installing Quickshell's build dependencies"
+    deps_status=0
     # shellcheck disable=SC2086  # word-split the package list
-    if ! missing=$(install_all $QUICKSHELL_BUILD_DEPS); then
-        warn "could not install Quickshell's build dependencies:$(printf ' %s' $missing)"
+    install_all $QUICKSHELL_BUILD_DEPS || deps_status=$?
+    pkg_end
+    if test "$deps_status" -ne 0; then
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "could not install Quickshell's build dependencies:$(printf ' %s' $not_installed)"
         return 1
     fi
     # shellcheck disable=SC2086  # word-split the package list
@@ -1278,9 +1612,14 @@ build_tidewm() {
     deps=$(tidewm_build_deps) || return 1
     tw_short=$(printf '%.12s' "$TIDEWM_COMMIT")
     info "Building tidewm $tw_short from source"
+    pkg_begin "$(pkg_manager)" "Installing tidewm's build dependencies"
+    deps_status=0
     # shellcheck disable=SC2086  # word-split the package list
-    if ! missing=$(install_all $deps); then
-        warn "could not install tidewm's build dependencies:$(printf ' %s' $missing)"
+    install_all $deps || deps_status=$?
+    pkg_end
+    if test "$deps_status" -ne 0; then
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "could not install tidewm's build dependencies:$(printf ' %s' $not_installed)"
         return 1
     fi
     tw_record=$(printf '%s\n' "$TIDEWM_REPO $TIDEWM_COMMIT" "make XWAYLAND=$TIDEWM_XWAYLAND XLIBS=$TIDEWM_XLIBS")
@@ -1390,9 +1729,14 @@ build_hyprland() {
         return
     fi
     info "Building Hyprland from source into $install_dir (apt's is older than $MIN_HYPRLAND; this takes a while)"
+    pkg_begin apt "Installing Hyprland's build dependencies"
+    deps_status=0
     # shellcheck disable=SC2086  # word-split the package list
-    if ! missing=$(install_all $HYPRLAND_BUILD_DEPS); then
-        warn "could not install Hyprland's build dependencies:$(printf ' %s' $missing)"
+    install_all $HYPRLAND_BUILD_DEPS || deps_status=$?
+    pkg_end
+    if test "$deps_status" -ne 0; then
+        # shellcheck disable=SC2086  # word-split the package list
+        warn "could not install Hyprland's build dependencies:$(printf ' %s' $not_installed)"
         return 1
     fi
     # Our own libraries come first, ahead of any the distro has.
@@ -1426,7 +1770,9 @@ build_hyprland() {
             info "Already built $name $tag"
             continue
         fi
-        build_component "$name" "$url" "$tag" "$commit" "$kind" && : > "$stamp" || exit 1
+        # printf, not :, which is a special builtin: dash exits when its
+        # redirection fails.
+        build_component "$name" "$url" "$tag" "$commit" "$kind" && printf "" > "$stamp" || exit 1
     done || {
         warn "building Hyprland failed; the sources are in $HYPRLAND_SRC, and a rerun resumes from the step that failed"
         return 1
@@ -1621,15 +1967,17 @@ fetch_tide() {
         # The existing checkout is enough to install, so a failed pull (no
         # network, say) warns rather than ending the run. A checkout cloned
         # through the mirror still names GitHub as its origin, so the pull
-        # goes through the mirror too.
-        git_github -C "$TIDE_DIR" pull --ff-only \
+        # goes through the mirror too. Quiet, as setup's pulls are: git
+        # still says what went wrong.
+        git_github -C "$TIDE_DIR" pull --quiet --ff-only \
             || warn "could not update $TIDE_DIR; installing the existing checkout"
     else
         # Not naming the URL: one passed with credentials in it would land in
-        # the terminal and any captured log.
+        # the terminal and any captured log, so the clone isn't logged
+        # either, just quiet, as setup's are.
         info "Cloning tide into $TIDE_DIR"
         mkdir -p "$(dirname "$TIDE_DIR")"
-        git_github clone "$TIDE_REPO" "$TIDE_DIR"
+        git_github clone --quiet "$TIDE_REPO" "$TIDE_DIR"
     fi
 }
 
@@ -1646,10 +1994,10 @@ install_tide() {
         error "tide needs Go $MIN_GO or newer to build tide-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
     fi
     info "Installing tide's user files"
-    make -C "$TIDE_DIR" install GO="$GO"
+    run_logged make -C "$TIDE_DIR" install GO="$GO"
     if test "$INSTALL" = yes; then
         info "Installing the tide session entry and commands under /usr"
-        sudo_or_warn make -C "$TIDE_DIR" install-session PREFIX=/usr \
+        sudo_logged make -C "$TIDE_DIR" install-session PREFIX=/usr \
             || warn "could not install the session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
     fi
 }
@@ -1710,7 +2058,7 @@ mask_distro_units() {
         warn "couldn't reach the systemd user manager${probe:+ ($probe)}; masking $units without stopping them, so a running one lasts until the next login"
     fi
     # shellcheck disable=SC2086  # word-split the unit list
-    systemctl --user mask $now $units \
+    run_logged systemctl --user mask $now $units \
         || warn "couldn't mask $units; they can start under Plasma, and another notification daemon can take tide's notifications"
 }
 
@@ -2081,12 +2429,21 @@ enable_unit() {
         warn "no systemd user manager; run 'systemctl --user enable tide.service tide-clipboard.service' in your session"
         return 0
     fi
-    systemctl --user daemon-reload
-    systemctl --user enable tide.service
+    run_logged systemctl --user daemon-reload
+    # A failure, which shows what systemctl said, ends the run by name, as
+    # it ends without one under set -e; --ignore-errors carries on past it,
+    # as past any other.
+    if ! run_logged systemctl --user enable tide.service; then
+        if test "$IGNORE_ERRORS" = yes; then
+            warn "couldn't enable tide.service, so the tide session won't start its shell"
+        else
+            error "couldn't enable tide.service, so the tide session won't start its shell"
+        fi
+    fi
     # The clipboard history behind Super+C's picker (tide SPEC.md §8.4).
     # Apart from tide.service, so a tide checkout too old to ship it costs
     # only the history.
-    systemctl --user enable tide-clipboard.service \
+    run_logged systemctl --user enable tide-clipboard.service \
         || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup again"
 }
 
@@ -2222,7 +2579,8 @@ valid_display_manager() {
     return 1
 }
 
-# install_greetd installs the packages the greeter needs from the distro.
+# install_greetd installs the packages the greeter needs from the distro,
+# in a package step (see pkg_end).
 install_greetd() {
     case "$(detect_os)" in
         debian | redhat | arch) ;;
@@ -2231,7 +2589,8 @@ install_greetd() {
             return 0
             ;;
     esac
-    if ! install_all greetd >/dev/null; then
+    pkg_begin "$(pkg_manager)" "Installing greetd"
+    if ! install_all greetd; then
         warn "couldn't install greetd, so tide's greeter can't be the login screen"
     fi
     # PAM's gnome-keyring module, which unlocks the keyring at login. Arch
@@ -2243,10 +2602,11 @@ install_greetd() {
         arch) _keyring=gnome-keyring ;;
     esac
     # shellcheck disable=SC2086  # word-split the package list
-    if ! _missing=$(install_all $_keyring); then
+    if ! install_all $_keyring; then
         # shellcheck disable=SC2086  # word-split the package list
-        warn "couldn't install$(printf ' %s' $_missing), so logging in won't unlock the keyring"
+        warn "couldn't install$(printf ' %s' $not_installed), so logging in won't unlock the keyring"
     fi
+    pkg_end
 }
 
 # is_system_account NAME: whether NAME is a system account, which is what
@@ -5360,7 +5720,7 @@ restore_display_manager() {
     # alias to it, so one whose alias was made by hand leaves greetd until
     # it's the display manager again, rather than none.
     if test "$1" != none; then
-        if ! sudo_or_warn systemctl enable --force "$1"; then
+        if ! sudo_logged systemctl enable --force "$1"; then
             warn "couldn't put back $1; run '$(way_back "$1")'"
             return 1
         fi
@@ -5373,7 +5733,7 @@ restore_display_manager() {
             return 1
         fi
     fi
-    if ! sudo_or_warn systemctl disable greetd.service; then
+    if ! sudo_logged systemctl disable greetd.service; then
         warn "couldn't put back $1; run '$(way_back "$1")'"
         return 1
     fi
@@ -5501,14 +5861,14 @@ setup_greeter() {
         not_switching "couldn't note it in $PREVIOUS_DM_FILE, which is the way back"
         return 0
     fi
-    if ! sudo_or_warn systemctl enable --force greetd.service; then
+    if ! sudo_logged systemctl enable --force greetd.service; then
         # A failed enable can still have made some of the links greetd's
         # unit names, a WantedBy=, before failing on the alias (a plain
         # display-manager.service file, say), and those would start it
         # beside the display manager, so they go again. One that took the
         # alias, not_switching puts back, disabling greetd as it does.
         if _dm=$(display_manager) && test "$_dm" = "$dm_before" \
-            && ! sudo_or_warn systemctl disable greetd.service; then
+            && ! sudo_logged systemctl disable greetd.service; then
             warn "couldn't disable greetd again, so it may start beside $(describe_dm "$dm_before") from the next boot; run 'sudo systemctl disable greetd.service'"
         fi
         not_switching "systemctl couldn't enable greetd"
@@ -5519,7 +5879,7 @@ setup_greeter() {
     if ! _dm=$(display_manager) || test "$_dm" != greetd.service; then
         # Enabling it made the links its unit names, a WantedBy=, say, which
         # would start it beside the display manager, so they go again.
-        if ! sudo_or_warn systemctl disable greetd.service; then
+        if ! sudo_logged systemctl disable greetd.service; then
             warn "couldn't disable greetd again, so it may start beside $(describe_dm "$dm_before") from the next boot; run 'sudo systemctl disable greetd.service'"
         fi
         not_switching "enabling greetd didn't make it the display manager, as its unit would with Alias=display-manager.service"

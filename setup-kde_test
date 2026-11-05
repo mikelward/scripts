@@ -9,6 +9,10 @@
 
 set -e
 
+# Each run starts its own log of what the commands say, in its sandbox's
+# XDG_STATE_HOME, rather than adding to one a caller's setup exported.
+unset SETUP_LOG
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TESTS_RUN=0
 TESTS_PASSED=0
@@ -29,6 +33,23 @@ printf "%s\\n" "$cmd \$*" >> "$CALLS"
 exit 0
 MOCK
     done
+    # The two that chatter, as the real ones do.
+    cat > "$TEST_TMPDIR/bin/kbuildsycoca6" <<MOCK
+#!/bin/sh
+printf "%s\\n" "kbuildsycoca6 \$*" >> "$CALLS"
+echo "kf.service.sycoca: Menu \"applications-kmenuedit.menu\" not found." >&2
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+for unit; do
+    case "\$unit" in
+        *.socket | *.service) echo "Created symlink '$TEST_TMPDIR/home/.config/systemd/user/\$unit' → '/dev/null'." >&2 ;;
+    esac
+done
+exit 0
+MOCK
 
     chmod +x "$TEST_TMPDIR"/bin/*
 
@@ -79,6 +100,7 @@ if test "\$1" = "--backend" && test "\$2" = codeberg \\
     dir="\$HOME/.local/share/homepkg/assets/krohnkite"
     mkdir -p "\$dir"
     touch "\$dir/krohnkite-0.9.9.3_beta.kwinscript"
+    echo "Downloading krohnkite-0.9.9.3_beta.kwinscript from codeberg.org"
 fi
 exit 0
 MOCK
@@ -86,6 +108,7 @@ MOCK
     cat > "$TEST_TMPDIR/bin/kpackagetool6" <<MOCK
 #!/bin/sh
 printf "%s\\n" "kpackagetool6 \$*" >> "$CALLS"
+echo "Successfully upgraded \$4"
 exit 0
 MOCK
     chmod +x "$TEST_TMPDIR/bin/kpackagetool6"
@@ -215,6 +238,33 @@ assert_output_contains() {
         *)
             printf "%s\n" "  FAIL: output does not contain '$1'"
             echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+assert_output_is() {
+    if test "$output" != "$1"; then
+        echo "  FAIL: output is not what was expected"
+        echo "  expected: $1"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# The log a run started, in its sandbox's XDG_STATE_HOME.
+run_log() {
+    cat "$TEST_TMPDIR/home/.local/state/setup/setup.log" 2>/dev/null
+}
+
+assert_log_contains() {
+    case "$(run_log)" in
+        *"$1"*) ;;
+        *)
+            printf "%s\n" "  FAIL: the log does not contain '$1'"
+            echo "  log: $(run_log)"
             TEST_FAILED=1
             return 1
             ;;
@@ -476,7 +526,7 @@ test_homepkg_missing_falls_back_to_source_build() {
     run_kde
     assert_status 0 &&
     assert_output_contains "homepkg not found beside this script" &&
-    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
+    assert_called "git clone --quiet --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
 
@@ -493,7 +543,7 @@ MOCK
     run_kde
     assert_status 0 &&
     assert_output_contains "could not fetch the Krohnkite release via homepkg" &&
-    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
+    assert_called "git clone --quiet --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git" &&
     assert_called "kpackagetool6 -t KWin/Script"
 }
 
@@ -502,7 +552,7 @@ test_clones_fork_by_default() {
     add_install_mocks
     run_kde
     assert_status 0 &&
-    assert_called "git clone --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git"
+    assert_called "git clone --quiet --depth 1 --branch mikel https://codeberg.org/mikelward/Krohnkite.git"
 }
 
 # KROHNKITE_REPO and KROHNKITE_BRANCH override the fallback's clone source
@@ -514,7 +564,7 @@ test_krohnkite_repo_env_overrides_clone_source() {
     run_kde
     unset KROHNKITE_REPO KROHNKITE_BRANCH
     assert_status 0 &&
-    assert_called "git clone --depth 1 --branch mybranch https://example.test/me/krohnkite.git"
+    assert_called "git clone --quiet --depth 1 --branch mybranch https://example.test/me/krohnkite.git"
 }
 
 # The mikel branch only exists on my fork: overriding KROHNKITE_REPO alone
@@ -526,7 +576,7 @@ test_repo_override_does_not_force_mikel_branch() {
     run_kde
     unset KROHNKITE_REPO
     assert_status 0 &&
-    assert_called "git clone --depth 1 https://example.test/me/krohnkite.git" &&
+    assert_called "git clone --quiet --depth 1 https://example.test/me/krohnkite.git" &&
     assert_not_called "--branch"
 }
 
@@ -710,6 +760,100 @@ MOCK
     run_kde --no-install
     assert_status 0 &&
     assert_output_contains "couldn't mask drkonqi-coredump-launcher.socket" &&
+    assert_output_contains "KDE configured successfully"
+}
+
+# --- what a run prints ---
+
+# A run says only which step it's on: what homepkg, kpackagetool6,
+# systemctl and kbuildsycoca6 say goes to the log.
+test_quiet_run_shows_only_its_steps() {
+    add_release_mocks
+    for launcher in browser1 browser2 terminal terminal_on_workstation music \
+            google-chat google-calendar clipboard-menu fill-menu; do
+        add_launcher "$launcher"
+    done
+    : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
+    run_kde
+    assert_status 0 &&
+    assert_output_is "Fetching the Krohnkite release via homepkg
+Installing Krohnkite from $TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.3_beta.kwinscript
+Enabling Krohnkite plugin
+Configuring Krohnkite layouts: Tile, ThreeColumn, Columns, Monocle
+Enabling focus follows mouse (mouse precedence)
+Enabling dim inactive windows
+Configuring 9 virtual desktops
+Configuring keyboard layout: US Dvorak, Caps Lock as Compose
+Masking DrKonqi's crash handler
+Reloading KWin configuration
+Configuring keybindings
+Configuring application shortcuts
+Reloading KWin configuration
+Applying shortcuts to the running session
+Shortcuts are live; no logout needed
+KDE configured successfully" &&
+    assert_log_contains "+ $TEST_TMPDIR/isolated/homepkg --backend codeberg install krohnkite
+Downloading krohnkite-0.9.9.3_beta.kwinscript" &&
+    assert_log_contains "Successfully upgraded" &&
+    assert_log_contains "+ systemctl --user mask --now drkonqi-coredump-launcher.socket" &&
+    assert_log_contains "Created symlink" &&
+    assert_log_contains "+ kbuildsycoca6
+kf.service.sycoca: Menu"
+}
+
+# The source build's clone is quiet, and its build goes to the log too.
+test_source_build_is_quiet() {
+    add_source_build_mocks
+    cat > "$TEST_TMPDIR/bin/go-task" <<MOCK
+#!/bin/sh
+printf "%s\\n" "go-task \$*" >> "$CALLS"
+echo "task: [package] npm run tsc"
+npm install --save-dev || exit 1
+npm run tsc -- --strict || exit 1
+touch krohnkite.kwinscript
+exit 0
+MOCK
+    run_kde
+    assert_status 0 &&
+    assert_called "git clone --quiet --depth 1" &&
+    assert_output_lacks "task: [package]" &&
+    assert_log_contains "go-task package
+task: [package] npm run tsc"
+}
+
+# A failed command shows the end of what it said, and where the rest is,
+# before the warning that says what's lost.
+test_failed_command_shows_what_it_said() {
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+echo "Failed to connect to bus: No medium found" >&2
+exit 1
+MOCK
+    run_kde --no-install
+    assert_status 0 &&
+    assert_output_contains "'systemctl --user mask --now drkonqi-coredump-launcher.socket drkonqi-coredump-pickup.service' exited with status 1; the end of what it said (all of it is in $TEST_TMPDIR/home/.local/state/setup/setup.log):
+    Failed to connect to bus: No medium found
+Warning: couldn't mask drkonqi-coredump-launcher.socket" &&
+    assert_output_contains "KDE configured successfully"
+}
+
+# Where the log can't be made, what the commands say is shown instead, and
+# the run carries on.
+test_unmakeable_log_shows_the_output() {
+    : > "$TEST_TMPDIR/state-is-a-file"
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/state-is-a-file/state" \
+        XDG_SESSION_TYPE=wayland \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        "$KDE_SCRIPT" --no-install 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_output_contains "couldn't make $TEST_TMPDIR/state-is-a-file/state/setup/setup.log to keep the installers' output in, so it's shown instead" &&
+    assert_output_contains "Created symlink" &&
     assert_output_contains "KDE configured successfully"
 }
 
@@ -1358,6 +1502,10 @@ run_test "Meta+[Shift+]Left/Right switch or move to the adjacent desktop" \
     test_meta_arrows_switch_adjacent_desktop
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
+run_test "a quiet run shows only its steps" test_quiet_run_shows_only_its_steps
+run_test "the source build is quiet" test_source_build_is_quiet
+run_test "a failed command shows what it said" test_failed_command_shows_what_it_said
+run_test "a log that can't be made shows the output" test_unmakeable_log_shows_the_output
 run_test "masks DrKonqi's crash handler" test_masks_drkonqi
 run_test "a failed DrKonqi mask warns and the run continues" \
     test_failed_drkonqi_mask_warns_and_continues

@@ -14,6 +14,9 @@ TESTS_FAILED=0
 # The fixtures' modes, which setup's checks of what the greeter runs read,
 # don't depend on the caller's umask.
 umask 022
+# Whether apt could ask anything is the run's to decide, not the caller's
+# environment's.
+unset DEBIAN_FRONTEND
 
 setup() {
     T="$(mktemp -d)"
@@ -24,10 +27,12 @@ setup() {
     # \$FAKE_ENTRY_TRYEXEC (or none, when that's empty), or uwsm; with
     # \$FAKE_NO_ENTRY it installs none. make install PREFIX=DIR, as
     # tidewm's, installs DIR/bin/tidewm. \$FAKE_MAKE_FAILS makes a make in
-    # the directory it names fail.
+    # the directory it names fail. It says what it installs, as the real one
+    # does.
     cat > "$T/bin/make" <<MOCK
 #!/bin/sh
 printf "%s\\n" "make \$*" >> "$CALLS"
+echo "install -m 644 tide.service $T/home/.config/systemd/user"
 if test -n "\$FAKE_MAKE_FAILS" && test "\$1" = -C && test "\$2" = "\$FAKE_MAKE_FAILS"; then
     exit 2
 fi
@@ -61,6 +66,7 @@ MOCK
     # copr plugin with \$FAKE_DNF_PLUGIN_FAILS. repoquery knows every package
     # but those in \$FAKE_MISSING, and fails with \$FAKE_DNF_QUERY_FAILS; like
     # dnf, install refuses the whole command when it names one of them.
+    # What it installs goes in $T/installed, for rpm -qa, and it says so.
     cat > "$T/bin/dnf" <<MOCK
 #!/bin/sh
 if test "\$1" = repoquery; then
@@ -78,13 +84,32 @@ if test "\$1" = copr; then
 fi
 test "\$*" != "install -y dnf-command(copr)" || test -z "\$FAKE_DNF_PLUGIN_FAILS" || exit 1
 test "\$1" != install || for arg; do
-    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+    case " \$FAKE_MISSING " in *" \$arg "*) echo "No match for argument: \$arg" >&2; exit 1 ;; esac
 done
+echo "Updating and loading repositories:"
+if test "\$1" = install; then
+    shift
+    for arg; do
+        case "\$arg" in
+            -*) ;;
+            "dnf-command(copr)") echo "dnf-plugins-core 4.10.0-1.fc43" >> "$T/installed" ;;
+            *) echo "  Installing \$arg" && echo "\$arg 1.0-1.fc43" >> "$T/installed" ;;
+        esac
+    done
+fi
+MOCK
+    # rpm -qa lists what dnf installed.
+    cat > "$T/bin/rpm" <<MOCK
+#!/bin/sh
+test "\$1" = -qa || exit 1
+test ! -f "$T/installed" || sort -u "$T/installed"
 MOCK
     # pacman refuses the whole command when it names a package in
     # \$FAKE_MISSING. -Si describes every other package, failing, as pacman
     # does, when it names one of them, or answering nothing with
-    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED.
+    # \$FAKE_PACMAN_QUERY_FAILS; -Qq names those in \$FAKE_INSTALLED, as if
+    # from the AUR. -S puts what it installs in $T/installed, saying so, and
+    # -Q lists that and \$FAKE_INSTALLED.
     cat > "$T/bin/pacman" <<MOCK
 #!/bin/sh
 case "\$1" in
@@ -106,16 +131,36 @@ case "\$1" in
         done
         exit \$status
         ;;
+    -Q)
+        test \$# -eq 1 || exit 1
+        for pkg in \$FAKE_INSTALLED; do echo "\$pkg 1.0-1"; done
+        test ! -f "$T/installed" || sort -u "$T/installed"
+        exit 0
+        ;;
 esac
 printf "%s\\n" "pacman \$*" >> "$CALLS"
 for arg; do
-    case " \$FAKE_MISSING " in *" \$arg "*) exit 1 ;; esac
+    case " \$FAKE_MISSING " in *" \$arg "*) echo "error: target not found: \$arg" >&2; exit 1 ;; esac
 done
+if test "\$1" = -S; then
+    shift
+    for arg; do
+        case "\$arg" in
+            -*) ;;
+            *) echo "installing \$arg..." && echo "\$arg 1.0-1" >> "$T/installed" ;;
+        esac
+    done
+fi
 MOCK
     # dpkg-query reports Qt base's private headers as \$FAKE_QT_VERSION and
-    # Qt Declarative's as \$FAKE_QTDECL_VERSION, or Ubuntu 26.04's.
+    # Qt Declarative's as \$FAKE_QTDECL_VERSION, or Ubuntu 26.04's. Asked
+    # for every package (-W -f FORMAT), it lists what apt-get installed.
     cat > "$T/bin/dpkg-query" <<MOCK
 #!/bin/sh
+if test "\$2" = -f && test \$# -eq 3; then
+    test ! -f "$T/installed" || sort -u "$T/installed" | sed 's/^/ii  /'
+    exit 0
+fi
 printf "%s\\n" "dpkg-query \$*" >> "$CALLS"
 shift 2
 for pkg; do
@@ -133,16 +178,50 @@ printf "%s\\n" "meson \$*" >> "$CALLS"
 test "\$1" != setup || printf "%s\\n" "meson compilers CC=\$CC CXX=\$CXX" >> "$CALLS"
 MOCK
     # apt-get refuses the whole command when it names a package in
-    # \$FAKE_MISSING, as apt does. Installing greetd installs its unit, which
+    # \$FAKE_MISSING or \$FAKE_APT_REFUSES (one apt-cache knows), as apt
+    # does, saying why. Installing greetd installs its unit, which
     # with \$FAKE_GREETD_TAKES becomes the display manager on a machine with
-    # none, as Debian's package does.
+    # none, as Debian's package does. What it installs goes in
+    # $T/installed, for dpkg-query, and it says so, as apt does, a line or
+    # two a package. Whether it could ask anything goes in $T/apt-asks.
     cat > "$T/bin/apt-get" <<MOCK
 #!/bin/sh
+if test "\$1" = --version; then
+    test -z "\$FAKE_APT_GET_FAILS" || exit 100
+    echo "apt 3.1.6 (amd64)"
+    exit 0
+fi
 printf "%s\\n" "apt-get \$*" >> "$CALLS"
-test -z "\$FAKE_APT_GET_FAILS" || exit 100
+if test -t 0; then in=terminal; else in=\$(cat); fi
+printf "%s\\n" "apt-get \$1 DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-unset} stdin=\$in" >> "$T/apt-asks"
+echo "Reading package lists..."
+if test -n "\$FAKE_APT_GET_FAILS"; then
+    echo "E: Could not get lock /var/lib/dpkg/lock-frontend" >&2
+    exit 100
+fi
 for arg; do
-    case " \$FAKE_MISSING " in *" \$arg "*) exit 100 ;; esac
+    case " \$FAKE_MISSING \$FAKE_APT_REFUSES " in
+        *" \$arg "*)
+            echo "E: Package '\$arg' has no installation candidate" >&2
+            exit 100
+            ;;
+    esac
 done
+if test "\$1" = install; then
+    shift
+    skip=
+    for arg; do
+        if test -n "\$skip"; then skip=; continue; fi
+        case "\$arg" in
+            -o) skip=1 ;;
+            -*) ;;
+            *)
+                echo "Setting up \$arg (1.0-1) ..."
+                echo "\$arg 1.0-1" >> "$T/installed"
+                ;;
+        esac
+    done
+fi
 case " \$* " in
     *" greetd "*)
         : > "$T/greetd-installed"
@@ -209,10 +288,20 @@ MOCK
     # makes rm remove everything but the file it names, then fail.
     # \$FAKE_INSTALL_FAILS makes installing to the path it names fail.
     # Another user can't run the files in \$FAKE_USER_NOEXEC, or read those in
-    # \$FAKE_USER_NOREAD, as the loader would for them.
+    # \$FAKE_USER_NOREAD, as the loader would for them. A VAR=value before
+    # the command is set for it, unless \$FAKE_SUDO_NO_SETENV stands for a
+    # sudo rule that won't.
     cat > "$T/bin/sudo" <<MOCK
 #!/bin/sh
 printf "%s\\n" "sudo \$*" >> "$CALLS"
+while case "\$1" in *=*) true ;; *) false ;; esac; do
+    if test -n "\$FAKE_SUDO_NO_SETENV"; then
+        echo "sudo: sorry, you are not allowed to set the following environment variables: \${1%%=*}" >&2
+        exit 1
+    fi
+    export "\$1"
+    shift
+done
 # -u USER runs the command as this user.
 if test "\$1" = -u; then
     shift 2
@@ -241,7 +330,8 @@ fi
 "\$@"
 MOCK
     # git clone creates the checkout, its last argument; pull just logs, or
-    # fails with \$FAKE_PULL_FAILS.
+    # fails with \$FAKE_PULL_FAILS. Both say what they did, as git does,
+    # unless --quiet.
     cat > "$T/bin/git" <<MOCK
 #!/bin/sh
 printf "%s\\n" "git \$*" >> "$CALLS"
@@ -260,7 +350,15 @@ if test "\$1" = clone; then
         */wayland-protocols) printf "%s\\n" "command: [scanner, '--strict', 'enum-header']" > "\$last/meson.build" ;;
     esac
 fi
-if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then exit 1; fi
+if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then
+    echo "fatal: unable to access 'https://example.com/tide.git/': Could not resolve host: example.com" >&2
+    exit 1
+fi
+case " \$* " in
+    *" --quiet "*) ;;
+    *" clone "*) echo "Cloning into '\$last'..." >&2 ;;
+    *" pull "*) printf "Updating 1111111..2222222\\nFast-forward\\n" ;;
+esac
 # rev-parse names the commit a Hyprland pin's checkout was pinned at, or
 # another for the one named in \$FAKE_MOVED_PIN; Quickshell's is its pinned
 # commit, or \$FAKE_QS_COMMIT.
@@ -308,7 +406,9 @@ MOCK
     # Disabling greetd fails with \$FAKE_DISABLE_FAILS. Enabling greetd makes
     # its WantedBy= link, $T/greetd-wanted, before the alias, and with
     # \$FAKE_ENABLE_FAILS_PARTWAY fails between the two; disabling it
-    # removes the link.
+    # removes the link. A user unit is enabled or masked saying so, as
+    # systemctl does; enabling the one \$FAKE_USER_ENABLE_FAILS names fails,
+    # saying why.
     cat > "$T/bin/systemctl" <<MOCK
 #!/bin/sh
 printf "%s\\n" "systemctl \$*" >> "$CALLS"
@@ -379,6 +479,21 @@ case "\$*" in
         test -z "\$FAKE_DISABLE_FAILS" || exit 1
         rm -f "$T/greetd-wanted"
         if test -s "$T/dm" && test "\$(cat "$T/dm")" = greetd.service; then : > "$T/dm"; fi
+        ;;
+    "--user enable "*)
+        if test "\$3" = "\$FAKE_USER_ENABLE_FAILS"; then
+            echo "Failed to enable unit: Unit \$3 does not exist" >&2
+            exit 1
+        fi
+        echo "Created symlink '$T/home/.config/systemd/user/tide-session.target.wants/\$3' → '$T/home/.config/systemd/user/\$3'." >&2
+        ;;
+    "--user mask "*)
+        for unit; do
+            case "\$unit" in
+                -*) ;;
+                *.service) echo "Created symlink '$T/home/.config/systemd/user/\$unit' → '/dev/null'." >&2 ;;
+            esac
+        done
         ;;
 esac
 exit 0
@@ -634,7 +749,7 @@ run() {
     set +e
     output=$(env HOME="$T/home" PATH="$T/bin:$PATH" SETUP_LOGIND_DIR="$T/logind" \
         XDG_CONFIG_HOME="$T/home/.config" XDG_CONFIG_DIRS="$T/xdg" \
-        XDG_DATA_HOME="$T/home/.local/share" XDG_STATE_HOME="$T/home/.local/state" SETUP_BUILD_LOG_DIR= \
+        XDG_DATA_HOME="$T/home/.local/share" XDG_STATE_HOME="$T/home/.local/state" SETUP_LOG= \
         SETUP_SCRIPTS_DIR="$T/scripts" \
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \

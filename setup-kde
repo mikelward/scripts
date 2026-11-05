@@ -53,6 +53,13 @@
 # uses no sudo, so it already runs unchanged on a machine with restricted
 # sudo.
 #
+# What homepkg, the Krohnkite build, kpackagetool6, systemctl and
+# kbuildsycoca6 say goes to ~/.local/state/setup/setup.log, the log setup
+# starts each run and this adds to (it starts the log itself when it's run
+# on its own), so a run shows a line a step. A failed command shows the end
+# of what it said, and where the rest is. Warnings, errors and what's left
+# for you to do show as before.
+#
 # Krohnkite normally installs from the prebuilt .kwinscript release asset
 # published on upstream's Codeberg (anametologin/Krohnkite), fetched via
 # homepkg's codeberg backend -- see install_krohnkite. That needs no
@@ -177,6 +184,55 @@ error() {
 
 is_command() {
     test -x "$(command -v "$1")"
+}
+
+# --- Quiet commands ---
+
+# What the commands say -- homepkg's downloads, the Krohnkite build,
+# kpackagetool6's and systemctl's notices, kbuildsycoca6's progress -- goes to
+# one log per run, and the run shows a line a step. These are setup's own:
+# the outermost of setup and setup-kde starts the log, and when setup runs
+# this, it adds to setup's, through the exported path.
+start_setup_log() {
+    test -z "${SETUP_LOG:-}" || return 0
+    SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
+    # printf, not :, which is a special builtin: dash exits when its
+    # redirection fails, even under if.
+    if ! mkdir -p "${SETUP_LOG%/*}" || ! printf "" > "$SETUP_LOG"; then
+        warn "couldn't make $SETUP_LOG to keep the installers' output in, so it's shown instead"
+        SETUP_LOG=-
+    fi
+    export SETUP_LOG
+}
+
+# log_mark DESCRIPTION: notes in the log what runs next, and sets _log_start
+# to where its output begins, for log_failure.
+log_mark() {
+    _log_start=$(($(wc -l < "$SETUP_LOG") + 2))
+    printf '+ %s\n' "$1" >> "$SETUP_LOG"
+}
+
+# log_failure DESCRIPTION STATUS: shows the end of what the command
+# log_mark noted said, which is where the reason is.
+log_failure() {
+    printf "'%s' exited with status %s; the end of what it said (all of it is in %s):\n" \
+        "$1" "$2" "$SETUP_LOG" >&2
+    tail -n "+$_log_start" "$SETUP_LOG" | tail -n 5 | sed 's/^/    /' >&2
+}
+
+# run_logged COMMAND...: runs COMMAND with its output added to the log. A
+# failure shows what it said; the caller says what's lost.
+run_logged() {
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        "$@"
+        return
+    fi
+    log_mark "$*"
+    "$@" >> "$SETUP_LOG" 2>&1 && return 0
+    _rl_status=$?
+    log_failure "$*" "$_rl_status"
+    return "$_rl_status"
 }
 
 usage() {
@@ -354,16 +410,17 @@ SHIM
     # assembles the installable .kwinscript package. package.json defines no
     # "build" script, so there is no npm-only build to fall back on -- the
     # Makefile is it.
+    # The build's output goes to the log (see run_logged).
     if command -v go-task >/dev/null 2>&1; then
         info "Building Krohnkite with go-task"
-        PATH="$shimdir:$PATH" go-task package
+        run_logged env PATH="$shimdir:$PATH" go-task package
     elif command -v task >/dev/null 2>&1 \
             && task --version 2>/dev/null | grep -q '^Task version'; then
         info "Building Krohnkite with task"
-        PATH="$shimdir:$PATH" task package
+        run_logged env PATH="$shimdir:$PATH" task package
     elif test -f Makefile; then
         info "Building Krohnkite with make"
-        PATH="$shimdir:$PATH" make
+        run_logged env PATH="$shimdir:$PATH" make
     else
         error "Krohnkite checkout has no Taskfile or Makefile to build with"
     fi
@@ -384,12 +441,13 @@ install_krohnkite_from_source() {
     KROHNKITE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/krohnkite-XXXXXX")" \
         || error "could not create a temporary directory to build Krohnkite in"
 
+    # Quiet, as setup's clones are: git still says what went wrong.
     if test -n "${KROHNKITE_BRANCH:-}"; then
         info "Cloning Krohnkite from $KROHNKITE_REPO ($KROHNKITE_BRANCH)"
-        git clone --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+        git clone --quiet --depth 1 --branch "$KROHNKITE_BRANCH" "$KROHNKITE_REPO" "$KROHNKITE_DIR"
     else
         info "Cloning Krohnkite from $KROHNKITE_REPO"
-        git clone --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
+        git clone --quiet --depth 1 "$KROHNKITE_REPO" "$KROHNKITE_DIR"
     fi
 
     cd "$KROHNKITE_DIR"
@@ -402,16 +460,12 @@ install_krohnkite_from_source() {
         kwinscript=$(find . -name '*.kwinscript' -print -quit)
     fi
     if test -n "$kwinscript"; then
-        info "Installing Krohnkite from $kwinscript"
-        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
-            kpackagetool6 -t KWin/Script -i "$kwinscript"
+        install_kwinscript "$kwinscript"
     else
         pkgdir=$(find . \( -name metadata.json -o -name metadata.desktop \) \
             -printf '%h\n' -quit 2>/dev/null)
         if test -n "$pkgdir"; then
-            info "Installing Krohnkite from $pkgdir"
-            kpackagetool6 -t KWin/Script -u "$pkgdir" 2>/dev/null ||
-                kpackagetool6 -t KWin/Script -i "$pkgdir"
+            install_kwinscript "$pkgdir"
         else
             error "Could not find installable Krohnkite package"
         fi
@@ -443,7 +497,7 @@ install_krohnkite() {
         asset_dir="$HOME/.local/share/homepkg/assets/krohnkite"
 
         info "Fetching the Krohnkite release via homepkg"
-        if "$homepkg" --backend codeberg install krohnkite; then
+        if run_logged "$homepkg" --backend codeberg install krohnkite; then
             kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
         else
             warn "could not fetch the Krohnkite release online; trying a staged bundle"
@@ -458,7 +512,7 @@ install_krohnkite() {
             done
             if test -n "$bundle"; then
                 info "Fetching the Krohnkite release from bundle: $bundle"
-                "$homepkg" install-bundle "$bundle" \
+                run_logged "$homepkg" install-bundle "$bundle" \
                     || warn "the Krohnkite bundle didn't provide the release either"
             fi
             # Whatever's on disk now -- fresh from the bundle, or whatever
@@ -474,13 +528,27 @@ install_krohnkite() {
     fi
 
     if test -n "$kwinscript"; then
-        info "Installing Krohnkite from $kwinscript"
-        kpackagetool6 -t KWin/Script -u "$kwinscript" 2>/dev/null ||
-            kpackagetool6 -t KWin/Script -i "$kwinscript"
+        install_kwinscript "$kwinscript"
         return
     fi
 
     install_krohnkite_from_source
+}
+
+# install_kwinscript PACKAGE: installs Krohnkite into KWin from PACKAGE, a
+# .kwinscript or its directory. -u upgrades the one installed, and fails
+# where there's none, for -i to install it; what either says goes to the
+# log, and only -i's failure is shown.
+install_kwinscript() {
+    info "Installing Krohnkite from $1"
+    start_setup_log
+    if test "$SETUP_LOG" = -; then
+        kpackagetool6 -t KWin/Script -u "$1" 2>/dev/null && return 0
+    else
+        log_mark "kpackagetool6 -t KWin/Script -u $1"
+        kpackagetool6 -t KWin/Script -u "$1" >> "$SETUP_LOG" 2>&1 && return 0
+    fi
+    run_logged kpackagetool6 -t KWin/Script -i "$1"
 }
 
 # --- Enable Krohnkite ---
@@ -613,7 +681,7 @@ disable_drkonqi() {
     info "Masking DrKonqi's crash handler"
     # Not fatal: the rest of the desktop config doesn't depend on it.
     # shellcheck disable=SC2086 # the list is meant to split
-    if ! systemctl --user mask --now $DRKONQI_UNITS; then
+    if ! run_logged systemctl --user mask --now $DRKONQI_UNITS; then
         warn "couldn't mask $DRKONQI_UNITS; run 'systemctl --user mask --now $DRKONQI_UNITS' from the desktop session"
     fi
 }
@@ -1109,7 +1177,7 @@ configure_app_shortcuts
 # components when sycoca changes, which is what lets apply_shortcuts_live bind
 # the launch shortcuts below.
 if command -v kbuildsycoca6 >/dev/null 2>&1; then
-    kbuildsycoca6
+    run_logged kbuildsycoca6
 fi
 # Reload to apply all changes. Order matters for the last step: Krohnkite has
 # to be loaded before its shortcuts can be pushed into the daemon, since

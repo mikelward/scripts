@@ -13,7 +13,7 @@ set -e
 # On a GDM machine, greetd becomes the display manager from the next boot,
 # running tide's greeter as the user and on the VT this greetd needs.
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run
-check "greetd: installs greetd" has "$calls" "sudo apt-get install -y greetd"
+check "greetd: installs greetd, with sudo" has "$calls" "sudo DEBIAN_FRONTEND=noninteractive apt-get install -y greetd"
 check "greetd: the config is tide's, with Debian's user and VT" \
     test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
 check "greetd: the config is root's" has "$calls" "sudo install -D -m 644"
