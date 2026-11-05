@@ -229,6 +229,28 @@ check "quiet build: and the failure is repeated at the end" \
     has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "building Quickshell failed: 'cmake' exited with status 1"
 teardown
 
+# --verbose shows what apt, make and the builds say as they run, and makes
+# no setup log; a build's output is kept in its own log too, which the run
+# still names.
+setup; ARGS=(--verbose); run FAKE_MISSING=quickshell
+check "--verbose succeeds" test "$status" -eq 0
+check "--verbose: apt's output is shown" has "$output" "Reading package lists..."
+check "--verbose: tide's make is shown" has "$output" "install -m 644 tide.service"
+check "--verbose: there's no setup log" test ! -e "$T/home/.local/state/setup/setup.log"
+check "--verbose build: Quickshell's build output is shown" has "$output" "CMake Warning: the link target"
+check "--verbose build: and it's in the log" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "CMake Warning: the link target"
+check "--verbose build: the run says it built, and where its output is" \
+    has "$output" "Built Quickshell v0.3.1; the build's output is in $T/home/.local/state/setup-tide/quickshell-build.log"
+check "--verbose: the steps still say what changed" has "$output" "Installing Quickshell's build dependencies"
+teardown
+
+setup; ARGS=(--verbose --ignore-errors); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
+check "--verbose build: a failure says which command failed and where the log is" \
+    has "$output" "Warning: building Quickshell failed: 'cmake' exited with status 1; its output is in $T/home/.local/state/setup-tide/quickshell-build.log"
+check "--verbose build: and doesn't show its output twice" \
+    test "$(printf '%s\n' "$output" | sed '/from this run, again:/,$d' | grep -c 'CMake Warning: the link target')" -eq 1
+teardown
+
 # apt's Quickshell older than tide's shell loads in (Debian's 0.2.1) is
 # passed over for the build, as if apt had none.
 setup; ARGS=(); run FAKE_APT_QS=0.2.1-3

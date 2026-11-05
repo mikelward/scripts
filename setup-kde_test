@@ -857,6 +857,24 @@ test_unmakeable_log_shows_the_output() {
     assert_output_contains "KDE configured successfully"
 }
 
+# --verbose shows what the commands say, as they say it, and makes no log;
+# without it, the same lines go to the log (see the quiet run above).
+test_verbose_shows_the_output() {
+    run_kde --no-install --verbose
+    assert_status 0 &&
+    assert_output_contains "Created symlink" &&
+    assert_output_contains "KDE configured successfully" &&
+    assert_output_lacks "couldn't make" &&
+    if test -e "$TEST_TMPDIR/home/.local/state/setup/setup.log"; then
+        echo "  FAIL: --verbose made a log"
+        TEST_FAILED=1
+        return 1
+    fi &&
+    run_kde --no-install &&
+    assert_output_lacks "Created symlink" &&
+    assert_log_contains "Created symlink"
+}
+
 # Meta+Left/Right step one desktop and Meta+Shift+Left/Right carry the window
 # along, which means taking the keys back from KWin's Quick Tile and
 # move-to-screen defaults -- otherwise the actions fight over them.
@@ -1506,6 +1524,7 @@ run_test "a quiet run shows only its steps" test_quiet_run_shows_only_its_steps
 run_test "the source build is quiet" test_source_build_is_quiet
 run_test "a failed command shows what it said" test_failed_command_shows_what_it_said
 run_test "a log that can't be made shows the output" test_unmakeable_log_shows_the_output
+run_test "--verbose shows the output" test_verbose_shows_the_output
 run_test "masks DrKonqi's crash handler" test_masks_drkonqi
 run_test "a failed DrKonqi mask warns and the run continues" \
     test_failed_drkonqi_mask_warns_and_continues
