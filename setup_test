@@ -176,7 +176,7 @@ MOCK
 
     set +e
     output="$(PATH="$brew_tmpdir" \
-        sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS install_homebrew")
+        sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS install_homebrew")
 install_homebrew" 2>&1)"
     status=$?
     set -e
@@ -216,7 +216,7 @@ MOCK
         sh -c "set -e
 OS=$terminal_os
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS set_kde_default_terminal set_default_terminal")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS set_kde_default_terminal set_default_terminal")
 set_default_terminal
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -276,7 +276,7 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS is_intel_mac install_packages")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -326,7 +326,7 @@ OS=macos
 NPM=$2
 ROOT=$3
 SCRIPTS_DIR='$node_tmpdir/scripts'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS is_intel_mac install_node_home")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac install_node_home")
 install_node_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -393,7 +393,7 @@ NPM=no
 GUI_ENABLED=$linux_gui
 CROSTINI=0
 SUDO=yes
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS sudo_or_warn install_packages")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -420,7 +420,7 @@ run_pkg_summary() {
     printf '%s\n' "$3" > "$summary_tmpdir/after"
     set +e
     output="$(sh -c "set -e
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS")
 pkg_versions() { cat '$summary_tmpdir/versions'; }
 sudo_logged() {
     cp '$summary_tmpdir/after' '$summary_tmpdir/versions'
@@ -510,7 +510,7 @@ MOCK
 OS=$purge_os
 TIDE=${PURGE_TIDE:-no}
 SUDO=yes
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS sudo_or_warn obsolete_pkg_installed purge_obsolete_packages")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -543,7 +543,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
 install_file_managers
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -571,7 +571,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$prune_tmpdir/home'
 SCRIPTS_DIR='$prune_scripts'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS prune_retired_tools")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS prune_retired_tools")
 prune_retired_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -590,7 +590,7 @@ run_missing_homepkg_warnings() {
 
     set +e
     output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS install_home_tools install_shell_tools install_extras_release")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_home_tools install_shell_tools install_extras_release")
 install_home_tools
 install_shell_tools
 install_extras_release" 2>&1)"
@@ -652,7 +652,7 @@ run_helix_runtime_helper() {
 HOME='$helix_home'
 XDG_CONFIG_HOME='$helix_config'
 SRC_DIR='$helix_home/src'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS link_helix_runtime clear_managed_helix_runtime")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS link_helix_runtime clear_managed_helix_runtime")
 $helix_call
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -723,7 +723,7 @@ MOCK
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -783,7 +783,7 @@ HOME='$release_home'
 XDG_CONFIG_HOME='$release_home/.config'
 SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -861,7 +861,7 @@ MOCK
 OS=debian
 HOME='$services_home'
 XDG_CONFIG_HOME='$services_home/.config'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS systemd_user_available shpool_service_exists start_services")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS systemd_user_available shpool_service_exists start_services")
 start_services
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -928,7 +928,7 @@ SRC_DIR='$ht_home/src'
 SCRIPTS_DIR='$ht_home/scripts'
 MINIMAL_ENABLED=0
 NPM=yes
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
 install_home_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -985,7 +985,7 @@ run_check_go() {
         chmod +x "$go_tmpdir/go"
     fi
     set +e
-    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS go_at_least check_go")
+    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS go_at_least check_go")
 check_go" 2>&1)"
     status=$?
     set -e
@@ -1081,7 +1081,7 @@ test_crostini_not_detected_elsewhere() {
 
 test_crostini_skips_the_keyboard() {
     set +e
-    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS configure_keyboard")
+    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS configure_keyboard")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
@@ -1246,7 +1246,7 @@ TIDE_REPO=https://example.com/mikelward/tide.git
 GITHUB_MIRROR='${DESKTOP_MIRROR:-no}'
 GITHUB_PREFIX='${DESKTOP_PREFIX:-git@github.com:}'
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS configure_linux_desktop")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS configure_linux_desktop")
 configure_linux_desktop" 2>&1)"
     status=$?
     set -e
@@ -1512,7 +1512,9 @@ test_extras_brew_skips_an_installed_jj() {
     assert_calls_lack "brew install jj" &&
     assert_calls_contain "brew install helix" &&
     assert_calls_contain "brew install nushell" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_lacks "jj" &&
+    VERBOSE=yes run_install_extras_brew system &&
+    assert_output_contains "Skipping jj: already installed at"
 }
 
 # ...but a jj under ~/.local is setup's own, from an earlier release or
@@ -1521,7 +1523,8 @@ test_extras_brew_installs_over_its_own_jj() {
     run_install_extras_brew home
     assert_status 0 &&
     assert_calls_contain "brew install jj" &&
-    assert_output_lacks "jj is already installed at"
+    VERBOSE=yes run_install_extras_brew home &&
+    assert_output_lacks "Skipping jj"
 }
 
 # shpool has no prebuilt artifact anywhere -- no release binaries, no bottle,
@@ -1548,18 +1551,20 @@ test_shpool_service_skipped_when_a_unit_file_exists() {
     run_start_services cat
     assert_status 0 &&
     assert_eq "$services_unit_written" no &&
-    assert_output_contains "already set up; leaving it alone" &&
-    assert_output_lacks "Creating shpool systemd user service"
+    assert_output_lacks "shpool.service" &&
+    assert_output_lacks "Creating shpool systemd user service" &&
+    VERBOSE=yes run_start_services cat &&
+    assert_output_contains "Skipping shpool.service: already set up"
 }
 
 # `systemctl --user cat` only sees file-backed units, so a service that's merely
 # loaded -- what `list-units` reports on a box where something already set it up
 # -- has to count as existing too.
 test_shpool_service_skipped_when_the_unit_is_loaded() {
-    run_start_services loaded
+    VERBOSE=yes run_start_services loaded
     assert_status 0 &&
     assert_eq "$services_unit_written" no &&
-    assert_output_contains "already set up; leaving it alone"
+    assert_output_contains "Skipping shpool.service: already set up"
 }
 
 # With no shpool.service anywhere, setup still provides one for an shpool that
@@ -1620,10 +1625,10 @@ test_extras_release_uses_homepkg_github() {
 # drops out of the release install rather than being shadowed by a second copy
 # in ~/.local/bin.
 test_extras_release_skips_an_installed_jj() {
-    run_install_extras_release 0 yes system
+    VERBOSE=yes run_install_extras_release 0 yes system
     assert_status 0 &&
     assert_eq "$calls" "homepkg --backend github install helix nu" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_contains "Skipping jj: already installed at"
 }
 
 # A jj in ~/.local/bin is the one this path installed last time, so it's
@@ -2016,8 +2021,10 @@ test_file_managers_install_via_homepkg() {
 test_file_managers_skipped_when_present() {
     run_install_file_managers both
     assert_status 0 &&
-    assert_output_contains "already installed" &&
-    test -z "$calls"
+    assert_output_lacks "lf" &&
+    test -z "$calls" &&
+    VERBOSE=yes run_install_file_managers both &&
+    assert_output_contains "Skipping lf: already installed"
 }
 
 # The rootless path still invokes homepkg with lf in the tools it installs --
@@ -2251,7 +2258,7 @@ MOCK
     set +e
     output="$(XDG_STATE_HOME="$confinst_tmpdir/state" SETUP_LOG="" sh -c "set -e
 SCRIPTS_DIR='$confinst_tmpdir'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS run_confinst")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS run_confinst")
 run_confinst
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -2274,7 +2281,7 @@ test_unwritable_brew_log_is_not_fatal() {
     chmod +x "$log_tmpdir/brew"
     set +e
     output="$(PATH="$log_tmpdir:$PATH" XDG_STATE_HOME="$log_tmpdir" SETUP_LOG="" sh -c "set -e
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS")
 brew_logged install zoxide
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -2496,7 +2503,7 @@ run_local_bin_check() {
     fi
     set +e
     output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
 install_shell_tools
 install_shell_tools
 echo \"blocked=\$LOCAL_BIN_BLOCKED\"" 2>&1)"
@@ -2565,7 +2572,7 @@ test_ssh_key_prompt_covers_github_and_codeberg() {
 # that check and skips only to avoid clobbering the id_ed25519 it would write.
 test_ssh_flag_overrides_existing_key_check() {
     assert_source_contains 'test "$SSH" = auto' &&
-    assert_source_contains "pass --ssh to create one anyway" &&
+    assert_source_contains "; --ssh makes one anyway" &&
     assert_source_contains "not overwriting"
 }
 
@@ -2607,7 +2614,7 @@ GITHUB_HOST=ghe.corp.example.com
 SCRIPTS_DIR='$offer_tmpdir/scripts'
 CONF_DIR='$offer_tmpdir/conf'
 ROOT_DIR='$offer_tmpdir/src/root'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS offer_ssh_remotes")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS offer_ssh_remotes")
 offer_ssh_remotes
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2621,10 +2628,9 @@ echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
 # chosen because SSH isn't the way in. So the offer is skipped outright --
 # gittossh is never run, and the bootstrap continues.
 test_mirror_skips_ssh_remote_offer() {
-    run_offer_ssh_remotes yes present
+    VERBOSE=yes run_offer_ssh_remotes yes present
     assert_status 0 &&
-    assert_output_contains "Cloned from ghe.corp.example.com" &&
-    assert_output_contains "leaving repo remotes as-is" &&
+    assert_output_contains "Skipping the switch to SSH remotes: cloned from ghe.corp.example.com" &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_eq "$calls" ""
 }
@@ -2633,10 +2639,10 @@ test_mirror_skips_ssh_remote_offer() {
 # to its converter lookup (absent here, so it returns before the prompt) rather
 # than reporting that it left the remotes alone.
 test_default_prefix_reaches_ssh_remote_offer() {
-    run_offer_ssh_remotes no absent
+    VERBOSE=yes run_offer_ssh_remotes no absent
     assert_status 0 &&
     assert_output_lacks "ghe.corp.example.com" &&
-    assert_output_lacks "leaving repo remotes as-is" &&
+    assert_output_lacks "Skipping the switch to SSH remotes" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -2668,7 +2674,7 @@ SSH=yes
 GITHUB_MIRROR=yes
 GITHUB_HOST=ghe.corp.example.com
 GITHUB_PREFIX_SSH=no
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS generate_ssh_key")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -2721,7 +2727,7 @@ MOCK
     output="$(PATH="$cop_tmpdir/bin:$PATH" MOCK_ORIGIN="$cop_origin" \
         sh -c "set -e
 GITHUB_MIRROR=$cop_mirror
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS redact_url_credentials canonical_remote clone_or_pull")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS redact_url_credentials canonical_remote clone_or_pull")
 clone_or_pull '$cop_repo' '$cop_tmpdir/scripts' $cop_from_prefix
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -2948,12 +2954,12 @@ test_no_root_installs_via_homepkg() {
 # has to hold there too -- the tools go into ~/.local/bin, which the conf repo
 # puts ahead of /usr/bin, so an unwanted jj there shadows the packaged one.
 test_home_tools_skips_an_installed_jj() {
-    run_home_tools_helix absent system
+    VERBOSE=yes run_home_tools_helix absent system
     assert_status 0 &&
     assert_calls_contain "homepkg install ripgrep" &&
     assert_calls_lack " jj" &&
     assert_calls_contain " helix nu" &&
-    assert_output_contains "jj is already installed at"
+    assert_output_contains "Skipping jj: already installed at"
 }
 
 test_home_tools_installs_jj_when_absent() {
@@ -3088,7 +3094,7 @@ run_clone_or_pull() {
     set +e
     output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
 GITHUB_MIRROR=no
-$(extract_functions "info warn note_problem redact_url_credentials canonical_remote default_branch pull_checkout clone_or_pull")
+$(extract_functions "info detail warn note_problem redact_url_credentials canonical_remote default_branch pull_checkout clone_or_pull")
 clone_or_pull '$1' '$co_tmpdir/repo' yes
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3464,7 +3470,7 @@ SPEC
     output="$(GPU_CALLS="$gpu_tmpdir/calls" SETUP_SYSFS="$gpu_sys" SETUP_UDEV_RULES="$gpu_rules" \
         sh -c "set -e
 OS=$gpu_os
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
 $gpu_stub
 keep_display_gpu_awake
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -3721,7 +3727,7 @@ OS=$zas_os
 $zas_consts
 ZSH_AUTOSUGGESTIONS_REPO='file://$zas_tmp/repo'
 ZSH_AUTOSUGGESTIONS_COMMIT='$zas_pinned'
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS install_zsh_autosuggestions_home")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_zsh_autosuggestions_home")
 install_zsh_autosuggestions_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3777,9 +3783,9 @@ test_zsh_autosuggestions_existing_copy_used() {
     run_install_zsh_autosuggestions_home checkout
     assert_status 0 &&
     assert_eq "$zas_state" kept || { echo "  (earlier checkout)"; return 1; }
-    run_install_zsh_autosuggestions_home system
+    VERBOSE=yes run_install_zsh_autosuggestions_home system
     assert_status 0 &&
-    assert_output_contains "already installed in /usr/share/zsh-autosuggestions" &&
+    assert_output_contains "Skipping zsh-autosuggestions: already installed in /usr/share/zsh-autosuggestions" &&
     assert_eq "$zas_state" absent || { echo "  (distro package)"; return 1; }
 }
 

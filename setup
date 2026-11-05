@@ -273,7 +273,8 @@ Options:
                    git@ghe.example.com or https://ghe.example.com. Also
                    settable via GITHUB_PREFIX
   -v, --verbose    Show what the installers and builds print, instead of
-                   keeping it in ~/.local/state/setup/setup.log
+                   keeping it in ~/.local/state/setup/setup.log, and what
+                   was already so ("Skipping jj: already installed")
   -h, --help       Show this help and exit
 
 Graphical setup runs only when a display is detected, and the extras are
@@ -321,6 +322,13 @@ recap_problems() {
 
 info() {
     printf "%s\n" "$*"
+}
+
+# detail: an info line that only --verbose shows, for what was already so:
+# "Skipping jj: already installed at /usr/bin/jj".
+detail() {
+    test "${VERBOSE:-no}" = yes || return 0
+    info "$@"
 }
 
 warn() {
@@ -1042,7 +1050,7 @@ resolve_extras() {
 
 install_homebrew() {
     if command -v brew >/dev/null 2>&1; then
-        info "Homebrew already installed"
+        detail "Skipping Homebrew: already installed"
         return 0
     fi
     info "Installing Homebrew"
@@ -1834,7 +1842,7 @@ install_fonts() {
 
     # Ubuntu Mono
     if font_installed "Ubuntu Mono" || ls "$font_dir"/UbuntuMono*.ttf >/dev/null 2>&1; then
-        info "Ubuntu Mono already installed"
+        detail "Skipping Ubuntu Mono: already installed"
     else
         info "Installing Ubuntu Mono"
         ubuntu_mono_url="https://github.com/google/fonts/raw/main/ufl/ubuntumono"
@@ -1903,7 +1911,7 @@ start_services() {
                     # whatever a packaged unit turns out to be once there is one.
                     warn "no systemd user manager to query; leaving shpool.service alone rather than write an override blind"
                 elif shpool_service_exists; then
-                    info "shpool.service is already set up; leaving it alone"
+                    detail "Skipping shpool.service: already set up"
                 else
                     shpool_bin=$(command -v shpool)
                     shpool_service_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -2026,7 +2034,7 @@ system_jj() {
 set_extras_tools() {
     EXTRAS_TOOLS=helix
     if jj_path="$(system_jj)"; then
-        info "jj is already installed at $jj_path; leaving it to whatever provides it"
+        detail "Skipping jj: already installed at $jj_path"
     else
         EXTRAS_TOOLS="$EXTRAS_TOOLS jj"
     fi
@@ -2259,7 +2267,7 @@ lf_missing() {
 
 install_file_managers() {
     if ! lf_missing; then
-        info "lf already installed"
+        detail "Skipping lf: already installed"
         return 0
     fi
     if local_bin_blocked; then
@@ -2440,7 +2448,7 @@ install_shell_tools() {
     fi
     shell_tools="$(missing_shell_tools)"
     if test -z "$shell_tools"; then
-        info "atuin and carapace already installed"
+        detail "Skipping atuin and carapace: already installed"
         return 0
     fi
 
@@ -2502,13 +2510,13 @@ install_zsh_autosuggestions_home() {
     esac
     zas_dir="$HOME/.zsh/zsh-autosuggestions"
     if test -e "$zas_dir"; then
-        info "zsh-autosuggestions is already in ~/.zsh/zsh-autosuggestions"
+        detail "Skipping zsh-autosuggestions: already in ~/.zsh/zsh-autosuggestions"
         return 0
     fi
     for zas_system in "${SETUP_SYSROOT:-}/usr/share/zsh-autosuggestions" \
             "${SETUP_SYSROOT:-}/usr/share/zsh/plugins/zsh-autosuggestions"; do
         if test -r "$zas_system/zsh-autosuggestions.zsh"; then
-            info "zsh-autosuggestions is already installed in ${zas_system#"${SETUP_SYSROOT:-}"}"
+            detail "Skipping zsh-autosuggestions: already installed in ${zas_system#"${SETUP_SYSROOT:-}"}"
             return 0
         fi
     done
@@ -2573,7 +2581,7 @@ install_fnm() {
         return
     fi
     if command -v fnm >/dev/null 2>&1; then
-        info "fnm already installed"
+        detail "Skipping fnm: already installed"
         return
     fi
     info "Installing fnm"
@@ -2603,7 +2611,7 @@ generate_ssh_key() {
     if test "$SSH" = auto \
             && command -v ssh-add >/dev/null 2>&1 \
             && ssh-add -l >/dev/null 2>&1; then
-        info "SSH key already available via ssh-agent; pass --ssh to create one anyway"
+        detail "Skipping the SSH key: ssh-agent has one; --ssh makes one anyway"
         return
     fi
 
@@ -2616,7 +2624,7 @@ generate_ssh_key() {
                 *.pub) continue ;;
             esac
             if test -f "$key"; then
-                info "SSH key already exists: $key; pass --ssh to create one anyway"
+                detail "Skipping the SSH key: $key exists; --ssh makes one anyway"
                 return
             fi
         done
@@ -2681,7 +2689,7 @@ offer_ssh_remotes() {
     # answer "nothing to convert"; and an HTTPS prefix was chosen precisely
     # because SSH isn't the way in, so converting would break the remote.
     if test "$GITHUB_MIRROR" = yes; then
-        info "Cloned from $GITHUB_HOST; leaving repo remotes as-is"
+        detail "Skipping the switch to SSH remotes: cloned from $GITHUB_HOST"
         return 0
     fi
 
@@ -2707,7 +2715,7 @@ offer_ssh_remotes() {
         printf "%s" "$prompt"
         read -r reply < /dev/tty
     else
-        info "Non-interactive; leaving repo remotes as-is (run gittossh later to switch)"
+        info "Skipping the switch to SSH remotes: not interactive (run gittossh to switch)"
         return 0
     fi
 
