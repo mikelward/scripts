@@ -2652,8 +2652,8 @@ test_tilemo_installs_a_checkout_it_cant_update() {
     touch "$TEST_TMPDIR/git_fails"
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_output_contains "could not update $TEST_TMPDIR/home/tilemo" &&
-    assert_output_contains "installing it as it stands" &&
+    assert_output_contains "Warning: couldn't update $TEST_TMPDIR/home/tilemo: " &&
+    assert_output_contains "; installing it as it is" &&
     assert_called "make -C $TEST_TMPDIR/home/tilemo install"
 }
 

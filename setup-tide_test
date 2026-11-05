@@ -565,7 +565,7 @@ teardown
 
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run FAKE_PULL_FAILS=1
 check "a failed pull still installs" test "$status" -eq 0
-check "a failed pull is reported" has "$output" "could not update $T/src/tide"
+check "a failed pull says why" has "$output" "Warning: couldn't update $T/src/tide: can't reach origin; installing it as it is"
 check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/tide install"
 teardown
 

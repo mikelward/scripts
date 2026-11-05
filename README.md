@@ -87,6 +87,13 @@ apt runs without asking anything, since its questions would land in the log;
 a config file changed on the machine keeps that version, apt's own default
 answer.
 
+A checkout `setup` can't pull (this repo, conf, tide, tilemo) is used as it
+is, with a warning that says why: it can't reach origin, local changes are in
+the way, it has diverged, or its branch has no upstream. One that pulls but
+is on a branch other than its default gets a warning too, since that's how
+an old branch gets installed unnoticed. Nothing switches the branch or drops
+a change.
+
 **A machine that won't run binaries from `~/.local/bin`** — a managed Mac whose
 policy kills any binary it hasn't approved (exit 137), or a `noexec` home —
 gets none of this. Before installing anything there, `setup` copies a system

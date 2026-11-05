@@ -1958,6 +1958,87 @@ check_hyprland_version() {
 
 # $TIDE_REPO only steers a fresh clone; an existing checkout pulls from
 # its own origin.
+# default_branch DIR: origin's default branch, as DIR's clone recorded it,
+# or main or master when it recorded none.
+default_branch() {
+    if _db=$(git -C "$1" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null); then
+        printf '%s\n' "${_db#origin/}"
+        return 0
+    fi
+    for _db in main master; do
+        if git -C "$1" show-ref --verify --quiet "refs/remotes/origin/$_db"; then
+            printf '%s\n' "$_db"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# pull_checkout DIR USE GIT...: runs GIT..., a git pull of DIR. When it
+# fails, or leaves DIR on a branch other than origin's default, it warns why
+# and what happens instead (USE): nothing here switches a branch or drops a
+# change. Fails when the pull did.
+pull_checkout() {
+    _pc_dir=$1
+    _pc_use=$2
+    _pc_said=
+    shift 2
+    # The branch is read before pulling: a rebase that stops on conflicts
+    # leaves HEAD detached. symbolic-ref exits 1 for a detached HEAD, and
+    # more when it can't say.
+    _pc_sym=0
+    _pc_branch=$(git -C "$_pc_dir" symbolic-ref --quiet --short HEAD 2>/dev/null) || _pc_sym=$?
+    _pc_status=0
+    _pc_out=$("$@" 2>&1) || _pc_status=$?
+    if test "$_pc_status" -eq 0; then
+        test -z "$_pc_out" || printf '%s\n' "$_pc_out"
+        if test -n "$_pc_branch" && _pc_default=$(default_branch "$_pc_dir") \
+                && test -n "$_pc_default" && test "$_pc_branch" != "$_pc_default"; then
+            warn "$_pc_dir is on branch $_pc_branch, not $_pc_default; $_pc_use"
+        fi
+        return 0
+    fi
+    case "$_pc_out" in
+        *CONFLICT* | *"merge failed"*) _pc_sym=conflicts ;;
+    esac
+    if test "$_pc_sym" = conflicts; then
+        _pc_why="it has conflicts to resolve"
+    elif test "$_pc_sym" -eq 1; then
+        _pc_why="it's detached at $(git -C "$_pc_dir" rev-parse --short HEAD 2>/dev/null)"
+    elif test "$_pc_sym" -eq 0 && ! git -C "$_pc_dir" rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
+        _pc_why="branch $_pc_branch has no upstream"
+    else
+        # Only what says the network failed: a server that answers and
+        # refuses (an HTTP 403, a rejected key) gets git's reason, below.
+        case "$_pc_out" in
+            *"Could not resolve host"* | *"Failed to connect to"* | *"Couldn't connect to server"* \
+            | *"timed out"* | *"Network is unreachable"* | *"Connection refused"*)
+                _pc_why="can't reach origin" ;;
+            *"would be overwritten"* | *"local changes"* | *"unstaged changes"* \
+            | *"uncommitted changes"* | *"commit your changes"* | *"commit or stash"*)
+                _pc_why="local changes are in the way" ;;
+            *"fast-forward"* | *"divergent"* | *"diverged"*)
+                _pc_why="it has diverged from $(git -C "$_pc_dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null)" ;;
+            *)
+                # git's own reason, with any credentials in a URL taken out,
+                # and all of what git said under it when that's more than the
+                # one line: the reason can come before git's line (ssh's
+                # "Permission denied (publickey)") or instead of it (a hook's
+                # refusal).
+                _pc_said=$(printf '%s\n' "$_pc_out" | sed 's#://[^/@ ]*@#://***@#g')
+                _pc_why=$(printf '%s\n' "$_pc_said" | awk '/^(fatal|error): / { sub(/^(fatal|error): /, ""); print; exit }')
+                if test -z "$_pc_why"; then
+                    _pc_why="git pull exited $_pc_status"
+                elif test "$(printf '%s\n' "$_pc_said" | wc -l)" -eq 1; then
+                    _pc_said=
+                fi ;;
+        esac
+    fi
+    warn "couldn't update $_pc_dir: $_pc_why; $_pc_use"
+    test -z "$_pc_said" || printf '%s\n' "$_pc_said" | sed 's/^/    /' >&2
+    return "$_pc_status"
+}
+
 fetch_tide() {
     if test "$FETCH" = no; then
         test -d "$TIDE_DIR/.git" \
@@ -1965,12 +2046,12 @@ fetch_tide() {
     elif test -d "$TIDE_DIR/.git"; then
         info "Updating $TIDE_DIR"
         # The existing checkout is enough to install, so a failed pull (no
-        # network, say) warns rather than ending the run. A checkout cloned
-        # through the mirror still names GitHub as its origin, so the pull
-        # goes through the mirror too. Quiet, as setup's pulls are: git
-        # still says what went wrong.
-        git_github -C "$TIDE_DIR" pull --quiet --ff-only \
-            || warn "could not update $TIDE_DIR; installing the existing checkout"
+        # network, say) warns, saying why, rather than ending the run. A
+        # checkout cloned through the mirror still names GitHub as its
+        # origin, so the pull goes through the mirror too. Quiet, as setup's
+        # pulls are.
+        pull_checkout "$TIDE_DIR" "installing it as it is" \
+            git_github -C "$TIDE_DIR" pull --quiet --ff-only || :
     else
         # Not naming the URL: one passed with credentials in it would land in
         # the terminal and any captured log, so the clone isn't logged
