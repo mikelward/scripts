@@ -124,6 +124,12 @@ installs nothing there (the `homepkg` tools, `uv`) and removes the `atuin` and
 starting them. Nothing looks for a particular company or product; install the
 tools some other way (Homebrew, if the policy allows it) instead.
 
+**A Mac whose Santa is in Lockdown mode**, where each new binary needs an
+administrator's approval, gets nothing from Homebrew: `setup` says so once,
+installs and upgrades nothing from it, and carries on. `setup-macos` lists the
+apps it would have installed (Hammerspoon, Karabiner-Elements and the rest) as
+steps to get from IT.
+
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
 closure), native updates, and clean removal. micromamba is bootstrapped

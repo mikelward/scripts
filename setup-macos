@@ -67,6 +67,11 @@
 #        restart Finder and the Dock. Without any of them the settings are
 #        still written and the script says what needs a logout.
 #
+# On a Mac whose Santa is in Lockdown mode, where each new binary needs an
+# administrator's approval, nothing is installed from Homebrew: Amethyst,
+# Hammerspoon, blueutil, the DDC tool, Karabiner-Elements and LinearMouse
+# each become a step at the end, to get from IT.
+#
 # docs/MACOS.md covers the whole setup: the key mapping against the KDE/Krohnkite
 # side, how the symbolic hotkeys work, what doesn't carry over from KWin, and
 # why Amethyst rather than yabai or AeroSpace.
@@ -334,6 +339,45 @@ error() {
 
 is_command() {
     command -v "$1" >/dev/null 2>&1
+}
+
+# Santa, the binary-authorization agent some managed Macs run, can be in
+# Lockdown mode, where every binary it hasn't been told to allow needs an
+# administrator's approval before it runs. Everything Homebrew installs is
+# such a binary, so there nothing here is installed from Homebrew, and each
+# app or tool that would have been is a step in the closing to-do list
+# instead (see todo_from_it). setup has the same two functions; the answer,
+# and whether it was said, are exported, so a run from setup neither asks
+# nor says it twice.
+santa_lockdown() {
+    if test -z "${SETUP_SANTA_LOCKDOWN:-}"; then
+        SETUP_SANTA_LOCKDOWN=no
+        if command -v santactl >/dev/null 2>&1 \
+                && _sl_status=$(santactl status 2>/dev/null) \
+                && printf '%s\n' "$_sl_status" \
+                    | grep -Eqi '^[[:space:]]*Mode[[:space:]]*\|[[:space:]]*Lockdown'; then
+            SETUP_SANTA_LOCKDOWN=yes
+        fi
+        export SETUP_SANTA_LOCKDOWN
+    fi
+    test "$SETUP_SANTA_LOCKDOWN" = yes
+}
+
+# homebrew_blocked: whether Homebrew's installs are to be skipped, saying why
+# the first time in a run. Every Homebrew step starts with it.
+homebrew_blocked() {
+    santa_lockdown || return 1
+    if test -z "${SETUP_SANTA_WARNED:-}"; then
+        SETUP_SANTA_WARNED=yes
+        export SETUP_SANTA_WARNED
+        warn "Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval"
+    fi
+}
+
+# todo_from_it NAME EFFECT: the step for NAME, which Lockdown mode kept from
+# Homebrew, saying what's lost (EFFECT) until it's there.
+todo_from_it() {
+    todo "Get $1 from IT or your company's software portal, then run setup-macos again. Until then, $2."
 }
 
 # Run a configuration step, and make a failure visible either way.
@@ -1301,6 +1345,11 @@ install_amethyst() {
         return 0
     fi
 
+    # Not from a staged bundle either: Santa blocks that copy just the same.
+    if homebrew_blocked; then
+        todo_from_it Amethyst "the tiling settings here have no effect"
+        return 0
+    fi
     if ! is_command brew; then
         info "Homebrew not found; looking for a staged Amethyst bundle"
     elif ! stale_cask_record amethyst Amethyst "trying a staged bundle meanwhile"; then
@@ -1381,6 +1430,10 @@ install_hammerspoon() {
         warn "Hammerspoon is not installed and --no-install was given; $TILEMO_MISSING_EFFECT until it is"
         return 0
     fi
+    if homebrew_blocked; then
+        todo_from_it Hammerspoon "$TILEMO_MISSING_EFFECT"
+        return 0
+    fi
     if ! is_command brew; then
         warn "Homebrew not found, so Hammerspoon can't be installed; $TILEMO_MISSING_EFFECT until it is"
         return 0
@@ -1426,6 +1479,10 @@ install_brew_tool() {
     fi
     if test "$INSTALL" = no; then
         warn "$_tool is not installed and --no-install was given; $_effect until it is"
+        return 0
+    fi
+    if homebrew_blocked; then
+        todo_from_it "$_tool" "$_effect"
         return 0
     fi
     if ! is_command brew; then
@@ -1747,6 +1804,10 @@ install_karabiner() {
         warn "Karabiner-Elements is not installed and --no-install was given; $KARABINER_MISSING_EFFECT until it is"
         return 0
     fi
+    if homebrew_blocked; then
+        todo_from_it Karabiner-Elements "$KARABINER_MISSING_EFFECT"
+        return 0
+    fi
     # Not attempted under --no-sudo: the cask is a .pkg, so Homebrew hands it
     # to the system installer and an administrator prompt appears -- exactly
     # what --no-sudo exists to avoid.
@@ -1928,6 +1989,10 @@ install_linearmouse() {
     fi
     if test "$INSTALL" = no; then
         warn "LinearMouse is not installed and --no-install was given; $LINEARMOUSE_MISSING_EFFECT until it is"
+        return 0
+    fi
+    if homebrew_blocked; then
+        todo_from_it LinearMouse "$LINEARMOUSE_MISSING_EFFECT"
         return 0
     fi
     if ! is_command brew; then

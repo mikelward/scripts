@@ -69,6 +69,14 @@ On macOS this installs Homebrew if it's missing, then, by category:
 Then it hands off to `setup-macos` for the desktop configuration described in
 this file.
 
+If Santa is in Lockdown mode (`santactl status` says `Mode | Lockdown`), each
+new binary needs an administrator's approval, so nothing comes from Homebrew:
+`setup` warns once and skips Homebrew and everything above that comes from it,
+including the weekly `brew upgrade`; the extras come from their releases
+instead. `setup-macos` puts Hammerspoon, blueutil, the DDC tool,
+Karabiner-Elements, LinearMouse (and Amethyst, with `--wm amethyst`) in its
+closing list, to get from IT or the company's software portal.
+
 A re-run installs what's missing and leaves what's installed at its version,
 since a managed Mac can need each new version of a binary approved before it
 runs. Once a week, or the first time, it also runs `brew update` and `brew
@@ -172,7 +180,7 @@ manager's own layouts and keybindings are missing.
    cleared.
 
 There's no third backend. If Amethyst is already installed in either location,
-both are skipped.
+both are skipped. Under Santa's Lockdown mode neither is tried (see above).
 
 ### tilemo, the default
 
