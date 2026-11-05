@@ -4,7 +4,8 @@
 # Usage:
 #     setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
-#           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-v | --verbose] \
+#           [--ssh | --no-ssh] [--no-npm] [--upgrade] [--github PREFIX] \
+#           [-v | --verbose] \
 #           [-h | --help]
 #
 #  or, to bootstrap from scratch:
@@ -41,6 +42,14 @@
 # already has the tools. Pass --ignore-errors to keep going past failures
 # instead of aborting on the first one. Both flags are forwarded to
 # setup-kde / setup-macos.
+#
+# A re-run installs whatever is missing but upgrades what's already installed
+# at most once a week: on a managed machine each new version of a binary can
+# need approving before it runs. The weekly pass upgrades setup's apt or dnf
+# packages, everything Homebrew has, the homepkg env, the release binaries
+# and uv; ~/.local/state/setup/last-upgrade records when the last one
+# finished without failing. Pass --upgrade to upgrade now anyway. The repos
+# setup clones are config, not packages, and are pulled on every run.
 #
 # Every privileged command runs through sudo_or_warn, so an unexpected sudo
 # denial already degrades to a warning instead of aborting the bootstrap --
@@ -120,6 +129,26 @@ ROOT_DIR="$SRC_DIR/root"
 # This deliberately stops at confirmations. The administrator password a .pkg
 # cask asks for is the user's to give, and nothing here suppresses it.
 export HOMEBREW_NO_ASK=1
+
+# Installed formulae and casks stay at their versions, so setup can upgrade
+# them at most once a week (see resolve_upgrade): a brew install neither
+# upgrades a formula asked for again nor checks its dependents, and Homebrew
+# refreshes its index at most weekly by itself. Exported, like
+# HOMEBREW_NO_ASK, so setup-macos's installs get them too.
+export HOMEBREW_NO_INSTALL_UPGRADE=1
+export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+export HOMEBREW_AUTO_UPDATE_SECS=604800
+
+# Whether this run upgrades installed packages. One of:
+#   auto - when the last upgrade pass was a week or more ago, or never ran;
+#          resolve_upgrade decides (the default)
+#   yes  - upgrade now (--upgrade)
+# resolve_upgrade turns auto into yes or no. UPGRADE_STAMP's time is when the
+# last upgrade pass finished without failing; record_upgrade touches it, and
+# any upgrade step that fails sets UPGRADE_FAILED so the next run tries again.
+UPGRADE=auto
+UPGRADE_FAILED=no
+UPGRADE_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/setup/last-upgrade"
 
 # Whether to install/configure graphical components. One of:
 #   auto - decide based on a detected display server (the default)
@@ -234,7 +263,8 @@ Usage: setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter]
              [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
-             [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-v | --verbose]
+             [--ssh | --no-ssh] [--no-npm] [--upgrade] [--github PREFIX]
+             [-v | --verbose]
              [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
@@ -269,6 +299,8 @@ Options:
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
   --no-npm         Skip installing Node.js and the TypeScript compiler
+  --upgrade        Upgrade installed packages now, even if they were upgraded
+                   less than a week ago
   --github PREFIX  Clone from PREFIX instead of github.com, e.g.
                    git@ghe.example.com or https://ghe.example.com. Also
                    settable via GITHUB_PREFIX
@@ -278,7 +310,8 @@ Options:
   -h, --help       Show this help and exit
 
 Graphical setup runs only when a display is detected, and the extras are
-skipped below MIN_DISK_GB (default 15GB) free.
+skipped below MIN_DISK_GB (default 15GB) free. Installed packages are
+upgraded at most once a week.
 USAGE
 }
 
@@ -588,6 +621,9 @@ while test $# -gt 0; do
             ;;
         --no-npm)
             NPM=no
+            ;;
+        --upgrade)
+            UPGRADE=yes
             ;;
         --github)
             shift
@@ -1286,11 +1322,106 @@ pkg_note() {
     done
 }
 
+# --- Weekly upgrades ---
+
+# A re-run installs what's missing, and upgrades what's installed only on an
+# upgrade run: one a week or more after the last upgrade pass that didn't
+# fail, the first run of all, or one given --upgrade. On a managed machine
+# each new version of a binary can need approving before it runs.
+#
+# One stamp covers every package manager, as one pass upgrades them all, and
+# a failure anywhere has the next run try the whole pass again. The repos
+# setup clones (scripts, conf, root, tide, and setup-macos's tilemo) are
+# config, not packages, and are pulled on every run.
+
+# resolve_upgrade: turns UPGRADE=auto into yes or no by UPGRADE_STAMP's age.
+resolve_upgrade() {
+    test "$UPGRADE" = auto || return 0
+    if ! test -e "$UPGRADE_STAMP"; then
+        UPGRADE=yes
+    elif ! _ru_stale=$(find "$UPGRADE_STAMP" -prune -mtime +6); then
+        warn "couldn't tell from $UPGRADE_STAMP when packages were last upgraded; upgrading them"
+        UPGRADE=yes
+    elif test -n "$_ru_stale"; then
+        UPGRADE=yes
+    else
+        UPGRADE=no
+        detail "Skipping upgrades: the last was less than a week ago (--upgrade does them now)"
+    fi
+}
+
+# upgrade_failed WHAT: says WHAT couldn't be upgraded, and keeps the stamp
+# as it is so the next run tries again.
+upgrade_failed() {
+    UPGRADE_FAILED=yes
+    # A fresh stamp would hold the retry off for a week, as after a failed
+    # --upgrade within one: drop it.
+    rm -f "$UPGRADE_STAMP" 2>/dev/null \
+        || warn "couldn't remove $UPGRADE_STAMP; the next upgrade waits for it to be a week old"
+    warn "could not upgrade $1; the next run tries again"
+}
+
+# record_upgrade: after an upgrade run's installs, notes when it finished,
+# unless an upgrade failed.
+record_upgrade() {
+    test "$UPGRADE" = yes && test "$UPGRADE_FAILED" = no || return 0
+    if ! mkdir -p "${UPGRADE_STAMP%/*}" || ! touch "$UPGRADE_STAMP"; then
+        warn "couldn't record the upgrade in $UPGRADE_STAMP, so the next run upgrades again"
+    fi
+}
+
+# pkg_upgrade MANAGER NAME...: on an upgrade run, upgrades those of NAME
+# that MANAGER (apt or dnf) has installed. The installs themselves leave
+# installed packages as they are: apt-get install --no-upgrade, and dnf
+# install with best off, which is Fedora's default and dnf5's way anyway.
+# Under --no-sudo there's nothing it could run.
+pkg_upgrade() {
+    test "$UPGRADE" = yes && test "$SUDO" != no || return 0
+    _pu_manager=$1
+    shift
+    _pu_names=$(pkg_versions "$_pu_manager" | NAMES="$*" awk '
+        BEGIN { n = split(ENVIRON["NAMES"], a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+        want[$1] && !seen[$1]++ { printf "%s%s", sep, $1; sep = " " }')
+    test -n "$_pu_names" || return 0
+    case "$_pu_manager" in
+        apt) set -- apt-get install -y --only-upgrade --install-recommends ;;
+        dnf) set -- dnf upgrade -y ;;
+    esac
+    # shellcheck disable=SC2086  # $_pu_names is a space-separated list of names
+    sudo_logged "$@" $_pu_names || upgrade_failed "$_pu_names"
+}
+
+# brew_upgrade: on an upgrade run, refreshes Homebrew's index and upgrades
+# every formula and cask, once a run. brew install upgrades nothing (see
+# HOMEBREW_NO_INSTALL_UPGRADE).
+brew_upgrade() {
+    test "$UPGRADE" = yes && test -z "${BREW_UPGRADED:-}" || return 0
+    BREW_UPGRADED=1
+    info "Upgrading Homebrew packages"
+    { brew_logged update && brew_logged upgrade; } || upgrade_failed "Homebrew packages"
+}
+
+# npm_install_typescript: tsc from npm, where the distro has no package of
+# it. npm install -g upgrades an installed one, so with tsc there that waits
+# for an upgrade run.
+npm_install_typescript() {
+    _nt_had=no
+    if command -v tsc >/dev/null 2>&1; then
+        test "$UPGRADE" = yes || return 0
+        _nt_had=yes
+    fi
+    sudo_logged npm install -g typescript && return 0
+    _nt_status=$?
+    test "$_nt_had" = no || upgrade_failed "typescript (npm)"
+    return "$_nt_status"
+}
+
 # apt_install, dnf_install, brew_install NAME...: install NAME, quietly
 # (see run_logged), for pkg_end to report.
 apt_install() {
     pkg_note asked "$@"
-    sudo_logged apt-get install -y --install-recommends "$@" && return 0
+    pkg_upgrade apt "$@"
+    sudo_logged apt-get install -y --no-upgrade --install-recommends "$@" && return 0
     _pi_status=$?
     pkg_note failed "$@"
     return "$_pi_status"
@@ -1298,7 +1429,8 @@ apt_install() {
 
 dnf_install() {
     pkg_note asked "$@"
-    sudo_logged dnf install -y "$@" && return 0
+    pkg_upgrade dnf "$@"
+    sudo_logged dnf install -y --setopt=best=False "$@" && return 0
     _pi_status=$?
     pkg_note failed "$@"
     return "$_pi_status"
@@ -1476,6 +1608,10 @@ install_os_packages() {
         debian)
             if ! sudo_logged apt-get update -qq; then
                 warn "skipping Debian package installation because apt-get update failed"
+                # Nothing was upgraded either, so this pass mustn't count.
+                if test "$UPGRADE" = yes && test "$SUDO" != no; then
+                    upgrade_failed "Debian packages (apt-get update failed)"
+                fi
                 return 0
             fi
             if ! apt_install \
@@ -1535,7 +1671,7 @@ install_os_packages() {
                 # time. Debian/Ubuntu package it as node-typescript; fall
                 # back to a one-time global npm install where unavailable.
                 apt_install node-typescript \
-                    || sudo_logged npm install -g typescript \
+                    || npm_install_typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
@@ -1618,7 +1754,7 @@ install_os_packages() {
                 # without fetching typescript from the npm registry at build
                 # time. Fedora ships no typescript rpm, so this is a one-time
                 # global npm install during bootstrap.
-                sudo_logged npm install -g typescript \
+                npm_install_typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             if test "$GUI_ENABLED" -eq 1; then
@@ -1646,6 +1782,7 @@ install_os_packages() {
             # binaries for a managed Mac to approve at each version.
             # python3 and git come with the Command Line Tools, which
             # Homebrew needs anyway.
+            brew_upgrade
             if ! brew_install \
                 atool \
                 autoconf \
@@ -2098,6 +2235,7 @@ install_extras_brew() {
     helix_installed=no
     set_extras_tools nushell
     pkg_begin brew "Installing $EXTRAS_TOOLS from Homebrew"
+    brew_upgrade
     for formula in $EXTRAS_TOOLS; do
         if brew_install "$formula"; then
             test "$formula" = helix && helix_installed=yes
@@ -2132,10 +2270,33 @@ install_extras_release() {
         return 0
     fi
     set_extras_tools nu
-    info "Installing the extras from their GitHub release artifacts: $EXTRAS_TOOLS"
-    # shellcheck disable=SC2086  # $EXTRAS_TOOLS is a space-separated list expanded into multiple args
-    run_logged "$homepkg" --backend github install $EXTRAS_TOOLS \
-        || warn "some of the extras could not be installed from their releases (offline?)"
+    # homepkg fetches the latest release whether or not one is installed, so
+    # the ones a release put in ~/.local/bin wait for an upgrade run.
+    release_missing=
+    release_installed=
+    for tool in $EXTRAS_TOOLS; do
+        case "$tool" in
+            helix) bin=hx ;;
+            *) bin=$tool ;;
+        esac
+        if test -f "$HOME/.local/bin/$bin" && ! test -L "$HOME/.local/bin/$bin"; then
+            release_installed="$release_installed $tool"
+        else
+            release_missing="$release_missing $tool"
+        fi
+    done
+    if test -n "$release_installed" && test "$UPGRADE" = yes; then
+        info "Upgrading$release_installed from their GitHub release artifacts"
+        # shellcheck disable=SC2086  # a space-separated list expanded into multiple args
+        run_logged "$homepkg" --backend github install $release_installed \
+            || upgrade_failed "${release_installed# } from their releases (offline?)"
+    fi
+    if test -n "$release_missing"; then
+        info "Installing the extras from their GitHub release artifacts:$release_missing"
+        # shellcheck disable=SC2086  # a space-separated list expanded into multiple args
+        run_logged "$homepkg" --backend github install $release_missing \
+            || warn "some of the extras could not be installed from their releases (offline?)"
+    fi
     # A partial run can still have landed helix, so wire up its runtime on the
     # strength of the binary being there rather than of homepkg's exit status.
     # A release hx is a plain file; an hx that's a symlink is homepkg's, pointing
@@ -2299,6 +2460,26 @@ install_home_tools() {
             && test "$(readlink "$HOME/.local/bin/hx")" = "$env_dir/bin/hx"; then
         clear_managed_helix_runtime
     fi
+}
+
+# --- Upgrade homepkg's env ---
+
+# homepkg install leaves a package its conda env already has as it is, so
+# the env's tools -- the --no-root ones, lf, an Intel Mac's node -- move to
+# newer versions here, on an upgrade run, all at once.
+upgrade_home_env() {
+    test "$UPGRADE" = yes || return 0
+    test -d "$HOME/.local/share/homepkg/env" || return 0
+    if local_bin_blocked; then
+        return 0
+    fi
+    homepkg="$SCRIPTS_DIR/homepkg"
+    if ! test -x "$homepkg"; then
+        warn "homepkg not found in the scripts repo; skipping the upgrade of the tools it installed"
+        return 0
+    fi
+    info "Upgrading the tools homepkg installed"
+    run_logged "$homepkg" update || upgrade_failed "the tools homepkg installed (offline?)"
 }
 
 # --- Install the terminal file managers with no reliable distro package ---
@@ -2497,8 +2678,24 @@ install_shell_tools() {
         return 0
     fi
     shell_tools="$(missing_shell_tools)"
+    # homepkg fetches the latest release whether or not one is installed, so
+    # the ones it put in ~/.local/bin wait for an upgrade run.
+    shell_upgrades=
+    if test "$UPGRADE" = yes; then
+        for tool in atuin carapace; do
+            if test -f "$HOME/.local/bin/$tool" && ! test -L "$HOME/.local/bin/$tool"; then
+                shell_upgrades="$shell_upgrades $tool"
+            fi
+        done
+    fi
+    if test -n "$shell_upgrades"; then
+        info "Upgrading$shell_upgrades via homepkg"
+        # shellcheck disable=SC2086  # deliberate word split: one flag per tool
+        run_logged "$homepkg" --backend github install $shell_upgrades \
+            || upgrade_failed "${shell_upgrades# } (offline?)"
+    fi
     if test -z "$shell_tools"; then
-        detail "Skipping atuin and carapace: already installed"
+        test -n "$shell_upgrades" || detail "Skipping atuin and carapace: already installed"
         return 0
     fi
 
@@ -2595,12 +2792,21 @@ install_uv() {
     # not abort the bootstrap. install_uv runs before install_home_tools, so on
     # an offline "setup --no-root" a hard failure here would kill the run before
     # the homepkg bundle install -- where uv can instead come from the bundle.
-    if command -v uv >/dev/null 2>&1; then
+    if uv_path=$(command -v uv); then
+        # uv self update fetches the latest release, so it waits for an
+        # upgrade run, and only updates a uv its own installer put in place:
+        # that installer leaves a receipt, which self update needs. One from
+        # pipx, pip or Homebrew, even in ~/.local/bin, is left to them.
+        test "$UPGRADE" = yes || return 0
+        if ! test -f "${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv-receipt.json"; then
+            detail "Skipping uv's update: $uv_path wasn't installed by uv's installer"
+            return 0
+        fi
         info "Updating uv"
         # uv self update reruns the installer, which edits the shell rc/profile
         # files unless UV_NO_MODIFY_PATH is set; PATH is managed by the conf repo.
         run_logged env UV_NO_MODIFY_PATH=1 uv self update \
-            || warn "could not update uv (offline?); keeping the installed version"
+            || upgrade_failed "uv (offline?)"
     elif local_bin_blocked; then
         info "Skipping uv: $LOCAL_BIN_WHY"
     else
@@ -3019,6 +3225,7 @@ resolve_gui
 resolve_minimal
 resolve_extras
 if test "$INSTALL" = yes; then
+    resolve_upgrade
     install_packages
     if test "$GUI_ENABLED" -eq 1; then
         install_fonts
@@ -3053,10 +3260,16 @@ if ! command -v make >/dev/null 2>&1; then
     exit 1
 fi
 
+# Pulled on every run, upgrade run or not: these are config, not packages.
 clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR" yes
 clone_or_pull "$CONF_REPO" "$CONF_DIR" yes
 
 run_confinst
+
+# Before the installs below, which leave what the env has as it is.
+if test "$INSTALL" = yes; then
+    upgrade_home_env
+fi
 
 if test "$INSTALL" = no; then
     info "Skipping heavyweight extras (helix, jj, nushell); --no-install"
@@ -3148,6 +3361,12 @@ if test "$INSTALL" = yes; then
     fi
 else
     info "Skipping root config installation (--no-install)"
+fi
+
+# The last of the installs is done, so an upgrade pass that didn't fail is
+# over.
+if test "$INSTALL" = yes; then
+    record_upgrade
 fi
 
 # Now that the repos are cloned, offer to switch their remotes to SSH.

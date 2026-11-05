@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
+QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -232,6 +232,35 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     rm -rf "$terminal_tmpdir"
 }
 
+# stage_stamp FILE AGE: leaves setup's upgrade stamp FILE missing (none), just
+# touched (fresh), or from long ago (stale).
+stage_stamp() {
+    case "$2" in
+        none) ;;
+        fresh) mkdir -p "${1%/*}" && touch "$1" ;;
+        stale) mkdir -p "${1%/*}" && touch -t 202001010000 "$1" ;;
+        *) echo "stage_stamp: unknown age $2" >&2; return 2 ;;
+    esac
+}
+
+# stamp_state FILE: prints missing, fresh (under a week old) or stale.
+stamp_state() {
+    if ! test -e "$1"; then
+        echo missing
+    elif test -n "$(find "$1" -mtime +6)"; then
+        echo stale
+    else
+        echo fresh
+    fi
+}
+
+# The harnesses below run a whole upgrade pass -- resolve_upgrade, the
+# installs, record_upgrade -- as setup's main does. HARNESS_UPGRADE is what
+# UPGRADE starts as (default no: an in-week run, with no stamp to check), and
+# HARNESS_STAMP how old the stamp is beforehand (none, fresh, stale). They
+# leave $stamp set to its state afterwards, and the output ends with
+# UPGRADE_FAILED's value.
+
 # Run install_packages' macOS arm against a brew that always fails, or against
 # an unavailable Homebrew. Asserting the run survives is the whole point: this
 # arm used to abort the bootstrap under set -e, so the tests run with set -e on
@@ -245,7 +274,8 @@ run_macos_packages() {
     macos_tmpdir="$(mktemp -d)"
     macos_calls="$macos_tmpdir/calls"
     # brew_mode: fail (the default) fails every call, saying why as brew
-    # would; ok installs, chattering as brew does, and lists what it has.
+    # would; ok installs, chattering as brew does, and lists what it has;
+    # upgrade-fails is ok but for brew update and brew upgrade.
     brew_mode="${3:-fail}"
     cat > "$macos_tmpdir/brew" <<MOCK
 #!/bin/sh
@@ -255,6 +285,12 @@ if test "$brew_mode" = fail; then
     exit 1
 fi
 case "\$1" in
+    update|upgrade)
+        if test "$brew_mode" = upgrade-fails; then
+            echo "Error: Failed to download the index" >&2
+            exit 1
+        fi
+        ;;
     list) cat "$macos_tmpdir/installed" 2>/dev/null ;;
     install)
         for _name; do
@@ -272,6 +308,8 @@ exit 0
 MOCK
     chmod +x "$macos_tmpdir/brew"
     write_mock_uname "$macos_tmpdir" "$macos_arch"
+    macos_stamp="$macos_tmpdir/state/setup/last-upgrade"
+    stage_stamp "$macos_stamp" "${HARNESS_STAMP:-none}"
 
     set +e
     output="$(PATH="$macos_tmpdir:$PATH" XDG_STATE_HOME="$macos_tmpdir/state" SETUP_LOG="" \
@@ -281,15 +319,23 @@ OS=macos
 NPM=yes
 ROOT=yes
 GUI_ENABLED=1
+SUDO=yes
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+UPGRADE_STAMP='$macos_stamp'
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac install_packages")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac resolve_upgrade record_upgrade install_packages")
+resolve_upgrade
 install_packages
-echo BOOTSTRAP_CONTINUED" 2>&1)"
+record_upgrade
+echo BOOTSTRAP_CONTINUED
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$macos_calls" 2>/dev/null)"
     brew_log="$(cat "$macos_tmpdir/state/setup/setup.log" 2>/dev/null)"
+    stamp="$(stamp_state "$macos_stamp")"
     rm -rf "$macos_tmpdir"
 }
 
@@ -381,14 +427,49 @@ run_linux_packages() {
     linux_tmpdir="$(mktemp -d)"
     linux_calls="$linux_tmpdir/calls"
     # It chatters as the real ones do, and records whether apt may ask.
+    # HARNESS_PM_MODE=upgrade-fails fails its upgrades (apt-get install
+    # --only-upgrade, dnf upgrade) and nothing else; update-fails fails
+    # apt-get update.
     cat > "$linux_tmpdir/$linux_pm" <<MOCK
 #!/bin/sh
 printf '%s\n' "$linux_pm \$* [DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-unset}] [stdin=\$(cat)]" >> "$linux_calls"
+case "${HARNESS_PM_MODE:-ok} \$*" in
+    "update-fails update"*)
+        echo "E: Could not resolve the mirror" >&2
+        exit 100
+        ;;
+    "upgrade-fails "*--only-upgrade* | "upgrade-fails upgrade "*)
+        echo "E: Failed to fetch the upgrades" >&2
+        exit 100
+        ;;
+esac
 echo "Setting up \$*"
 exit 0
 MOCK
+    # The packages installed beforehand are HARNESS_INSTALLED's, as dpkg and
+    # rpm list them; tsc is there when HARNESS_TSC=yes.
+    cat > "$linux_tmpdir/dpkg-query" <<MOCK
+#!/bin/sh
+for _name in ${HARNESS_INSTALLED:-}; do echo "ii  \$_name 1.0-1"; done
+MOCK
+    cat > "$linux_tmpdir/rpm" <<MOCK
+#!/bin/sh
+for _name in ${HARNESS_INSTALLED:-}; do echo "\$_name 1.0-1"; done
+MOCK
+    cat > "$linux_tmpdir/npm" <<MOCK
+#!/bin/sh
+printf '%s\n' "npm \$*" >> "$linux_calls"
+test "${HARNESS_NPM_FAILS:-no}" = no || exit 1
+MOCK
+    if test "${HARNESS_TSC:-no}" = yes; then
+        printf '#!/bin/sh\n' > "$linux_tmpdir/tsc"
+        chmod +x "$linux_tmpdir/tsc"
+    fi
     write_mock_sudo "$linux_tmpdir" "$linux_calls"
-    chmod +x "$linux_tmpdir/$linux_pm" "$linux_tmpdir/sudo"
+    chmod +x "$linux_tmpdir/$linux_pm" "$linux_tmpdir/sudo" "$linux_tmpdir/dpkg-query" \
+        "$linux_tmpdir/rpm" "$linux_tmpdir/npm"
+    linux_stamp="$linux_tmpdir/state/setup/last-upgrade"
+    stage_stamp "$linux_stamp" "${HARNESS_STAMP:-none}"
 
     set +e
     # An answer waits on stdin, for a package manager that asks anything.
@@ -396,16 +477,23 @@ MOCK
         sh -c "set -e
 unset DEBIAN_FRONTEND
 OS=$linux_os
-NPM=no
+NPM=${HARNESS_NPM:-no}
 GUI_ENABLED=$linux_gui
 CROSTINI=0
 SUDO=yes
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn install_packages")
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+UPGRADE_STAMP='$linux_stamp'
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn resolve_upgrade record_upgrade install_packages")
+resolve_upgrade
 install_packages
-echo BOOTSTRAP_CONTINUED" 2>&1)"
+record_upgrade
+echo BOOTSTRAP_CONTINUED
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$linux_calls" 2>/dev/null)"
+    stamp="$(stamp_state "$linux_stamp")"
     rm -rf "$linux_tmpdir"
 }
 
@@ -790,9 +878,12 @@ HOME='$release_home'
 XDG_CONFIG_HOME='$release_home/.config'
 SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
 $(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
-echo BOOTSTRAP_CONTINUED" 2>&1)"
+echo BOOTSTRAP_CONTINUED
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$release_tmpdir/calls" 2>/dev/null)"
@@ -1472,8 +1563,85 @@ test_uv_installs_without_modifying_path() {
     assert_source_contains "uv/install.sh | sh -s -- --no-modify-path" &&
     assert_source_not_contains "uv/install.sh | sh$" &&
     assert_source_contains "UV_NO_MODIFY_PATH=1 uv self update" &&
-    assert_source_contains "could not update uv" &&
     assert_source_contains "could not install uv"
+}
+
+# Run install_uv with a mock uv, which records its arguments and exits $2
+# (default 0): put there by uv's installer, in ~/.local/bin with its receipt
+# ($1=installer); by pipx or pip, in ~/.local/bin with none ($1=pipx); or
+# somewhere else ($1=other). UPGRADE is HARNESS_UPGRADE (default no).
+run_install_uv() {
+    uv_tmpdir="$(mktemp -d)"
+    uv_home="$uv_tmpdir/home"
+    mkdir -p "$uv_home/.local/bin" "$uv_tmpdir/bin"
+    case "$1" in
+        installer)
+            uv_dir="$uv_home/.local/bin"
+            mkdir -p "$uv_home/.config/uv"
+            echo '{}' > "$uv_home/.config/uv/uv-receipt.json"
+            ;;
+        pipx) uv_dir="$uv_home/.local/bin" ;;
+        *) uv_dir="$uv_tmpdir/bin" ;;
+    esac
+    cat > "$uv_dir/uv" <<MOCK
+#!/bin/sh
+printf '%s\n' "uv \$* [UV_NO_MODIFY_PATH=\${UV_NO_MODIFY_PATH:-unset}]" >> "$uv_tmpdir/calls"
+exit ${2:-0}
+MOCK
+    chmod +x "$uv_dir/uv"
+    set +e
+    output="$(PATH="$uv_home/.local/bin:$uv_tmpdir/bin:$PATH" sh -c "set -e
+HOME='$uv_home'
+unset XDG_BIN_HOME XDG_CONFIG_HOME
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools install_uv")
+install_uv
+echo BOOTSTRAP_CONTINUED
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$uv_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$uv_tmpdir"
+}
+
+# uv self update fetches the latest uv, so it waits for an upgrade run.
+test_uv_waits_a_week_to_update() {
+    run_install_uv installer
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    HARNESS_UPGRADE=yes run_install_uv installer &&
+    assert_status 0 &&
+    assert_eq "$calls" "uv self update [UV_NO_MODIFY_PATH=1]" &&
+    assert_output_contains "UPGRADE_FAILED=no"
+}
+
+test_uv_failed_update_is_retried() {
+    HARNESS_UPGRADE=yes run_install_uv installer 1
+    assert_status 0 &&
+    assert_output_contains "could not upgrade uv (offline?)" &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A uv its installer didn't put there (Homebrew's, pip's) can't self-update,
+# and would fail every upgrade pass.
+test_uv_from_elsewhere_is_left_alone() {
+    VERBOSE=yes HARNESS_UPGRADE=yes run_install_uv other
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_output_contains "Skipping uv's update" &&
+    assert_output_contains "UPGRADE_FAILED=no"
+}
+
+# pipx and pip --user put uv in ~/.local/bin too, but self update refuses
+# a uv without the standalone installer's receipt.
+test_uv_from_pipx_is_left_alone() {
+    VERBOSE=yes HARNESS_UPGRADE=yes run_install_uv pipx 1
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_output_contains "Skipping uv's update" &&
+    assert_output_contains "UPGRADE_FAILED=no"
 }
 
 # --- Extras backends ---
@@ -1622,7 +1790,7 @@ test_shpool_service_failure_is_reported_not_fatal() {
 # homepkg's github backend -- one rootless mechanism, already used for
 # atuin/carapace -- rather than building anything.
 test_extras_release_uses_homepkg_github() {
-    run_install_extras_release 0 yes
+    run_install_extras_release 0 no
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_eq "$calls" "homepkg --backend github install helix jj nu"
@@ -1632,18 +1800,39 @@ test_extras_release_uses_homepkg_github() {
 # drops out of the release install rather than being shadowed by a second copy
 # in ~/.local/bin.
 test_extras_release_skips_an_installed_jj() {
-    VERBOSE=yes run_install_extras_release 0 yes system
+    VERBOSE=yes run_install_extras_release 0 no system
     assert_status 0 &&
     assert_eq "$calls" "homepkg --backend github install helix nu" &&
     assert_output_contains "Skipping jj: already installed at"
 }
 
-# A jj in ~/.local/bin is the one this path installed last time, so it's
-# reinstalled (i.e. refreshed) rather than treated as somebody else's.
+# A jj in ~/.local/bin is the one this path installed last time, so an
+# upgrade run reinstalls (i.e. refreshes) it rather than treating it as
+# somebody else's.
 test_extras_release_refreshes_its_own_jj() {
+    HARNESS_UPGRADE=yes run_install_extras_release 0 yes home
+    assert_status 0 &&
+    assert_eq "$calls" "homepkg --backend github install helix jj
+homepkg --backend github install nu" &&
+    assert_output_contains "UPGRADE_FAILED=no"
+}
+
+# homepkg fetches the latest release whether or not one is there, so on an
+# in-week run the extras a release installed stay as they are, and only the
+# missing ones are fetched.
+test_extras_release_waits_a_week_to_upgrade() {
     run_install_extras_release 0 yes home
     assert_status 0 &&
-    assert_eq "$calls" "homepkg --backend github install helix jj nu"
+    assert_eq "$calls" "homepkg --backend github install nu"
+}
+
+# A failed upgrade of the installed extras keeps the stamp, so the next run
+# tries again.
+test_extras_release_failed_upgrade_is_retried() {
+    HARNESS_UPGRADE=yes run_install_extras_release 1 yes home
+    assert_status 0 &&
+    assert_output_contains "could not upgrade helix jj from their releases" &&
+    assert_output_contains "UPGRADE_FAILED=yes"
 }
 
 # A homepkg failure (a changed release layout, an offline box) warns and the
@@ -1834,7 +2023,7 @@ test_zsh_autosuggestions_reaches_each_package_manager() {
     run_linux_packages debian &&
     assert_calls_contain "install-recommends zsh-autosuggestions" &&
     run_linux_packages redhat &&
-    assert_calls_contain "dnf install -y zsh-autosuggestions" &&
+    assert_calls_contain "dnf install -y --setopt=best=False zsh-autosuggestions" &&
     run_macos_packages 0 &&
     assert_calls_contain "brew install zsh-autosuggestions"
 }
@@ -1854,7 +2043,7 @@ test_file_managers_not_in_apt_transaction() {
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_calls_lack "recommends lf" &&
     assert_calls_lack "kde-standard" &&
-    assert_calls_lack "install -y --install-recommends kitty"
+    assert_calls_lack "--install-recommends kitty"
 }
 
 # fuzzel is KDE's Win+V menu (clipboard-menu), and wl-copy puts the entry
@@ -1863,19 +2052,19 @@ test_file_managers_not_in_apt_transaction() {
 test_fuzzel_installed_for_kde() {
     run_linux_packages debian 1
     assert_status 0 &&
-    assert_calls_contain "apt-get install -y --install-recommends fuzzel wl-clipboard" &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends fuzzel wl-clipboard" &&
     run_linux_packages redhat 1 &&
     assert_status 0 &&
-    assert_calls_contain "dnf install -y fuzzel wl-clipboard"
+    assert_calls_contain "dnf install -y --setopt=best=False fuzzel wl-clipboard"
 }
 
 test_file_managers_not_in_dnf_transaction() {
     run_linux_packages redhat
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_calls_lack "dnf install -y lf" &&
+    assert_calls_lack "dnf install -y --setopt=best=False lf" &&
     assert_calls_lack "kde-desktop-environment" &&
-    assert_calls_lack "dnf install -y kitty"
+    assert_calls_lack "dnf install -y --setopt=best=False kitty"
 }
 
 # --- --purge-obsolete: removing the old Sway/Hyprland desktop packages ---
@@ -2216,12 +2405,12 @@ test_verbose_shows_what_the_installers_print() {
     VERBOSE=yes SETUP_LOG= XDG_STATE_HOME="$verbose_state" run_linux_packages debian
     assert_status 0 &&
     assert_output_contains "Installing apt packages" &&
-    assert_output_contains "Setting up install -y --install-recommends" &&
+    assert_output_contains "Setting up install -y --no-upgrade --install-recommends" &&
     assert_eq "$(find "$verbose_state" -type f)" "" &&
     SETUP_LOG= XDG_STATE_HOME="$verbose_state" run_linux_packages debian &&
     assert_status 0 &&
     assert_output_lacks "Setting up" &&
-    grep -q "Setting up install -y --install-recommends" "$verbose_state/setup/setup.log"
+    grep -q "Setting up install -y --no-upgrade --install-recommends" "$verbose_state/setup/setup.log"
     _vs_status=$?
     rm -rf "$verbose_state"
     return "$_vs_status"
@@ -2244,7 +2433,7 @@ test_apt_runs_where_sudo_wont_set_its_frontend() {
     LINUX_NO_SETENV=1 run_linux_packages debian
     assert_status 0 &&
     assert_output_lacks "Warning:" &&
-    assert_calls_contain "apt-get install -y --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=unset] [stdin=]"
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=unset] [stdin=]"
 }
 
 # With a terminal, and apt-utils to read the packages' questions, apt runs
@@ -2258,7 +2447,7 @@ test_apt_asks_debconfs_questions_on_the_terminal() {
     chmod +x "$ask_tmpdir/apt-extracttemplates"
     PATH="$ask_tmpdir:$PATH" APT_TTY="$ask_tmpdir/tty" run_linux_packages debian
     assert_status 0 &&
-    assert_calls_contain "apt-get install -y --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$ask_tmpdir/tty >$ask_tmpdir/tty 2>&1 || true [DEBIAN_FRONTEND=noninteractive]" &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$ask_tmpdir/tty >$ask_tmpdir/tty 2>&1 || true [DEBIAN_FRONTEND=noninteractive]" &&
     assert_output_lacks "Setting up" &&
     PATH="$ask_tmpdir:$PATH" run_linux_packages debian &&
     assert_calls_lack "Pre-Install-Pkgs" &&
@@ -2430,6 +2619,266 @@ test_macos_core_install_uses_the_system_tools() {
                 ;;
         esac
     done
+}
+
+# --- Weekly upgrades ---
+
+# On a run less than a week after the last upgrade pass, Homebrew installs
+# what's missing and upgrades nothing.
+test_in_week_run_does_not_upgrade_brew() {
+    VERBOSE=yes HARNESS_UPGRADE=auto HARNESS_STAMP=fresh run_macos_packages 0 arm64 ok
+    assert_status 0 &&
+    assert_output_contains "Skipping upgrades: the last was less than a week ago" &&
+    assert_calls_lack "brew update" &&
+    assert_calls_lack "brew upgrade" &&
+    assert_calls_contain "brew install zoxide" &&
+    assert_eq "$stamp" fresh
+}
+
+# A week on, or with no record of an upgrade, the run refreshes Homebrew's
+# index, upgrades everything, installs the rest, and records the pass.
+test_stale_stamp_upgrades_brew_and_records_it() {
+    for age in stale none; do
+        HARNESS_UPGRADE=auto HARNESS_STAMP=$age run_macos_packages 0 arm64 ok
+        assert_status 0 &&
+        assert_eq "$(printf '%s\n' "$calls" | grep -v '^brew list' | head -3 | cut -d' ' -f1-3)" "brew update [HOMEBREW_NO_ASK=1]
+brew upgrade [HOMEBREW_NO_ASK=1]
+brew install atool" &&
+        assert_calls_contain "brew install zoxide" &&
+        assert_output_contains "UPGRADE_FAILED=no" &&
+        assert_eq "$stamp" fresh || return 1
+    done
+}
+
+# A failed upgrade warns, still installs, and drops the stamp, so the next
+# run tries again.
+test_failed_brew_upgrade_drops_the_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale run_macos_packages 0 arm64 upgrade-fails
+    assert_status 0 &&
+    assert_output_contains "could not upgrade Homebrew packages; the next run tries again" &&
+    assert_calls_contain "brew install zoxide" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$stamp" missing
+}
+
+# --upgrade upgrades now, a week or not.
+test_upgrade_flag_upgrades_within_the_week() {
+    run_setup --upgrade --help
+    assert_status 0 &&
+    assert_output_contains "--upgrade        Upgrade installed packages now" &&
+    HARNESS_UPGRADE=yes HARNESS_STAMP=fresh run_macos_packages 0 arm64 ok &&
+    assert_status 0 &&
+    assert_calls_contain "brew upgrade" &&
+    assert_output_lacks "Skipping upgrades" &&
+    assert_eq "$stamp" fresh
+}
+
+# apt-get install upgrades a package it's asked for again, so in the week it
+# runs with --no-upgrade, and nothing asks for an upgrade.
+test_in_week_run_does_not_upgrade_apt() {
+    VERBOSE=yes HARNESS_UPGRADE=auto HARNESS_STAMP=fresh HARNESS_INSTALLED="git curl" run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends adb atool" &&
+    assert_calls_lack "--only-upgrade" &&
+    assert_output_contains "Skipping upgrades" &&
+    assert_eq "$stamp" fresh
+}
+
+# A week on, it upgrades the packages of setup's it already has, and no
+# others, then records the pass.
+test_stale_stamp_upgrades_apt_and_records_it() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_INSTALLED="git curl vim-tiny" run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --only-upgrade --install-recommends git curl -o" &&
+    assert_calls_lack "--only-upgrade --install-recommends adb" &&
+    assert_calls_lack "vim-tiny" &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends adb atool" &&
+    assert_eq "$stamp" fresh
+}
+
+test_failed_apt_upgrade_drops_the_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_INSTALLED="git" HARNESS_PM_MODE=upgrade-fails \
+        run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "could not upgrade git; the next run tries again" &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends adb atool" &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_eq "$stamp" missing
+}
+
+# With apt-get update failing nothing is upgraded, so the pass mustn't count.
+test_failed_apt_update_on_an_upgrade_run_drops_the_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=none HARNESS_INSTALLED="git" HARNESS_PM_MODE=update-fails \
+        run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "apt-get update failed" &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_eq "$stamp" missing
+}
+
+# --upgrade within the week that fails leaves no fresh stamp to hold the
+# retry off.
+test_failed_forced_upgrade_drops_a_fresh_stamp() {
+    HARNESS_UPGRADE=yes HARNESS_STAMP=fresh HARNESS_INSTALLED="git" HARNESS_PM_MODE=upgrade-fails \
+        run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "could not upgrade git; the next run tries again" &&
+    assert_eq "$stamp" missing
+}
+
+test_upgrade_flag_upgrades_apt_within_the_week() {
+    HARNESS_UPGRADE=yes HARNESS_STAMP=fresh HARNESS_INSTALLED="git" run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --only-upgrade --install-recommends git -o"
+}
+
+# dnf install leaves an installed package as it is unless best is on, so it
+# runs with best off, and the upgrades are dnf upgrade's, once a week.
+test_in_week_run_does_not_upgrade_dnf() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=fresh HARNESS_INSTALLED="git curl" run_linux_packages redhat
+    assert_status 0 &&
+    assert_calls_contain "dnf install -y --setopt=best=False @development-tools android-tools" &&
+    assert_calls_lack "dnf upgrade" &&
+    assert_eq "$stamp" fresh
+}
+
+test_stale_stamp_upgrades_dnf_and_records_it() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=none HARNESS_INSTALLED="git curl" run_linux_packages redhat
+    assert_status 0 &&
+    assert_calls_contain "dnf upgrade -y git curl [" &&
+    assert_calls_lack "dnf upgrade -y @development-tools" &&
+    assert_eq "$stamp" fresh
+}
+
+test_failed_dnf_upgrade_drops_the_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_INSTALLED="git" HARNESS_PM_MODE=upgrade-fails \
+        run_linux_packages redhat
+    assert_status 0 &&
+    assert_output_contains "could not upgrade git; the next run tries again" &&
+    assert_eq "$stamp" missing
+}
+
+# A failed npm upgrade, even one --upgrade forced within the week, drops
+# the stamp, so the next run tries again.
+test_failed_npm_upgrade_drops_the_stamp() {
+    HARNESS_NPM=yes HARNESS_TSC=yes HARNESS_NPM_FAILS=yes HARNESS_UPGRADE=yes HARNESS_STAMP=fresh \
+        run_linux_packages redhat
+    assert_status 0 &&
+    assert_calls_contain "npm install -g typescript" &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_eq "$stamp" missing
+}
+
+# npm install -g upgrades an installed tsc, so it waits for an upgrade run.
+test_npm_typescript_waits_a_week_to_upgrade() {
+    HARNESS_NPM=yes HARNESS_TSC=yes run_linux_packages redhat
+    assert_status 0 &&
+    assert_calls_lack "npm install -g typescript" &&
+    HARNESS_NPM=yes HARNESS_TSC=yes HARNESS_UPGRADE=yes run_linux_packages redhat &&
+    assert_calls_contain "npm install -g typescript"
+}
+
+# Run upgrade_home_env against a mock homepkg that exits $2 (default 0), with
+# homepkg's conda env there ($1=yes) or not. UPGRADE is HARNESS_UPGRADE.
+run_upgrade_home_env() {
+    he_tmpdir="$(mktemp -d)"
+    he_home="$he_tmpdir/home"
+    mkdir -p "$he_home/.local/bin" "$he_tmpdir/scripts"
+    test "$1" != yes || mkdir -p "$he_home/.local/share/homepkg/env"
+    cat > "$he_tmpdir/scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$he_tmpdir/calls"
+exit ${2:-0}
+MOCK
+    chmod +x "$he_tmpdir/scripts/homepkg"
+    set +e
+    output="$(HOME="$he_home" sh -c "set -e
+SCRIPTS_DIR='$he_tmpdir/scripts'
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools upgrade_home_env")
+upgrade_home_env
+echo BOOTSTRAP_CONTINUED
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$he_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$he_tmpdir"
+}
+
+# homepkg install leaves what its env has, so the env's tools move on once a
+# week, all at once -- and only when there's an env.
+test_home_env_upgrades_once_a_week() {
+    run_upgrade_home_env yes
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    HARNESS_UPGRADE=yes run_upgrade_home_env yes &&
+    assert_eq "$calls" "homepkg update" &&
+    assert_output_contains "UPGRADE_FAILED=no" &&
+    HARNESS_UPGRADE=yes run_upgrade_home_env no &&
+    assert_eq "$calls" ""
+}
+
+test_home_env_failed_upgrade_is_retried() {
+    HARNESS_UPGRADE=yes run_upgrade_home_env yes 1
+    assert_status 0 &&
+    assert_output_contains "could not upgrade the tools homepkg installed" &&
+    assert_output_contains "UPGRADE_FAILED=yes"
+}
+
+# Before the installs that would add to the env, after the clone that brings
+# homepkg.
+test_home_env_upgrade_runs_before_the_home_installs() {
+    upgrade_line="$(grep -n '^    upgrade_home_env$' "$SETUP" | cut -d: -f1)"
+    test -n "$upgrade_line" &&
+    test "$(grep -n '^clone_or_pull "$SCRIPTS_REPO"' "$SETUP" | cut -d: -f1)" -lt "$upgrade_line" &&
+    test "$upgrade_line" -lt "$(grep -n '^    install_home_tools$' "$SETUP" | cut -d: -f1)" &&
+    test "$upgrade_line" -lt "$(grep -n '^    install_file_managers$' "$SETUP" | cut -d: -f1)"
+}
+
+# Run install_shell_tools with atuin, from an earlier run, in ~/.local/bin and
+# carapace missing, against a mock homepkg that exits $1 (default 0).
+run_shell_tools_upgrade() {
+    stu_tmpdir="$(mktemp -d)"
+    stu_home="$stu_tmpdir/home"
+    mkdir -p "$stu_home/.local/bin" "$stu_tmpdir/scripts"
+    printf '#!/bin/sh\nexit 0\n' > "$stu_home/.local/bin/atuin"
+    cat > "$stu_tmpdir/scripts/homepkg" <<MOCK
+#!/bin/sh
+printf '%s\n' "homepkg \$*" >> "$stu_tmpdir/calls"
+exit ${1:-0}
+MOCK
+    chmod +x "$stu_home/.local/bin/atuin" "$stu_tmpdir/scripts/homepkg"
+    set +e
+    output="$(HOME="$stu_home" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$stu_tmpdir/scripts'
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools upgrade_failed install_shell_tools")
+install_shell_tools
+echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$stu_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$stu_tmpdir"
+}
+
+# atuin and carapace come from their latest releases, so the installed one
+# waits for an upgrade run, and a missing one installs either way.
+test_shell_tools_upgrade_once_a_week() {
+    run_shell_tools_upgrade
+    assert_status 0 &&
+    assert_eq "$calls" "homepkg --backend github install carapace" &&
+    HARNESS_UPGRADE=yes run_shell_tools_upgrade &&
+    assert_eq "$calls" "homepkg --backend github install atuin
+homepkg --backend github install carapace" &&
+    assert_output_contains "UPGRADE_FAILED=no"
+}
+
+test_shell_tools_failed_upgrade_is_retried() {
+    HARNESS_UPGRADE=yes run_shell_tools_upgrade 1
+    assert_status 0 &&
+    assert_output_contains "could not upgrade atuin (offline?)" &&
+    assert_output_contains "UPGRADE_FAILED=yes"
 }
 
 # setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
@@ -4312,6 +4761,59 @@ run_test "Crostini skips KDE, tide and the root group, keeping kitty" \
     test_crostini_skips_kde_tide_and_the_root_group
 run_test "Crostini says what to set in ChromeOS" \
     test_crostini_settings_point_at_chromeos
+
+run_test "an in-week run doesn't upgrade Homebrew packages" \
+    test_in_week_run_does_not_upgrade_brew
+run_test "a stale or missing stamp upgrades Homebrew packages and records it" \
+    test_stale_stamp_upgrades_brew_and_records_it
+run_test "a failed Homebrew upgrade drops the stamp, so the next run retries" \
+    test_failed_brew_upgrade_drops_the_stamp
+run_test "--upgrade upgrades within the week" \
+    test_upgrade_flag_upgrades_within_the_week
+run_test "an in-week run doesn't upgrade apt packages" \
+    test_in_week_run_does_not_upgrade_apt
+run_test "a stale stamp upgrades setup's installed apt packages and records it" \
+    test_stale_stamp_upgrades_apt_and_records_it
+run_test "a failed apt upgrade drops the stamp, so the next run retries" \
+    test_failed_apt_upgrade_drops_the_stamp
+run_test "a failed apt-get update on an upgrade run drops the stamp" \
+    test_failed_apt_update_on_an_upgrade_run_drops_the_stamp
+run_test "a failed --upgrade within the week drops the fresh stamp" \
+    test_failed_forced_upgrade_drops_a_fresh_stamp
+run_test "--upgrade upgrades apt packages within the week" \
+    test_upgrade_flag_upgrades_apt_within_the_week
+run_test "an in-week run doesn't upgrade dnf packages" \
+    test_in_week_run_does_not_upgrade_dnf
+run_test "a missing stamp upgrades setup's installed dnf packages and records it" \
+    test_stale_stamp_upgrades_dnf_and_records_it
+run_test "a failed dnf upgrade drops the stamp, so the next run retries" \
+    test_failed_dnf_upgrade_drops_the_stamp
+run_test "npm's tsc waits for an upgrade run" \
+    test_npm_typescript_waits_a_week_to_upgrade
+run_test "a failed npm upgrade drops the stamp, so the next run retries" \
+    test_failed_npm_upgrade_drops_the_stamp
+run_test "homepkg's env upgrades once a week" \
+    test_home_env_upgrades_once_a_week
+run_test "a failed homepkg env upgrade is retried" \
+    test_home_env_failed_upgrade_is_retried
+run_test "homepkg's env upgrades after the clone, before the home installs" \
+    test_home_env_upgrade_runs_before_the_home_installs
+run_test "atuin and carapace upgrade once a week" \
+    test_shell_tools_upgrade_once_a_week
+run_test "a failed atuin upgrade is retried" \
+    test_shell_tools_failed_upgrade_is_retried
+run_test "the release extras wait a week to upgrade" \
+    test_extras_release_waits_a_week_to_upgrade
+run_test "a failed release extras upgrade is retried" \
+    test_extras_release_failed_upgrade_is_retried
+run_test "uv waits a week to update" \
+    test_uv_waits_a_week_to_update
+run_test "a failed uv update is retried" \
+    test_uv_failed_update_is_retried
+run_test "a uv from elsewhere is left alone" \
+    test_uv_from_elsewhere_is_left_alone
+run_test "a uv from pipx, without the installer's receipt, is left alone" \
+    test_uv_from_pipx_is_left_alone
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"

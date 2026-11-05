@@ -69,6 +69,14 @@ On macOS this installs Homebrew if it's missing, then, by category:
 Then it hands off to `setup-macos` for the desktop configuration described in
 this file.
 
+A re-run installs what's missing and leaves what's installed at its version,
+since a managed Mac can need each new version of a binary approved before it
+runs. Once a week, or the first time, it also runs `brew update` and `brew
+upgrade` and upgrades the release binaries, the `homepkg` tools and `uv`;
+`~/.local/state/setup/last-upgrade` records the last pass that didn't fail.
+`setup-macos` on its own upgrades nothing. tilemo's checkout is config, so
+it's pulled on every run.
+
 `setup` flags that matter here:
 
 | Flag | Effect |
@@ -80,6 +88,7 @@ this file.
 | `--brew` / `--release` | Take the extras from Homebrew bottles, or from GitHub releases into `~/.local` via `homepkg` |
 | `--no-root` | Unprivileged install; CLI tools come from conda-forge via `homepkg` instead |
 | `--no-npm` | Skip node and tsc |
+| `--upgrade` | Upgrade installed packages now, even if they were upgraded less than a week ago |
 
 `--no-sudo` and `--no-root` change little on macOS. Homebrew never wants sudo
 and installing Amethyst needs write access to an Applications directory rather
