@@ -82,7 +82,8 @@
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
 #                      [--no-build-hyprland] [--tidewm]
-#                      [--greeter | --no-greeter] [--github PREFIX] [-h | --help]
+#                      [--greeter | --no-greeter] [--github PREFIX]
+#                      [-v | --verbose] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -112,11 +113,14 @@
 #   Failed: frob
 #
 # A failed command shows the end of what it said, and where the rest is.
-# Warnings, errors and what's left for you to do show as before.
+# Warnings, errors and what's left for you to do show as before. --verbose
+# shows what the commands say as they run, the builds' kept in their logs
+# too; setup passes it on.
 
 INSTALL=yes
 SUDO=yes
 IGNORE_ERRORS=no
+VERBOSE=no
 FETCH=yes
 BUILD_HYPRLAND=yes
 BUILD_TIDEWM=no
@@ -455,7 +459,7 @@ usage() {
     cat <<'USAGE'
 Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
                   [--no-build-hyprland] [--greeter | --no-greeter]
-                  [--github PREFIX] [-h | --help]
+                  [--github PREFIX] [-v | --verbose] [-h | --help]
 
 Install the tide session (Hyprland + uwsm) beside KDE Plasma. The display
 manager stays as it is, with tide as one more session, unless --greeter is
@@ -480,6 +484,9 @@ Options:
                    https://ghe.corp/) instead of github.com: tide, and the
                    Quickshell and Hyprland source builds. A bare host is
                    treated as SSH. Also settable via GITHUB_PREFIX
+  -v, --verbose    Show what the installers and builds print, instead of
+                   keeping it in ~/.local/state/setup/setup.log (the builds'
+                   own logs still keep theirs)
   -h, --help       Show this help and exit
 USAGE
 }
@@ -491,6 +498,7 @@ while test $# -gt 0; do
         --sudo) SUDO=yes ;;
         --no-sudo) SUDO=no ;;
         --ignore-errors) IGNORE_ERRORS=yes ;;
+        -v|--verbose) VERBOSE=yes ;;
         --fetch) FETCH=yes ;;
         --no-fetch) FETCH=no ;;
         --build-hyprland) BUILD_HYPRLAND=yes ;;
@@ -608,9 +616,14 @@ detect_os() {
 # run (the source builds keep their own; see build_logged), and the run
 # shows a line or two per step. These are setup's own: the outermost of setup
 # and setup-tide starts the log, and when setup runs this, it adds to
-# setup's, through the exported path.
+# setup's, through the exported path. --verbose shows it instead, as - does.
 start_setup_log() {
     test -z "${SETUP_LOG:-}" || return 0
+    if test "${VERBOSE:-no}" = yes; then
+        SETUP_LOG=-
+        export SETUP_LOG
+        return 0
+    fi
     SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
     # printf, not :, which is a special builtin: dash exits when its
     # redirection fails, even under if.
@@ -1396,12 +1409,23 @@ start_build_log() {
 }
 
 # build_logged NAME COMMAND...: runs COMMAND with its output added to
-# $build_log. A failure says which command failed, with the log's last
-# lines, which is where the reason is.
+# $build_log, and shown too under --verbose. A failure says which command
+# failed, with the log's last lines, which is where the reason is.
 build_logged() {
     _bl_name=$1
     shift
     printf '+ %s\n' "$*" >> "$build_log"
+    if test "${VERBOSE:-no}" = yes; then
+        # sh has no pipefail, so COMMAND's status comes back through a file.
+        { "$@" 2>&1 && echo 0 > "$build_log.status" || echo $? > "$build_log.status"; } \
+            | tee -a "$build_log"
+        _bl_status=$(cat "$build_log.status" 2>/dev/null) || _bl_status=1
+        rm -f "$build_log.status"
+        test "$_bl_status" -eq 0 && return 0
+        # What it said is just above.
+        warn "building $_bl_name failed: '$1' exited with status $_bl_status; its output is in $build_log"
+        return "$_bl_status"
+    fi
     "$@" >> "$build_log" 2>&1 && return 0
     _bl_status=$?
     warn "building $_bl_name failed: '$1' exited with status $_bl_status; its output is in $build_log"

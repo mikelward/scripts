@@ -1322,6 +1322,29 @@ MOCK
         "$TEST_TMPDIR/home/.local/state/setup/setup.log"
 }
 
+# --verbose shows brew's chatter instead, and makes no log.
+test_verbose_shows_what_brew_says() {
+    remove_linearmouse
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$*" >> "$CALLS"
+test "\$1" = list && exit 1
+echo "==> Downloading https://example.invalid/LinearMouse.dmg"
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/brew"
+    run_macos --verbose
+    assert_status 0 &&
+    assert_called "brew install --cask linearmouse" &&
+    assert_output_contains "Installing LinearMouse" &&
+    assert_output_contains "==> Downloading https://example.invalid/LinearMouse.dmg" &&
+    if test -e "$TEST_TMPDIR/home/.local/state/setup/setup.log"; then
+        echo "  FAIL: --verbose made a log"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
 # A failed install shows the end of what brew said, the reason.
 test_brew_failure_shows_what_brew_said() {
     remove_linearmouse
@@ -3047,6 +3070,7 @@ run_test "--yes skips the preflight pause" \
     test_yes_skips_the_preflight_pause
 run_test "installs LinearMouse when missing" test_installs_linearmouse_when_missing
 run_test "brew's output goes to the log" test_brew_output_goes_to_the_log
+run_test "--verbose shows brew's output" test_verbose_shows_what_brew_says
 run_test "a failed brew install shows what brew said" test_brew_failure_shows_what_brew_said
 run_test "a stale LinearMouse record names the fix instead of installing" \
     test_stale_linearmouse_record_names_the_fix

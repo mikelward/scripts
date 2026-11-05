@@ -81,9 +81,9 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [--wm tilemo|amethyst] [-h | --help]
+#                 [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
 #
-# setup forwards --no-install, --no-sudo, and --ignore-errors here.
+# setup forwards --no-install, --no-sudo, --ignore-errors and --verbose here.
 # --no-install skips installing tilemo (or Amethyst) and Karabiner-Elements and
 # configures whatever is already there. --no-sudo skips only Karabiner's install, the one
 # step here that needs administrator rights -- its cask is a .pkg and Homebrew
@@ -96,6 +96,10 @@
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
+
+# Whether to show what Homebrew prints (--verbose), rather than keep it in the
+# log.
+VERBOSE=no
 
 # Whether to install Amethyst. --no-install skips it and configures whatever is
 # already there, matching setup-kde, which installs its own tiling window
@@ -465,7 +469,7 @@ preflight() {
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [--wm tilemo|amethyst] [-h | --help]
+                   [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
 
 Configure the macOS desktop environment.
 
@@ -477,6 +481,8 @@ Options:
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Don't pause before starting
   --wm WM          The tiling window manager: tilemo (the default) or amethyst
+  -v, --verbose    Show what Homebrew prints, instead of keeping it in
+                   ~/.local/state/setup/setup.log
   -h, --help       Show this help and exit
 USAGE
 }
@@ -507,6 +513,9 @@ while test $# -gt 0; do
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
+            ;;
+        -v|--verbose)
+            VERBOSE=yes
             ;;
         -y|--yes)
             ASSUME_YES=yes
@@ -1085,9 +1094,14 @@ is_usable_app() {
 # warnings, caveats, auto-update news -- goes to one log per run, as apt's
 # would on a quiet Linux run, and the run shows a line or two per step. The
 # outermost of setup and setup-macos starts the log; a helper it runs adds
-# to it, through the exported path.
+# to it, through the exported path. --verbose shows it instead, as - does.
 start_setup_log() {
     test -z "${SETUP_LOG:-}" || return 0
+    if test "${VERBOSE:-no}" = yes; then
+        SETUP_LOG=-
+        export SETUP_LOG
+        return 0
+    fi
     SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
     # printf, not :, which is a special builtin: dash exits when its
     # redirection fails, even under if.

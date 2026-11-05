@@ -4,7 +4,8 @@
 # Usage:
 #     setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
-#           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
+#           [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-v | --verbose] \
+#           [-h | --help]
 #
 #  or, to bootstrap from scratch:
 #     curl -fsSL https://mikelward.com/setup | sh
@@ -166,6 +167,10 @@ TIDE_SETUP_FLAGS=""
 #   yes - keep going past failures (--ignore-errors)
 IGNORE_ERRORS=no
 
+# Whether to show what the installers print (--verbose), rather than keep it
+# in the log.
+VERBOSE=no
+
 # Whether to ask setup-kde to apply keyboard shortcuts to the running session
 # (--live-shortcuts). On by default, matching setup-kde: kglobalaccel never
 # re-reads its config, so without the live apply the shortcuts do nothing until
@@ -229,7 +234,8 @@ Usage: setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter]
              [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
-             [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-h | --help]
+             [--ssh | --no-ssh] [--no-npm] [--github PREFIX] [-v | --verbose]
+             [-h | --help]
 
 Bootstrap a new machine: install packages, fonts, tools, and dotfiles.
 
@@ -266,6 +272,8 @@ Options:
   --github PREFIX  Clone from PREFIX instead of github.com, e.g.
                    git@ghe.example.com or https://ghe.example.com. Also
                    settable via GITHUB_PREFIX
+  -v, --verbose    Show what the installers and builds print, instead of
+                   keeping it in ~/.local/state/setup/setup.log
   -h, --help       Show this help and exit
 
 Graphical setup runs only when a display is detected, and the extras are
@@ -552,6 +560,9 @@ while test $# -gt 0; do
         --ignore-errors)
             IGNORE_ERRORS=yes
             ;;
+        -v|--verbose)
+            VERBOSE=yes
+            ;;
         --live-shortcuts)
             LIVE_SHORTCUTS=yes
             ;;
@@ -651,6 +662,9 @@ if test "$SUDO" = no; then
 fi
 if test "$IGNORE_ERRORS" = yes; then
     DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --ignore-errors"
+fi
+if test "$VERBOSE" = yes; then
+    DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --verbose"
 fi
 # Flags for setup-kde only, kept out of DESKTOP_SETUP_FLAGS because
 # setup-macos shares that and rejects anything it doesn't know.
@@ -1064,9 +1078,15 @@ install_homebrew() {
 # package, brew's download bars and caveats, micromamba's solver progress,
 # cargo's compile lines -- goes to one log per run, and the run shows a line
 # or two per step. The outermost of setup and setup-macos starts the log; a
-# helper it runs adds to it, through the exported path.
+# helper it runs adds to it, through the exported path. --verbose shows it
+# instead, as - does.
 start_setup_log() {
     test -z "${SETUP_LOG:-}" || return 0
+    if test "${VERBOSE:-no}" = yes; then
+        SETUP_LOG=-
+        export SETUP_LOG
+        return 0
+    fi
     SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
     # printf, not :, which is a special builtin: dash exits when its
     # redirection fails, even under if.

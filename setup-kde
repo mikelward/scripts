@@ -109,6 +109,10 @@ INSTALL=yes
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
 IGNORE_ERRORS=no
 
+# Whether to show what the commands print (--verbose), rather than keep it in
+# the log.
+VERBOSE=no
+
 # Interpreter for kdeshortcut.py (see apply_shortcuts_live). Overridable for
 # a box where python3 isn't the name of a working Python 3.
 PYTHON="${PYTHON:-python3}"
@@ -192,9 +196,15 @@ is_command() {
 # kpackagetool6's and systemctl's notices, kbuildsycoca6's progress -- goes to
 # one log per run, and the run shows a line a step. These are setup's own:
 # the outermost of setup and setup-kde starts the log, and when setup runs
-# this, it adds to setup's, through the exported path.
+# this, it adds to setup's, through the exported path. --verbose shows it
+# instead, as - does.
 start_setup_log() {
     test -z "${SETUP_LOG:-}" || return 0
+    if test "${VERBOSE:-no}" = yes; then
+        SETUP_LOG=-
+        export SETUP_LOG
+        return 0
+    fi
     SETUP_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/setup.log"
     # printf, not :, which is a special builtin: dash exits when its
     # redirection fails, even under if.
@@ -238,7 +248,7 @@ run_logged() {
 usage() {
     cat <<'USAGE'
 Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-                 [--no-live-shortcuts] [-h | --help]
+                 [--no-live-shortcuts] [-v | --verbose] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
@@ -249,6 +259,8 @@ Options:
   --live-shortcuts Apply the shortcuts to the running session (the default)
   --no-live-shortcuts
                    Leave the shortcuts for the next login
+  -v, --verbose    Show what the commands print, instead of keeping it in
+                   ~/.local/state/setup/setup.log
   -h, --help       Show this help and exit
 USAGE
 }
@@ -269,6 +281,9 @@ while test $# -gt 0; do
             ;;
         --ignore-errors)
             IGNORE_ERRORS=yes
+            ;;
+        -v|--verbose)
+            VERBOSE=yes
             ;;
         --live-shortcuts)
             LIVE_SHORTCUTS_MODE=on

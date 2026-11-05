@@ -2195,6 +2195,35 @@ test_apt_is_quiet_and_asks_nothing() {
     assert_output_lacks "Setting up"
 }
 
+# --verbose shows what apt prints instead of logging it, and the run still
+# says what changed; without it, the same lines go to the log.
+test_verbose_shows_what_the_installers_print() {
+    verbose_state="$(mktemp -d)"
+    VERBOSE=yes SETUP_LOG= XDG_STATE_HOME="$verbose_state" run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "Installing apt packages" &&
+    assert_output_contains "Setting up install -y --install-recommends" &&
+    assert_eq "$(find "$verbose_state" -type f)" "" &&
+    SETUP_LOG= XDG_STATE_HOME="$verbose_state" run_linux_packages debian &&
+    assert_status 0 &&
+    assert_output_lacks "Setting up" &&
+    grep -q "Setting up install -y --install-recommends" "$verbose_state/setup/setup.log"
+    _vs_status=$?
+    rm -rf "$verbose_state"
+    return "$_vs_status"
+}
+
+# setup takes --verbose, or -v, and hands it to setup-kde, setup-tide and
+# setup-macos with the rest of what they share.
+test_verbose_is_forwarded() {
+    run_setup --verbose --help
+    assert_status 0 &&
+    assert_output_contains "-v, --verbose" &&
+    run_setup -v --help &&
+    assert_status 0 &&
+    assert_source_contains 'DESKTOP_SETUP_FLAGS="$DESKTOP_SETUP_FLAGS --verbose"'
+}
+
 # A sudo rule that allows apt-get but not setting DEBIAN_FRONTEND for it
 # still installs: apt runs without the variable, and without input.
 test_apt_runs_where_sudo_wont_set_its_frontend() {
@@ -4038,6 +4067,8 @@ run_test "a package run with nothing new says so" test_package_summary_with_noth
 run_test "a long package list is still summarized" test_package_summary_of_a_long_package_list
 run_test "several versions of one package aren't an upgrade" test_package_summary_with_several_versions_of_one_package
 run_test "apt is quiet and asks nothing" test_apt_is_quiet_and_asks_nothing
+run_test "--verbose shows what the installers print" test_verbose_shows_what_the_installers_print
+run_test "--verbose is taken and passed on" test_verbose_is_forwarded
 run_test "apt runs where sudo won't set its frontend" test_apt_runs_where_sudo_wont_set_its_frontend
 run_test "confinst's links are counted and its errors shown" test_confinst_is_counted_and_its_errors_shown
 run_test "a brew log that can't be made isn't fatal" test_unwritable_brew_log_is_not_fatal
