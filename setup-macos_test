@@ -1209,7 +1209,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says "for the Dvorak layout, the Desktop & Dock settings and the menu bar setting to take effect" &&
+    assert_says "for the Dvorak layout, the trackpad and mouse gestures, the Desktop & Dock settings and the menu bar setting to take effect" &&
     assert_output_in_order "Turn on LinearMouse" "Log out and back in" &&
     assert_output_in_order "Log out and back in" "And if you like:"
 }
@@ -2359,6 +2359,44 @@ test_tilemo_turns_off_stage_manager_and_tiling() {
     assert_output_contains "take effect at the next login"
 }
 
+test_tilemo_hands_mission_control_to_its_overview() {
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_hotkey 32 false 65535 126 8650752 &&
+    assert_hotkey 33 false 65535 125 8650752 &&
+    assert_called "defaults write com.apple.dock showMissionControlGestureEnabled -bool false" &&
+    assert_called "defaults write com.apple.dock showAppExposeGestureEnabled -bool false" &&
+    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadFourFingerVertSwipeGesture -int 0" &&
+    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerVertSwipeGesture -int 0" &&
+    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseTwoFingerDoubleTapGesture -int 0" &&
+    assert_output_contains "Turning off Mission Control's gestures"
+}
+
+# A hot corner set to Mission Control (2) is cleared; one set to anything
+# else is the user's and stays.
+test_tilemo_clears_mission_control_hot_corners() {
+    stage_defaults_read com.apple.dock 2
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_called "defaults write com.apple.dock wvous-tl-corner -int 1" &&
+    assert_called "defaults write com.apple.dock wvous-br-modifier -int 0"
+}
+
+test_tilemo_leaves_other_hot_corners_alone() {
+    stage_defaults_read com.apple.dock 5
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_not_called "wvous-tl-corner -int" &&
+    assert_not_called "wvous-br-modifier"
+}
+
+test_amethyst_leaves_mission_control_alone() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_not_called "showMissionControlGestureEnabled" &&
+    assert_not_called "TrackpadFourFingerVertSwipeGesture"
+}
+
 test_tilemo_keeps_the_menu_bar_shown_for_its_bar() {
     run_macos --wm tilemo
     assert_status 0 &&
@@ -3134,6 +3172,14 @@ run_test "tilemo: the shortcuts are applied to this session" \
 run_test "tilemo: no nine-Spaces check" test_tilemo_does_not_ask_for_nine_spaces
 run_test "tilemo: Stage Manager and Sequoia tiling are turned off" \
     test_tilemo_turns_off_stage_manager_and_tiling
+run_test "tilemo: hands Mission Control's keys and gestures to its overview" \
+    test_tilemo_hands_mission_control_to_its_overview
+run_test "tilemo: clears hot corners set to Mission Control" \
+    test_tilemo_clears_mission_control_hot_corners
+run_test "tilemo: leaves other hot corners alone" \
+    test_tilemo_leaves_other_hot_corners_alone
+run_test "Amethyst runs leave Mission Control's gestures alone" \
+    test_amethyst_leaves_mission_control_alone
 run_test "tilemo: keeps the menu bar shown for its bar to cover" \
     test_tilemo_keeps_the_menu_bar_shown_for_its_bar
 run_test "Amethyst runs leave the menu bar alone" \

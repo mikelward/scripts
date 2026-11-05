@@ -773,6 +773,13 @@ configure_shortcuts_tilemo() {
     # tilemo takes that chord for itself.
     write_symbolic_hotkey 79 false 65535 123 8650752
     write_symbolic_hotkey 81 false 65535 124 8650752
+
+    # Mission Control (32) and App Exposé (33) off, at their stock Ctrl+Up
+    # and Ctrl+Down: tilemo parks hidden workspaces' windows on one Space,
+    # so Mission Control would show every workspace at once, and tilemo
+    # takes both keys for its own overview (tilemo's SPEC.md, section 6.9).
+    write_symbolic_hotkey 32 false 65535 126 8650752
+    write_symbolic_hotkey 33 false 65535 125 8650752
 }
 
 configure_shortcuts() {
@@ -968,6 +975,10 @@ configure_spaces() {
     # a fixed order. tilemo's spec (section 6.4) keeps it off too.
     try defaults write com.apple.dock mru-spaces -bool false
 
+    if test "$WM" = tilemo; then
+        configure_mission_control_for_tilemo
+    fi
+
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
 
@@ -1005,6 +1016,35 @@ configure_spaces() {
 # WindowManager reads them at launch, and restarting it from here isn't known
 # to be safe -- it owns every window on screen -- so they take effect at the
 # next login.
+# The other ways into Mission Control and App Exposé, off for the reason
+# configure_shortcuts_tilemo gives: the trackpad's swipe up and down, the
+# Magic Mouse's double tap, and any hot corner set to either. A corner set to
+# something else is left alone. The gesture keys are the ones System Settings
+# is reported to write *(unverified here, and per macOS release)*; the Dock
+# reads them at its restart, the trackpad and mouse drivers at the next login.
+configure_mission_control_for_tilemo() {
+    info "Turning off Mission Control's gestures and hot corners (tilemo has its own overview)"
+    try defaults write com.apple.dock showMissionControlGestureEnabled -bool false
+    try defaults write com.apple.dock showAppExposeGestureEnabled -bool false
+    for _domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
+        try defaults write "$_domain" TrackpadThreeFingerVertSwipeGesture -int 0
+        try defaults write "$_domain" TrackpadFourFingerVertSwipeGesture -int 0
+    done
+    try defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseTwoFingerDoubleTapGesture -int 0
+
+    # 2 is Mission Control and 3 App Exposé; 1 is no action.
+    for _corner in tl tr bl br; do
+        _action=$(defaults read com.apple.dock "wvous-$_corner-corner" 2>/dev/null) || continue
+        case $_action in
+            2 | 3)
+                try defaults write com.apple.dock "wvous-$_corner-corner" -int 1
+                try defaults write com.apple.dock "wvous-$_corner-modifier" -int 0
+                ;;
+        esac
+    done
+    needs_logout "the trackpad and mouse gestures"
+}
+
 configure_window_manager_for_tilemo() {
     todo_optional "Remove the Spaces you don't need, since tilemo uses one per display: open Mission Control (open -a 'Mission Control' in a terminal), point at a Space along the top, and click its x."
 
