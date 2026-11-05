@@ -791,7 +791,7 @@ check() {
     fi
 }
 # The directory this run's pins install into.
-inst() { printf '%s\n' "$T"/opt/hyprland/v0.56.2-*; }
+inst() { printf '%s\n' "$T"/opt/hyprland/v0.57.1-*; }
 has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
 lacks() { ! has "$1" "$2"; }
 # N bytes of VALUE, least significant first, as printf escapes.
