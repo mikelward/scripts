@@ -241,6 +241,8 @@ Options:
   --no-tide        Install KDE Plasma alone, without tide
   --no-build-hyprland
                    Use the distro's Hyprland for tide, even if it's too old
+  --tidewm         Also build tidewm for tide's tidewm session, an option
+                   beside Hyprland's (Debian testing and Arch)
   --greeter        Make greetd, with tide's greeter, the display manager
   --no-greeter     Put back the display manager greetd replaced
   --minimal        Skip the heavyweight extras (helix, jj, nushell)
@@ -494,6 +496,9 @@ while test $# -gt 0; do
             ;;
         --no-build-hyprland)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"
+            ;;
+        --tidewm)
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --tidewm"
             ;;
         --greeter)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --greeter"

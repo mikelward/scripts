@@ -25,6 +25,7 @@ TESTS = \
 	setup_test \
 	setup-tide_test \
 	setup-tide_hyprland_test \
+	setup-tide_tidewm_test \
 	setup-tide_greeter_test \
 	setup-tide_greeter_pam_test \
 	setup-tide_greeter_pam_modules_test \

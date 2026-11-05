@@ -1,0 +1,105 @@
+#!/bin/bash
+# Tests for setup-tide: the tidewm build, with --tidewm
+#
+# The harness, its fixtures and mocks are in setup-tide_testlib.
+
+# shellcheck source=setup-tide_testlib
+. "$(dirname "$0")/setup-tide_testlib"
+
+set -e
+
+commit=$(sed -n 's/^TIDEWM_COMMIT=//p' "$SCRIPT")
+short=${commit:0:12}
+build() { printf '%s\n' "$T"/opt/tidewm/"$short"-*; }
+
+# Without --tidewm, nothing of tidewm's is touched.
+setup; ARGS=(); run
+check "without --tidewm, setup succeeds" test "$status" -eq 0
+check "without --tidewm, tidewm isn't built" lacks "$calls" "tidewm"
+check "without --tidewm, nothing is linked" test ! -e "$T/usr-local-bin/tidewm"
+teardown
+
+# With --tidewm on Debian testing, which packages wlroots 0.20: build it.
+setup; ARGS=(--tidewm); run
+check "--tidewm succeeds" test "$status" -eq 0
+check "--tidewm installs tidewm's build dependencies, wlroots 0.20 among them" \
+    has "$calls" "apt-get install -y build-essential pkgconf git libwlroots-0.20-dev libwayland-dev"
+check "and Xwayland, for X11 apps" has "$calls" "libjson-c-dev xwayland"
+check "--tidewm clones tidewm" has "$calls" "git clone --quiet https://github.com/mikelward/tidewm.git $T/src/tidewm-build/tidewm"
+check "and checks out the pinned commit" has "$calls" "git -C $T/src/tidewm-build/tidewm -c advice.detachedHead=false checkout --quiet $commit"
+check "and checks what it checked out" has "$calls" "git -C $T/src/tidewm-build/tidewm rev-parse HEAD"
+check "--tidewm builds it with XWayland" has "$calls" "make -C $T/src/tidewm-build/tidewm XWAYLAND=-DXWAYLAND XLIBS=xcb xcb-icccm"
+check "--tidewm installs it under its prefix, by commit" has "$calls" "make -C $T/src/tidewm-build/tidewm install PREFIX=$T/opt/tidewm/$short-"
+check "the build never uses sudo to install" lacks "$calls" "sudo make -C $T/src/tidewm-build"
+check "the build is marked complete" test -f "$(build)/setup-tide-build"
+check "the build is current" test "$(readlink -f "$T/opt/tidewm/current")" = "$(build)"
+check "tidewm is linked onto PATH, through current" \
+    test "$(readlink "$T/usr-local-bin/tidewm")" = "$T/opt/tidewm/current/bin/tidewm"
+check "the build is root's once it's linked" has "$calls" "sudo chown -R 0:0 $(build)"
+# A second run with the same pin doesn't rebuild.
+: > "$CALLS"
+run
+check "the same pin doesn't rebuild" lacks "$calls" "make -C $T/src/tidewm-build"
+check "the same pin says so" has "$output" "tidewm $short is already built in $(build)"
+check "the same pin still links" test "$(readlink "$T/usr-local-bin/tidewm")" = "$T/opt/tidewm/current/bin/tidewm"
+teardown
+
+# A new pin builds afresh, and the old build goes once current moves.
+setup; ARGS=(--tidewm)
+mkdir -p "$T/opt/tidewm/000000000000-1/bin"
+printf '#!/bin/sh\n' > "$T/opt/tidewm/000000000000-1/bin/tidewm"
+echo "old pin" > "$T/opt/tidewm/000000000000-1/setup-tide-build"
+ln -s 000000000000-1 "$T/opt/tidewm/current"
+ln -s "$T/opt/tidewm/current/bin/tidewm" "$T/usr-local-bin/tidewm"
+run
+check "a new pin builds" has "$calls" "make -C $T/src/tidewm-build/tidewm install"
+check "a new pin's build is current" test "$(readlink -f "$T/opt/tidewm/current")" = "$(build)"
+check "the old pin's build is removed" test ! -e "$T/opt/tidewm/000000000000-1"
+teardown
+
+# A checkout of another commit isn't built.
+FAKE_TIDEWM_COMMIT=0000000000000000000000000000000000000000 setup; ARGS=(--tidewm); run
+check "a moved checkout isn't built" lacks "$calls" "make -C $T/src/tidewm-build"
+check "a moved checkout says so" has "$output" "tidewm's checkout is commit 0000000000000000000000000000000000000000, not the pinned $commit"
+check "a failed tidewm build is a warning, not a failure" test "$status" -eq 0
+check "and says what it costs" has "$output" "the tide (tidewm) session won't show at the login screen; rerun setup-tide --tidewm to retry"
+check "nothing is linked" test ! -e "$T/usr-local-bin/tidewm"
+teardown
+
+# A failed make is reported, and nothing is linked or marked complete.
+setup; ARGS=(--tidewm); run FAKE_MAKE_FAILS="$T/src/tidewm-build/tidewm"
+check "a failed make doesn't fail setup" test "$status" -eq 0
+check "a failed make is reported" has "$output" "building tidewm failed"
+check "a failed make leaves nothing linked" test ! -e "$T/usr-local-bin/tidewm"
+check "a failed make leaves no marker" test -z "$(find "$T/opt/tidewm" -name setup-tide-build 2>/dev/null)"
+teardown
+
+# Ubuntu 26.04 has no wlroots 0.20, so tidewm isn't built there.
+setup; ARGS=(--tidewm); run FAKE_MISSING=libwlroots-0.20-dev
+check "without wlroots 0.20, setup still succeeds" test "$status" -eq 0
+check "without wlroots 0.20, tidewm isn't built" lacks "$calls" "git clone --quiet https://github.com/mikelward/tidewm.git"
+check "without wlroots 0.20, it says why" has "$output" "apt has no libwlroots-0.20-dev here (Ubuntu 26.04 has only 0.19)"
+teardown
+
+# Arch packages wlroots 0.20.
+setup; ARGS=(--tidewm); run SETUP_OS=arch
+check "on Arch, tidewm's dependencies come from pacman" has "$calls" "pacman -S --needed --noconfirm base-devel git wlroots0.20"
+check "on Arch, tidewm is built" has "$calls" "make -C $T/src/tidewm-build/tidewm install PREFIX="
+teardown
+
+# Fedora isn't built on yet.
+setup; ARGS=(--tidewm); run SETUP_OS=redhat
+check "on Fedora, tidewm isn't built" lacks "$calls" "git clone --quiet https://github.com/mikelward/tidewm.git"
+check "on Fedora, it says why" has "$output" "tidewm isn't built on redhat"
+teardown
+
+# A tidewm on PATH that setup didn't link is left alone.
+setup; ARGS=(--tidewm)
+printf '#!/bin/sh\n' > "$T/usr-local-bin/tidewm"
+chmod +x "$T/usr-local-bin/tidewm"
+run
+check "someone else's tidewm isn't replaced" test ! -L "$T/usr-local-bin/tidewm"
+check "and setup says so" has "$output" "NOT LINKING tidewm: $T/usr-local-bin/tidewm is already there"
+teardown
+
+finish

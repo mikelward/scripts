@@ -117,6 +117,14 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 
 ## Decisions needing review
 
+- **setup-tide builds tidewm only with `--tidewm`** (2026-11-05), since
+  tide's tidewm session is an option beside Hyprland's, not the default,
+  and the build costs a run's time on every machine. It pins a commit, not
+  a tag: tidewm has cut no release, and a tag ruleset could make a tag
+  permanent. Only Debian testing and Arch, which package the wlroots 0.20
+  it builds against; Ubuntu 26.04 (0.19) and Fedora say so and carry on.
+  The alternatives are building it by default, or building wlroots too.
+  Reversible.
 - **KDE's Win+V pastes with Ctrl+V into every window** (2026-11-04),
   terminals included. KWin has no D-Bus call for the focused window's
   class, so `clipboard-menu` can't pick Ctrl+Shift+V for a terminal, as
