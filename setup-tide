@@ -208,7 +208,7 @@ QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
 # tidewm linked onto PATH, where the session entry's TryExec finds it.
 # Overridable for tests.
 TIDEWM_REPO=https://github.com/mikelward/tidewm.git
-TIDEWM_COMMIT=c86258e114b614e08c224b8d1e4d1c6a95f86d25
+TIDEWM_COMMIT=a4e575b1a849733bac95b0edbbecbec861e4d116
 TIDEWM_PREFIX="${TIDEWM_PREFIX:-/opt/tidewm}"
 TIDEWM_SRC="${TIDEWM_SRC:-$HOME/src/tidewm-build}"
 TIDEWM_BIN_DIR="${TIDEWM_BIN_DIR:-/usr/local/bin}"
