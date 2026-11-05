@@ -22,10 +22,28 @@ setup() {
     mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
     # make install-session installs the session entry, with TryExec
     # \$FAKE_ENTRY_TRYEXEC (or none, when that's empty), or uwsm; with
-    # \$FAKE_NO_ENTRY it installs none.
+    # \$FAKE_NO_ENTRY it installs none. make install PREFIX=DIR, as
+    # tidewm's, installs DIR/bin/tidewm. \$FAKE_MAKE_FAILS makes a make in
+    # the directory it names fail.
     cat > "$T/bin/make" <<MOCK
 #!/bin/sh
 printf "%s\\n" "make \$*" >> "$CALLS"
+if test -n "\$FAKE_MAKE_FAILS" && test "\$1" = -C && test "\$2" = "\$FAKE_MAKE_FAILS"; then
+    exit 2
+fi
+for arg; do
+    case "\$arg" in
+        PREFIX=*)
+            case " \$* " in
+                *" install "*)
+                    mkdir -p "\${arg#PREFIX=}/bin"
+                    printf "#!/bin/sh\\n" > "\${arg#PREFIX=}/bin/tidewm"
+                    chmod 755 "\${arg#PREFIX=}/bin/tidewm"
+                    ;;
+            esac
+            ;;
+    esac
+done
 case " \$* " in
     *" install-session "*)
         test -z "\$FAKE_NO_ENTRY" || exit 0
@@ -258,8 +276,10 @@ if test "\$3" = rev-parse; then
     fi
 fi
 MOCK
-    # Each Hyprland pin's name and commit, for git rev-parse.
+    # Each Hyprland pin's name and commit, for git rev-parse, and tidewm's,
+    # or \$FAKE_TIDEWM_COMMIT, as setup is called.
     sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+    echo "tidewm ${FAKE_TIDEWM_COMMIT:-$(sed -n 's/^TIDEWM_COMMIT=//p' "$SCRIPT")}" >> "$T/pins"
     # systemctl answers show from the display manager in $T/dm (none while
     # it's empty or missing), and from greetd's unit: installed once
     # $T/greetd-installed exists, keeping getty off the VTs in
@@ -621,6 +641,7 @@ run() {
         TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
+        TIDEWM_PREFIX="$T/opt/tidewm" TIDEWM_SRC="$T/src/tidewm-build" TIDEWM_BIN_DIR="$T/usr-local-bin" \
         SETUP_GREETD_DIR="$T/etc/greetd" SETUP_GREETD_TEMPLATE="$T/greetd.toml" \
         SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" \
         SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \

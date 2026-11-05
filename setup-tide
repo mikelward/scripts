@@ -25,6 +25,11 @@
 #   source, at pinned tags, into /opt/hyprland (see build_hyprland). Both
 #   builds are outside $HOME because the greeter runs them too, as greetd's
 #   own user, which can't read a home directory;
+# - with --tidewm, builds tidewm, tide's fork of dwl, from a pinned commit
+#   into /opt/tidewm and links it onto PATH, so the tide (tidewm) session,
+#   an option beside Hyprland's, shows at the login screen (see
+#   build_tidewm). Only where the distro packages wlroots 0.20, which it
+#   builds against: Debian testing and Arch;
 # - clones or updates the tide repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
@@ -74,8 +79,8 @@
 #
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
-#                      [--no-build-hyprland] [--greeter | --no-greeter]
-#                      [--github PREFIX] [-h | --help]
+#                      [--no-build-hyprland] [--tidewm]
+#                      [--greeter | --no-greeter] [--github PREFIX] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
 # --no-sudo skips every privileged step. --ignore-errors keeps going past
@@ -83,6 +88,7 @@
 # is: setup passes it after cloning or pulling the repo with its own
 # clone_or_pull, which honors --github and redacts the URLs it prints.
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
+# --tidewm builds tidewm too; without it, nothing of tidewm's is touched.
 # --greeter makes greetd the display manager. --no-greeter puts back the
 # one setup replaced with greetd. Without either, the display manager stays
 # as it is. --github PREFIX, or $GITHUB_PREFIX, clones what it clones from
@@ -96,6 +102,7 @@ SUDO=yes
 IGNORE_ERRORS=no
 FETCH=yes
 BUILD_HYPRLAND=yes
+BUILD_TIDEWM=no
 # Where GitHub's repos come from: empty for github.com itself (see
 # git_github).
 GITHUB_PREFIX="${GITHUB_PREFIX:-}"
@@ -172,6 +179,29 @@ QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
     libwayland-dev libwayland-bin wayland-protocols libxcb1-dev
     libpipewire-0.3-dev libpam0g-dev libpolkit-agent-1-dev libpolkit-gobject-1-dev libglib2.0-dev
     qt6-svg-plugins qml6-module-qtquick qml6-module-qtquick-layouts qml6-module-qtquick-effects"
+
+# tidewm (github.com/mikelward/tidewm), tide's fork of dwl, which
+# build_tidewm builds with --tidewm, for tide's tidewm session, an option
+# beside Hyprland's. A commit, not a tag: the fork has cut no release yet,
+# and a commit can't be moved. Its own prefix, like Quickshell's, with
+# tidewm linked onto PATH, where the session entry's TryExec finds it.
+# Overridable for tests.
+TIDEWM_REPO=https://github.com/mikelward/tidewm.git
+TIDEWM_COMMIT=c86258e114b614e08c224b8d1e4d1c6a95f86d25
+TIDEWM_PREFIX="${TIDEWM_PREFIX:-/opt/tidewm}"
+TIDEWM_SRC="${TIDEWM_SRC:-$HOME/src/tidewm-build}"
+TIDEWM_BIN_DIR="${TIDEWM_BIN_DIR:-/usr/local/bin}"
+TIDEWM_COMMANDS=tidewm
+# With XWayland, for X11 apps, as tidewm's CI builds it.
+TIDEWM_XWAYLAND=-DXWAYLAND
+TIDEWM_XLIBS="xcb xcb-icccm"
+# What the build needs, from tidewm's CI, plus Xwayland to run X11 apps.
+# It builds against wlroots 0.20, which Debian testing and Arch package and
+# Ubuntu 26.04 doesn't (it has 0.19).
+TIDEWM_APT_DEPS="build-essential pkgconf git libwlroots-0.20-dev libwayland-dev wayland-protocols
+    libinput-dev libxkbcommon-dev libxcb1-dev libxcb-icccm4-dev libjson-c-dev xwayland"
+TIDEWM_PACMAN_DEPS="base-devel git wlroots0.20 wayland wayland-protocols libinput libxkbcommon
+    libxcb xcb-util-wm json-c pkgconf xorg-xwayland"
 
 # Where build_hyprland builds and installs Hyprland, and where it links its
 # commands. Its own prefix keeps its libraries out of the system's library
@@ -402,6 +432,9 @@ Options:
   --no-build-hyprland
                    On Debian and Ubuntu, don't build Hyprland from source when
                    apt's is older than 0.56 (the build takes 10-20 minutes)
+  --tidewm         Also build tidewm, tide's fork of dwl, for the tide
+                   (tidewm) session, an option beside Hyprland's: on Debian
+                   testing and Arch, which package the wlroots 0.20 it needs
   --greeter        Make greetd, with tide's greeter, the display manager
                    from the next boot
   --no-greeter     If setup made greetd the display manager, put back the
@@ -425,6 +458,8 @@ while test $# -gt 0; do
         --no-fetch) FETCH=no ;;
         --build-hyprland) BUILD_HYPRLAND=yes ;;
         --no-build-hyprland) BUILD_HYPRLAND=no ;;
+        --tidewm) BUILD_TIDEWM=yes ;;
+        --no-tidewm) BUILD_TIDEWM=no ;;
         --greeter) GREETER=yes ;;
         --no-greeter) GREETER=no ;;
         --github)
@@ -1204,6 +1239,137 @@ unlink_quickshell() {
         fi
     done
     test "$_unlinked" = yes
+}
+
+# --- tidewm from source ---
+
+# tidewm_build_deps prints the packages tidewm's build needs here, or
+# nothing on a distro it isn't built on, and fails, saying why, on one
+# whose apt has no wlroots 0.20.
+tidewm_build_deps() {
+    case "$(detect_os)" in
+        debian)
+            if ! _cand=$(apt_candidates libwlroots-0.20-dev); then
+                warn "couldn't ask apt whether it has wlroots 0.20, which tidewm builds against"
+                return 1
+            fi
+            case "$_cand" in
+                "libwlroots-0.20-dev "[0-9]*) echo "$TIDEWM_APT_DEPS" ;;
+                *)
+                    warn "apt has no libwlroots-0.20-dev here (Ubuntu 26.04 has only 0.19), and tidewm builds against wlroots 0.20, so it isn't built"
+                    return 1
+                    ;;
+            esac
+            ;;
+        arch) echo "$TIDEWM_PACMAN_DEPS" ;;
+        *)
+            warn "tidewm isn't built on $(detect_os): setup builds it only where the distro packages wlroots 0.20 (Debian testing and Arch)"
+            return 1
+            ;;
+    esac
+}
+
+# build_tidewm builds TIDEWM_COMMIT into its own directory under
+# $TIDEWM_PREFIX, as this user, then hands it to root and links tidewm onto
+# PATH, as build_quickshell does Quickshell. The directory is named for the
+# commit and a checksum of the build's inputs, so a new pin builds afresh
+# and a rerun with none changed only relinks.
+build_tidewm() {
+    deps=$(tidewm_build_deps) || return 1
+    tw_short=$(printf '%.12s' "$TIDEWM_COMMIT")
+    info "Building tidewm $tw_short from source"
+    # shellcheck disable=SC2086  # word-split the package list
+    if ! missing=$(install_all $deps); then
+        warn "could not install tidewm's build dependencies:$(printf ' %s' $missing)"
+        return 1
+    fi
+    tw_record=$(printf '%s\n' "$TIDEWM_REPO $TIDEWM_COMMIT" "make XWAYLAND=$TIDEWM_XWAYLAND XLIBS=$TIDEWM_XLIBS")
+    tw_sum=$(printf '%s\n' "$tw_record" | cksum | cut -d' ' -f1)
+    tw_dir="$TIDEWM_PREFIX/$tw_short-$tw_sum"
+    tw_marker="$tw_dir/setup-tide-build"
+    if test -f "$tw_marker"; then
+        info "tidewm $tw_short is already built in $tw_dir"
+    else
+        src="$TIDEWM_SRC/tidewm"
+        # A stale clone or partial install left in place would be built into
+        # and then marked complete. The partial install is in root's prefix,
+        # so only root can remove it.
+        if ! rm -rf "$src" || { test -e "$tw_dir" && ! sudo_or_warn rm -rf "$tw_dir"; }; then
+            warn "couldn't remove the old tidewm sources or partial build in $src and $tw_dir; not building"
+            return 1
+        fi
+        mkdir -p "$TIDEWM_SRC" || return 1
+        make_build_dir "$tw_dir" || return 1
+        start_build_log tidewm || return 1
+        build_logged tidewm git_github clone --quiet "$TIDEWM_REPO" "$src" \
+            && build_logged tidewm git -C "$src" -c advice.detachedHead=false checkout --quiet "$TIDEWM_COMMIT" || return 1
+        commit=$(git -C "$src" rev-parse HEAD) || return 1
+        if test "$commit" != "$TIDEWM_COMMIT"; then
+            warn "tidewm's checkout is commit $commit, not the pinned $TIDEWM_COMMIT; not building it"
+            rm -rf "$src" || warn "couldn't remove the rejected clone in $src"
+            return 1
+        fi
+        build_logged tidewm make -C "$src" XWAYLAND="$TIDEWM_XWAYLAND" XLIBS="$TIDEWM_XLIBS" \
+            && build_logged tidewm make -C "$src" install PREFIX="$tw_dir" || return 1
+        info "Built tidewm $tw_short; the build's output is in $build_log"
+        printf '%s\n' "$tw_record" > "$tw_marker" || {
+            warn "couldn't write $tw_marker"
+            return 1
+        }
+    fi
+    link_tidewm || return 1
+    remove_old_tidewm_builds
+}
+
+# link_tidewm hands $tw_dir to root, points $TIDEWM_PREFIX/current at it,
+# then makes sure tidewm's link goes through it.
+link_tidewm() {
+    for cmd in $TIDEWM_COMMANDS; do
+        if ! test -x "$tw_dir/bin/$cmd"; then
+            warn "$tw_dir/bin/$cmd is missing; remove $tw_marker to rebuild"
+            return 1
+        fi
+    done
+    seal_build "$tw_dir" "$TIDEWM_COMMANDS" || return 1
+    current="$TIDEWM_PREFIX/current"
+    if ! sudo_or_warn ln -sfn "${tw_dir##*/}" "$current.new" || ! sudo_or_warn mv -Tf "$current.new" "$current"; then
+        warn "couldn't point $current at $tw_dir"
+        if test -L "$current.new"; then
+            sudo_or_warn rm -f "$current.new" || warn "couldn't remove $current.new"
+        fi
+        return 1
+    fi
+    for cmd in $TIDEWM_COMMANDS; do
+        link="$TIDEWM_BIN_DIR/$cmd"
+        test "$(readlink "$link")" != "$current/bin/$cmd" || continue
+        # Only replace a link of ours; anything else there is someone else's.
+        if test -e "$link" || test -L "$link"; then
+            case "$(readlink "$link")" in
+                "$TIDEWM_PREFIX"/*) ;;
+                *)
+                    warn "NOT LINKING $cmd: $link is already there, and setup didn't make it; remove it to use this build"
+                    continue
+                    ;;
+            esac
+        fi
+        if ! sudo_or_warn ln -sfn "$current/bin/$cmd" "$link"; then
+            warn "COULDN'T LINK $cmd INTO $TIDEWM_BIN_DIR: the tide (tidewm) session won't show at the login screen; link $current/bin/$cmd onto its PATH yourself"
+        fi
+    done
+}
+
+# Builds of an older pin, now that current points elsewhere. A running
+# tidewm keeps the files it has open. Only finished builds of setup's, by
+# their marker.
+remove_old_tidewm_builds() {
+    for old in "$TIDEWM_PREFIX"/*-[0-9]*/; do
+        old=${old%/}
+        if ! test -d "$old" || test -L "$old" || test "$old" = "$tw_dir" \
+            || ! test -f "$old/setup-tide-build"; then
+            continue
+        fi
+        sudo_or_warn rm -rf "$old" || warn "couldn't remove the old tidewm build in $old"
+    done
 }
 
 # --- Hyprland from source ---
@@ -5466,6 +5632,11 @@ else
     # Only once the distro's is there to replace them.
     if test "$DISTRO_HYPRLAND" = yes; then
         unlink_hyprland || warn "couldn't remove the links to a source-built Hyprland in $HYPRLAND_BIN_DIR"
+    fi
+    # tidewm is an option beside Hyprland, so a failed build is only a
+    # warning: the default session doesn't need it.
+    if test "$BUILD_TIDEWM" = yes; then
+        build_tidewm || warn "tidewm wasn't built, so the tide (tidewm) session won't show at the login screen; rerun setup-tide --tidewm to retry"
     fi
     if test "$BUILD_NOW" = yes; then
         # apt's Hyprland wasn't installed, so without this build there's no
