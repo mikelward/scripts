@@ -142,6 +142,11 @@ SUDO=yes
 # confirmations -- the administrator password Karabiner's .pkg needs is the
 # user's to give, and nothing here suppresses it.
 export HOMEBREW_NO_ASK=1
+# And, as in setup, a brew install leaves installed casks and formulae at
+# their versions: setup upgrades them at most once a week.
+export HOMEBREW_NO_INSTALL_UPGRADE=1
+export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
+export HOMEBREW_AUTO_UPDATE_SECS=604800
 
 # Directory containing this script, resolved up front while $0 still means what
 # the caller typed. The launcher helpers the Quick Actions run live beside this
@@ -1437,7 +1442,8 @@ install_brew_tool() {
 # whatever its Makefile says belongs there rather than a list kept here.
 #
 # An existing checkout is pulled with --ff-only first, as setup pulls tide, so
-# a plain run keeps it current. A checkout with commits of its own, or
+# a plain run keeps it current: it's config, not a package, so it isn't held
+# to setup's weekly upgrades. A checkout with commits of its own, or
 # changes a pull would overwrite, is left as it is, with a warning, and
 # installed as it stands. --no-install skips the clone and the pull, which
 # would bring in a newer tilemo -- copying an existing checkout's files is

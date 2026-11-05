@@ -75,7 +75,7 @@ MOCK
     # per cask Homebrew has a record of, and like brew fails for any other.
     cat > "$TEST_TMPDIR/bin/brew" <<MOCK
 #!/bin/sh
-printf "%s\\n" "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}]" >> "$CALLS"
+printf "%s\\n" "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}] [NO_INSTALL_UPGRADE=\${HOMEBREW_NO_INSTALL_UPGRADE:-unset} NO_INSTALLED_DEPENDENTS_CHECK=\${HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK:-unset} AUTO_UPDATE_SECS=\${HOMEBREW_AUTO_UPDATE_SECS:-unset}]" >> "$CALLS"
 if test "\$1" = list; then
     for _arg; do _cask="\$_arg"; done
     grep "^\$_cask " "$TEST_TMPDIR/brew-casks" 2>/dev/null || exit 1
@@ -1600,6 +1600,18 @@ test_cask_installs_do_not_ask_for_confirmation() {
     assert_called "brew install --cask karabiner-elements [HOMEBREW_NO_ASK=1]"
 }
 
+# A managed Mac has each new version of a binary approved by hand, so a cask
+# install leaves what's installed at its version, dependents included, and
+# Homebrew refreshes its index at most weekly: setup upgrades once a week.
+test_cask_installs_do_not_upgrade() {
+    remove_amethyst
+    remove_karabiner
+    run_macos --wm amethyst --ignore-errors
+    assert_status 0 &&
+    assert_called "brew install --cask amethyst [HOMEBREW_NO_ASK=1] [NO_INSTALL_UPGRADE=1 NO_INSTALLED_DEPENDENTS_CHECK=1 AUTO_UPDATE_SECS=604800]" &&
+    assert_called "brew install --cask karabiner-elements [HOMEBREW_NO_ASK=1] [NO_INSTALL_UPGRADE=1 NO_INSTALLED_DEPENDENTS_CHECK=1 AUTO_UPDATE_SECS=604800]"
+}
+
 test_missing_brew_does_not_abort_karabiner() {
     remove_karabiner
     run_macos_without brew --ignore-errors
@@ -3102,6 +3114,8 @@ run_test "--no-install skips installing Karabiner-Elements" \
     test_no_install_skips_karabiner
 run_test "cask installs don't stop for confirmation" \
     test_cask_installs_do_not_ask_for_confirmation
+run_test "cask installs leave installed casks at their versions" \
+    test_cask_installs_do_not_upgrade
 run_test "missing brew does not abort the Karabiner step" \
     test_missing_brew_does_not_abort_karabiner
 run_test "--no-sudo skips the Karabiner install" \

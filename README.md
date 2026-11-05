@@ -21,6 +21,16 @@ curl -fsSL https://github.com/mikelward/scripts/raw/main/setup | sh
 wget -qO- https://github.com/mikelward/scripts/raw/main/setup | sh
 ```
 
+Re-run `setup` whenever you like: it installs what's missing and leaves what's
+installed at its version, upgrading only once a week. That pass upgrades
+`setup`'s apt or dnf packages, everything Homebrew has, the `homepkg` tools,
+the release binaries and `uv`, and `~/.local/state/setup/last-upgrade` records
+the last one that didn't fail; a failed one is tried again on the next run.
+`setup --upgrade` upgrades now. A managed machine that has each new version of
+a binary approved before it runs sees new versions at most weekly. The repos
+`setup` clones (`scripts`, `conf` and the rest) are config, so they're pulled
+on every run.
+
 ## Installing tools without root
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI
@@ -36,8 +46,9 @@ the minimal profile is in effect). `--no-sudo` on its own is just the mechanism
 
 `atuin` and `carapace` — the history search and completion engines the conf
 repo's shell config wires up — are in no distro repo and have no conda-forge
-package, so every `setup` run installs them from their GitHub releases with
-`homepkg --backend github`, regardless of profile or privilege.
+package, so `setup` installs them from their GitHub releases with
+`homepkg --backend github`, regardless of profile or privilege, and upgrades
+them on its weekly upgrade run.
 
 The heavyweight extras (`helix jj nu`) come the same way on a privileged box
 without Homebrew: `setup` fetches the release artifacts rather than building
@@ -47,7 +58,7 @@ forces the release artifacts. `jj` is left out of that install whenever the
 box already has one `setup` didn't install — a distro package, a Homebrew
 formula — so the packaged copy stays the one that runs instead of being
 shadowed by a second install in `~/.local/bin`. A `jj` already under
-`~/.local` is `setup`'s own and keeps being refreshed. `shpool` publishes no
+`~/.local` is `setup`'s own and is refreshed on the weekly upgrade run. `shpool` publishes no
 prebuilt artifact and is no longer installed by `setup` — sessions still
 prefer it when it's on `PATH` from somewhere else, and otherwise fall back to
 `tmux`.
