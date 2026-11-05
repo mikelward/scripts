@@ -816,11 +816,12 @@ CONF
 
 # Meta+. is Plasma's Emoji Selector by default, and it holds it as a
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
-# Krohnkite's Next Layout needs the launch-shortcut form.
-test_unbinds_emoji_selector_for_next_layout() {
+# Krohnkite's Next Layout needs the launch-shortcut form. It moves to Meta+;,
+# the emoji key on tide and tilemo too.
+test_moves_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none,none,Emoji Selector" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch Meta+;,none,Emoji Selector" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteNextLayout Meta+."
 }
 
@@ -1367,8 +1368,8 @@ run_test "leaves Alt+\` app-window cycling alone" \
     test_does_not_unbind_walk_through_current_application
 run_test "Krohnkite sweep survives the config being rewritten mid-sweep" \
     test_krohnkite_sweep_survives_config_rewrite
-run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
-    test_unbinds_emoji_selector_for_next_layout
+run_test "moves the Emoji Selector to Meta+; so Meta+. reaches Krohnkite" \
+    test_moves_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \
     test_strips_stale_app_shortcut_groups
 run_test "stale-group sweep preserves the config's mode" \

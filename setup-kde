@@ -7,7 +7,8 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music, chat, calendar),
 #   Win+V's clipboard menu, which pastes (clipboard-menu), and Win+Shift+V's
-#   snippets and Bitwarden menu, which types (fill-menu)
+#   snippets and Bitwarden menu, which types (fill-menu); Plasma's Emoji
+#   Selector moves from Win+. to Win+;
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
@@ -667,10 +668,12 @@ unbind_shortcut_in() {
 # "shortcut,default,name" triple as a [kwin] action -- see add_app_shortcut.
 # Writing a bare "none" would be a one-field value, which kglobalaccel skips,
 # leaving the component free to register its .desktop default instead.
-unbind_app_shortcut() {
+# A launch shortcut in [services], as Plasma's own apps keep theirs:
+# set_app_shortcut COMPONENT KEYS NAME.
+set_app_shortcut() {
     kwriteconfig6 --file kglobalshortcutsrc \
-        --group services --group "$1" --key _launch "none,none,$2"
-    record_live_shortcut "$1" _launch none "$2"
+        --group services --group "$1" --key _launch "$2,none,$3"
+    record_live_shortcut "$1" _launch "$2" "$3"
 }
 
 # Collect the action IDs first, then unbind them -- never write from inside
@@ -895,8 +898,9 @@ configure_keybindings() {
     # and cost the app-window cycling that key does. If an earlier run of this
     # script already cleared yours, System Settings > Shortcuts restores it.
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
-    # not a [kwin] action, so it needs the launch-shortcut form.
-    unbind_app_shortcut org.kde.plasma.emojier.desktop "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
+    # not a [kwin] action, so it needs the launch-shortcut form. It moves to
+    # Meta+;, the emoji and characters key on tide and tilemo too.
+    set_app_shortcut org.kde.plasma.emojier.desktop "Meta+;" "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
     # Klipper's popup, in plasmashell, holds Meta+V. clipboard-menu opens
     # it itself in an X11 session, where its fuzzel menu can't run.
     unbind_shortcut_in plasmashell show-on-mouse-pos              # Meta+V -> clipboard-menu
