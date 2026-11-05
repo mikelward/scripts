@@ -1142,23 +1142,28 @@ brew_logged() {
 }
 
 # sudo_logged COMMAND...: sudo_or_warn COMMAND, with its output in the log.
-# apt-get runs without asking anything: nobody would see the question in
-# the log. A config file changed here and in the package keeps the version
-# here, apt's own default answer.
+# debconf's questions about the packages apt-get installs are asked on the
+# terminal before they're installed (see apt_ask_hook); anything else apt
+# would ask takes its default, since the question would land in the log. A
+# config file changed here and in the package keeps the version here, apt's
+# own default answer.
 sudo_logged() {
     #
-    # debconf's questions are kept away with DEBIAN_FRONTEND, which goes to
-    # sudo as an argument so that apt-get stays the command it runs: a sudo
-    # rule that allows only apt-get still lets it. Such a rule may not let
-    # the variable be set, though, so apt_frontend_allowed asks once, and
-    # without it apt gets no input, which is the most that's left (apt's
-    # dpkg-preconfigure opens the terminal itself). dpkg's questions about
-    # changed config files take the default answer the options name. sudo
-    # asks for a password on the terminal, not on stdin.
+    # DEBIAN_FRONTEND keeps debconf from asking as dpkg sets packages up,
+    # with its question in the log. It goes to sudo as an argument so that
+    # apt-get stays the command it runs: a sudo rule that allows only apt-get
+    # still lets it. Such a rule may not let the variable be set, though, so
+    # apt_frontend_allowed asks once, and without it apt gets no input and
+    # nothing is asked on the terminal, which is the most that's left. dpkg's
+    # questions about changed config files take the default answer the
+    # options name. sudo asks for a password on the terminal, not on stdin.
     if test "$1" = apt-get; then
         set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
         if apt_frontend_allowed; then
             set -- DEBIAN_FRONTEND=noninteractive "$@"
+            if apt_can_ask; then
+                set -- "$@" -o "DPkg::Pre-Install-Pkgs::=$(apt_ask_hook)"
+            fi
         fi
     fi
     start_setup_log
@@ -1188,6 +1193,30 @@ apt_frontend_allowed() {
         fi
     fi
     test "$_apt_frontend" = yes
+}
+
+# apt_can_ask: whether debconf's questions can be asked on the terminal:
+# there is one, and apt-utils' apt-extracttemplates, which dpkg-preconfigure
+# needs, is installed. printf, not :, for dash (see start_setup_log).
+# $APT_TTY and $DPKG_PRECONFIGURE stand in for the terminal and the program
+# in tests.
+apt_can_ask() {
+    command -v apt-extracttemplates >/dev/null 2>&1 \
+        && (printf "" >"${APT_TTY:-/dev/tty}") 2>/dev/null
+}
+
+# apt_ask_hook: a command for apt to run before it installs anything, given
+# the .debs on stdin, a line each: dpkg-preconfigure asks their debconf
+# questions on the terminal, and dpkg then finds them answered. It's
+# debconf's plain text frontend, not its dialogs: sudo relays the terminal
+# to apt a line at a time while apt's output goes to the log, and the
+# dialogs need each key as it's pressed. A question already answered isn't
+# asked again. Whatever goes wrong here, apt carries on with the defaults.
+apt_ask_hook() {
+    # shellcheck disable=SC2016  # the $s are the hook's, for apt's sh
+    printf '%s' 'set --; while read -r deb; do set -- "$@" "$deb"; done; test "$#" -eq 0 || DEBIAN_FRONTEND=readline '
+    printf '%s "$@" <%s >%s 2>&1 || true' "${DPKG_PRECONFIGURE:-/usr/sbin/dpkg-preconfigure}" \
+        "${APT_TTY:-/dev/tty}" "${APT_TTY:-/dev/tty}"
 }
 
 # --- Package summaries ---

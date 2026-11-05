@@ -1233,6 +1233,26 @@ check "quiet: without it, and without input" has "$(cat "$T/apt-asks")" "apt-get
 check "quiet: and without a warning" lacks "$output" "Warning:"
 teardown
 
+# With a terminal, and apt-utils to read the packages' questions, debconf's
+# questions about what apt installs are asked there, in its plain text
+# frontend, by a hook apt runs before it installs; without a terminal, or
+# where sudo won't set DEBIAN_FRONTEND, nothing is asked.
+setup; ARGS=(); : > "$T/tty"
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/apt-extracttemplates"; chmod +x "$T/bin/apt-extracttemplates"
+run APT_TTY="$T/tty"
+check "with a terminal, apt asks debconf's questions on it" \
+    has "$calls" "apt-get install -y hyprland"
+check "through a hook it runs before it installs" \
+    has "$calls" "-o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$T/tty >$T/tty 2>&1 || true"
+check "and apt itself still asks nothing" lacks "$(cat "$T/apt-asks")" "DEBIAN_FRONTEND=unset"
+: > "$CALLS"
+run
+check "without a terminal, there's no hook" lacks "$calls" "Pre-Install-Pkgs"
+: > "$CALLS"
+run APT_TTY="$T/tty" FAKE_SUDO_NO_SETENV=1
+check "where sudo won't set DEBIAN_FRONTEND, there's no hook" lacks "$calls" "Pre-Install-Pkgs"
+teardown
+
 # Where the log can't be made, what the commands say is shown instead, and
 # the run carries on: under dash, a failed redirection of :, a special
 # builtin, would end it.
