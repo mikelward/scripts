@@ -65,10 +65,13 @@ homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
 `setup` prefers a bundle over the download, so an offline run never waits for
 a fetch that can't succeed.
 
-What the installers say — apt's and dnf's lines a package, Homebrew's
-downloads and caveats, micromamba's progress, the root build — goes to
+What the installers say — apt's, dnf's and pacman's lines a package,
+Homebrew's downloads and caveats, micromamba's progress, the root build, and
+on a Linux desktop tide's `make`, Krohnkite's install and `systemctl`'s
+notices — goes to
 `~/.local/state/setup/setup.log`, which `setup` starts afresh each run and
-`setup-macos` adds to. Each package manager's run shows a header and what
+`setup-macos`, `setup-kde` and `setup-tide` add to (each starts the log itself
+when it's run on its own). Each package manager's run shows a header and what
 changed:
 
 ```
@@ -78,9 +81,11 @@ Upgraded: git
 Failed: frob
 ```
 
-A failed step also shows the last lines it printed. apt runs without asking
-anything, since its questions would land in the log; a config file changed
-on the machine keeps that version, apt's own default answer.
+`setup-tide`'s steps say `Installing tide's apt packages`, `Installing
+Quickshell`, and so on. A failed step also shows the last lines it printed.
+apt runs without asking anything, since its questions would land in the log;
+a config file changed on the machine keeps that version, apt's own default
+answer.
 
 **A machine that won't run binaries from `~/.local/bin`** — a managed Mac whose
 policy kills any binary it hasn't approved (exit 137), or a `noexec` home —

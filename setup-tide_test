@@ -13,7 +13,7 @@ check "exits 0" test "$status" -eq 0
 check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle hyprlock uwsm"
 check "installs hyprlock, the lock screen Super+L and hypridle run" has "$calls" " hyprlock "
 check "installs the transitional owners" has "$calls" "waybar"
-check "clones tide when it isn't there" has "$calls" "git clone https://example.com/tide.git $T/src/tide"
+check "clones tide when it isn't there, quietly" has "$calls" "git clone --quiet https://example.com/tide.git $T/src/tide"
 check "clones from mikelward/tide by default" grep -q '^TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/tide.git}"$' "$SCRIPT"
 check "runs tide's make install" has "$calls" "make -C $T/src/tide install"
 # Go too, for a run without setup.
@@ -53,10 +53,12 @@ check "Fedora installs its swaync, notify-send, Go and python3" has "$calls" "Sw
 teardown
 
 # Fedora has no swww, and dnf refuses the lot over one unknown name, so dnf
-# is asked first and the rest, Hyprland too, install together.
+# is asked first and the rest, Hyprland too, install together. swaybg
+# draws the wallpaper in swww's place, so its absence isn't a failure.
 setup; ARGS=(); run SETUP_OS=redhat FAKE_MISSING=swww
 check "Fedora: a missing package isn't fatal" test "$status" -eq 0
-check "Fedora: a missing package is named" has "$output" "could not install: swww"
+check "Fedora: a missing swww, beside swaybg, isn't named" lacks "$output" "swww"
+check "Fedora: nor warned about" lacks "$output" "Warning:"
 check "Fedora: the rest install in one go" has "$calls" "dnf install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
 teardown
 
@@ -214,6 +216,8 @@ check "quiet build: it's in the log" has "$(cat "$T/home/.local/state/setup-tide
 check "quiet build: the log names each command" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "+ cmake --build $T/src/quickshell-build/quickshell/build"
 check "quiet build: the run says it built, and where its output is" \
     has "$output" "Built Quickshell v0.3.1; the build's output is in $T/home/.local/state/setup-tide/quickshell-build.log"
+check "quiet build: its build dependencies are a package step" has "$output" "Installing Quickshell's build dependencies
+Installed: build-essential cmake ninja-build"
 check "quiet build: Quickshell builds without assuming strict aliasing" has "$calls" "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing"
 teardown
 
@@ -490,10 +494,10 @@ teardown
 
 # Arch, like Fedora, refuses the lot over one unknown name, so pacman is
 # asked first and the rest install together.
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING="swww grim"
 check "Arch: a missing package isn't fatal" test "$status" -eq 0
-check "Arch: a missing package is named" has "$output" "could not install: swww"
-check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+check "Arch: a missing package is named" has "$output" "could not install: grim; install them manually"
+check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel slurp"
 teardown
 
 # An AUR package isn't in the sync databases, and pacman -S refuses it too.
@@ -516,11 +520,15 @@ check "an unknown OS installs nothing" lacks "$calls" "install -y"
 teardown
 
 # A package the distro lacks (swww on Ubuntu 26.04) would make apt refuse
-# the lot, so apt is asked first and the rest install together.
+# the lot, so apt is asked first and the rest install together. swww and
+# swaybg each draw the wallpaper, so one missing beside the other isn't a
+# failure: it's neither warned about nor under Failed.
 setup; ARGS=(); run FAKE_MISSING=swww
 check "a missing package isn't fatal" test "$status" -eq 0
-check "a missing package is named" has "$output" "could not install: swww"
-check "a missing swww names the stand-in" has "$output" "swaybg shows the wallpaper instead"
+check "a missing swww, beside swaybg, isn't named" lacks "$output" "swww"
+check "nor warned about" lacks "$output" "Warning:"
+check "nor a failure" lacks "$output" "Failed:"
+check "swaybg is installed in its place" has "$output" " swaybg "
 check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
 check "the rest install in one go, notify-send, Go and python3 too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang python3"
 check "satty is asked for, for the screenshot's Annotate" has "$calls" "apt-get install -y satty"
@@ -528,9 +536,19 @@ check "Debian gets nm-connection-editor from network-manager-gnome" has "$calls"
 check "a missing package is never asked for" lacks "$calls" "swww"
 teardown
 
+setup; ARGS=(); run FAKE_MISSING=swaybg
+check "a missing swaybg, beside swww, isn't named either" lacks "$output" "swaybg"
+check "nor warned about either" lacks "$output" "Warning:"
+teardown
+
 setup; ARGS=(); run FAKE_MISSING="swww swaybg"
+check "without swww or swaybg, both are named" has "$output" "could not install: swww swaybg; install them manually"
 check "without swww or swaybg, no wallpaper is warned about" has "$output" "without swww or swaybg there's no wallpaper"
-check "and no stand-in is promised" lacks "$output" "swaybg shows the wallpaper instead"
+teardown
+
+setup; ARGS=(); run FAKE_MISSING="swww fuzzel"
+check "a missing package is named" has "$output" "Warning: could not install: fuzzel; install them manually"
+check "and swww, beside swaybg, isn't" lacks "$output" "swww"
 teardown
 
 # When apt itself fails (offline, say), that's one failure, not one per
@@ -541,7 +559,7 @@ check "a failed apt names what didn't install" has "$output" "could not install:
 teardown
 
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run
-check "updates an existing checkout" has "$calls" "git -C $T/src/tide pull --ff-only"
+check "updates an existing checkout, quietly" has "$calls" "git -C $T/src/tide pull --quiet --ff-only"
 check "doesn't clone over it" lacks "$calls" "git clone"
 teardown
 
@@ -1116,14 +1134,131 @@ check "tabs: and leaves no temporary file" test -z "$(ls -A "$T/home/.config/goo
 teardown
 
 
+# What a run prints. The package managers, the builds, make and systemctl
+# go to the run's log, and the run says what step it's on and what changed.
+log() { cat "$T/home/.local/state/setup/setup.log" 2>/dev/null; }
+
+setup; ARGS=(); run
+check "quiet: a package step says what it installed" has "$output" "Installing tide's apt packages
+Installed: hyprland hypridle hyprlock uwsm "
+check "quiet: and Quickshell's" has "$output" "Installing Quickshell
+Installed: quickshell qml6-module-qtquick-effects"
+check "quiet: apt's own lines aren't shown" lacks "$output" "Setting up"
+check "quiet: they're in the log" has "$(log)" "+ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y hyprland hypridle"
+check "quiet: what apt said, too" has "$(log)" "Setting up hyprland (1.0-1) ..."
+check "quiet: make's lines aren't shown" lacks "$output" "install -m 644"
+check "quiet: they're in the log" has "$(log)" "+ make -C $T/src/tide install GO=go
+install -m 644"
+check "quiet: nor systemctl's" lacks "$output" "Created symlink"
+check "quiet: they're in the log" has "$(log)" "+ systemctl --user enable tide.service
+Created symlink"
+check "quiet: nor git's" lacks "$output" "Cloning into"
+# A rerun with everything installed says only which step it's on.
+run
+check "quiet: a rerun shows only its steps" test "$output" = "Installing tide's apt packages
+Nothing new to install
+Installing Quickshell
+Nothing new to install
+Updating $T/src/tide
+Installing tide's user files
+Installing the tide session entry and commands under /usr
+Listing 0 app scripts in the launcher, with entries in $T/home/.local/share/applications
+No Chrome or Brave here, so no host for tide's browser tabs
+Leaving the text console login as the display manager; 'setup --greeter' makes tide's greeter the login screen
+tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+check "quiet: a rerun starts the log afresh" test "$(log | grep -c '^+ make -C .* install GO=go$')" -eq 1
+teardown
+
+setup; ARGS=(); run SETUP_OS=redhat
+check "quiet: dnf's step has a header" has "$output" "Installing tide's dnf packages"
+check "quiet: and says what it installed" has "$output" "
+Installed: hyprland hypridle "
+check "quiet: dnf's own lines aren't shown" lacks "$output" "  Installing"
+teardown
+
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww FAKE_INSTALLED=swww
+check "quiet: pacman's step says what it installed" has "$output" "Installing tide's pacman packages
+Installed: hyprland hypridle "
+check "quiet: pacman's own lines aren't shown" lacks "$output" "installing hyprland..."
+check "Arch: an AUR-installed package isn't a failure" lacks "$output" "Failed:"
+teardown
+
+# A failed install shows the end of what the package manager said, and
+# where the rest is; the step names what didn't install.
+setup; ARGS=(); run FAKE_APT_REFUSES=satty
+check "quiet: a failed install isn't fatal" test "$status" -eq 0
+check "quiet: a failed install shows what apt said, and where the log is" has "$output" "'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y satty -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold' exited with status 100; the end of what it said (all of it is in $T/home/.local/state/setup/setup.log):
+    Reading package lists...
+    E: Package 'satty' has no installation candidate"
+check "quiet: the step names it" has "$output" "
+Failed: satty"
+check "quiet: and the rest still installed" has "$output" "Installed: hyprland "
+teardown
+
+# apt's output goes to the log, so it mustn't ask anything there: debconf
+# runs noninteractive, apt gets no input, and a package whose config file
+# changed here keeps the version here. A sudo rule that won't set the
+# variable still installs.
+setup; ARGS=(); run
+check "quiet: apt keeps a changed config file, as dpkg's default" has "$calls" "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+check "quiet: apt asks nothing" has "$(cat "$T/apt-asks")" "apt-get install DEBIAN_FRONTEND=noninteractive stdin="
+check "quiet: apt always asks nothing" lacks "$(cat "$T/apt-asks")" "DEBIAN_FRONTEND=unset"
+teardown
+
+setup; ARGS=(); run FAKE_SUDO_NO_SETENV=1
+check "quiet: apt installs where sudo won't set its frontend" has "$output" "Installed: hyprland "
+check "quiet: without it, and without input" has "$(cat "$T/apt-asks")" "apt-get install DEBIAN_FRONTEND=unset stdin="
+check "quiet: and without a warning" lacks "$output" "Warning:"
+teardown
+
+# Where the log can't be made, what the commands say is shown instead, and
+# the run carries on: under dash, a failed redirection of :, a special
+# builtin, would end it.
+setup; ARGS=(); mkdir -p "$T/home/.local/state/setup/setup.log"; run
+check "quiet: a log that can't be written isn't fatal" test "$status" -eq 0
+check "quiet: it says so" has "$output" "couldn't make $T/home/.local/state/setup/setup.log to keep the installers' output in, so it's shown instead"
+check "quiet: and shows what apt said" has "$output" "Setting up hyprland (1.0-1) ..."
+check "quiet: and still says what changed" has "$output" "Installed: hyprland "
+check "quiet: and the run finishes" has "$output" "tide installed."
+teardown
+
+setup; ARGS=(); : > "$T/state-is-a-file"; run XDG_STATE_HOME="$T/state-is-a-file"
+check "quiet: a log whose directory can't be made isn't fatal either" test "$status" -eq 0
+check "quiet: it says so too" has "$output" "couldn't make $T/state-is-a-file/setup/setup.log to keep the installers' output in, so it's shown instead"
+teardown
+
+# tide.service is the tide session's shell: a failure to enable it shows
+# what systemctl said and ends the run by name, unless --ignore-errors,
+# which warns and carries on.
+setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide.service
+check "units: a failed enable of tide.service ends the run" test "$status" -ne 0
+check "units: it shows what systemctl said" has "$output" "'systemctl --user enable tide.service' exited with status 1; the end of what it said (all of it is in $T/home/.local/state/setup/setup.log):
+    Failed to enable unit: Unit tide.service does not exist"
+check "units: and names what's lost" has "$output" "Error: couldn't enable tide.service, so the tide session won't start its shell"
+check "units: and stops there" lacks "$calls" "systemctl --user enable tide-clipboard.service"
+teardown
+
+setup; ARGS=(--ignore-errors); run FAKE_USER_ENABLE_FAILS=tide.service
+check "units: --ignore-errors carries on past it" test "$status" -eq 0
+check "units: it still shows what systemctl said" has "$output" "    Failed to enable unit: Unit tide.service does not exist"
+check "units: and warns" has "$output" "Warning: couldn't enable tide.service, so the tide session won't start its shell"
+check "units: and enables the rest" has "$calls" "systemctl --user enable tide-clipboard.service"
+teardown
+
+setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-clipboard.service
+check "units: a failed enable of tide-clipboard.service isn't fatal" test "$status" -eq 0
+check "units: it shows what systemctl said" has "$output" "'systemctl --user enable tide-clipboard.service' exited with status 1; the end of what it said"
+check "units: and warns" has "$output" "Warning: couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history"
+teardown
+
 # Every warning and error is repeated at the end, where it's seen: a
 # warning in the middle scrolls away among thousands of lines.
-setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=swww
+setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=fuzzel
 check "recap: the run ends by repeating its warnings" \
     has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
-  Warning: could not install: swww; install them manually"
+  Warning: could not install: fuzzel; install them manually"
 check "recap: a warning still shows where it happened too" \
-    test "$(printf '%s\n' "$output" | grep -c 'Warning: could not install: swww')" -eq 2
+    test "$(printf '%s\n' "$output" | grep -c 'Warning: could not install: fuzzel')" -eq 2
 check "recap: a run that went on still exits 0" test "$status" -eq 0
 check "recap: leaves no file behind" test -z "$(ls -A "$T/tmp")"
 teardown
@@ -1141,9 +1276,9 @@ teardown
 
 # Run from setup, which made the file: add to it and leave the repeat to
 # setup, at the very end.
-setup; ARGS=(); : > "$T/problems"; run SETUP_OS=redhat FAKE_MISSING=swww SETUP_PROBLEMS="$T/problems"
+setup; ARGS=(); : > "$T/problems"; run SETUP_OS=redhat FAKE_MISSING=fuzzel SETUP_PROBLEMS="$T/problems"
 check "recap: a helper adds to setup's file" \
-    has "$(cat "$T/problems")" "Warning: could not install: swww; install them manually"
+    has "$(cat "$T/problems")" "Warning: could not install: fuzzel; install them manually"
 check "recap: and doesn't repeat it itself" lacks "$output" "from this run, again"
 check "recap: nor removes setup's file" test -f "$T/problems"
 teardown
@@ -1158,7 +1293,7 @@ rule_for() { printf 'git config: url.%s.insteadOf=https://github.com/' "$1"; }
 setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX=https://ghe.example.com
 check "mirror: setup's prefix rewrites the Quickshell clone" has "$calls" "quickshell-build/quickshell
 $(rule_for https://ghe.example.com/)"
-check "mirror: and tide's" has "$calls" "git clone https://example.com/tide.git $T/src/tide
+check "mirror: and tide's" has "$calls" "git clone --quiet https://example.com/tide.git $T/src/tide
 $(rule_for https://ghe.example.com/)"
 check "mirror: the URL itself stays GitHub's, for the rule to rewrite" \
     has "$calls" "https://github.com/quickshell-mirror/quickshell.git"
@@ -1168,7 +1303,7 @@ teardown
 # A checkout cloned through the mirror names GitHub as its origin, so a
 # rerun's pull goes through the mirror too.
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(--github https://ghe.example.com); run
-check "mirror: a rerun pulls tide through the mirror" has "$calls" "git -C $T/src/tide pull --ff-only
+check "mirror: a rerun pulls tide through the mirror" has "$calls" "git -C $T/src/tide pull --quiet --ff-only
 $(rule_for https://ghe.example.com/)"
 teardown
 
