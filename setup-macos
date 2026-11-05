@@ -2194,6 +2194,16 @@ configure_screenshots() {
     restart_app SystemUIServer "the screenshot settings to take effect"
 }
 
+# Font smoothing off. On macOS since Mojave it only thickens text, which on a
+# non-Retina display smears bold into gray; off is thin and sharp. It's per
+# host (-currentHost), as System Settings once wrote it, and apps read it as
+# they launch, so it waits for the logout.
+configure_fonts() {
+    info "Turning off font smoothing"
+    try defaults -currentHost write -g AppleFontSmoothing -int 0
+    needs_logout "the font smoothing"
+}
+
 # --- Main ---
 
 preflight
@@ -2211,6 +2221,7 @@ configure_linearmouse
 configure_app_shortcuts
 configure_finder
 configure_screenshots
+configure_fonts
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
