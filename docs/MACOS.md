@@ -563,13 +563,6 @@ focus-stealing prevention levels — that part *is* a platform limit.
 
 [amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
-**Subpixel text.** macOS dropped subpixel antialiasing in Mojave, so on a
-non-Retina display text is grayscale and bold smears. `setup-macos` turns font
-smoothing off, which thins text back to sharp; it takes effect at the next
-login. To undo it:
-`defaults -currentHost delete -g AppleFontSmoothing`. conf's kitty also draws
-text at Linux's size and without the extra thickening on macOS.
-
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
 tilemo dims every window but the focused one itself; with Amethyst there's no
 dim.
