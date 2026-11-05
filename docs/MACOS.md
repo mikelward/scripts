@@ -58,7 +58,7 @@ On macOS this installs Homebrew if it's missing, then, by category:
 
 | Category | Examples |
 | --- | --- |
-| Core CLI packages | git, python3, ripgrep, vim, zsh, shellcheck, unzip, p7zip, atool |
+| Core CLI packages | ripgrep, shellcheck, p7zip, atool; git, python3, vim, zsh, curl and unzip are macOS's own |
 | Directory jumping | zoxide |
 | Node toolchain | node, typescript (skip with `--no-npm`; an Intel Mac gets them from conda-forge via `homepkg`, as Homebrew would compile them) |
 | Android CLI tools | android-platform-tools (adb, fastboot) |
