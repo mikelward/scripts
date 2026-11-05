@@ -218,16 +218,37 @@ run_macos_packages() {
     macos_arch="${2:-arm64}"
     macos_tmpdir="$(mktemp -d)"
     macos_calls="$macos_tmpdir/calls"
+    # brew_mode: fail (the default) fails every call, saying why as brew
+    # would; ok installs, chattering as brew does, and lists what it has.
+    brew_mode="${3:-fail}"
     cat > "$macos_tmpdir/brew" <<MOCK
 #!/bin/sh
 printf '%s\n' "brew \$* [HOMEBREW_NO_ASK=\${HOMEBREW_NO_ASK:-unset}]" >> "$macos_calls"
-exit 1
+if test "$brew_mode" = fail; then
+    echo "Error: No available formula with the name \$2." >&2
+    exit 1
+fi
+case "\$1" in
+    list) cat "$macos_tmpdir/installed" 2>/dev/null ;;
+    install)
+        for _name; do
+            case "\$_name" in
+                install|--cask) ;;
+                *)
+                    echo "==> Pouring \$_name--1.0.arm64_sequoia.bottle.tar.gz"
+                    printf '%s\n' "\$_name" >> "$macos_tmpdir/installed"
+                    ;;
+            esac
+        done
+        ;;
+esac
+exit 0
 MOCK
     chmod +x "$macos_tmpdir/brew"
     write_mock_uname "$macos_tmpdir" "$macos_arch"
 
     set +e
-    output="$(PATH="$macos_tmpdir:$PATH" \
+    output="$(PATH="$macos_tmpdir:$PATH" XDG_STATE_HOME="$macos_tmpdir/state" SETUP_BREW_LOG="" \
         sh -c "set -e
 $(extract_homebrew_env)
 OS=macos
@@ -236,12 +257,13 @@ ROOT=yes
 GUI_ENABLED=1
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info warn note_problem is_intel_mac install_packages")
+$(extract_functions "info warn note_problem is_intel_mac start_brew_log brew_logged brew_inventory brew_report install_packages")
 install_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$macos_calls" 2>/dev/null)"
+    brew_log="$(cat "$macos_tmpdir/state/setup/brew.log" 2>/dev/null)"
     rm -rf "$macos_tmpdir"
 }
 
@@ -609,7 +631,7 @@ run_install_extras_brew() {
     extras_home="$extras_tmpdir/home"
     extras_calls="$extras_tmpdir/calls"
     mkdir -p "$extras_home/.config"
-    extras_bin="$(stub_path "$extras_tmpdir/bin" sh rm)"
+    extras_bin="$(stub_path "$extras_tmpdir/bin" sh rm wc awk tail sed mkdir)"
     cat > "$extras_bin/brew" <<MOCK
 #!/bin/sh
 printf '%s\n' "brew \$*" >> "$extras_calls"
@@ -618,11 +640,11 @@ MOCK
     extras_path="$(stub_jj_path "$extras_home" "$extras_bin" "$brew_jj")"
 
     set +e
-    output="$(PATH="$extras_path" sh -c "set -e
+    output="$(PATH="$extras_path" XDG_STATE_HOME="$extras_tmpdir/state" SETUP_BREW_LOG="" sh -c "set -e
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info warn note_problem system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "info warn note_problem start_brew_log brew_logged brew_inventory brew_report system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1243,7 +1265,7 @@ test_purge_obsolete_keeps_tide_stack() {
 test_typescript_installed_from_distro() {
     assert_source_contains "node-typescript" &&
     assert_source_contains "npm install -g typescript" &&
-    assert_source_contains "brew install typescript"
+    assert_source_contains "brew_logged install typescript"
 }
 
 # sudo failures are warnings rather than fatal set -e exits. Use stderr when
@@ -1677,9 +1699,11 @@ test_zoxide_is_a_core_package() {
     # In its own best-effort transaction per platform, never in the core
     # package list: apt/dnf reject the whole request on one unknown name,
     # and zoxide is missing from older releases -- which would take git and
-    # make down with it. Three install steps (apt, dnf, brew) plus the
-    # manual-install hint and the homepkg core set.
-    test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 3 &&
+    # make down with it. Three install steps (apt, dnf, brew -- whose is
+    # quiet, see brew_logged) plus the manual-install hint and the homepkg
+    # core set.
+    test "$(grep -c '^ *info "Installing zoxide"$' "$SETUP")" -eq 2 &&
+    assert_source_contains "brew_logged install zoxide" &&
     test "$(grep -c '^ *zoxide \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zoxide" &&
     assert_source_contains "unzip zoxide zsh" &&
@@ -1690,10 +1714,11 @@ test_zoxide_is_a_core_package() {
 # too, so it takes the same best-effort per-platform steps as zoxide rather
 # than riding a core list.
 test_zsh_autosuggestions_is_a_best_effort_package() {
-    # Three install steps (apt, dnf, brew), never a bare entry in a core
+    # Three install steps (apt, dnf, a quiet brew), never a bare entry in a core
     # package list: one unknown name aborts the whole apt/dnf transaction, and
     # older releases may not carry it. Plus the manual-install hint.
-    test "$(grep -c '^ *info "Installing zsh-autosuggestions"$' "$SETUP")" -eq 3 &&
+    test "$(grep -c '^ *info "Installing zsh-autosuggestions"$' "$SETUP")" -eq 2 &&
+    assert_source_contains "brew_logged install zsh-autosuggestions" &&
     test "$(grep -c '^ *zsh-autosuggestions \\$' "$SETUP")" -eq 0 &&
     assert_source_contains "could not install zsh-autosuggestions" &&
     assert_source_contains "zoxide zsh zsh-autosuggestions"
@@ -1987,6 +2012,31 @@ test_macos_brew_failure_still_attempts_later_steps() {
     assert_calls_contain "brew install kitty"
 }
 
+# brew prints a screenful per package, and an "already installed" warning
+# for each one on every rerun, where apt on a quiet Linux run says little.
+# Its output goes to the log, and the arm says what it installed in a line.
+test_macos_brew_output_is_logged_and_summarized() {
+    run_macos_packages 0 arm64 ok
+    assert_status 0 &&
+    assert_output_lacks "Pouring" &&
+    assert_output_contains "Installed from Homebrew: atool, autoconf," &&
+    assert_output_contains "iterm2" &&
+    case "$brew_log" in
+        *"+ brew install zoxide"*"==> Pouring zoxide--1.0"*) ;;
+        *) echo "brew's output isn't in the log: $brew_log"; return 1 ;;
+    esac
+}
+
+# A failed install shows what brew said, since that's the reason, and where
+# the rest of it is.
+test_macos_brew_failure_shows_what_brew_said() {
+    run_macos_packages 0
+    assert_status 0 &&
+    assert_output_contains "'brew install zoxide' exited with status 1" &&
+    assert_output_contains "    Error: No available formula with the name zoxide." &&
+    assert_output_contains "Nothing new from Homebrew"
+}
+
 # setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
 # over keys and windows, so setup installs neither; `setup-macos --wm
 # amethyst` installs Amethyst itself.
@@ -2087,7 +2137,10 @@ test_macos_without_homebrew_skips_the_arm() {
 test_no_unguarded_brew_install_remains() {
     test "$(grep -c '^ *brew install --cask android-platform-tools$' "$SETUP")" -eq 0 &&
     test "$(grep -c '^ *brew install kitty$' "$SETUP")" -eq 0 &&
-    test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0
+    test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0 &&
+    # ...nor one whose output reaches the terminal: each goes through
+    # brew_logged, which keeps it in the log.
+    test "$(grep -cE '^ *(if ! )?brew install' "$SETUP")" -eq 0
 }
 
 # AGENTS.md applies the Privacy rule to warnings too, and homepkg's absolute
@@ -3525,6 +3578,8 @@ run_test "macOS brew failures warn instead of aborting the bootstrap" \
 run_test "a failing brew still attempts the later macOS steps" \
     test_macos_brew_failure_still_attempts_later_steps
 run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
+run_test "setup logs brew's output on a Mac and says what it installed" test_macos_brew_output_is_logged_and_summarized
+run_test "a failed brew install shows what brew said" test_macos_brew_failure_shows_what_brew_said
 run_test "brew installs don't stop for confirmation" \
     test_brew_installs_do_not_ask_for_confirmation
 run_test "the Homebrew installer can still ask for the admin password" \

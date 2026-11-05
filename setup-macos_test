@@ -162,7 +162,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in awk cat dirname grep id mkdir mktemp mv rm sed tr unzip; do
+    for cmd in awk cat dirname grep id mkdir mktemp mv rm sed tail tr unzip wc; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -1300,6 +1300,44 @@ test_installs_linearmouse_when_missing() {
     assert_called "brew install --cask linearmouse"
 }
 
+# brew's download and install chatter goes to the log, not the run's output,
+# and an app that's already there takes no line at all, as on Linux.
+test_brew_output_goes_to_the_log() {
+    remove_linearmouse
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$*" >> "$CALLS"
+test "\$1" = list && exit 1
+echo "==> Downloading https://example.invalid/LinearMouse.dmg"
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/brew"
+    run_macos
+    assert_status 0 &&
+    assert_called "brew install --cask linearmouse" &&
+    assert_output_contains "Installing LinearMouse" &&
+    assert_output_lacks "Downloading" &&
+    assert_output_lacks "already installed at" &&
+    grep -q "Downloading https://example.invalid/LinearMouse.dmg" \
+        "$TEST_TMPDIR/home/.local/state/setup/brew.log"
+}
+
+# A failed install shows the end of what brew said, the reason.
+test_brew_failure_shows_what_brew_said() {
+    remove_linearmouse
+    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
+#!/bin/sh
+printf "%s\\n" "brew \$*" >> "$CALLS"
+echo "Error: Download failed on Cask 'linearmouse'" >&2
+exit 1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/brew"
+    run_macos --ignore-errors
+    assert_output_contains "'brew install --cask linearmouse' exited with status 1" &&
+    assert_output_contains "    Error: Download failed on Cask 'linearmouse'" &&
+    assert_output_contains "could not install LinearMouse"
+}
+
 # The same stale record as Karabiner's (see stale_cask_record): brew lists the
 # cask, the app is gone, and brew install can't bring it back.
 test_stale_linearmouse_record_names_the_fix() {
@@ -1316,7 +1354,7 @@ test_does_not_reinstall_linearmouse() {
     run_macos
     assert_status 0 &&
     assert_not_called "brew install --cask linearmouse" &&
-    assert_output_contains "LinearMouse is already installed"
+    assert_output_lacks "LinearMouse is already installed"
 }
 
 test_no_install_skips_linearmouse() {
@@ -1849,7 +1887,7 @@ test_installs_amethyst_when_missing() {
 test_does_not_reinstall_amethyst_when_present() {
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_output_contains "Amethyst is already installed" &&
+    assert_output_lacks "Amethyst is already installed" &&
     assert_not_called "brew install"
 }
 
@@ -2393,7 +2431,7 @@ test_tilemo_does_not_reinstall_hammerspoon() {
     run_macos --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install --cask hammerspoon" &&
-    assert_output_contains "Hammerspoon is already installed"
+    assert_output_lacks "Hammerspoon is already installed"
 }
 
 test_tilemo_no_install_skips_hammerspoon() {
@@ -2445,7 +2483,7 @@ test_tilemo_does_not_reinstall_blueutil() {
     run_macos --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install blueutil" &&
-    assert_output_contains "blueutil is already installed"
+    assert_output_lacks "blueutil is already installed"
 }
 
 test_tilemo_no_install_skips_blueutil() {
@@ -2509,7 +2547,7 @@ test_tilemo_does_not_reinstall_m1ddc() {
     run_macos --wm tilemo
     assert_status 0 &&
     assert_not_called "brew install m1ddc" &&
-    assert_output_contains "m1ddc is already installed"
+    assert_output_lacks "m1ddc is already installed"
 }
 
 test_tilemo_failed_ddc_install_is_counted() {
@@ -2970,6 +3008,8 @@ run_test "no preflight pause without a terminal" \
 run_test "--yes skips the preflight pause" \
     test_yes_skips_the_preflight_pause
 run_test "installs LinearMouse when missing" test_installs_linearmouse_when_missing
+run_test "brew's output goes to the log" test_brew_output_goes_to_the_log
+run_test "a failed brew install shows what brew said" test_brew_failure_shows_what_brew_said
 run_test "a stale LinearMouse record names the fix instead of installing" \
     test_stale_linearmouse_record_names_the_fix
 run_test "does not reinstall LinearMouse" test_does_not_reinstall_linearmouse

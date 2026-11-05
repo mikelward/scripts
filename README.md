@@ -65,6 +65,12 @@ homepkg --backend github bundle -o homepkg-shell-tools.tgz atuin carapace
 `setup` prefers a bundle over the download, so an offline run never waits for
 a fetch that can't succeed.
 
+On a Mac, Homebrew's own output — downloads, pours, an "already installed"
+warning per package on every rerun, caveats — goes to
+`~/.local/state/setup/brew.log`, which `setup` starts afresh each run and
+`setup-macos` adds to. The run says what it installed in one line, and a failed
+install shows the end of what brew said.
+
 **A machine that won't run binaries from `~/.local/bin`** — a managed Mac whose
 policy kills any binary it hasn't approved (exit 137), or a `noexec` home —
 gets none of this. Before installing anything there, `setup` copies a system

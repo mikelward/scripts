@@ -938,6 +938,64 @@ install_homebrew() {
     command -v brew >/dev/null 2>&1
 }
 
+# --- Quiet Homebrew ---
+
+# brew's own output -- download bars, pour lines, "already installed"
+# warnings, caveats, auto-update news -- goes to one log per run, as apt's
+# would on a quiet Linux run, and the run shows a line or two per step. The
+# outermost of setup and setup-macos starts the log; a helper it runs adds
+# to it, through the exported path.
+start_brew_log() {
+    test -z "${SETUP_BREW_LOG:-}" || return 0
+    SETUP_BREW_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/brew.log"
+    if ! mkdir -p "${SETUP_BREW_LOG%/*}" || ! : > "$SETUP_BREW_LOG"; then
+        warn "couldn't make $SETUP_BREW_LOG to keep Homebrew's output in, so it's shown instead"
+        SETUP_BREW_LOG=-
+    fi
+    export SETUP_BREW_LOG
+}
+
+# brew_logged ARGS...: runs brew ARGS with its output added to the log. A
+# failure shows what brew said this time, which is where the reason is; the
+# caller says what's lost. An administrator password a .pkg cask asks for
+# still reaches the terminal: sudo asks on it, not on brew's output.
+brew_logged() {
+    start_brew_log
+    if test "$SETUP_BREW_LOG" = -; then
+        brew "$@"
+        return
+    fi
+    _bl_start=$(($(wc -l < "$SETUP_BREW_LOG") + 1))
+    printf '+ brew %s\n' "$*" >> "$SETUP_BREW_LOG"
+    brew "$@" >> "$SETUP_BREW_LOG" 2>&1 && return 0
+    _bl_status=$?
+    printf "'brew %s' exited with status %s; the end of what it said (all of it is in %s):\n" \
+        "$*" "$_bl_status" "$SETUP_BREW_LOG" >&2
+    tail -n "+$((_bl_start + 1))" "$SETUP_BREW_LOG" | tail -n 20 | sed 's/^/    /' >&2
+    return "$_bl_status"
+}
+
+# brew_inventory: the formulae and casks Homebrew has installed, one a line,
+# or nothing when brew can't say.
+brew_inventory() {
+    brew list --formula -1 2>/dev/null || :
+    brew list --cask -1 2>/dev/null || :
+}
+
+# brew_report BEFORE: one line for a run of brew_logged installs, naming
+# what's new since BEFORE, an earlier brew_inventory -- dependencies too,
+# since they're installed as well -- instead of a line or more each.
+brew_report() {
+    _br_new=$(brew_inventory | BREW_BEFORE="$1" awk '
+        BEGIN { n = split(ENVIRON["BREW_BEFORE"], had, "\n"); for (i = 1; i <= n; i++) was[had[i]] = 1 }
+        NF && !was[$0] { printf "%s%s", sep, $0; sep = ", " }')
+    if test -n "$_br_new"; then
+        info "Installed from Homebrew: $_br_new"
+    else
+        info "Nothing new from Homebrew"
+    fi
+}
+
 # --- Go ---
 
 # vcs (conf) and tide-grant (tide) are built with Go.
@@ -1183,8 +1241,12 @@ install_packages() {
                 warn "Homebrew unavailable; skipping macOS package installation"
                 return 0
             fi
-            info "Installing system packages"
-            if ! brew install \
+            # One line before and one after, as on a quiet Linux run: brew's
+            # own output goes to the log (see brew_logged), and a failure
+            # still warns, naming what it costs.
+            info "Installing Homebrew packages"
+            _brew_before=$(brew_inventory)
+            if ! brew_logged install \
                 atool \
                 autoconf \
                 automake \
@@ -1210,18 +1272,15 @@ install_packages() {
             fi
             # Separate, so a formula rename or a tap outage can't take the
             # core package list down with it.
-            info "Installing zoxide"
-            brew install zoxide \
+            brew_logged install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
             # Its own step, matching zoxide; the shell config skips it when
             # it's missing.
-            info "Installing zsh-autosuggestions"
-            brew install zsh-autosuggestions \
+            brew_logged install zsh-autosuggestions \
                 || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
             # lf (terminal file manager) is a CLI tool, not graphical, so
             # install it regardless of --no-gui (matching the Linux paths).
-            info "Installing lf"
-            brew install lf || warn "could not install lf"
+            brew_logged install lf || warn "could not install lf"
             # Node.js + tsc from Homebrew on the privileged path (setup-kde's
             # source-build fallback for Krohnkite needs tsc; its normal path
             # fetches a prebuilt release and needs neither). brew needs no
@@ -1233,32 +1292,29 @@ install_packages() {
             if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
                 info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned"
             elif test "$NPM" = yes && test "$ROOT" = yes; then
-                info "Installing Node.js (npm)"
-                brew install node \
+                brew_logged install node \
                     || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
                 # tsc lets setup-kde's fallback build Krohnkite from source
                 # without fetching typescript from the npm registry at build
                 # time. Installed on macOS too so the toolchain matches Linux.
-                info "Installing TypeScript (tsc)"
-                brew install typescript \
+                brew_logged install typescript \
                     || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
             # Linux paths which keep adb/android-tools as core packages.
-            brew install --cask android-platform-tools \
+            brew_logged install --cask android-platform-tools \
                 || warn "could not install android-platform-tools; adb/fastboot will be unavailable"
             if test "$GUI_ENABLED" -eq 1; then
-                info "Installing graphical packages"
-                brew install kitty \
+                brew_logged install kitty \
                     || warn "skipping kitty installation"
                 # No Amethyst or Rectangle: setup-macos sets up tilemo, which
                 # they'd fight over keys and windows. `setup-macos --wm
                 # amethyst` installs Amethyst itself.
-                info "Installing macOS applications"
-                brew install --cask iterm2 \
+                brew_logged install --cask iterm2 \
                     || warn "some macOS applications could not be installed"
             fi
+            brew_report "$_brew_before"
             ;;
         *)
             warn "Unsupported OS, skipping package installation"
@@ -1648,9 +1704,10 @@ install_extras_brew() {
     # One formula at a time so a single failure doesn't block the rest.
     helix_installed=no
     set_extras_tools nushell
+    info "Installing $EXTRAS_TOOLS from Homebrew"
+    _brew_before=$(brew_inventory)
     for formula in $EXTRAS_TOOLS; do
-        info "Installing $formula via Homebrew"
-        if brew install "$formula"; then
+        if brew_logged install "$formula"; then
             test "$formula" = helix && helix_installed=yes
         else
             warn "could not install $formula via Homebrew"
@@ -1661,6 +1718,7 @@ install_extras_brew() {
     if test "$helix_installed" = yes; then
         clear_managed_helix_runtime
     fi
+    brew_report "$_brew_before"
 }
 
 # The release-artifact path: the prebuilt binaries each project publishes with
