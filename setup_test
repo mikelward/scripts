@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
+QUIET_FUNCTIONS="santa_lockdown homebrew_blocked apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -159,6 +159,31 @@ extract_homebrew_env() {
     grep '^export HOMEBREW_' "$SETUP"
 }
 
+# write_mock_santactl DIR MODE: a santactl in DIR, as Santa's in MODE says
+# its mode: lockdown (with the spacing santactl pads its table with),
+# monitor, or fails (it says Lockdown, but exits non-zero). none writes
+# nothing. Each run adds a line to DIR/santactl-runs.
+write_mock_santactl() {
+    case "$2" in
+        none) return 0 ;;
+        lockdown) _ms_mode="  Mode                      | Lockdown"; _ms_status=0 ;;
+        monitor) _ms_mode="  Mode                      | Monitor"; _ms_status=0 ;;
+        fails) _ms_mode="  Mode                      | Lockdown"; _ms_status=1 ;;
+        *) echo "write_mock_santactl: unknown mode $2" >&2; return 2 ;;
+    esac
+    cat > "$1/santactl" <<MOCK
+#!/bin/sh
+echo run >> "$1/santactl-runs"
+cat <<'STATUS'
+>>> Daemon Info
+$_ms_mode
+  Log Type                  | file
+STATUS
+exit $_ms_status
+MOCK
+    chmod +x "$1/santactl"
+}
+
 # Run install_homebrew against a stub curl. The installer is fetched and run as
 # `/bin/bash -c "$(curl ...)"`, so having curl print a one-line script is
 # enough to see the environment the installer is actually handed -- bash runs
@@ -176,10 +201,11 @@ INSTALLER
 MOCK
     chmod +x "$brew_tmpdir/curl"
     # The only real tools the stub PATH needs: sh to run the extracted
-    # functions, cat for the stub curl itself.
-    for tool in sh cat; do
+    # functions, cat for the stub curl itself, grep to read santactl's.
+    for tool in sh cat grep; do
         ln -s "$(command -v "$tool")" "$brew_tmpdir/$tool"
     done
+    write_mock_santactl "$brew_tmpdir" "${HARNESS_SANTACTL:-none}"
 
     set +e
     output="$(PATH="$brew_tmpdir" \
@@ -308,6 +334,7 @@ exit 0
 MOCK
     chmod +x "$macos_tmpdir/brew"
     write_mock_uname "$macos_tmpdir" "$macos_arch"
+    write_mock_santactl "$macos_tmpdir" "${HARNESS_SANTACTL:-none}"
     macos_stamp="$macos_tmpdir/state/setup/last-upgrade"
     stage_stamp "$macos_stamp" "${HARNESS_STAMP:-none}"
 
@@ -337,6 +364,45 @@ echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     brew_log="$(cat "$macos_tmpdir/state/setup/setup.log" 2>/dev/null)"
     stamp="$(stamp_state "$macos_stamp")"
     rm -rf "$macos_tmpdir"
+}
+
+# Run install_extras for EXTRAS_BACKEND=brew with santactl in $1's mode (as
+# write_mock_santactl takes it), against stubs that say which install ran.
+run_install_extras_dispatch() {
+    dispatch_tmpdir="$(mktemp -d)"
+    dispatch_bin="$(stub_path "$dispatch_tmpdir/bin" sh grep cat)"
+    write_mock_santactl "$dispatch_bin" "$1"
+    set +e
+    output="$(PATH="$dispatch_bin" sh -c "set -e
+EXTRAS_BACKEND=brew
+install_homebrew() { echo INSTALL_HOMEBREW; }
+install_extras_brew() { echo EXTRAS_FROM_BREW; }
+install_extras_release() { echo EXTRAS_FROM_RELEASE; }
+$(extract_functions "info detail warn note_problem santa_lockdown homebrew_blocked install_extras")
+install_extras
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$dispatch_tmpdir"
+}
+
+# Run santa_lockdown twice with santactl in $1's mode (none: no santactl),
+# printing its answers, and leave $santactl_runs set to how often santactl
+# ran.
+run_santa_lockdown() {
+    santa_tmpdir="$(mktemp -d)"
+    santa_bin="$(stub_path "$santa_tmpdir/bin" sh grep cat)"
+    write_mock_santactl "$santa_bin" "$1"
+    : > "$santa_bin/santactl-runs"
+    set +e
+    output="$(PATH="$santa_bin" sh -c "
+$(extract_functions "santa_lockdown")
+santa_lockdown && echo LOCKDOWN || echo NOT_LOCKDOWN
+santa_lockdown && echo LOCKDOWN || echo NOT_LOCKDOWN" 2>&1)"
+    status=$?
+    set -e
+    santactl_runs=$(wc -l < "$santa_bin/santactl-runs" | tr -d ' ')
+    rm -rf "$santa_tmpdir"
 }
 
 # Write a uname into directory $1 that reports a Mac whose uname -m is $2, so a
@@ -2621,6 +2687,83 @@ test_macos_core_install_uses_the_system_tools() {
     done
 }
 
+# --- Santa's Lockdown mode ---
+
+# santactl pads its table, so the row is found by its words, not its spacing;
+# and the answer holds for the run without asking santactl again.
+test_santa_lockdown_reads_the_mode_row() {
+    run_santa_lockdown lockdown
+    assert_status 0 &&
+    assert_eq "$output" "LOCKDOWN
+LOCKDOWN" &&
+    assert_eq "$santactl_runs" 1
+}
+
+# Monitor mode, no Santa, and a santactl that fails all leave Homebrew be.
+test_santa_lockdown_is_off_otherwise() {
+    for mode in monitor none fails; do
+        run_santa_lockdown "$mode"
+        assert_eq "$output" "NOT_LOCKDOWN
+NOT_LOCKDOWN" || return 1
+    done
+}
+
+# Under Lockdown every new binary needs an administrator's approval, so the
+# macOS arm installs nothing from Homebrew, says why once, and carries on.
+test_macos_lockdown_skips_homebrew() {
+    HARNESS_UPGRADE=yes HARNESS_SANTACTL=lockdown run_macos_packages 0 arm64 ok
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$calls" "" &&
+    assert_eq "$(printf '%s\n' "$output" | grep -c 'Santa is in Lockdown mode')" 1 &&
+    assert_output_contains "Warning: Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval"
+}
+
+# Monitor mode, no Santa, or a santactl that fails installs as before.
+test_macos_without_lockdown_installs_from_homebrew() {
+    for mode in monitor none fails; do
+        HARNESS_SANTACTL=$mode run_macos_packages 0 arm64 ok
+        assert_status 0 &&
+        assert_calls_contain "brew install zoxide" &&
+        assert_calls_contain "brew install --cask iterm2" &&
+        assert_output_lacks "Santa" || return 1
+    done
+}
+
+# The skipped brew upgrade isn't a failed one: the pass is recorded, as
+# under --no-sudo, so the next run doesn't try again straight away.
+test_macos_lockdown_keeps_the_upgrade_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_SANTACTL=lockdown \
+        run_macos_packages 0 arm64 upgrade-fails
+    assert_status 0 &&
+    assert_calls_lack "brew upgrade" &&
+    assert_output_lacks "could not upgrade" &&
+    assert_output_contains "UPGRADE_FAILED=no" &&
+    assert_eq "$stamp" fresh
+}
+
+# Nor is Homebrew itself installed.
+test_lockdown_does_not_install_homebrew() {
+    HARNESS_SANTACTL=lockdown run_homebrew_installer
+    assert_eq "$calls" "" &&
+    assert_output_contains "Santa is in Lockdown mode" &&
+    HARNESS_SANTACTL=monitor run_homebrew_installer &&
+    assert_calls_contain "installer ran"
+}
+
+# The extras come from their releases instead, without a second warning.
+test_lockdown_extras_come_from_their_releases() {
+    run_install_extras_dispatch lockdown
+    assert_status 0 &&
+    assert_output_contains "EXTRAS_FROM_RELEASE" &&
+    assert_output_lacks "INSTALL_HOMEBREW" &&
+    assert_output_lacks "EXTRAS_FROM_BREW" &&
+    assert_output_lacks "Homebrew unavailable" &&
+    assert_eq "$(printf '%s\n' "$output" | grep -c 'Warning:')" 1 &&
+    run_install_extras_dispatch monitor &&
+    assert_output_contains "EXTRAS_FROM_BREW"
+}
+
 # --- Weekly upgrades ---
 
 # On a run less than a week after the last upgrade pass, Homebrew installs
@@ -4762,6 +4905,19 @@ run_test "Crostini skips KDE, tide and the root group, keeping kitty" \
 run_test "Crostini says what to set in ChromeOS" \
     test_crostini_settings_point_at_chromeos
 
+run_test "Santa's Lockdown mode is read from santactl's mode row, once" \
+    test_santa_lockdown_reads_the_mode_row
+run_test "Monitor mode, no Santa or a failing santactl isn't Lockdown" \
+    test_santa_lockdown_is_off_otherwise
+run_test "Lockdown skips Homebrew on a Mac, warning once" \
+    test_macos_lockdown_skips_homebrew
+run_test "without Lockdown a Mac installs from Homebrew" \
+    test_macos_without_lockdown_installs_from_homebrew
+run_test "Lockdown's skipped brew upgrade keeps the upgrade stamp" \
+    test_macos_lockdown_keeps_the_upgrade_stamp
+run_test "Lockdown doesn't install Homebrew" test_lockdown_does_not_install_homebrew
+run_test "Lockdown takes the extras from their releases" \
+    test_lockdown_extras_come_from_their_releases
 run_test "an in-week run doesn't upgrade Homebrew packages" \
     test_in_week_run_does_not_upgrade_brew
 run_test "a stale or missing stamp upgrades Homebrew packages and records it" \

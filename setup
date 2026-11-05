@@ -51,6 +51,10 @@
 # finished without failing. Pass --upgrade to upgrade now anyway. The repos
 # setup clones are config, not packages, and are pulled on every run.
 #
+# On a Mac whose Santa is in Lockdown mode, where each new binary needs an
+# administrator's approval, setup installs and upgrades nothing from Homebrew,
+# and says so once.
+#
 # Every privileged command runs through sudo_or_warn, so an unexpected sudo
 # denial already degrades to a warning instead of aborting the bootstrap --
 # which means a box that only permits "sudo apt" works as-is (the package
@@ -1082,9 +1086,48 @@ resolve_extras() {
     esac
 }
 
+# --- Santa's Lockdown mode ---
+
+# Santa, the binary-authorization agent some managed Macs run, can be in
+# Lockdown mode, where every binary it hasn't been told to allow needs an
+# administrator's approval before it runs. Everything Homebrew installs is
+# such a binary, so there setup installs and upgrades nothing from Homebrew.
+# santactl status prints the mode as a "Mode | Lockdown" row; a Mac without
+# Santa, or a santactl that fails, counts as not locked down. The answer is
+# cached, and exported with whether it was said, so setup-macos, which has
+# the same two functions as it also runs on its own, neither asks nor says
+# it again.
+santa_lockdown() {
+    if test -z "${SETUP_SANTA_LOCKDOWN:-}"; then
+        SETUP_SANTA_LOCKDOWN=no
+        if command -v santactl >/dev/null 2>&1 \
+                && _sl_status=$(santactl status 2>/dev/null) \
+                && printf '%s\n' "$_sl_status" \
+                    | grep -Eqi '^[[:space:]]*Mode[[:space:]]*\|[[:space:]]*Lockdown'; then
+            SETUP_SANTA_LOCKDOWN=yes
+        fi
+        export SETUP_SANTA_LOCKDOWN
+    fi
+    test "$SETUP_SANTA_LOCKDOWN" = yes
+}
+
+# homebrew_blocked: whether Homebrew's installs are to be skipped, saying why
+# the first time in a run. Every Homebrew step starts with it.
+homebrew_blocked() {
+    santa_lockdown || return 1
+    if test -z "${SETUP_SANTA_WARNED:-}"; then
+        SETUP_SANTA_WARNED=yes
+        export SETUP_SANTA_WARNED
+        warn "Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval"
+    fi
+}
+
 # --- Install Homebrew (macOS) ---
 
 install_homebrew() {
+    if homebrew_blocked; then
+        return 1
+    fi
     if command -v brew >/dev/null 2>&1; then
         detail "Skipping Homebrew: already installed"
         return 0
@@ -1591,6 +1634,9 @@ install_packages() {
             # Every brew step warns and continues rather than aborting,
             # matching the apt/dnf branches: one renamed formula or one tap
             # outage shouldn't take the whole bootstrap down under set -e.
+            if homebrew_blocked; then
+                return 0
+            fi
             if ! install_homebrew; then
                 warn "Homebrew unavailable; skipping macOS package installation"
                 return 0
@@ -2309,9 +2355,15 @@ install_extras_release() {
 }
 
 # Dispatch to the resolved extras backend. When Homebrew is requested but
-# can't be made available, fall back to the release artifacts.
+# can't be made available, fall back to the release artifacts. Under Santa's
+# Lockdown mode homebrew_blocked has said Homebrew is skipped, so the
+# fallback goes without another warning.
 install_extras() {
     if test "$EXTRAS_BACKEND" = brew; then
+        if homebrew_blocked; then
+            install_extras_release
+            return
+        fi
         if install_homebrew; then
             install_extras_brew
             return
