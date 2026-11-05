@@ -241,7 +241,7 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # What build_hyprland builds, in order: name, repository, tag, the commit
 # that tag named when it was pinned, build system. A tag can be moved, so
 # each clone must check out exactly that commit before its build files run.
-# Each tag meets the next one's minimums (Hyprland v0.56.2's CMakeLists.txt
+# Each tag meets the next one's minimums (Hyprland v0.57.1's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
 # Hyprland needs 1.49. re2 is here because a distro's can lag its abseil:
 # Debian's libre2 was built against an abseil whose absl::string_view was
@@ -251,14 +251,14 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 HYPRLAND_PINS="
 wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
 hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
-hyprutils https://github.com/hyprwm/hyprutils.git v0.14.2 a21e87b878e72ee5dfd375899e8b2ad0d0c4c0e1 cmake
+hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3 0d13d5a624eb093b600d1b2cbe448fb613c86424 cmake
 hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 3e6865ce5fd9237b58f5b2ce5de18814df3baff5 cmake
 hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc46991562ba1158d125c cmake
 hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 44e91d467bdad8dcf8bbd2ac7cf49972540980a5 cmake
 hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 482d4b7ec36ffdaf3573086aa586b178fd5404be cmake
 aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 f31c47a1b9d300847d8fc3108ad959448103dfc1 cmake
 re2 https://github.com/google/re2.git 2025-08-05 85c7c0fb1163b0bd83a7951f5a205ee7b489e33e cmake
-Hyprland https://github.com/hyprwm/Hyprland.git v0.56.2 efb50993780079460b0cbed1363e2166a2de1d9f cmake
+Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c35ccf12b660a1ab9 cmake
 "
 # The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
 # which libstdc++ first has in GCC 16; Ubuntu 26.04's default g++ is 15, but
@@ -272,7 +272,7 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
     libjpeg-dev libwebp-dev libmagic-dev libpng-dev libjxl-dev libheif-dev
     libgles-dev libegl-dev libgbm-dev libseat-dev libinput-dev libudev-dev
     libdisplay-info-dev hwdata libxkbcommon-dev uuid-dev libxcursor-dev libeis-dev
-    libglib2.0-dev libabsl-dev libmuparser-dev liblcms2-dev liblua5.5-dev
+    libglib2.0-dev libabsl-dev libmuparser-dev liblcms2-dev libcanberra-dev liblua5.5-dev
     glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
     libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
     xwayland"
