@@ -1079,6 +1079,45 @@ is_usable_app() {
     test -f "$1/Contents/Info.plist" && test -d "$1/Contents/MacOS"
 }
 
+# --- Quiet Homebrew ---
+
+# brew's own output -- download bars, pour lines, "already installed"
+# warnings, caveats, auto-update news -- goes to one log per run, as apt's
+# would on a quiet Linux run, and the run shows a line or two per step. The
+# outermost of setup and setup-macos starts the log; a helper it runs adds
+# to it, through the exported path.
+start_brew_log() {
+    test -z "${SETUP_BREW_LOG:-}" || return 0
+    SETUP_BREW_LOG="${XDG_STATE_HOME:-$HOME/.local/state}/setup/brew.log"
+    # printf, not :, which is a special builtin: dash exits when its
+    # redirection fails, even under if.
+    if ! mkdir -p "${SETUP_BREW_LOG%/*}" || ! printf "" > "$SETUP_BREW_LOG"; then
+        warn "couldn't make $SETUP_BREW_LOG to keep Homebrew's output in, so it's shown instead"
+        SETUP_BREW_LOG=-
+    fi
+    export SETUP_BREW_LOG
+}
+
+# brew_logged ARGS...: runs brew ARGS with its output added to the log. A
+# failure shows what brew said this time, which is where the reason is; the
+# caller says what's lost. An administrator password a .pkg cask asks for
+# still reaches the terminal: sudo asks on it, not on brew's output.
+brew_logged() {
+    start_brew_log
+    if test "$SETUP_BREW_LOG" = -; then
+        brew "$@"
+        return
+    fi
+    _bl_start=$(($(wc -l < "$SETUP_BREW_LOG") + 1))
+    printf '+ brew %s\n' "$*" >> "$SETUP_BREW_LOG"
+    brew "$@" >> "$SETUP_BREW_LOG" 2>&1 && return 0
+    _bl_status=$?
+    printf "'brew %s' exited with status %s; the end of what it said (all of it is in %s):\n" \
+        "$*" "$_bl_status" "$SETUP_BREW_LOG" >&2
+    tail -n "+$((_bl_start + 1))" "$SETUP_BREW_LOG" | tail -n 20 | sed 's/^/    /' >&2
+    return "$_bl_status"
+}
+
 # Whether Homebrew still lists cask $1 though its app, $2, is missing. If so,
 # this warns with the command that clears the record, followed by $3: what stays
 # broken until then, or what the caller tries next.
@@ -1229,8 +1268,7 @@ install_amethyst_from_bundle() {
 }
 
 install_amethyst() {
-    if _installed=$(amethyst_path); then
-        info "Amethyst is already installed at $_installed"
+    if amethyst_path >/dev/null; then
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1242,7 +1280,7 @@ install_amethyst() {
         info "Homebrew not found; looking for a staged Amethyst bundle"
     elif ! stale_cask_record amethyst Amethyst "trying a staged bundle meanwhile"; then
         info "Installing Amethyst"
-        if brew install --cask amethyst; then
+        if brew_logged install --cask amethyst; then
             return 0
         fi
         warn "could not install Amethyst via Homebrew; trying a staged bundle"
@@ -1311,8 +1349,7 @@ TILEMO_MISSING_EFFECT="nothing will tile and tilemo's workspace keys will do not
 # either way. The cask installs into /Applications without an administrator
 # prompt, so --no-sudo doesn't skip it.
 install_hammerspoon() {
-    if _installed=$(hammerspoon_path); then
-        info "Hammerspoon is already installed at $_installed"
+    if hammerspoon_path >/dev/null; then
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1327,7 +1364,7 @@ install_hammerspoon() {
         return 0
     fi
     info "Installing Hammerspoon"
-    brew install --cask hammerspoon \
+    brew_logged install --cask hammerspoon \
         || warn "could not install Hammerspoon; $TILEMO_MISSING_EFFECT until it is"
 }
 
@@ -1360,7 +1397,6 @@ install_brew_tool() {
     _tool=$1
     _effect=$2
     if is_command "$_tool"; then
-        info "$_tool is already installed at $(command -v "$_tool")"
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1372,7 +1408,7 @@ install_brew_tool() {
         return 0
     fi
     info "Installing $_tool"
-    brew install "$_tool" \
+    brew_logged install "$_tool" \
         || warn "could not install $_tool; $_effect until it is"
 }
 
@@ -1597,8 +1633,7 @@ karabiner_path() {
 # installs a driver extension that needs approving in the GUI anyway, so an
 # offline install would still leave the interactive half undone.
 install_karabiner() {
-    if _installed=$(karabiner_path); then
-        info "Karabiner-Elements is already installed at $_installed"
+    if karabiner_path >/dev/null; then
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1619,8 +1654,8 @@ install_karabiner() {
     if stale_cask_record karabiner-elements Karabiner-Elements "until then, $KARABINER_MISSING_EFFECT"; then
         return 0
     fi
-    info "Installing Karabiner-Elements"
-    brew install --cask karabiner-elements \
+    info "Installing Karabiner-Elements; its installer may ask for your password"
+    brew_logged install --cask karabiner-elements \
         || warn "could not install Karabiner-Elements; $KARABINER_MISSING_EFFECT until it is"
 }
 
@@ -1781,8 +1816,7 @@ linearmouse_path() {
 # Homebrew only, like Hammerspoon: the cask is an app, so --no-sudo has
 # nothing to skip.
 install_linearmouse() {
-    if _installed=$(linearmouse_path); then
-        info "LinearMouse is already installed at $_installed"
+    if linearmouse_path >/dev/null; then
         return 0
     fi
     if test "$INSTALL" = no; then
@@ -1797,7 +1831,7 @@ install_linearmouse() {
         return 0
     fi
     info "Installing LinearMouse"
-    brew install --cask linearmouse \
+    brew_logged install --cask linearmouse \
         || warn "could not install LinearMouse; $LINEARMOUSE_MISSING_EFFECT until it is"
 }
 
