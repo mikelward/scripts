@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end install_os_packages"
+QUIET_FUNCTIONS="apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -138,6 +138,9 @@ trap 'rm -f "$SETUP_LOG"' EXIT
 # a test gives one.
 APT_TTY=/nonexistent/tty
 export APT_TTY
+# Nor an /etc of the machine's to look through for kept config files.
+SETUP_ETC=/nonexistent/etc
+export SETUP_ETC
 
 extract_functions() {
     awk -v names="$1" '
@@ -2296,6 +2299,45 @@ apt_ask_hook")
     return "$_hook_status"
 }
 
+# A config file an install kept as you'd changed it, with the package's
+# new version beside it, is a warning, to merge by hand: apt's .dpkg-dist,
+# dnf's .rpmnew. An install that leaves none says nothing more, and brew
+# has none to leave.
+run_kept_config() {
+    kept_tmpdir="$(mktemp -d)"
+    mkdir -p "$kept_tmpdir/etc/frob"
+    set +e
+    output="$(SETUP_ETC="$kept_tmpdir/etc" sh -c "set -e
+$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
+pkg_versions() { echo 'frob 1.0'; }
+sudo_logged() { test -z '$2' || : > '$kept_tmpdir/etc/frob/$2'; }
+brew_logged() { test -z '$2' || : > '$kept_tmpdir/etc/frob/$2'; }
+pkg_begin $1
+# Older than whatever the install makes, however coarse the clock.
+touch -t 200001010000 \"\$_pkg_before\"
+${1}_install frob
+pkg_end
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$kept_tmpdir"
+}
+
+test_a_kept_config_file_is_a_warning() {
+    run_kept_config apt frob.conf.dpkg-dist
+    assert_status 0 &&
+    assert_output_contains "Warning: kept your $kept_tmpdir/etc/frob/frob.conf; the package's new version is $kept_tmpdir/etc/frob/frob.conf.dpkg-dist, to merge by hand" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    run_kept_config dnf frob.conf.rpmnew &&
+    assert_output_contains "Warning: kept your $kept_tmpdir/etc/frob/frob.conf; the package's new version is $kept_tmpdir/etc/frob/frob.conf.rpmnew, to merge by hand" &&
+    run_kept_config apt "" &&
+    assert_output_lacks "Warning:" &&
+    run_kept_config apt frob.conf.rpmnew &&
+    assert_output_lacks "Warning:" &&
+    run_kept_config brew frob.conf.dpkg-dist &&
+    assert_output_lacks "Warning:"
+}
+
 # confinst says a line a link, which the run counts instead. It can fail to
 # make one and still exit 0, so what else it says is a warning, and the
 # count leaves the failed link out.
@@ -4134,6 +4176,7 @@ run_test "--verbose is taken and passed on" test_verbose_is_forwarded
 run_test "apt runs where sudo won't set its frontend" test_apt_runs_where_sudo_wont_set_its_frontend
 run_test "apt asks debconf's questions on the terminal, when there is one" test_apt_asks_debconfs_questions_on_the_terminal
 run_test "the ask hook preconfigures what apt installs" test_the_ask_hook_preconfigures_what_apt_installs
+run_test "a config file an install kept is a warning" test_a_kept_config_file_is_a_warning
 run_test "confinst's links are counted and its errors shown" test_confinst_is_counted_and_its_errors_shown
 run_test "a brew log that can't be made isn't fatal" test_unwritable_brew_log_is_not_fatal
 run_test "brew installs don't stop for confirmation" \
