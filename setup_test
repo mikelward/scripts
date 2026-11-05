@@ -44,6 +44,17 @@ assert_output_contains() {
     esac
 }
 
+assert_output_not_contains() {
+    case "$output" in
+        *"$1"*)
+            echo "  FAIL: output contains '$1'"
+            echo "  output: $output"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
 assert_source_contains() {
     if ! grep -q "$1" "$SETUP"; then
         echo "  FAIL: setup does not contain '$1'"
@@ -3015,24 +3026,223 @@ test_home_tools_provisioned_by_a_partial_bundle() {
 # dies on the scripts/conf pull before reaching the homepkg bundle install. A
 # failed clone (no checkout to fall back to) stays fatal, so success is never
 # faked when there's nothing usable on disk.
+# A throwaway origin with a commit on main, and a clone of it in
+# $co_tmpdir/repo, with git configured by nothing outside it.
+co_git() {
+    HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 GIT_AUTHOR_NAME=Test GIT_AUTHOR_EMAIL=test@example.com \
+        GIT_COMMITTER_NAME=Test GIT_COMMITTER_EMAIL=test@example.com git "$@"
+}
+
+make_checkout() {
+    co_tmpdir="$(mktemp -d)"
+    co_git init -q --bare "$co_tmpdir/origin.git"
+    co_git -C "$co_tmpdir/origin.git" symbolic-ref HEAD refs/heads/main
+    co_git init -q "$co_tmpdir/seed"
+    co_git -C "$co_tmpdir/seed" checkout -q -b main
+    echo one > "$co_tmpdir/seed/file"
+    co_git -C "$co_tmpdir/seed" add file
+    co_git -C "$co_tmpdir/seed" commit -q -m one
+    co_git -C "$co_tmpdir/seed" push -q "$co_tmpdir/origin.git" main
+    co_git clone -q "$co_tmpdir/origin.git" "$co_tmpdir/repo"
+}
+
+# advance_origin: a new commit on origin's main, making file "two".
+advance_origin() {
+    echo two > "$co_tmpdir/seed/file"
+    co_git -C "$co_tmpdir/seed" commit -q -am two
+    co_git -C "$co_tmpdir/seed" push -q "$co_tmpdir/origin.git" main
+}
+
+# run_clone_or_pull REPO: clone_or_pull REPO into $co_tmpdir/repo, under
+# set -e, as setup runs it.
+run_clone_or_pull() {
+    set +e
+    output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
+GITHUB_MIRROR=no
+$(extract_functions "info warn note_problem redact_url_credentials canonical_remote default_branch pull_checkout clone_or_pull")
+clone_or_pull '$1' '$co_tmpdir/repo' yes
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+}
+
+# A pull that works says nothing, and moves the checkout.
+test_clone_or_pull_updates_quietly() {
+    make_checkout
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_eq "$(printf '%s\n' "$output" | grep -v '^Updating ')" "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$(cat "$co_tmpdir/repo/file")" "two"
+    rm -rf "$co_tmpdir"
+}
+
+# A pull that fails on an existing checkout (offline, say) warns, saying why,
+# and setup carries on with the checkout as it is: an offline "setup
+# --no-root" still reaches the homepkg bundle install.
 test_clone_or_pull_degrades_offline() {
-    assert_source_contains "could not pull" &&
-    assert_source_contains "using the existing checkout" || return 1
-    # Within clone_or_pull: other steps clone optional extras whose failure
-    # is rightly only a warning.
-    clone_src="$(extract_functions clone_or_pull)"
-    if test -z "$clone_src"; then
-        echo "  FAIL: clone_or_pull not found in setup"
-        TEST_FAILED=1
-        return 1
-    fi
-    case "$clone_src" in
-        *"could not clone"*)
-            echo "  FAIL: clone_or_pull downgrades a failed clone to a warning"
-            TEST_FAILED=1
-            return 1
-            ;;
-    esac
+    make_checkout
+    # An ssh that can't look the host up, as ssh says it offline.
+    cat > "$co_tmpdir/ssh" <<'SSH'
+#!/bin/sh
+echo "ssh: Could not resolve hostname example.invalid: Name or service not known" >&2
+exit 255
+SSH
+    chmod +x "$co_tmpdir/ssh"
+    co_git -C "$co_tmpdir/repo" config core.sshCommand "$co_tmpdir/ssh"
+    co_git -C "$co_tmpdir/repo" remote set-url origin ssh://example.invalid/repo.git
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: can't reach origin; using the existing checkout" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+    rm -rf "$co_tmpdir"
+}
+
+# A server that answers and refuses isn't "can't reach origin": the warning
+# gives git's reason, without the credentials in the URL.
+test_a_refused_pull_says_what_the_server_said() {
+    make_checkout
+    # A remote helper that fails as git's https one does on a 403.
+    mkdir "$co_tmpdir/bin"
+    cat > "$co_tmpdir/bin/git-remote-denied" <<'HELPER'
+#!/bin/sh
+echo "fatal: unable to access 'https://user:secret-token@example.com/repo.git/': The requested URL returned error: 403" >&2
+exit 128
+HELPER
+    chmod +x "$co_tmpdir/bin/git-remote-denied"
+    co_git -C "$co_tmpdir/repo" remote set-url origin denied::https://example.com/repo.git
+    _path=$PATH
+    PATH="$co_tmpdir/bin:$PATH"
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    PATH=$_path
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: unable to access 'https://***@example.com/repo.git/': The requested URL returned error: 403; using the existing checkout" &&
+    assert_output_not_contains "secret-token" &&
+    assert_output_not_contains "can't reach origin"
+    rm -rf "$co_tmpdir"
+}
+
+# ssh says why it was refused before git's own line, which says only that it
+# couldn't read: what ssh said is shown under the warning.
+test_a_refused_ssh_key_is_shown() {
+    make_checkout
+    cat > "$co_tmpdir/ssh" <<'SSH'
+#!/bin/sh
+echo "git@example.com: Permission denied (publickey)." >&2
+exit 255
+SSH
+    chmod +x "$co_tmpdir/ssh"
+    co_git -C "$co_tmpdir/repo" config core.sshCommand "$co_tmpdir/ssh"
+    co_git -C "$co_tmpdir/repo" remote set-url origin ssh://git@example.com/repo.git
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: Could not read from remote repository.; using the existing checkout
+    git@example.com: Permission denied (publickey)." &&
+    assert_output_not_contains "can't reach origin" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_branch_with_no_upstream_says_so() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" checkout -q -b foo
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: branch foo has no upstream; using the existing checkout" &&
+    assert_eq "$(co_git -C "$co_tmpdir/repo" symbolic-ref --short HEAD)" "foo" &&
+    assert_eq "$(cat "$co_tmpdir/repo/file")" "one"
+    rm -rf "$co_tmpdir"
+}
+
+test_local_changes_in_the_way_say_so_and_stay() {
+    make_checkout
+    echo mine > "$co_tmpdir/repo/file"
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: local changes are in the way; using the existing checkout" &&
+    assert_eq "$(cat "$co_tmpdir/repo/file")" "mine"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_diverged_checkout_says_so() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" config pull.ff only
+    echo mine > "$co_tmpdir/repo/other"
+    co_git -C "$co_tmpdir/repo" add other
+    co_git -C "$co_tmpdir/repo" commit -q -m mine
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: it has diverged from origin/main; using the existing checkout"
+    rm -rf "$co_tmpdir"
+}
+
+test_a_detached_checkout_says_so() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" checkout -q --detach
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: it's detached at $(co_git -C "$co_tmpdir/repo" rev-parse --short HEAD); using the existing checkout"
+    rm -rf "$co_tmpdir"
+}
+
+# A rebasing pull that stops on conflicts leaves HEAD detached: the warning
+# names the conflicts, not the detached HEAD.
+test_a_rebase_that_stops_on_conflicts_says_so() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" config pull.rebase true
+    echo mine > "$co_tmpdir/repo/file"
+    co_git -C "$co_tmpdir/repo" commit -q -am mine
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: it has conflicts to resolve; using the existing checkout" &&
+    assert_output_lacks "detached"
+    rm -rf "$co_tmpdir"
+}
+
+# A failure git gives no error line for (a hook that refuses the merge, say)
+# shows all of what git said, since that's where the reason is.
+test_a_failure_without_an_error_line_shows_what_git_said() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" config pull.rebase false
+    co_git -C "$co_tmpdir/repo" config user.name Test
+    co_git -C "$co_tmpdir/repo" config user.email test@example.com
+    echo mine > "$co_tmpdir/repo/other"
+    co_git -C "$co_tmpdir/repo" add other
+    co_git -C "$co_tmpdir/repo" commit -q -m mine
+    printf '#!/bin/sh\necho "the merge hook says no"\nexit 1\n' > "$co_tmpdir/repo/.git/hooks/pre-merge-commit"
+    chmod +x "$co_tmpdir/repo/.git/hooks/pre-merge-commit"
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't update $co_tmpdir/repo: git pull exited 1; using the existing checkout" &&
+    assert_output_contains "    the merge hook says no"
+    rm -rf "$co_tmpdir"
+}
+
+# One that pulls, but on a branch other than origin's default, is named:
+# that's how a stale checkout of an old branch gets installed unnoticed.
+test_a_checkout_off_its_default_branch_is_named_when_it_pulls() {
+    make_checkout
+    co_git -C "$co_tmpdir/repo" checkout -q -b foo --track origin/main
+    advance_origin
+    run_clone_or_pull "$co_tmpdir/origin.git"
+    assert_status 0 &&
+    assert_output_contains "Warning: $co_tmpdir/repo is on branch foo, not main; using the existing checkout" &&
+    assert_eq "$(co_git -C "$co_tmpdir/repo" symbolic-ref --short HEAD)" "foo"
+    rm -rf "$co_tmpdir"
+}
+
+# A failed clone has no checkout to fall back to, so it stays fatal.
+test_clone_or_pull_fails_when_a_clone_does() {
+    co_tmpdir="$(mktemp -d)"
+    run_clone_or_pull "$co_tmpdir/gone.git"
+    assert_status 128 &&
+    assert_output_lacks "BOOTSTRAP_CONTINUED"
+    rm -rf "$co_tmpdir"
 }
 
 # --- --github internal-mirror flag ---
@@ -3624,8 +3834,30 @@ run_test "--no-root prefers a prebuilt bundle, then refreshes online" \
     test_home_tools_uses_bundle_optimistically
 run_test "a partial bundle provisions the run even with no network" \
     test_home_tools_provisioned_by_a_partial_bundle
+run_test "clone_or_pull updates a checkout quietly" \
+    test_clone_or_pull_updates_quietly
 run_test "clone_or_pull warns and continues on an offline failure" \
     test_clone_or_pull_degrades_offline
+run_test "a refused pull says what the server said, not that it's offline" \
+    test_a_refused_pull_says_what_the_server_said
+run_test "a refused ssh key is shown, under git's own line" \
+    test_a_refused_ssh_key_is_shown
+run_test "a failed pull on a branch with no upstream says so" \
+    test_a_branch_with_no_upstream_says_so
+run_test "a failed pull with local changes in the way says so, and keeps them" \
+    test_local_changes_in_the_way_say_so_and_stay
+run_test "a failed pull of a diverged checkout says so" \
+    test_a_diverged_checkout_says_so
+run_test "a failed pull of a detached checkout says so" \
+    test_a_detached_checkout_says_so
+run_test "a rebasing pull that stops on conflicts says so" \
+    test_a_rebase_that_stops_on_conflicts_says_so
+run_test "a failed pull with no error line shows what git said" \
+    test_a_failure_without_an_error_line_shows_what_git_said
+run_test "a checkout off its default branch is named when it pulls" \
+    test_a_checkout_off_its_default_branch_is_named_when_it_pulls
+run_test "a failed clone stays fatal" \
+    test_clone_or_pull_fails_when_a_clone_does
 run_test "--no-root installs CLI tools into a home prefix via homepkg" \
     test_no_root_installs_via_homepkg
 run_test "--no-root is accepted and documented" \
