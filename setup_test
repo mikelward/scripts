@@ -2402,6 +2402,36 @@ test_macos_brew_failure_shows_what_brew_said() {
     assert_output_contains " zoxide zsh-autosuggestions lf node typescript android-platform-tools kitty iterm2"
 }
 
+# macOS ships git, python3, vim, zsh, curl and unzip, and a managed Mac has
+# each new version of a Homebrew binary approved by hand, so the core brew
+# install leaves those six to macOS and still asks for the rest.
+test_macos_core_install_uses_the_system_tools() {
+    run_macos_packages 0 arm64 ok
+    assert_status 0 || return 1
+    core=$(printf '%s\n' "$calls" | grep '^brew install atool ')
+    if test -z "$core"; then
+        echo "  FAIL: no core brew install among the calls: $calls"
+        return 1
+    fi
+    for tool in curl git python3 unzip vim zsh; do
+        case " $core " in
+            *" $tool "*)
+                echo "  FAIL: the core brew install asks for $tool: $core"
+                return 1
+                ;;
+        esac
+    done
+    for tool in atool autoconf automake bat fd fzf gh git-delta go jq mercurial micro p7zip ripgrep shellcheck; do
+        case " $core " in
+            *" $tool "*) ;;
+            *)
+                echo "  FAIL: the core brew install doesn't ask for $tool: $core"
+                return 1
+                ;;
+        esac
+    done
+}
+
 # setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
 # over keys and windows, so setup installs neither; `setup-macos --wm
 # amethyst` installs Amethyst itself.
@@ -4164,6 +4194,8 @@ run_test "macOS brew failures warn instead of aborting the bootstrap" \
 run_test "a failing brew still attempts the later macOS steps" \
     test_macos_brew_failure_still_attempts_later_steps
 run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
+run_test "setup leaves git, python3, vim, zsh, curl and unzip to macOS" \
+    test_macos_core_install_uses_the_system_tools
 run_test "setup logs brew's output on a Mac and says what it installed" test_macos_brew_output_is_logged_and_summarized
 run_test "a failed brew install shows what brew said" test_macos_brew_failure_shows_what_brew_said
 run_test "a package run says what it installed, upgraded and failed" test_package_summary_says_what_changed

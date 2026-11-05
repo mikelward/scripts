@@ -1641,28 +1641,27 @@ install_os_packages() {
             fi
             ;;
         macos)
+            # macOS's own curl, git, python3, unzip, vim and zsh, as the
+            # distro's are used on Linux: Homebrew's copies would be more
+            # binaries for a managed Mac to approve at each version.
+            # python3 and git come with the Command Line Tools, which
+            # Homebrew needs anyway.
             if ! brew_install \
                 atool \
                 autoconf \
                 automake \
                 bat \
-                curl \
                 fd \
                 fzf \
                 gh \
-                git \
                 git-delta \
                 go \
                 jq \
                 mercurial \
                 micro \
                 p7zip \
-                python3 \
                 ripgrep \
-                shellcheck \
-                unzip \
-                vim \
-                zsh; then
+                shellcheck; then
                 warn "some core Homebrew packages could not be installed"
             fi
             # Separate, so a formula rename or a tap outage can't take the
