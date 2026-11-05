@@ -1319,7 +1319,7 @@ MOCK
     assert_output_lacks "Downloading" &&
     assert_output_lacks "already installed at" &&
     grep -q "Downloading https://example.invalid/LinearMouse.dmg" \
-        "$TEST_TMPDIR/home/.local/state/setup/brew.log"
+        "$TEST_TMPDIR/home/.local/state/setup/setup.log"
 }
 
 # A failed install shows the end of what brew said, the reason.
