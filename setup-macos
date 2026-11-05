@@ -220,6 +220,12 @@ info() {
     printf "%s\n" "$*"
 }
 
+# detail: an info line that only --verbose shows, for what was already so.
+detail() {
+    test "${VERBOSE:-no}" = yes || return 0
+    info "$@"
+}
+
 warn() {
     printf "Warning: %s\n" "$*" >&2
     note_problem "Warning: $*"
@@ -482,7 +488,7 @@ Options:
   --yes            Don't pause before starting
   --wm WM          The tiling window manager: tilemo (the default) or amethyst
   -v, --verbose    Show what Homebrew prints, instead of keeping it in
-                   ~/.local/state/setup/setup.log
+                   ~/.local/state/setup/setup.log, and what was already so
   -h, --help       Show this help and exit
 USAGE
 }
@@ -600,7 +606,7 @@ configure_keyboard() {
     # point at a source missing from the enabled list.
     if defaults read com.apple.HIToolbox AppleEnabledInputSources 2>/dev/null \
             | grep -qE "\"?KeyboardLayout ID\"? *= *$DVORAK_LAYOUT_ID *;"; then
-        info "Dvorak is already an enabled input source"
+        detail "Skipping Dvorak: already an enabled input source"
     else
         try defaults write com.apple.HIToolbox AppleEnabledInputSources -array-add \
             "$DVORAK_INPUT_SOURCE"
@@ -1583,7 +1589,7 @@ configure_hammerspoon_init() {
         fi
         case "$_hs_status" in
             0)
-                info "$_hs_init already loads tilemo"
+                detail "Skipping $_hs_init: it already loads tilemo"
                 ;;
             1)
                 warn "$_hs_init exists and doesn't load tilemo, so it was left alone; add these two lines to it, or $TILEMO_MISSING_EFFECT: tilemo = require(\"tilemo\") and tilemo.start({})"
@@ -1964,7 +1970,7 @@ configure_linearmouse() {
         info "$_lm_config is the empty one LinearMouse made as it first started; writing $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration over it"
         write_linearmouse_config "$_lm_config"
     elif test -e "$_lm_config" || test -L "$_lm_config"; then
-        info "$_lm_config exists; leaving LinearMouse's settings as they are"
+        detail "Skipping LinearMouse's settings: $_lm_config exists"
     else
         info "Writing $_lm_config: $LINEARMOUSE_LINES lines per mouse wheel notch and a gentler pointer acceleration"
         write_linearmouse_config "$_lm_config"

@@ -635,10 +635,10 @@ test_does_not_re_add_dvorak() {
         "KeyboardLayout Name" = Dvorak;
     }
 )'
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_not_called "AppleEnabledInputSources -array-add" &&
-    assert_output_contains "already an enabled input source"
+    assert_output_contains "Skipping Dvorak: already an enabled input source"
 }
 
 # Enabling a layout only offers it; selecting it is a separate key. Written
@@ -1410,7 +1410,9 @@ test_keeps_existing_linearmouse_config() {
     run_macos
     assert_status 0 &&
     assert_file_contains "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" '{"schemes": []}' &&
-    assert_output_contains "leaving LinearMouse's settings as they are"
+    assert_output_lacks "Skipping LinearMouse's settings" &&
+    run_macos --verbose &&
+    assert_output_contains "Skipping LinearMouse's settings: $TEST_TMPDIR/home/.config/linearmouse/linearmouse.json exists"
 }
 
 # What LinearMouse writes as it first starts, before setup has run: its
@@ -1444,11 +1446,11 @@ test_keeps_linearmouse_config_with_a_scheme() {
     _config="$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json"
     mkdir -p "$(dirname "$_config")"
     printf '%s\n' '{"$schema": "x", "schemes": [{"scrolling": {"reverse": {"vertical": true}}}]}' > "$_config"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_file_contains "$_config" '"reverse"' &&
     assert_file_lacks "$_config" '"vertical": 9' &&
-    assert_output_contains "leaving LinearMouse's settings as they are"
+    assert_output_contains "Skipping LinearMouse's settings: $_config exists"
 }
 
 # LinearMouse reads ~/Library/Application Support/linearmouse first, so
@@ -1467,11 +1469,11 @@ test_keeps_linearmouse_support_config() {
     _support="$TEST_TMPDIR/home/Library/Application Support/linearmouse/linearmouse.json"
     mkdir -p "$(dirname "$_support")"
     printf '%s\n' '{"schemes": [{"pointer": {"acceleration": 0}}]}' > "$_support"
-    run_macos
+    run_macos --verbose
     assert_status 0 &&
     assert_file_lacks "$_support" '"vertical": 9' &&
     test ! -e "$TEST_TMPDIR/home/.config/linearmouse/linearmouse.json" &&
-    assert_output_contains "linearmouse.json exists; leaving LinearMouse's settings as they are"
+    assert_output_contains "Skipping LinearMouse's settings: $_support exists"
 }
 
 test_starts_linearmouse() {
@@ -2788,9 +2790,9 @@ test_tilemo_accepts_an_init_that_loads_tilemo() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' "local t = require 'tilemo'" 't.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tilemo
+    run_macos --wm tilemo --verbose
     assert_status 0 &&
-    assert_output_contains "already loads tilemo" &&
+    assert_output_contains "Skipping $TEST_TMPDIR/home/.hammerspoon/init.lua: it already loads tilemo" &&
     assert_output_lacks "doesn't load tilemo" &&
     assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo.start({})'
 }
@@ -2801,9 +2803,9 @@ test_tilemo_accepts_an_init_that_loads_it_by_its_old_name() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' 'timo = require("timo")' 'timo.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tilemo
+    run_macos --wm tilemo --verbose
     assert_status 0 &&
-    assert_output_contains "already loads tilemo" &&
+    assert_output_contains "Skipping $TEST_TMPDIR/home/.hammerspoon/init.lua: it already loads tilemo" &&
     assert_output_lacks "doesn't load tilemo" &&
     assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tilemo.start({})'
 }
@@ -2813,7 +2815,7 @@ test_tilemo_does_not_count_a_commented_out_require() {
     mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
     printf '%s\n' '-- tilemo = require("tilemo")' '  -- tilemo.start({})' \
         > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tilemo --ignore-errors
+    run_macos --wm tilemo --ignore-errors --verbose
     assert_status 0 &&
     assert_output_lacks "already loads tilemo" &&
     assert_output_contains "doesn't load tilemo, so it was left alone"

@@ -85,7 +85,8 @@ Failed: frob
 Quickshell`, and so on. A failed step also shows the last lines it printed.
 `--verbose` (`-v`) shows what the installers print instead of logging it;
 `setup` passes it on to the others, and `setup-tide`'s source builds are
-shown and still kept in their own logs.
+shown and still kept in their own logs. It also shows what was already so,
+which a plain run leaves out: `Skipping jj: already installed at /usr/bin/jj`.
 apt runs without asking anything, since its questions would land in the log;
 a config file changed on the machine keeps that version, apt's own default
 answer.
