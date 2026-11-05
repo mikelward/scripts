@@ -1209,7 +1209,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
     stage_tilemo_machine
     run_macos --wm tilemo
     assert_status 0 &&
-    assert_says "for the Dvorak layout, the trackpad and mouse gestures, the Desktop & Dock settings and the menu bar setting to take effect" &&
+    assert_says "for the Dvorak layout, the trackpad and mouse gestures, the Desktop & Dock settings, the menu bar setting and the font smoothing to take effect" &&
     assert_output_in_order "Turn on LinearMouse" "Log out and back in" &&
     assert_output_in_order "Log out and back in" "And if you like:"
 }
@@ -1821,6 +1821,15 @@ test_configures_screenshots() {
     assert_called "defaults write com.apple.screencapture show-thumbnail -bool false" &&
     assert_called "killall SystemUIServer" &&
     assert_dir_exists "$TEST_TMPDIR/home/Pictures/Screenshots"
+}
+
+# Off, so text is thin and sharp, not smeared, on a non-Retina display.
+# Apps read it as they launch, so it waits for the logout.
+test_turns_off_font_smoothing() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults -currentHost write -g AppleFontSmoothing -int 0" &&
+    assert_says "the font smoothing to take effect"
 }
 
 test_configures_finder() {
@@ -3120,6 +3129,7 @@ run_test "missing pbs falls back to the logout advice" \
 run_test "configures Finder and restarts it" test_configures_finder
 run_test "saves screenshots to ~/Pictures/Screenshots, without the thumbnail" \
     test_configures_screenshots
+run_test "turns off font smoothing" test_turns_off_font_smoothing
 run_test "an app that isn't running is reported, not swallowed" \
     test_app_not_running_is_not_a_warning
 run_test "a failed restart is reported, not relabeled" \
