@@ -91,12 +91,12 @@ ARGS=(--verbose); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "--verbose says the same pins are built" has "$output" "already built from these pins"
 ARGS=()
 # A new commit for the same tag is a new build, checked and built afresh.
-sed 's/ 0d13d5a624eb093b600d1b2cbe448fb613c86424 / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
+sed 's/ ade4ef0a887d2740efb9c9af2ddb175633365e1b / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
 chmod +x "$T/setup-repinned"
-sed -n '/^HYPRLAND_PINS="/,/^"/p' "$T/setup-repinned" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+sed -n '/^HYPRLAND_PINS="/,/^"/p' "$T/setup-repinned" | awk 'NF == 5 { print $1, $4, $5 }' > "$T/pins"
 : > "$CALLS"
 SCRIPT="$T/setup-repinned" run FAKE_APT_HYPRLAND=0.53.3+ds-4
-check "a new pinned commit alone rebuilds Hyprland" has "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a new pinned commit alone rebuilds Hyprland" has "$calls" "cmake -S $T/src/hyprland-build/hyprgraphics "
 check "a new pinned commit's build is current" test "$(readlink -f "$T/opt/hyprland/current")" = "$(inst)"
 teardown
 
@@ -459,14 +459,32 @@ teardown
 
 # A pin whose tag was moved to another commit isn't built: its build files
 # never run, and nothing after it is built either.
-setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MOVED_PIN=hyprutils
-check "a moved pin is named" has "$output" "hyprutils's v0.14.3 tag is commit 0000000000000000000000000000000000000000, not the pinned "
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MOVED_PIN=hyprgraphics
+check "a moved pin is named" has "$output" "hyprgraphics's v0.6.0 tag is commit 0000000000000000000000000000000000000000, not the pinned "
 check "a moved pin is fatal" test "$status" -ne 0
-check "a moved pin runs no build" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
+check "a moved pin runs no build" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprgraphics "
 check "a moved pin stops the build" lacks "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
-check "a moved pin's clone is removed" test ! -e "$T/src/hyprland-build/hyprutils"
-check "a moved pin isn't stamped built" test ! -e "$(inst)/.built-hyprutils"
+check "a moved pin's clone is removed" test ! -e "$T/src/hyprland-build/hyprgraphics"
+check "a moved pin isn't stamped built" test ! -e "$(inst)/.built-hyprgraphics"
 check "a moved pin isn't marked complete" test ! -e "$(inst)/quickspace-pins"
+teardown
+# A pin with no tag is its commit, checked out from a partial clone, through
+# the mirror's rule as a tag's clone is; a checkout that isn't that commit
+# isn't built either.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "a commit pin is a partial clone" has "$calls" "git clone --quiet --filter=blob:none --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine"
+check "of the commit Hyprland's flake.lock names" has "$calls" "git -C $T/src/hyprland-build/aquamarine -c advice.detachedHead=false checkout --quiet ad4484335fc327a6cf010f455ae258c397861ee0"
+check "a commit pin is named by its commit" has "$output" "Building aquamarine ad44843"
+teardown
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_MOVED_PIN=aquamarine
+check "a commit pin checked out as another commit is named" has "$output" "aquamarine's checkout is commit 0000000000000000000000000000000000000000, not the pinned ad4484335fc327a6cf010f455ae258c397861ee0"
+check "and isn't built" lacks "$calls" "cmake -S $T/src/hyprland-build/aquamarine "
+teardown
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 GITHUB_PREFIX=https://ghe.example.com GIT_CONFIG_COUNT=0
+check "a commit pin's clone goes through the mirror" has "$calls" "git clone --quiet --filter=blob:none --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine
+git config: url.https://ghe.example.com/.insteadOf=https://github.com/"
+check "and so does its checkout" has "$calls" "checkout --quiet ad4484335fc327a6cf010f455ae258c397861ee0
+git config: url.https://ghe.example.com/.insteadOf=https://github.com/"
 teardown
 
 # A failed step stops the build before anything is linked or recorded.
