@@ -1005,6 +1005,19 @@ configure_linux_desktop() {
     # Cloned here, not by setup-tide, so --github, the origin
     # check and URL redaction work as for setup's other repos.
     clone_or_pull "$TIDE_REPO" "$SRC_DIR/tide" yes
+    run_setup_tide && return 0
+    _cld_status=$?
+    # A busy apt can leave setup-tide without what a later step of its
+    # needs, and fail it; it's tried again at the end, so that's not
+    # setup's end.
+    if test -n "${SETUP_APT_RETRY:-}" && grep -qx setup-tide "$SETUP_APT_RETRY" 2>/dev/null; then
+        return 0
+    fi
+    return "$_cld_status"
+}
+
+# run_setup_tide: runs setup-tide on the tide checkout.
+run_setup_tide() {
     # A mirror stands in for GitHub in setup-tide's source builds too; in
     # the environment, not argv, where a token in it would show in ps.
     tide_github=
@@ -1014,6 +1027,37 @@ configure_linux_desktop() {
     # shellcheck disable=SC2086  # expands to zero or more flags
     TIDE_DIR="$SRC_DIR/tide" GITHUB_PREFIX="$tide_github" \
         "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS
+}
+
+# --- apt, when another program is using it ---
+
+# start_apt_retry: starts the list of what to run again at the end because
+# apt was busy (see apt_busy), which setup's helpers add to as well.
+start_apt_retry() {
+    SETUP_APT_RETRY="${XDG_STATE_HOME:-$HOME/.local/state}/setup/apt-retry"
+    if ! mkdir -p "${SETUP_APT_RETRY%/*}" || ! printf "" > "$SETUP_APT_RETRY"; then
+        warn "couldn't make $SETUP_APT_RETRY, so apt isn't tried again if it's busy"
+        SETUP_APT_RETRY=
+    fi
+    export SETUP_APT_RETRY
+}
+
+# retry_busy_apt: runs once more what apt was too busy for: setup's own
+# packages, setup-tide's, or both. A second busy apt is a warning to run
+# setup again.
+retry_busy_apt() {
+    test -n "$SETUP_APT_RETRY" && test -s "$SETUP_APT_RETRY" || return 0
+    _rba_progs=$(sort -u "$SETUP_APT_RETRY")
+    rm -f "$SETUP_APT_RETRY"
+    SETUP_APT_RETRY=
+    export SETUP_APT_RETRY
+    info "Trying apt again"
+    for _rba_prog in $_rba_progs; do
+        case "$_rba_prog" in
+            setup) install_packages || warn "the second try at setup's packages failed" ;;
+            setup-tide) run_setup_tide || warn "the second try at setup-tide failed" ;;
+        esac
+    done
 }
 
 # What setup leaves to ChromeOS, and where to set it instead.
@@ -1283,7 +1327,9 @@ sudo_logged() {
     # nothing is asked on the terminal, which is the most that's left. dpkg's
     # questions about changed config files take the default answer the
     # options name. sudo asks for a password on the terminal, not on stdin.
+    _sl_apt=no
     if test "$1" = apt-get; then
+        _sl_apt=yes
         set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
         if apt_frontend_allowed; then
             set -- DEBIAN_FRONTEND=noninteractive "$@"
@@ -1294,8 +1340,17 @@ sudo_logged() {
     fi
     start_setup_log
     if test "$SETUP_LOG" = -; then
-        sudo_or_warn "$@" </dev/null
-        return
+        test "$_sl_apt" = yes || { sudo_or_warn "$@" </dev/null; return; }
+        # What it says is shown, as --verbose asks, and kept to look for
+        # the lock in, which it says on stderr.
+        _sl_err=$(mktemp) || { sudo_or_warn "$@" </dev/null; return; }
+        sudo_or_warn "$@" </dev/null 2>"$_sl_err" && _sl_status=0 || _sl_status=$?
+        cat "$_sl_err" >&2
+        if test "$_sl_status" -ne 0 && apt_was_busy "$_sl_err" 1; then
+            apt_busy
+        fi
+        rm -f "$_sl_err"
+        return "$_sl_status"
     fi
     log_mark "sudo $*"
     _sudo_out=$SETUP_LOG
@@ -1304,7 +1359,31 @@ sudo_logged() {
     test "$_sl_status" -eq 0 && return 0
     # --no-sudo ran nothing, so there's nothing to show.
     test "$SUDO" = no || log_failure "sudo $*" "$_sl_status"
+    if test "$_sl_apt" = yes && apt_was_busy "$SETUP_LOG" "$_log_start"; then
+        apt_busy
+    fi
     return "$_sl_status"
+}
+
+# apt_was_busy FILE LINE: whether what apt-get said, in FILE from LINE on,
+# says it failed because another program, such as unattended-upgrades or
+# packagekit, held dpkg's lock.
+apt_was_busy() {
+    tail -n "+$2" "$1" \
+        | grep -q -e 'Could not get lock' -e 'Unable to acquire the dpkg frontend lock' -e 'Unable to lock directory'
+}
+
+# apt_busy: says apt was busy. Rather than wait for the lock while there's
+# other work to do, setup goes on and tries apt again once, at its end:
+# $SETUP_APT_RETRY, which setup sets, collects what to try again. Without it
+# -- run on its own, or on that second try -- there's nothing left to wait
+# for, so it's a warning to run again.
+apt_busy() {
+    if test -n "${SETUP_APT_RETRY:-}" && printf '%s\n' setup >> "$SETUP_APT_RETRY"; then
+        info "Another program is using apt, so setup tries again at the end"
+    else
+        warn "another program is using apt; run setup again once it's done"
+    fi
 }
 
 # apt_frontend_allowed: whether sudo lets apt-get run with DEBIAN_FRONTEND
@@ -3528,6 +3607,7 @@ RULE
 # --- Main ---
 
 detect_os
+start_apt_retry
 resolve_crostini
 resolve_gui
 resolve_minimal
@@ -3664,6 +3744,11 @@ if test "$INSTALL" = yes; then
     fi
 else
     info "Skipping root config installation (--no-install)"
+fi
+
+# Before the upgrade's recorded: what apt was too busy for earlier.
+if test "$INSTALL" = yes; then
+    retry_busy_apt
 fi
 
 # The last of the installs is done, so an upgrade pass that didn't fail is

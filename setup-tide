@@ -742,7 +742,9 @@ sudo_logged() {
     # nothing is asked on the terminal, which is the most that's left. dpkg's
     # questions about changed config files take the default answer the
     # options name. sudo asks for a password on the terminal, not on stdin.
+    _sl_apt=no
     if test "$1" = apt-get; then
+        _sl_apt=yes
         set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
         if apt_frontend_allowed; then
             set -- DEBIAN_FRONTEND=noninteractive "$@"
@@ -753,8 +755,17 @@ sudo_logged() {
     fi
     start_setup_log
     if test "$SETUP_LOG" = -; then
-        sudo_or_warn "$@" </dev/null
-        return
+        test "$_sl_apt" = yes || { sudo_or_warn "$@" </dev/null; return; }
+        # What it says is shown, as --verbose asks, and kept to look for
+        # the lock in, which it says on stderr.
+        _sl_err=$(mktemp) || { sudo_or_warn "$@" </dev/null; return; }
+        sudo_or_warn "$@" </dev/null 2>"$_sl_err" && _sl_status=0 || _sl_status=$?
+        cat "$_sl_err" >&2
+        if test "$_sl_status" -ne 0 && apt_was_busy "$_sl_err" 1; then
+            apt_busy
+        fi
+        rm -f "$_sl_err"
+        return "$_sl_status"
     fi
     log_mark "sudo $*"
     _sudo_out=$SETUP_LOG
@@ -763,7 +774,31 @@ sudo_logged() {
     test "$_sl_status" -eq 0 && return 0
     # --no-sudo ran nothing, so there's nothing to show.
     test "$SUDO" = no || log_failure "sudo $*" "$_sl_status"
+    if test "$_sl_apt" = yes && apt_was_busy "$SETUP_LOG" "$_log_start"; then
+        apt_busy
+    fi
     return "$_sl_status"
+}
+
+# apt_was_busy FILE LINE: whether what apt-get said, in FILE from LINE on,
+# says it failed because another program, such as unattended-upgrades or
+# packagekit, held dpkg's lock.
+apt_was_busy() {
+    tail -n "+$2" "$1" \
+        | grep -q -e 'Could not get lock' -e 'Unable to acquire the dpkg frontend lock' -e 'Unable to lock directory'
+}
+
+# apt_busy: says apt was busy. Rather than wait for the lock while there's
+# other work to do, setup goes on and tries apt again once, at its end:
+# $SETUP_APT_RETRY, which setup sets, collects what to try again. Without it
+# -- run on its own, or on that second try -- there's nothing left to wait
+# for, so it's a warning to run again.
+apt_busy() {
+    if test -n "${SETUP_APT_RETRY:-}" && printf '%s\n' setup-tide >> "$SETUP_APT_RETRY"; then
+        info "Another program is using apt, so setup tries again at the end"
+    else
+        warn "another program is using apt; run setup-tide again once it's done"
+    fi
 }
 
 # apt_frontend_allowed: whether sudo lets apt-get run with DEBIAN_FRONTEND
