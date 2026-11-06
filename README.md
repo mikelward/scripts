@@ -38,6 +38,12 @@ security key asks for its touch then, and every pull shares that connection.
 A sign-in that hasn't finished in a minute, as with a hung security key, is
 given up on with a warning.
 
+On a Linux desktop, tide is one more session at the login screen, and the
+display manager stays as it is. `--dm` picks the login screen from the next
+boot instead: `--dm=tide` for greetd with tide's greeter (or `--greeter`),
+`--dm=sddm` or `--dm=gdm`, each installed if it isn't. `--no-greeter` puts back
+the one greetd replaced.
+
 ## Installing tools without root
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI

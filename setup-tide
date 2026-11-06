@@ -82,7 +82,8 @@
 # Usage:
 #     setup-tide [--no-install] [--no-sudo] [--ignore-errors] [--no-fetch]
 #                      [--no-build-hyprland] [--tidewm]
-#                      [--greeter | --no-greeter] [--github PREFIX]
+#                      [--dm tide|sddm|gdm|keep | --greeter | --no-greeter]
+#                      [--github PREFIX]
 #                      [-v | --verbose] [-h | --help]
 #
 # --no-install skips the packages and the root `make install-session`.
@@ -92,6 +93,10 @@
 # clone_or_pull, which honors --github and redacts the URLs it prints.
 # --no-build-hyprland leaves Hyprland to the distro even when it's too old.
 # --tidewm builds tidewm too; without it, nothing of tidewm's is touched.
+# --dm picks the login screen: tide (greetd running tide's greeter), sddm,
+# gdm, or keep (the default). --greeter is --dm=tide; the rest of this says
+# --greeter for both. --dm=sddm or --dm=gdm installs it if it isn't, and makes
+# it the display manager from the next boot.
 # --greeter makes greetd the display manager. --no-greeter puts back the
 # one setup replaced with greetd. Without either, the display manager stays
 # as it is. --github PREFIX, or $GITHUB_PREFIX, clones what it clones from
@@ -127,8 +132,9 @@ BUILD_TIDEWM=no
 # Where GitHub's repos come from: empty for github.com itself (see
 # git_github).
 GITHUB_PREFIX="${GITHUB_PREFIX:-}"
-# keep (the default) leaves the display manager as it is, yes (--greeter)
-# makes greetd it, and no (--no-greeter) puts back the one greetd replaced.
+# keep (the default) leaves the display manager as it is, yes (--greeter,
+# --dm=tide) makes greetd it, no (--no-greeter) puts back the one greetd
+# replaced, and sddm or gdm (--dm) makes that one it.
 GREETER=keep
 
 # Overridable for tests, which can't touch the real /etc or clone.
@@ -279,6 +285,8 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
 # greetd's config directory, and tide's greetd config template, which
 # `make install-session PREFIX=/usr` installs. Overridable for tests.
 GREETD_DIR="${SETUP_GREETD_DIR:-/etc/greetd}"
+# The display manager Debian and Ubuntu start (see use_display_manager).
+DEFAULT_DM_FILE="${SETUP_ETC:-/etc}/X11/default-display-manager"
 GREETD_TEMPLATE="${SETUP_GREETD_TEMPLATE:-/usr/share/tide/greeter/greetd.toml}"
 # The greeter's PATH: greetd sources /etc/profile, which sets this for every
 # user but root.
@@ -375,6 +383,12 @@ info() {
     printf "%s\n" "$*"
 }
 
+# detail: an info line that only --verbose shows, for what was already so.
+detail() {
+    test "${VERBOSE:-no}" = yes || return 0
+    info "$@"
+}
+
 warn() {
     printf "Warning: %s\n" "$*" >&2
     note_problem "Warning: $*"
@@ -458,12 +472,13 @@ sudo_or_warn() {
 usage() {
     cat <<'USAGE'
 Usage: setup-tide [--no-install] [--no-sudo] [--ignore-errors]
-                  [--no-build-hyprland] [--greeter | --no-greeter]
+                  [--no-build-hyprland]
+                  [--dm tide|sddm|gdm|keep | --greeter | --no-greeter]
                   [--github PREFIX] [-v | --verbose] [-h | --help]
 
 Install the tide session (Hyprland + uwsm) beside KDE Plasma. The display
-manager stays as it is, with tide as one more session, unless --greeter is
-given.
+manager stays as it is, with tide as one more session, unless --dm or
+--greeter says otherwise.
 
 Options:
   --no-install     Skip the packages and the system-wide session install
@@ -476,8 +491,11 @@ Options:
   --tidewm         Also build tidewm, tide's fork of dwl, for the tide
                    (tidewm) session, an option beside Hyprland's: on Debian
                    testing and Arch, which package the wlroots 0.20 it needs
-  --greeter        Make greetd, with tide's greeter, the display manager
-                   from the next boot
+  --dm DM          The login screen from the next boot: tide (greetd with
+                   tide's greeter), sddm, gdm, or keep the one there is (the
+                   default). SDDM and GDM are installed if they aren't
+  --greeter        The same as --dm=tide: make greetd, with tide's greeter,
+                   the display manager from the next boot
   --no-greeter     If setup made greetd the display manager, put back the
                    one it replaced
   --github PREFIX  Clone from a GitHub mirror at PREFIX (git@ghe.corp: or
@@ -489,6 +507,20 @@ Options:
                    own logs still keep theirs)
   -h, --help       Show this help and exit
 USAGE
+}
+
+# set_dm DM: --dm's login screen, as GREETER says it.
+set_dm() {
+    case "$1" in
+        tide) GREETER=yes ;;
+        keep) GREETER=keep ;;
+        sddm | gdm) GREETER=$1 ;;
+        *)
+            warn "--dm takes tide, sddm, gdm or keep, not '$1'"
+            usage >&2
+            exit 1
+            ;;
+    esac
 }
 
 while test $# -gt 0; do
@@ -507,6 +539,16 @@ while test $# -gt 0; do
         --no-tidewm) BUILD_TIDEWM=no ;;
         --greeter) GREETER=yes ;;
         --no-greeter) GREETER=no ;;
+        --dm)
+            if test $# -lt 2; then
+                warn "--dm needs one of tide, sddm, gdm or keep"
+                usage >&2
+                exit 1
+            fi
+            shift
+            set_dm "$1"
+            ;;
+        --dm=*) set_dm "${1#--dm=}" ;;
         --github)
             if test $# -lt 2 || test -z "$2"; then
                 warn "--github needs a host or prefix"
@@ -5939,6 +5981,19 @@ setup_greeter() {
         info "No systemd, so the display manager is left alone"
         return 0
     fi
+    # --dm=sddm or --dm=gdm switches at the end of the run. Before then, a
+    # greetd setup made the display manager is kept right, as without --dm,
+    # in case the run ends first.
+    _want=$GREETER
+    case "$_want" in
+        sddm | gdm)
+            if test "${1-}" != early; then
+                use_display_manager "$_want"
+                return 0
+            fi
+            _want=keep
+            ;;
+    esac
     if test "${1-}" = early; then
         dm_now=greetd.service
     elif ! dm_now=$(display_manager) || ! valid_display_manager "$dm_now"; then
@@ -5946,7 +6001,7 @@ setup_greeter() {
         return 0
     fi
     dm_before=$dm_now
-    if test "$GREETER" = no; then
+    if test "$_want" = no; then
         test "$dm_now" = greetd.service || return 0
         restore_display_manager "$(replaced_display_manager)" || :
         return 0
@@ -5957,7 +6012,7 @@ setup_greeter() {
     # greetd replaced when the greeter can't run, so the end of the run takes
     # over again once this run has made it runnable. The early pass says
     # nothing, so the end of the run says it once.
-    if test "$GREETER" = keep; then
+    if test "$_want" = keep; then
         if test "$dm_now" = greetd.service && test -n "$(replaced_display_manager)"; then
             KEEP_GREETD=yes
         fi
@@ -6042,6 +6097,129 @@ setup_greeter() {
     fi
     GREETER_ACTIVE=yes
     info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --no-greeter'"
+}
+
+# use_display_manager DM makes SDDM or GDM (sddm, gdm) the display manager
+# from the next boot, for --dm, installing it if it isn't. On Debian and
+# Ubuntu, /etc/X11/default-display-manager names the one that runs: SDDM's
+# and GDM's units won't start unless it names them, and each package's
+# scripts link display-manager.service to the one it names, whatever
+# debconf's answer to shared/default-x-display-manager. So setup writes the
+# file, gives debconf the same answer, as the default for the question a
+# second display manager's install asks, then runs the package's scripts,
+# by installing it or with dpkg-reconfigure. Elsewhere, enabling its unit
+# moves the alias. A greetd it replaces is disabled once it has, so nothing
+# starts it beside.
+use_display_manager() {
+    _ud_os=$(detect_os)
+    _ud_file_was=
+    case "$1:$_ud_os" in
+        sddm:*) _ud_pkg=sddm _ud_unit=sddm.service _ud_name=SDDM _ud_daemon=/usr/bin/sddm ;;
+        gdm:debian) _ud_pkg=gdm3 _ud_unit=gdm.service _ud_name=GDM _ud_daemon=/usr/sbin/gdm3 ;;
+        gdm:*) _ud_pkg=gdm _ud_unit=gdm.service _ud_name=GDM ;;
+    esac
+    if ! _ud_before=$(display_manager) || ! valid_display_manager "$_ud_before"; then
+        warn "couldn't tell which display manager this is, so $_ud_name isn't made it"
+        return 0
+    fi
+    if test "$_ud_before" = "$_ud_unit"; then
+        detail "Skipping the display manager: $_ud_name already is it"
+        return 0
+    fi
+    case "$_ud_os" in
+        debian | redhat | arch) ;;
+        *)
+            warn "unknown OS, so $_ud_name isn't made the display manager"
+            return 0
+            ;;
+    esac
+    if test "$_ud_os" = debian; then
+        # Asked by a second display manager's install; this is setup's
+        # answer, so it isn't asked. A file, since sudo_logged gives the
+        # command no input.
+        if ! _ud_answer=$(mktemp); then
+            warn "couldn't make a file for debconf's answer, so $_ud_name isn't made the display manager"
+            return 0
+        fi
+        if ! printf '%s shared/default-x-display-manager select %s\n' "$_ud_pkg" "$_ud_pkg" > "$_ud_answer" \
+            || ! sudo_logged debconf-set-selections "$_ud_answer"; then
+            rm -f "$_ud_answer"
+            warn "couldn't tell debconf to make $_ud_name the display manager, so it isn't; rerun setup with --dm=$1"
+            return 0
+        fi
+        rm -f "$_ud_answer"
+        # The file as it was, to put back if the switch doesn't happen.
+        if ! test -e "$DEFAULT_DM_FILE"; then
+            _ud_file_was=none
+        elif ! _ud_file_was=$(cat "$DEFAULT_DM_FILE"); then
+            warn "couldn't read $DEFAULT_DM_FILE, so $_ud_name isn't made the display manager"
+            return 0
+        fi
+        if ! install_text "$DEFAULT_DM_FILE" "$_ud_daemon"; then
+            warn "couldn't write $DEFAULT_DM_FILE, so $_ud_name isn't made the display manager"
+            return 0
+        fi
+    fi
+    if test "$INSTALL" = yes; then
+        pkg_begin "$(pkg_manager)" "Installing $_ud_name"
+        _ud_status=0
+        install_all "$_ud_pkg" || _ud_status=$?
+        pkg_end
+        if test "$_ud_status" -ne 0; then
+            warn "couldn't install $_ud_name, so $(describe_dm "$_ud_before") stays the display manager"
+            undo_dm_file
+            return 0
+        fi
+    fi
+    if test "$_ud_os" = debian; then
+        # Installing it ran its scripts; one that was installed already
+        # needs them run again. systemd then reads the alias they linked.
+        if ! _ud_now=$(display_manager) || test "$_ud_now" != "$_ud_unit"; then
+            if ! sudo_logged dpkg-reconfigure -f noninteractive "$_ud_pkg" \
+                || ! sudo_logged systemctl daemon-reload; then
+                warn "couldn't make $_ud_name the display manager; rerun setup with --dm=$1"
+                undo_dm_file
+                return 0
+            fi
+        fi
+    elif ! sudo_logged systemctl enable --force "$_ud_unit"; then
+        warn "couldn't make $_ud_name the display manager; run 'sudo systemctl enable --force $_ud_unit'"
+        return 0
+    fi
+    if ! _ud_now=$(display_manager); then
+        warn "couldn't ask systemd whether $_ud_name is the display manager now"
+        return 0
+    fi
+    if test "$_ud_now" != "$_ud_unit"; then
+        warn "$_ud_name isn't the display manager after all, $(describe_dm "$_ud_now") is"
+        undo_dm_file
+        return 0
+    fi
+    if test "$_ud_before" = greetd.service && ! sudo_logged systemctl disable greetd.service; then
+        warn "couldn't disable greetd, so it may start beside $_ud_name from the next boot; run 'sudo systemctl disable greetd.service'"
+    fi
+    info "From the next boot, $_ud_name is the login screen, in place of $(describe_dm "$_ud_before")"
+}
+
+# undo_dm_file puts back the default-display-manager file use_display_manager
+# wrote, after a switch it couldn't make, while display-manager.service is
+# the one there was before, whose unit won't start unless the file names it.
+# systemd reads the alias first, in case the package's scripts linked it.
+undo_dm_file() {
+    test -n "$_ud_file_was" || return 0
+    if ! sudo_logged systemctl daemon-reload || ! _ud_after=$(display_manager); then
+        warn "couldn't ask systemd which display manager this is, so $DEFAULT_DM_FILE is left naming $_ud_name"
+        return 0
+    fi
+    test "$_ud_after" = "$_ud_before" || return 0
+    if test "$_ud_file_was" = none; then
+        sudo_or_warn rm -f "$DEFAULT_DM_FILE" && return 0
+        _ud_fix="sudo rm $DEFAULT_DM_FILE"
+    else
+        install_text "$DEFAULT_DM_FILE" "$_ud_file_was" && return 0
+        _ud_fix="echo $_ud_file_was | sudo tee $DEFAULT_DM_FILE"
+    fi
+    warn "couldn't put back $DEFAULT_DM_FILE, so $(describe_dm "$_ud_before") won't start from the next boot; run '$_ud_fix'"
 }
 
 # early_greeter runs before anything that can end the run, so a failure
