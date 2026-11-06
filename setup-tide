@@ -271,7 +271,10 @@ Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c
 # it packages g++-16, and its libstdc++6 runtime is already 16's.
 HYPRLAND_GCC=16
 
-# What the build needs from apt, named as on Ubuntu 26.04.
+# What the build needs from apt, named as on Ubuntu 26.04. Hyprland asks
+# rtkit for realtime scheduling through sdbus-c++ (2.0 or later) on Linux.
+# CMake also looks for epoll-shim and libinotify, which stand in for Linux's
+# own epoll and inotify on the BSDs; it says it can't find them, harmlessly.
 HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake meson ninja-build pkg-config git python3
     libwayland-dev libwayland-bin libpugixml-dev libpixman-1-dev libzip-dev
     libcairo2-dev librsvg2-dev libtomlplusplus-dev libdrm-dev libpango1.0-dev
@@ -279,7 +282,7 @@ HYPRLAND_BUILD_DEPS="build-essential gcc-$HYPRLAND_GCC g++-$HYPRLAND_GCC cmake m
     libgles-dev libegl-dev libgbm-dev libseat-dev libinput-dev libudev-dev
     libdisplay-info-dev hwdata libxkbcommon-dev uuid-dev libxcursor-dev libeis-dev
     libglib2.0-dev libabsl-dev libmuparser-dev liblcms2-dev libcanberra-dev liblua5.5-dev
-    glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev
+    glslang-dev glslang-tools libudis86-dev libffi-dev libreadline-dev libsdbus-c++-dev
     libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev libxcb-errors-dev
     xwayland"
 # greetd's config directory, and tide's greetd config template, which
