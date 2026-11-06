@@ -3521,6 +3521,34 @@ test_https_prefix_key_prompt_does_not_block() {
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
+# An ssh-agent that never answers ssh-add -l -- one behind a hung security
+# key, say -- must not stall setup: once the wait is up it counts as holding
+# no key, with a warning, and the key file check goes on. The stub sleep
+# ends the wait at once; the stub ssh-add answers only when killed, and gives
+# up after 30s, so a broken time limit fails rather than hangs.
+test_a_hung_ssh_agent_is_given_up_on() {
+    agent_tmpdir="$(mktemp -d)"
+    mkdir -p "$agent_tmpdir/bin" "$agent_tmpdir/.ssh"
+    : > "$agent_tmpdir/.ssh/id_ed25519"
+    printf '#!/bin/sh\nexec %s 30\n' "$(command -v sleep)" > "$agent_tmpdir/bin/ssh-add"
+    printf '#!/bin/sh\nexit 0\n' > "$agent_tmpdir/bin/sleep"
+    chmod +x "$agent_tmpdir/bin/ssh-add" "$agent_tmpdir/bin/sleep"
+    set +e
+    output="$(PATH="$agent_tmpdir/bin:$PATH" HOME="$agent_tmpdir" \
+        sh -c "set -e
+SSH=auto
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS ssh_agent_has_key generate_ssh_key")
+generate_ssh_key
+echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$agent_tmpdir"
+    assert_status 0 &&
+    assert_output_contains "ssh-agent isn't answering" &&
+    assert_output_lacks "ssh-agent has one" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
 # Run clone_or_pull's existing-checkout branch against a stub git, so nothing
 # here touches the network. The stub answers the config lookup with
 # $MOCK_ORIGIN (exiting 1 when it's empty, as git does for an unset key) and
@@ -5068,6 +5096,8 @@ run_test "atuin and carapace upgrade once a week" \
     test_shell_tools_upgrade_once_a_week
 run_test "a failed atuin upgrade is retried" \
     test_shell_tools_failed_upgrade_is_retried
+run_test "a hung ssh-agent is given up on" \
+    test_a_hung_ssh_agent_is_given_up_on
 run_test "the release extras wait a week to upgrade" \
     test_extras_release_waits_a_week_to_upgrade
 run_test "a failed release extras upgrade is retried" \
