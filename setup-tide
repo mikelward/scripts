@@ -643,6 +643,10 @@ github_host() {
     esac
     printf '%s' "${_gh_host#*@}"
 }
+# The build logs name github.com, as the rule rewrites the URLs as git runs.
+if test -n "$GITHUB_BASE"; then
+    info "Cloning from $(github_host "$GITHUB_BASE") in place of github.com"
+fi
 trap 'recap_problems "$?"' EXIT
 
 if test "$IGNORE_ERRORS" = no; then
