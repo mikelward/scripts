@@ -1350,6 +1350,7 @@ $(rule_for https://ghe.example.com/)"
 check "mirror: the URL itself stays GitHub's, for the rule to rewrite" \
     has "$calls" "https://github.com/quickshell-mirror/quickshell.git"
 check "mirror: no prefix on the command line" lacks "$calls" "-c url."
+check "mirror: the run says where it clones from" has "$output" "Cloning from ghe.example.com in place of github.com"
 teardown
 
 # A mirror without a repository answers that it has no such branch, so the
