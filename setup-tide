@@ -614,8 +614,21 @@ git_github() {
             return 1
             ;;
     esac
+    _gh_status=0
     env "GIT_CONFIG_COUNT=$((_gh_n + 1))" "GIT_CONFIG_KEY_$_gh_n=url.$GITHUB_BASE.insteadOf" \
-        "GIT_CONFIG_VALUE_$_gh_n=https://github.com/" git "$@"
+        "GIT_CONFIG_VALUE_$_gh_n=https://github.com/" git "$@" || _gh_status=$?
+    test "$_gh_status" -eq 0 && return 0
+    # git's own words name the mirror's answer, not the mirror: a repo it
+    # doesn't have reads as a missing branch.
+    for _gh_arg; do
+        case "$_gh_arg" in
+            https://github.com/*)
+                warn "$(github_host "$GITHUB_BASE") couldn't give git ${_gh_arg#https://github.com/}, which stands in for GitHub; it may not mirror that repo or tag yet"
+                break
+                ;;
+        esac
+    done
+    return "$_gh_status"
 }
 
 # github_host PREFIX: the host in a normalized prefix, without a user or

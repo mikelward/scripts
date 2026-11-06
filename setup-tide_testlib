@@ -365,7 +365,8 @@ if test "\$1" = rm && test -n "\$FAKE_RM_KEEPS"; then
 fi
 "\$@"
 MOCK
-    # git clone creates the checkout, its last argument; pull just logs, or
+    # git clone creates the checkout, its last argument, or fails for a
+    # repository named in \$FAKE_CLONE_FAILS; pull just logs, or
     # fails with \$FAKE_PULL_FAILS. Both say what they did, as git does,
     # unless --quiet.
     cat > "$T/bin/git" <<MOCK
@@ -380,6 +381,14 @@ while test "\$i" -lt "\${GIT_CONFIG_COUNT:-0}"; do
 done
 if test "\$1" = clone; then
     for last; do :; done
+    # \$FAKE_CLONE_FAILS names a repository the server doesn't have.
+    case " \$* " in
+        *"\${FAKE_CLONE_FAILS:-no such repo}"*)
+            echo "warning: Could not find remote branch v1, to clone." >&2
+            echo "fatal: Remote branch v1 not found in upstream origin" >&2
+            exit 128
+            ;;
+    esac
     mkdir -p "\$last/.git"
     # wayland-protocols generates its headers with a strict scanner.
     case "\$last" in
