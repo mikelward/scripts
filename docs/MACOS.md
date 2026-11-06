@@ -64,7 +64,7 @@ On macOS this installs Homebrew if it's missing, then, by category:
 | Android CLI tools | android-platform-tools (adb, fastboot) |
 | Graphical apps | kitty, iTerm2 (skip with `--no-gui`); `setup-macos` installs Hammerspoon for tilemo, or Amethyst with `--wm amethyst` |
 | Heavyweight extras | helix, jj, nushell (`--minimal` skips, `--brew` / `--release` picks the source) |
-| Dotfiles | clones the `conf` repo and symlinks it via `confinst` |
+| Dotfiles | clones the `conf` repo and symlinks it via `confinst`, then clones `vcs` into `conf/vcs` and builds it for the prompt |
 
 Then it hands off to `setup-macos` for the desktop configuration described in
 this file.
