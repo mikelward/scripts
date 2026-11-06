@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
+QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_was_busy apt_busy apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -495,10 +495,21 @@ run_linux_packages() {
     # It chatters as the real ones do, and records whether apt may ask.
     # HARNESS_PM_MODE=upgrade-fails fails its upgrades (apt-get install
     # --only-upgrade, dnf upgrade) and nothing else; update-fails fails
-    # apt-get update.
+    # apt-get update; busy holds dpkg's lock. HARNESS_RETRY=yes keeps a
+    # retry list, as setup does, and tries again at the end.
     cat > "$linux_tmpdir/$linux_pm" <<MOCK
 #!/bin/sh
 printf '%s\n' "$linux_pm \$* [DEBIAN_FRONTEND=\${DEBIAN_FRONTEND:-unset}] [stdin=\$(cat)]" >> "$linux_calls"
+# busy holds dpkg's lock for its first HARNESS_BUSY_CALLS calls (default
+# 1), not counting the --version setup asks first.
+if test "${HARNESS_PM_MODE:-ok}" = busy && test "\$1" != --version; then
+    _busy=\$(cat "$linux_tmpdir/busy-calls" 2>/dev/null || echo 0)
+    echo \$((_busy + 1)) > "$linux_tmpdir/busy-calls"
+    if test "\$_busy" -lt "${HARNESS_BUSY_CALLS:-1}"; then
+        echo "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1234 (unattended-upgr)" >&2
+        exit 100
+    fi
+fi
 case "${HARNESS_PM_MODE:-ok} \$*" in
     "update-fails update"*)
         echo "E: Could not resolve the mirror" >&2
@@ -550,9 +561,11 @@ SUDO=yes
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
 UPGRADE_STAMP='$linux_stamp'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn resolve_upgrade record_upgrade install_packages")
+SETUP_APT_RETRY=${HARNESS_RETRY:+$linux_tmpdir/apt-retry}
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn resolve_upgrade record_upgrade install_packages retry_busy_apt")
 resolve_upgrade
 install_packages
+test -z \"\$SETUP_APT_RETRY\" || retry_busy_apt
 record_upgrade
 echo BOOTSTRAP_CONTINUED
 echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
@@ -561,6 +574,35 @@ echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     calls="$(cat "$linux_calls" 2>/dev/null)"
     stamp="$(stamp_state "$linux_stamp")"
     rm -rf "$linux_tmpdir"
+}
+
+# Another program holding dpkg's lock doesn't stop the run: setup says it
+# tries again at the end, and does, once.
+test_busy_apt_is_tried_again_at_the_end() {
+    HARNESS_PM_MODE=busy HARNESS_RETRY=yes run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "Another program is using apt, so setup tries again at the end" &&
+    assert_output_contains "Trying apt again" &&
+    assert_output_lacks "run setup again" &&
+    assert_calls_contain "apt-get install -y --no-upgrade --install-recommends adb" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Still busy on the second try: a warning to run setup again.
+test_apt_still_busy_is_a_warning_to_run_again() {
+    HARNESS_PM_MODE=busy HARNESS_BUSY_CALLS=99 HARNESS_RETRY=yes run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "Trying apt again" &&
+    assert_output_contains "another program is using apt; run setup again once it's done" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Without the retry list (setup-tide run on its own), it's a warning at once.
+test_busy_apt_without_a_retry_is_a_warning() {
+    HARNESS_PM_MODE=busy run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "another program is using apt; run setup again once it's done" &&
+    assert_output_lacks "Trying apt again"
 }
 
 assert_output_is() {
@@ -1457,6 +1499,14 @@ run_linux_desktop() {
             "$desktop_script" "$desktop_calls" "$desktop_script" "$desktop_calls" > "$desktop_tmpdir/$desktop_script"
         chmod +x "$desktop_tmpdir/$desktop_script"
     done
+    # DESKTOP_TIDE_BUSY=yes: setup-tide found apt busy, queued itself for
+    # setup's second try, and failed for want of what apt didn't install.
+    if test "${DESKTOP_TIDE_FAILS:-no}" = yes; then
+        printf '#!/bin/sh\nexit 1\n' > "$desktop_tmpdir/setup-tide"
+    fi
+    if test "${DESKTOP_TIDE_BUSY:-no}" = yes; then
+        printf '#!/bin/sh\necho setup-tide >> "$SETUP_APT_RETRY"\nexit 1\n' > "$desktop_tmpdir/setup-tide"
+    fi
 
     set +e
     output="$(sh -c "set -e
@@ -1467,17 +1517,38 @@ DESKTOP_SETUP_FLAGS=--ignore-errors
 KDE_SETUP_FLAGS=
 SCRIPTS_DIR='$desktop_tmpdir'
 SRC_DIR='$desktop_tmpdir/src'
+SETUP_APT_RETRY='$desktop_tmpdir/apt-retry'
+export SETUP_APT_RETRY
 TIDE_REPO=https://example.com/mikelward/tide.git
 GITHUB_MIRROR='${DESKTOP_MIRROR:-no}'
 GITHUB_PREFIX='${DESKTOP_PREFIX:-git@github.com:}'
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS configure_linux_desktop")
-configure_linux_desktop" 2>&1)"
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS configure_linux_desktop run_setup_tide")
+configure_linux_desktop
+echo DESKTOP_CONTINUED" 2>&1)"
     status=$?
     set -e
     calls="$(cat "$desktop_calls" 2>/dev/null)"
     desktop_src="$desktop_tmpdir/src"
     rm -rf "$desktop_tmpdir"
+}
+
+# A setup-tide that failed after apt was busy gets its second try at the
+# end, so its failure doesn't end setup first.
+test_a_busy_setup_tide_waits_for_its_second_try() {
+    DESKTOP_TIDE_BUSY=yes run_linux_desktop
+    assert_status 0 &&
+    assert_output_contains "DESKTOP_CONTINUED"
+}
+
+# One that failed for another reason still fails setup.
+test_a_failed_setup_tide_still_fails() {
+    run_linux_desktop_failing
+    test "$status" -ne 0 || { echo "  FAIL: a failed setup-tide didn't fail setup"; TEST_FAILED=1; return 1; }
+    assert_output_lacks "DESKTOP_CONTINUED"
+}
+run_linux_desktop_failing() {
+    DESKTOP_TIDE_FAILS=yes run_linux_desktop
 }
 
 # A plain run sets up KDE and then tide, pulling tide first, and leaves the
@@ -5388,6 +5459,16 @@ run_test "sudo asks nothing on macOS or with --no-sudo" \
     test_sudo_asks_nothing_on_macos_or_with_no_sudo
 run_test "a hung ssh-agent is given up on" \
     test_a_hung_ssh_agent_is_given_up_on
+run_test "a busy setup-tide waits for its second try" \
+    test_a_busy_setup_tide_waits_for_its_second_try
+run_test "a setup-tide that failed otherwise still fails setup" \
+    test_a_failed_setup_tide_still_fails
+run_test "a busy apt is tried again at the end" \
+    test_busy_apt_is_tried_again_at_the_end
+run_test "apt still busy is a warning to run setup again" \
+    test_apt_still_busy_is_a_warning_to_run_again
+run_test "a busy apt without a retry list is a warning" \
+    test_busy_apt_without_a_retry_is_a_warning
 run_test "the release extras wait a week to upgrade" \
     test_extras_release_waits_a_week_to_upgrade
 run_test "a failed release extras upgrade is retried" \

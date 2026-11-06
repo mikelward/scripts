@@ -580,6 +580,20 @@ check "a failed apt is reported once" test "$(printf '%s\n' "$calls" | grep -c '
 check "a failed apt names what didn't install" has "$output" "could not install: hyprland hypridle"
 teardown
 
+# The fake apt fails as when another program holds dpkg's lock. Run on its
+# own, that's a warning to run again; run by setup, setup tries again.
+setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1
+check "a busy apt says to run setup-tide again" has "$output" "another program is using apt; run setup-tide again once it's done"
+teardown
+setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1 SETUP_APT_RETRY="$T/apt-retry"
+check "under setup, a busy apt waits for setup's second try" has "$output" "Another program is using apt, so setup tries again at the end"
+check "and setup-tide is on the list to run again" has "$(cat "$T/apt-retry")" "setup-tide"
+teardown
+setup; ARGS=(--verbose); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1 SETUP_APT_RETRY="$T/apt-retry"
+check "--verbose still spots a busy apt" has "$(cat "$T/apt-retry" 2>/dev/null)" "setup-tide"
+check "and still shows what apt said" has "$output" "Could not get lock"
+teardown
+
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run
 check "updates an existing checkout, quietly" has "$calls" "git -C $T/src/tide pull --quiet --ff-only"
 check "doesn't clone over it" lacks "$calls" "git clone"
