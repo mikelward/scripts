@@ -2933,6 +2933,31 @@ install_fnm() {
 
 # --- Generate SSH key ---
 
+# ssh_agent_has_key: whether ssh-agent holds a key. An agent that doesn't
+# answer -- a forwarded one whose connection is gone, or one that's stuck --
+# leaves ssh-add -l waiting for good, so it gets $SSH_AGENT_WAIT seconds (5)
+# and then counts as holding none. macOS has no timeout(1), hence the watcher.
+ssh_agent_has_key() {
+    command -v ssh-add >/dev/null 2>&1 || return 1
+    ssh-add -l </dev/null >/dev/null 2>&1 &
+    _sak_pid=$!
+    (
+        sleep "${SSH_AGENT_WAIT:-5}"
+        kill "$_sak_pid"
+    ) </dev/null >/dev/null 2>&1 &
+    _sak_watch=$!
+    _sak_status=0
+    wait "$_sak_pid" || _sak_status=$?
+    kill "$_sak_watch" 2>/dev/null || true
+    # ssh-add -l exits 0 with a key, 1 without, 2 with no agent; more than
+    # 128 is the watcher's signal.
+    if test "$_sak_status" -gt 128; then
+        warn "ssh-agent isn't answering, so checking for a key file instead"
+        return 1
+    fi
+    test "$_sak_status" -eq 0
+}
+
 generate_ssh_key() {
     if test "$SSH" = no; then
         info "Skipping SSH key generation (--no-ssh)"
@@ -2942,10 +2967,7 @@ generate_ssh_key() {
     # In auto mode, skip when the agent already has a key loaded. This
     # catches keys that aren't on this machine's disk -- a forwarded agent
     # over SSH, or a hardware token -- which the on-disk check below misses.
-    # ssh-add -l exits 0 only when at least one identity is loaded.
-    if test "$SSH" = auto \
-            && command -v ssh-add >/dev/null 2>&1 \
-            && ssh-add -l >/dev/null 2>&1; then
+    if test "$SSH" = auto && ssh_agent_has_key; then
         detail "Skipping the SSH key: ssh-agent has one; --ssh makes one anyway"
         return
     fi
