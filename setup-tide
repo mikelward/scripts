@@ -208,7 +208,7 @@ QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
 # tidewm linked onto PATH, where the session entry's TryExec finds it.
 # Overridable for tests.
 TIDEWM_REPO=https://github.com/mikelward/tidewm.git
-TIDEWM_COMMIT=95a7e7b73a790e9450d1830a4a2f13998bf90b0c
+TIDEWM_COMMIT=f823b07fd165dacfd23b3c42d3172bd0dd73ce24
 TIDEWM_PREFIX="${TIDEWM_PREFIX:-/opt/tidewm}"
 TIDEWM_SRC="${TIDEWM_SRC:-$HOME/src/tidewm-build}"
 TIDEWM_BIN_DIR="${TIDEWM_BIN_DIR:-/usr/local/bin}"
@@ -220,9 +220,9 @@ TIDEWM_XLIBS="xcb xcb-icccm"
 # It builds against wlroots 0.20, which Debian testing and Arch package and
 # Ubuntu 26.04 doesn't (it has 0.19).
 TIDEWM_APT_DEPS="build-essential pkgconf git libwlroots-0.20-dev libwayland-dev wayland-protocols
-    libinput-dev libxkbcommon-dev libxcb1-dev libxcb-icccm4-dev libjson-c-dev xwayland"
+    libinput-dev libxkbcommon-dev libxcb1-dev libxcb-icccm4-dev libjson-c-dev libpcre2-dev xwayland"
 TIDEWM_PACMAN_DEPS="base-devel git wlroots0.20 wayland wayland-protocols libinput libxkbcommon
-    libxcb xcb-util-wm json-c pkgconf xorg-xwayland"
+    libxcb xcb-util-wm json-c pcre2 pkgconf xorg-xwayland"
 
 # Where build_hyprland builds and installs Hyprland, and where it links its
 # commands. Its own prefix keeps its libraries out of the system's library
