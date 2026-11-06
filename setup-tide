@@ -247,6 +247,11 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # What build_hyprland builds, in order: name, repository, tag, the commit
 # that tag named when it was pinned, build system. A tag can be moved, so
 # each clone must check out exactly that commit before its build files run.
+# A tag of - pins the commit alone. Hyprland's own libraries are at the
+# commits its flake.lock names for v0.57.1, the ones it's built and tested
+# with upstream: their last tags can lack what it calls (aquamarine
+# v0.15.1 has no COutputState::setMaxBpc), and its CMakeLists.txt minimums
+# don't say so.
 # Each tag meets the next one's minimums (Hyprland v0.57.1's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
 # Hyprland needs 1.49, and hyprland-protocols because it has 0.7.0 and
@@ -259,14 +264,14 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # installed, it's static, so nothing more loads at run time.
 HYPRLAND_PINS="
 wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
-hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
-hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0 044a434ec371f985655389bcef09286b1af3d77c cmake
-hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3 0d13d5a624eb093b600d1b2cbe448fb613c86424 cmake
-hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 3e6865ce5fd9237b58f5b2ce5de18814df3baff5 cmake
-hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc46991562ba1158d125c cmake
-hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 44e91d467bdad8dcf8bbd2ac7cf49972540980a5 cmake
-hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 482d4b7ec36ffdaf3573086aa586b178fd5404be cmake
-aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 f31c47a1b9d300847d8fc3108ad959448103dfc1 cmake
+hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git - 62e62c1ca23da17612c6890d4ad2064f575643db cmake
+hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git - cd1aba6bd78775825eb230b3a4274c48b6705eb7 cmake
+hyprutils https://github.com/hyprwm/hyprutils.git - 7e1f69209cd910615d0573a93fa970408f643539 cmake
+hyprwire https://github.com/hyprwm/hyprwire.git - a546e42d45e161682f729ebf52375bd4800d7041 cmake
+hyprlang https://github.com/hyprwm/hyprlang.git - 9508458be316a0d70d37ebed1ab725ccd10411ff cmake
+hyprcursor https://github.com/hyprwm/hyprcursor.git - e4ed7c08123df5af460a0a70961380cbfb872f76 cmake
+hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.6.0 ade4ef0a887d2740efb9c9af2ddb175633365e1b cmake
+aquamarine https://github.com/hyprwm/aquamarine.git - ad4484335fc327a6cf010f455ae258c397861ee0 cmake
 re2 https://github.com/google/re2.git 2025-08-05 85c7c0fb1163b0bd83a7951f5a205ee7b489e33e cmake
 glaze https://github.com/stephenberry/glaze.git v7.2.0 b518eec7a22e56ffa238b072c07f47efa7cea97f cmake
 Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c35ccf12b660a1ab9 cmake
@@ -2004,7 +2009,7 @@ build_hyprland() {
         test -n "$name" || continue
         stamp="$install_dir/.built-$name"
         if test -f "$stamp"; then
-            detail "Already built $name $tag"
+            detail "Already built $name $(pin_label "$tag" "$commit")"
             continue
         fi
         # printf, not :, which is a special builtin: dash exits when its
@@ -2125,16 +2130,38 @@ unlink_hyprland() {
     return 1
 }
 
+# pin_label TAG COMMIT: a pin as a person would name it, its tag or, for a
+# commit with none, the commit's first seven.
+pin_label() {
+    if test "$1" = -; then
+        printf '%.7s' "$2"
+    else
+        printf '%s' "$1"
+    fi
+}
+
 build_component() {
     dir="$HYPRLAND_SRC/$1"
-    info "Building $1 $3"
+    info "Building $1 $(pin_label "$3" "$4")"
     rm -rf "$dir"
-    # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
-    # profiling, so it isn't fetched; a mirror without it can't fail the clone.
-    build_logged "$1" git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    if test "$3" = -; then
+        # A commit with no tag: a partial clone, which fetches only the
+        # files that commit has as it's checked out, through the mirror too.
+        build_logged "$1" git_github clone --quiet --filter=blob:none --no-checkout "$2" "$dir" \
+            && build_logged "$1" git_github -C "$dir" -c advice.detachedHead=false checkout --quiet "$4" \
+            || return 1
+    else
+        # Hyprland's Tracy submodule is only built with -DUSE_TRACY=ON, for
+        # profiling, so it isn't fetched; a mirror without it can't fail the clone.
+        build_logged "$1" git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$3" --recurse-submodules=':(exclude)subprojects/tracy' --shallow-submodules "$2" "$dir" || return 1
+    fi
     head=$(git -C "$dir" rev-parse HEAD) || return 1
     if test "$head" != "$4"; then
-        warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
+        if test "$3" = -; then
+            warn "$1's checkout is commit $head, not the pinned $4; not building it"
+        else
+            warn "$1's $3 tag is commit $head, not the pinned $4; not building it"
+        fi
         rm -rf "$dir" || warn "couldn't remove the rejected clone in $dir"
         return 1
     fi
