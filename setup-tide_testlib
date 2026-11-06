@@ -390,9 +390,17 @@ if test "\$1" = clone; then
             ;;
     esac
     mkdir -p "\$last/.git"
+    # A Hyprland pin's checkout has the build file its pin names, or a
+    # CMakeLists.txt for the one in \$FAKE_CHECKOUT_CMAKE.
+    kind=\$(awk -v name="\${last##*/}" '\$1 == name { print \$3 }' "$T/pins")
+    test "\${last##*/}" != "\$FAKE_CHECKOUT_CMAKE" || kind=cmake
+    case "\$kind" in
+        cmake) : > "\$last/CMakeLists.txt" ;;
+        meson) : > "\$last/meson.build" ;;
+    esac
     # wayland-protocols generates its headers with a strict scanner.
     case "\$last" in
-        */wayland-protocols) printf "%s\\n" "command: [scanner, '--strict', 'enum-header']" > "\$last/meson.build" ;;
+        */wayland-protocols) test "\$kind" != meson || printf "%s\\n" "command: [scanner, '--strict', 'enum-header']" > "\$last/meson.build" ;;
     esac
 fi
 if test "\$3" = pull && test -n "\$FAKE_PULL_FAILS"; then
@@ -421,7 +429,7 @@ fi
 MOCK
     # Each Hyprland pin's name and commit, for git rev-parse, and tidewm's,
     # or \$FAKE_TIDEWM_COMMIT, as setup is called.
-    sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4 }' > "$T/pins"
+    sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4, $5 }' > "$T/pins"
     echo "tidewm ${FAKE_TIDEWM_COMMIT:-$(sed -n 's/^TIDEWM_COMMIT=//p' "$SCRIPT")}" >> "$T/pins"
     # systemctl answers show from the display manager in $T/dm (none while
     # it's empty or missing), and from greetd's unit: installed once
@@ -762,17 +770,27 @@ MOCK
 printf "%s\\n" "dconf \$*" >> "$CALLS"
 MOCK
     # curl fetches a site icon: a PNG's first bytes, or an HTML page with
-    # \$FAKE_CURL_NOT_PNG; it fails with \$FAKE_CURL_FAILS. No test reaches
-    # the network.
+    # \$FAKE_CURL_NOT_PNG; it fails with \$FAKE_CURL_FAILS. Nerd Fonts'
+    # release is \$FAKE_NERD_TARBALL. No test reaches the network.
     cat > "$T/bin/curl" <<MOCK
 #!/bin/sh
 printf "%s\\n" "curl \$*" >> "$CALLS"
 test -z "\$FAKE_CURL_FAILS" || exit 22
 out=
+url=
 while test \$# -gt 0; do
     test "\$1" != --output || out=\$2
+    url=\$1
     shift
 done
+# Nerd Fonts' release: the tarball in \$FAKE_NERD_TARBALL.
+case "\$url" in
+    *NerdFontsSymbolsOnly.tar.xz)
+        test -n "\$FAKE_NERD_TARBALL" || exit 22
+        cp "\$FAKE_NERD_TARBALL" "\$out"
+        exit
+        ;;
+esac
 if test -n "\$FAKE_CURL_NOT_PNG"; then
     printf "<html>" > "\$out"
 else
@@ -784,6 +802,13 @@ MOCK
 echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
 MOCK
     chmod +x "$T"/bin/*
+    # Nerd Fonts' release, for a distro without Symbols Nerd Font's package,
+    # unless a test gives curl another one.
+    mkdir -p "$T/nerd-default"
+    : > "$T/nerd-default/SymbolsNerdFont-Regular.ttf"
+    : > "$T/nerd-default/SymbolsNerdFontMono-Regular.ttf"
+    tar -cJf "$T/nerd-default.tar.xz" -C "$T/nerd-default" SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf
+    NERD_DEFAULT_SUM=$(sha256sum < "$T/nerd-default.tar.xz" | cut -d' ' -f1)
 }
 
 teardown() {
@@ -808,6 +833,7 @@ run() {
         SETUP_PAM_VENDOR_DIR="$T/vendor-pam.d" SETUP_PAM_AT_INCLUDE=yes \
         SETUP_SESSION_ENTRY="$T/share/wayland-sessions/tide.desktop" SETUP_SESSION_PATH="$T/usr-local-bin:$T/usr-bin" \
         SETUP_BROWSER_PATH="$T/bin" \
+        FAKE_NERD_TARBALL="$T/nerd-default.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$NERD_DEFAULT_SUM" \
         "$@" "$SCRIPT" "${ARGS[@]}" 2>&1)
     status=$?
     set -e

@@ -250,7 +250,9 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # Each tag meets the next one's minimums (Hyprland v0.57.1's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
 # Hyprland needs 1.49, and hyprland-protocols because it has 0.7.0 and
-# Hyprland needs 0.8.0. re2 is here because a distro's can lag its abseil:
+# Hyprland needs 0.8.0. glaze is here because Hyprland fetches its own
+# (v7.2.0, newer than Ubuntu's 7.0.2) from GitHub as it configures, past
+# the mirror and any pin; built here, Hyprland finds it in the prefix. re2 is here because a distro's can lag its abseil:
 # Debian's libre2 was built against an abseil whose absl::string_view was
 # its own type, and its libabsl-dev's headers now make it std::string_view,
 # so Hyprland and hyprctl can't link it. Built here, against the abseil
@@ -258,7 +260,7 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 HYPRLAND_PINS="
 wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
 hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
-hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0 044a434ec371f985655389bcef09286b1af3d77c meson
+hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0 044a434ec371f985655389bcef09286b1af3d77c cmake
 hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3 0d13d5a624eb093b600d1b2cbe448fb613c86424 cmake
 hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 3e6865ce5fd9237b58f5b2ce5de18814df3baff5 cmake
 hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc46991562ba1158d125c cmake
@@ -266,6 +268,7 @@ hyprcursor https://github.com/hyprwm/hyprcursor.git v0.1.13 44e91d467bdad8dcf8bb
 hyprgraphics https://github.com/hyprwm/hyprgraphics.git v0.5.1 482d4b7ec36ffdaf3573086aa586b178fd5404be cmake
 aquamarine https://github.com/hyprwm/aquamarine.git v0.15.1 f31c47a1b9d300847d8fc3108ad959448103dfc1 cmake
 re2 https://github.com/google/re2.git 2025-08-05 85c7c0fb1163b0bd83a7951f5a205ee7b489e33e cmake
+glaze https://github.com/stephenberry/glaze.git v7.2.0 b518eec7a22e56ffa238b072c07f47efa7cea97f cmake
 Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c35ccf12b660a1ab9 cmake
 "
 # The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
@@ -2106,10 +2109,23 @@ build_component() {
     # and for Hyprland's own list that's the system's library directory, so
     # each of the two lookups is told ours instead.
     re2=
+    extra=
     case "$1" in
         Hyprland) re2=$install_dir/lib/libre2.a ;;
+        # Built on its own, glaze is its own top-level project, which turns
+        # on its developer mode: tests, fuzzers and their dependencies.
+        glaze) extra="-Dglaze_DEVELOPER_MODE=OFF -Dglaze_ENABLE_FUZZING=OFF" ;;
     esac
-    case "$5" in
+    # The checkout says how it builds; the pin's field is for when it
+    # doesn't, and a pin that's wrong about it can't fail the build.
+    kind=$5
+    if test -f "$dir/CMakeLists.txt"; then
+        kind=cmake
+    elif test -f "$dir/meson.build"; then
+        kind=meson
+    fi
+    test "$kind" = "$5" || printf '+ # %s builds with %s, not %s as pinned\n' "$1" "$kind" "$5" >> "$build_log"
+    case "$kind" in
         meson)
             build_logged "$1" env CC="gcc-$HYPRLAND_GCC" CXX="g++-$HYPRLAND_GCC" meson setup "$dir/build" "$dir" --prefix="$install_dir" --libdir=lib -Dtests=false \
                 && build_logged "$1" meson compile -C "$dir/build" \
@@ -2118,12 +2134,13 @@ build_component() {
         cmake)
             # The run path is how Hyprland finds these libraries, since
             # $install_dir/lib isn't in the system's library path.
+            # shellcheck disable=SC2086 # $extra is options, split on purpose
             build_logged "$1" cmake -S "$dir" -B "$dir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_INSTALL_PREFIX="$install_dir" -DCMAKE_INSTALL_LIBDIR=lib \
                 -DCMAKE_PREFIX_PATH="$install_dir" -DCMAKE_INSTALL_RPATH="$install_dir/lib" \
                 -DCMAKE_C_COMPILER="gcc-$HYPRLAND_GCC" -DCMAKE_CXX_COMPILER="g++-$HYPRLAND_GCC" \
                 ${re2:+"-Dpkgcfg_lib_deps_re2=$re2"} ${re2:+"-Dpkgcfg_lib_hyprctl_deps_re2=$re2"} \
-                -DBUILD_TESTING=OFF \
+                -DBUILD_TESTING=OFF $extra \
                 && build_logged "$1" cmake --build "$dir/build" \
                 && build_logged "$1" cmake --install "$dir/build"
             ;;
