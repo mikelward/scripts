@@ -24,7 +24,7 @@ setup; ARGS=(--tidewm); run
 check "--tidewm succeeds" test "$status" -eq 0
 check "--tidewm installs tidewm's build dependencies, wlroots 0.20 among them" \
     has "$calls" "apt-get install -y build-essential pkgconf git libwlroots-0.20-dev libwayland-dev"
-check "and Xwayland, for X11 apps" has "$calls" "libjson-c-dev xwayland"
+check "and PCRE2, for its window rules, and Xwayland, for X11 apps" has "$calls" "libjson-c-dev libpcre2-dev xwayland"
 check "--tidewm clones tidewm" has "$calls" "git clone --quiet https://github.com/mikelward/tidewm.git $T/src/tidewm-build/tidewm"
 check "and checks out the pinned commit" has "$calls" "git -C $T/src/tidewm-build/tidewm -c advice.detachedHead=false checkout --quiet $commit"
 check "and checks what it checked out" has "$calls" "git -C $T/src/tidewm-build/tidewm rev-parse HEAD"
