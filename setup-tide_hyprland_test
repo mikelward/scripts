@@ -21,6 +21,7 @@ check "the build doesn't install apt's Hyprland" lacks "$calls" "apt-get install
 check "the build installs its dependencies, with GCC 16" has "$calls" "apt-get install -y build-essential gcc-16 g++-16 cmake meson"
 check "the build needs Lua 5.5" has "$calls" "liblua5.5-dev"
 check "the build needs libcanberra, which Hyprland 0.57 requires" has "$calls" "libcanberra-dev"
+check "the build needs sdbus-c++, which Hyprland 0.57 requires on Linux" has "$calls" "libsdbus-c++-dev"
 check "the build clones pinned tags" has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v0.57.1 --recurse-submodules=:(exclude)subprojects/tracy --shallow-submodules https://github.com/hyprwm/Hyprland.git $T/src/hyprland-build/Hyprland"
 # Real git, given the Hyprland clone's own options, skips Tracy but still
 # fetches udis86, a fallback Hyprland builds when pkg-config lacks it, and
