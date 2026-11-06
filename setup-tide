@@ -1291,10 +1291,10 @@ install_packages() {
         arch) nerd_font=ttf-nerd-fonts-symbols ;;
         *) nerd_font= ;;
     esac
-    if test -z "$nerd_font"; then
-        info "This distro doesn't package Symbols Nerd Font, so waybar shows no icons; install it from nerdfonts.com for them"
-    elif ! install_all "$nerd_font"; then
-        info "couldn't install $nerd_font (it isn't in every release), so waybar shows no icons; install Symbols Nerd Font from nerdfonts.com for them"
+    # Where the distro has no package for it, it comes from Nerd Fonts' own
+    # release instead (install_nerd_symbols).
+    if test -z "$nerd_font" || ! install_all "$nerd_font"; then
+        install_nerd_symbols
     fi
     # cliphist keeps the clipboard history that Super+V's picker lists
     # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
@@ -1603,6 +1603,48 @@ build_logged() {
     printf '  The last lines of %s:\n' "$build_log" >&2
     tail -n 30 "$build_log" | sed 's/^/    /' >&2
     return "$_bl_status"
+}
+
+# --- Symbols Nerd Font from its release ---
+
+# Nerd Fonts' icons-only release, for a distro that doesn't package it:
+# Debian 13, Ubuntu 26.04 and Fedora. The checksum is the tarball's, so a
+# changed asset isn't installed. Overridable for tests.
+NERD_SYMBOLS_URL="${SETUP_NERD_SYMBOLS_URL:-https://github.com/ryanoasis/nerd-fonts/releases/download/v3.5.1/NerdFontsSymbolsOnly.tar.xz}"
+NERD_SYMBOLS_SHA256="${SETUP_NERD_SYMBOLS_SHA256:-01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996}"
+
+# install_nerd_symbols: puts Symbols Nerd Font in your fonts, from its
+# release, unless it's there already. Its failure costs waybar's icons only,
+# so it warns and goes on.
+install_nerd_symbols() {
+    _ns_dir="${XDG_DATA_HOME:-$HOME/.local/share}/fonts/SymbolsNerdFont"
+    if test -f "$_ns_dir/SymbolsNerdFont-Regular.ttf"; then
+        detail "Symbols Nerd Font is installed already"
+        return 0
+    fi
+    _ns_why="waybar shows no icons without it"
+    if ! is_command curl || ! is_command tar || ! is_command sha256sum; then
+        warn "couldn't fetch Symbols Nerd Font without curl, tar and sha256sum; $_ns_why"
+        return 0
+    fi
+    info "Installing Symbols Nerd Font from Nerd Fonts' release"
+    if ! _ns_tmp=$(mktemp -d); then
+        warn "couldn't make a directory to fetch Symbols Nerd Font into; $_ns_why"
+        return 0
+    fi
+    if ! curl --fail --silent --show-error --location --max-time 120 \
+            --output "$_ns_tmp/symbols.tar.xz" "$NERD_SYMBOLS_URL"; then
+        warn "couldn't download Symbols Nerd Font from $NERD_SYMBOLS_URL; $_ns_why"
+    elif test "$(sha256sum < "$_ns_tmp/symbols.tar.xz" | cut -d' ' -f1)" != "$NERD_SYMBOLS_SHA256"; then
+        warn "Symbols Nerd Font's download isn't the release it was pinned at, so it isn't installed; $_ns_why"
+    elif ! tar -xJf "$_ns_tmp/symbols.tar.xz" -C "$_ns_tmp" SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf \
+            || ! mkdir -p "$_ns_dir" \
+            || ! cp "$_ns_tmp"/SymbolsNerdFont*.ttf "$_ns_dir"/; then
+        warn "couldn't install Symbols Nerd Font into $_ns_dir; $_ns_why"
+    elif is_command fc-cache; then
+        run_logged fc-cache -f "$_ns_dir" || warn "fc-cache failed, so waybar may not find Symbols Nerd Font until you log in again"
+    fi
+    rm -rf "$_ns_tmp"
 }
 
 # --- Quickshell from source ---

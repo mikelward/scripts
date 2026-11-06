@@ -481,16 +481,49 @@ setup; ARGS=(); run
 check "nerd font: Debian installs the icons-only font" has "$calls" "apt-get install -y fonts-nerd-symbols"
 check "nerd font: not in the main transaction" lacks "$(printf '%s\n' "$calls" | grep 'hypridle')" "fonts-nerd-symbols"
 teardown
-setup; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols
+# A release without the package gets the font from Nerd Fonts' own release,
+# checked against its pinned checksum, into your fonts.
+nerd_tarball() {
+    mkdir -p "$T/nerd"
+    printf 'regular' > "$T/nerd/SymbolsNerdFont-Regular.ttf"
+    printf 'mono' > "$T/nerd/SymbolsNerdFontMono-Regular.ttf"
+    printf 'readme' > "$T/nerd/README.md"
+    tar -cJf "$T/nerd.tar.xz" -C "$T/nerd" SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf README.md
+    nerd_sum=$(sha256sum < "$T/nerd.tar.xz" | cut -d' ' -f1)
+}
+nerd_dir() { printf '%s' "$T/home/.local/share/fonts/SymbolsNerdFont"; }
+setup; nerd_tarball; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
 check "nerd font: a release without it isn't fatal" test "$status" -eq 0
-check "nerd font: and says what it costs" has "$output" "couldn't install fonts-nerd-symbols (it isn't in every release), so waybar shows no icons"
+check "nerd font: gets it from Nerd Fonts' release instead" has "$calls" "NerdFontsSymbolsOnly.tar.xz"
+check "nerd font: into your fonts" test "$(cat "$(nerd_dir)/SymbolsNerdFont-Regular.ttf")" = regular
+check "nerd font: the mono one too" test -f "$(nerd_dir)/SymbolsNerdFontMono-Regular.ttf"
+check "nerd font: and nothing else from the tarball" test ! -e "$(nerd_dir)/README.md"
+check "nerd font: says so" has "$output" "Installing Symbols Nerd Font from Nerd Fonts' release"
+check "nerd font: no longer says to fetch it yourself" lacks "$output" "nerdfonts.com"
+# Once it's there, a rerun leaves it, quietly.
+: > "$CALLS"
+run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
+check "nerd font: a rerun fetches nothing" lacks "$calls" "NerdFontsSymbolsOnly"
+check "nerd font: and says nothing" lacks "$output" "Symbols Nerd Font"
+teardown
+# A download that isn't the pinned release isn't installed.
+setup; nerd_tarball; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256=0000
+check "nerd font: a changed download isn't installed" test ! -e "$(nerd_dir)/SymbolsNerdFont-Regular.ttf"
+check "nerd font: and says why" has "$output" "isn't the release it was pinned at"
+check "nerd font: and isn't fatal" test "$status" -eq 0
+teardown
+# A failed download costs waybar's icons, and says so.
+setup; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL=
+check "nerd font: a failed download says what it costs" has "$output" "couldn't download Symbols Nerd Font"
+check "nerd font: and isn't fatal" test "$status" -eq 0
 teardown
 setup; ARGS=(); run SETUP_OS=arch
 check "nerd font: Arch installs its package" has "$calls" "pacman -S --needed --noconfirm ttf-nerd-fonts-symbols"
+check "nerd font: and fetches no release" lacks "$calls" "NerdFontsSymbolsOnly"
 teardown
-setup; ARGS=(); run SETUP_OS=redhat
-check "nerd font: Fedora, which doesn't package it, says where to get it" has "$output" "doesn't package Symbols Nerd Font, so waybar shows no icons"
-check "nerd font: and asks dnf for nothing" lacks "$calls" "nerd"
+setup; nerd_tarball; ARGS=(); run SETUP_OS=redhat FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
+check "nerd font: Fedora, which doesn't package it, gets the release" test -f "$(nerd_dir)/SymbolsNerdFont-Regular.ttf"
+check "nerd font: and asks dnf for nothing" lacks "$(printf '%s\n' "$calls" | grep dnf)" "nerd"
 teardown
 setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=nwg-displays
 check "a missing nwg-displays isn't fatal" test "$status" -eq 0
