@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="santa_lockdown homebrew_blocked apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
+QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -378,7 +378,7 @@ EXTRAS_BACKEND=brew
 install_homebrew() { echo INSTALL_HOMEBREW; }
 install_extras_brew() { echo EXTRAS_FROM_BREW; }
 install_extras_release() { echo EXTRAS_FROM_RELEASE; }
-$(extract_functions "info detail warn note_problem santa_lockdown homebrew_blocked install_extras")
+$(extract_functions "info detail warn note_problem santa_lockdown cli_tools_blocked install_extras")
 install_extras
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1635,7 +1635,8 @@ test_uv_installs_without_modifying_path() {
 # Run install_uv with a mock uv, which records its arguments and exits $2
 # (default 0): put there by uv's installer, in ~/.local/bin with its receipt
 # ($1=installer); by pipx or pip, in ~/.local/bin with none ($1=pipx); or
-# somewhere else ($1=other). UPGRADE is HARNESS_UPGRADE (default no).
+# somewhere else ($1=other). UPGRADE is HARNESS_UPGRADE (default no), and
+# santactl in HARNESS_SANTACTL's mode (as write_mock_santactl takes it).
 run_install_uv() {
     uv_tmpdir="$(mktemp -d)"
     uv_home="$uv_tmpdir/home"
@@ -1655,6 +1656,7 @@ printf '%s\n' "uv \$* [UV_NO_MODIFY_PATH=\${UV_NO_MODIFY_PATH:-unset}]" >> "$uv_
 exit ${2:-0}
 MOCK
     chmod +x "$uv_dir/uv"
+    write_mock_santactl "$uv_tmpdir/bin" "${HARNESS_SANTACTL:-none}"
     set +e
     output="$(PATH="$uv_home/.local/bin:$uv_tmpdir/bin:$PATH" sh -c "set -e
 HOME='$uv_home'
@@ -2369,7 +2371,7 @@ test_macos_brew_failure_still_attempts_later_steps() {
     assert_calls_contain "brew install zoxide" &&
     assert_calls_contain "brew install lf" &&
     assert_calls_contain "brew install --cask android-platform-tools" &&
-    assert_calls_contain "brew install kitty"
+    assert_calls_contain "brew install --cask kitty"
 }
 
 # brew prints a screenful per package, and an "already installed" warning
@@ -2708,15 +2710,21 @@ NOT_LOCKDOWN" || return 1
     done
 }
 
-# Under Lockdown every new binary needs an administrator's approval, so the
-# macOS arm installs nothing from Homebrew, says why once, and carries on.
-test_macos_lockdown_skips_homebrew() {
-    HARNESS_UPGRADE=yes HARNESS_SANTACTL=lockdown run_macos_packages 0 arm64 ok
+WARNING_LOCKDOWN="Warning: Santa is in Lockdown mode, so command-line tools like helix and jj aren't installed or upgraded: each new version would need your administrator's approval. Apps still install"
+
+# Under Lockdown each new version of a command-line tool needs an
+# administrator's approval, so the macOS arm installs no formula, says why
+# once, and carries on; the casks, signed apps Santa allows, still install.
+test_macos_lockdown_installs_casks_not_formulae() {
+    HARNESS_SANTACTL=lockdown run_macos_packages 0 arm64 ok
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
-    assert_eq "$calls" "" &&
+    assert_calls_contain "brew install --cask android-platform-tools" &&
+    assert_calls_contain "brew install --cask kitty" &&
+    assert_calls_contain "brew install --cask iterm2" &&
+    assert_eq "$(printf '%s\n' "$calls" | grep '^brew install' | grep -v -- '--cask')" "" &&
     assert_eq "$(printf '%s\n' "$output" | grep -c 'Santa is in Lockdown mode')" 1 &&
-    assert_output_contains "Warning: Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval"
+    assert_output_contains "$WARNING_LOCKDOWN"
 }
 
 # Monitor mode, no Santa, or a santactl that fails installs as before.
@@ -2725,43 +2733,120 @@ test_macos_without_lockdown_installs_from_homebrew() {
         HARNESS_SANTACTL=$mode run_macos_packages 0 arm64 ok
         assert_status 0 &&
         assert_calls_contain "brew install zoxide" &&
+        assert_calls_contain "brew install lf" &&
+        assert_calls_contain "brew install node" &&
         assert_calls_contain "brew install --cask iterm2" &&
         assert_output_lacks "Santa" || return 1
     done
 }
 
-# The skipped brew upgrade isn't a failed one: the pass is recorded, as
-# under --no-sudo, so the next run doesn't try again straight away.
-test_macos_lockdown_keeps_the_upgrade_stamp() {
+# The weekly upgrade upgrades only the casks, and that isn't a failed
+# upgrade: the pass is recorded, so the next run doesn't try again
+# straight away.
+test_macos_lockdown_upgrades_only_casks() {
     HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_SANTACTL=lockdown \
-        run_macos_packages 0 arm64 upgrade-fails
+        run_macos_packages 0 arm64 ok
     assert_status 0 &&
-    assert_calls_lack "brew upgrade" &&
+    assert_calls_contain "brew upgrade --cask [" &&
+    assert_calls_lack "brew upgrade [" &&
     assert_output_lacks "could not upgrade" &&
     assert_output_contains "UPGRADE_FAILED=no" &&
     assert_eq "$stamp" fresh
 }
 
-# Nor is Homebrew itself installed.
-test_lockdown_does_not_install_homebrew() {
+# Homebrew itself still installs, for the casks.
+test_lockdown_still_installs_homebrew() {
     HARNESS_SANTACTL=lockdown run_homebrew_installer
-    assert_eq "$calls" "" &&
-    assert_output_contains "Santa is in Lockdown mode" &&
-    HARNESS_SANTACTL=monitor run_homebrew_installer &&
-    assert_calls_contain "installer ran"
+    assert_calls_contain "installer ran" &&
+    assert_output_lacks "Santa"
 }
 
-# The extras come from their releases instead, without a second warning.
-test_lockdown_extras_come_from_their_releases() {
+# Nor do the extras come from their releases instead.
+test_lockdown_skips_the_extras() {
     run_install_extras_dispatch lockdown
     assert_status 0 &&
-    assert_output_contains "EXTRAS_FROM_RELEASE" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_lacks "EXTRAS_FROM_RELEASE" &&
     assert_output_lacks "INSTALL_HOMEBREW" &&
     assert_output_lacks "EXTRAS_FROM_BREW" &&
-    assert_output_lacks "Homebrew unavailable" &&
     assert_eq "$(printf '%s\n' "$output" | grep -c 'Warning:')" 1 &&
     run_install_extras_dispatch monitor &&
     assert_output_contains "EXTRAS_FROM_BREW"
+}
+
+# Run each step that downloads a command-line tool on a Mac whose santactl
+# is in $1's mode (as write_mock_santactl takes it): the release extras,
+# atuin and carapace, lf, an Intel Mac's node, the --no-root tools, the
+# homepkg env's upgrade, uv and fnm. homepkg and curl only record that they
+# ran.
+run_lockdown_downloads() {
+    dl_tmpdir="$(mktemp -d)"
+    dl_home="$dl_tmpdir/home"
+    mkdir -p "$dl_home/.local/share/homepkg/env" "$dl_tmpdir/scripts"
+    dl_bin="$(stub_path "$dl_tmpdir/bin" sh grep cat mkdir cp rm mktemp)"
+    write_mock_santactl "$dl_bin" "$1"
+    write_mock_uname "$dl_bin" x86_64
+    printf '#!/bin/sh\necho "homepkg $*" >> "%s/calls"\n' "$dl_tmpdir" > "$dl_tmpdir/scripts/homepkg"
+    printf '#!/bin/sh\necho "curl $*" >> "%s/calls"\n' "$dl_tmpdir" > "$dl_bin/curl"
+    printf '#!/bin/sh\nexit 0\n' > "$dl_tmpdir/ok"
+    chmod +x "$dl_tmpdir/scripts/homepkg" "$dl_bin/curl" "$dl_tmpdir/ok"
+    set +e
+    output="$(HOME="$dl_home" LOCAL_BIN_PROBE="$dl_tmpdir/ok" PATH="$dl_bin" sh -c "
+OS=macos
+NPM=yes
+ROOT=yes
+UPGRADE=yes
+UPGRADE_FAILED=no
+SCRIPTS_DIR='$dl_tmpdir/scripts'
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac local_bin_blocked remove_blocked_shell_tools system_jj set_extras_tools link_helix_runtime install_extras_release missing_shell_tools install_shell_tools lf_missing install_file_managers install_node_home install_home_tools upgrade_home_env install_uv install_fnm")
+install_extras_release
+install_shell_tools
+install_file_managers
+install_node_home
+install_home_tools
+upgrade_home_env
+install_uv
+install_fnm
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$dl_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$dl_tmpdir"
+}
+
+# Under Lockdown none of them downloads anything, and the run says why once.
+test_lockdown_downloads_no_tools() {
+    run_lockdown_downloads lockdown
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_eq "$calls" "" &&
+    assert_eq "$(printf '%s\n' "$output" | grep -c 'Santa is in Lockdown mode,')" 1 &&
+    assert_output_contains "$WARNING_LOCKDOWN" &&
+    assert_output_contains "Skipping atuin and carapace: Santa is in Lockdown mode" &&
+    assert_output_contains "Skipping lf: Santa is in Lockdown mode" &&
+    assert_output_contains "Skipping fnm: Santa is in Lockdown mode"
+}
+
+# In Monitor mode they download as before.
+test_monitor_mode_downloads_tools() {
+    run_lockdown_downloads monitor
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_calls_contain "homepkg --backend github install helix jj nu" &&
+    assert_calls_contain "homepkg --backend github install atuin carapace" &&
+    assert_calls_contain "homepkg install lf" &&
+    assert_calls_contain "homepkg install node typescript" &&
+    assert_calls_contain "homepkg update" &&
+    assert_calls_contain "curl" &&
+    assert_output_lacks "Santa"
+}
+
+# An upgrade run under Lockdown leaves an installed uv as it is.
+test_lockdown_does_not_update_uv() {
+    HARNESS_UPGRADE=yes HARNESS_SANTACTL=lockdown run_install_uv installer
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_output_contains "Skipping uv's update: Santa is in Lockdown mode" &&
+    assert_output_contains "UPGRADE_FAILED=no"
 }
 
 # --- Weekly upgrades ---
@@ -3123,7 +3208,7 @@ test_macos_without_homebrew_skips_the_arm() {
 # execute: no bare, unguarded "brew install" may be reintroduced anywhere.
 test_no_unguarded_brew_install_remains() {
     test "$(grep -c '^ *brew install --cask android-platform-tools$' "$SETUP")" -eq 0 &&
-    test "$(grep -c '^ *brew install kitty$' "$SETUP")" -eq 0 &&
+    test "$(grep -c '^ *brew install --cask kitty$' "$SETUP")" -eq 0 &&
     test "$(grep -c '^ *brew install node$' "$SETUP")" -eq 0 &&
     # ...nor one whose output reaches the terminal: each goes through
     # brew_logged, which keeps it in the log.
@@ -3203,6 +3288,7 @@ fi' &&
 # Run install_shell_tools against a sandboxed HOME whose ~/.local/bin either
 # runs binaries or kills them, as a managed Mac's policy does (exit 137).
 #   $1  ok | killed: what running a binary from ~/.local/bin does
+#   $2  santactl's mode, as write_mock_santactl takes it (default none)
 # The sandbox starts with an atuin there that's killed when run, a carapace
 # that runs, and a homepkg stub that records whether it was called. Leaves
 # $lb_home for the assertions; the caller removes $lb_tmpdir.
@@ -3214,16 +3300,19 @@ run_local_bin_check() {
     printf '#!/bin/sh\nexit 0\n' > "$lb_tmpdir/ok"
     printf '#!/bin/sh\necho "homepkg $*" >> "%s/calls"\n' "$lb_tmpdir" > "$lb_tmpdir/scripts/homepkg"
     chmod +x "$lb_tmpdir/killed" "$lb_tmpdir/ok" "$lb_tmpdir/scripts/homepkg"
+    mkdir -p "$lb_tmpdir/bin"
+    write_mock_santactl "$lb_tmpdir/bin" "${2:-none}"
     cp "$lb_tmpdir/killed" "$lb_home/.local/bin/atuin"
     cp "$lb_tmpdir/ok" "$lb_home/.local/bin/carapace"
     # carapace runs, so neither is "missing" there: move atuin aside for the
     # case where binaries run, so the install has something to do.
-    if test "$1" = ok; then
+    if test "$1" = ok && test "${2:-none}" = none; then
         rm -f "$lb_home/.local/bin/atuin"
     fi
     set +e
-    output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
+    output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH="$lb_tmpdir/bin:/usr/bin:/bin" bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
+OS=macos
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS santa_lockdown cli_tools_blocked local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
 install_shell_tools
 install_shell_tools
 echo \"blocked=\$LOCAL_BIN_BLOCKED\"" 2>&1)"
@@ -3250,6 +3339,22 @@ test_local_bin_blocked_skips_and_cleans_up() {
     # Checked once a run, so the second call says nothing more.
     assert_eq "$(printf '%s\n' "$output" | grep -c "installing nothing there")" "1"
     rm -rf "$lb_tmpdir"
+}
+
+# Under Lockdown the shell tools an earlier run put there go too, if they
+# no longer run, though the probe isn't needed to know to skip installs.
+test_lockdown_cleans_up_shell_tools() {
+    run_local_bin_check ok lockdown
+    assert_status 0 &&
+    assert_output_contains "Skipping atuin and carapace: Santa is in Lockdown mode" &&
+    assert_eq "$calls" "" &&
+    assert_output_contains "Removing ~/.local/bin/atuin, which this machine won't run" &&
+    assert_eq "$(test -e "$lb_home/.local/bin/atuin" && echo there || echo gone)" "gone" &&
+    assert_eq "$(test -e "$lb_home/.local/bin/carapace" && echo there || echo gone)" "there" &&
+    assert_eq "$(printf '%s\n' "$output" | grep -c "Removing ~/.local/bin/atuin")" "1"
+    _lc_status=$?
+    rm -rf "$lb_tmpdir"
+    return "$_lc_status"
 }
 
 test_local_bin_runs_installs_as_before() {
@@ -4827,6 +4932,8 @@ run_test "atuin and carapace install from their github releases" \
     test_shell_tools_install_from_github_releases
 run_test "a machine that kills ~/.local/bin's binaries installs nothing there and removes its stale shell tools" \
     test_local_bin_blocked_skips_and_cleans_up
+run_test "under Lockdown, shell tools that no longer run are removed" \
+    test_lockdown_cleans_up_shell_tools
 run_test "a machine that runs ~/.local/bin's binaries installs into it as before" \
     test_local_bin_runs_installs_as_before
 run_test "every installer into ~/.local/bin checks it runs binaries first" \
@@ -4909,15 +5016,18 @@ run_test "Santa's Lockdown mode is read from santactl's mode row, once" \
     test_santa_lockdown_reads_the_mode_row
 run_test "Monitor mode, no Santa or a failing santactl isn't Lockdown" \
     test_santa_lockdown_is_off_otherwise
-run_test "Lockdown skips Homebrew on a Mac, warning once" \
-    test_macos_lockdown_skips_homebrew
+run_test "Lockdown installs a Mac's casks but no formula, warning once" \
+    test_macos_lockdown_installs_casks_not_formulae
 run_test "without Lockdown a Mac installs from Homebrew" \
     test_macos_without_lockdown_installs_from_homebrew
-run_test "Lockdown's skipped brew upgrade keeps the upgrade stamp" \
-    test_macos_lockdown_keeps_the_upgrade_stamp
-run_test "Lockdown doesn't install Homebrew" test_lockdown_does_not_install_homebrew
-run_test "Lockdown takes the extras from their releases" \
-    test_lockdown_extras_come_from_their_releases
+run_test "Lockdown's weekly upgrade upgrades only casks and keeps the stamp" \
+    test_macos_lockdown_upgrades_only_casks
+run_test "Lockdown still installs Homebrew" test_lockdown_still_installs_homebrew
+run_test "Lockdown skips helix, jj and nushell" test_lockdown_skips_the_extras
+run_test "Lockdown downloads no command-line tools" test_lockdown_downloads_no_tools
+run_test "Monitor mode downloads the command-line tools" \
+    test_monitor_mode_downloads_tools
+run_test "Lockdown doesn't update uv" test_lockdown_does_not_update_uv
 run_test "an in-week run doesn't upgrade Homebrew packages" \
     test_in_week_run_does_not_upgrade_brew
 run_test "a stale or missing stamp upgrades Homebrew packages and records it" \

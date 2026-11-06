@@ -2599,91 +2599,28 @@ fake_arch() {
     chmod +x "$TEST_TMPDIR/bin/uname"
 }
 
-# --- Santa's Lockdown mode ---
-
-# One warning starts "Warning: $1", not counting the recap at the end.
-assert_warned_once() {
-    _count=$(printf '%s\n' "$output" | grep -c "^Warning: $1")
-    if test "$_count" -ne 1; then
-        printf "%s\n" "  FAIL: '$1' said $_count times, not once"
-        echo "  output: $output"
-        TEST_FAILED=1
-        return 1
-    fi
-}
-
-# A santactl on PATH saying Santa's mode: lockdown, monitor, or fails (it
-# says Lockdown, but exits non-zero). The row is padded as santactl pads it.
-stage_santactl() {
-    case "$1" in
-        lockdown) _ss_mode=Lockdown; _ss_status=0 ;;
-        monitor) _ss_mode=Monitor; _ss_status=0 ;;
-        fails) _ss_mode=Lockdown; _ss_status=1 ;;
-    esac
-    cat > "$TEST_TMPDIR/bin/santactl" <<MOCK
-#!/bin/sh
-printf "%s\\n" ">>> Daemon Info" "  Mode                      | $_ss_mode" "  Log Type                  | file"
-exit $_ss_status
-MOCK
-    chmod +x "$TEST_TMPDIR/bin/santactl"
-}
-
-# Under Lockdown each new binary needs an administrator's approval, so
-# nothing comes from Homebrew; each app or tool is a step to get from IT,
-# and the run says why once.
-test_lockdown_lists_tilemo_apps_as_todos() {
+# Santa's Lockdown mode needs each new version of a binary approved, which
+# setup minds for command-line tools like helix and jj. The apps and tools
+# here change rarely and have no good stand-ins, so they install as usual.
+test_lockdown_installs_apps_and_tools_as_usual() {
     stage_tilemo_machine
     remove_karabiner
     remove_linearmouse
     fake_arch arm64
-    stage_santactl lockdown
+    cat > "$TEST_TMPDIR/bin/santactl" <<'MOCK'
+#!/bin/sh
+printf "%s\n" ">>> Daemon Info" "  Mode                      | Lockdown"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/santactl"
     run_macos --wm tilemo --ignore-errors
     assert_status 0 &&
-    assert_not_called "brew " &&
-    assert_warned_once "Santa is in Lockdown mode" &&
-    assert_output_contains "Warning: Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval" &&
-    assert_says "Get Hammerspoon from IT or your company's software portal, then run setup-macos again. Until then, nothing will tile" &&
-    assert_says "Get blueutil from IT or your company's software portal" &&
-    assert_says "Get m1ddc from IT or your company's software portal" &&
-    assert_says "Get Karabiner-Elements from IT or your company's software portal, then run setup-macos again. Until then, Ctrl+Tab will switch applications" &&
-    assert_says "Get LinearMouse from IT or your company's software portal" &&
-    assert_output_in_order "Still to do by hand" "Get Hammerspoon from IT"
-}
-
-# Not from a staged bundle either, which Santa would block the same.
-test_lockdown_lists_amethyst_as_a_todo() {
-    remove_amethyst
-    stage_amethyst_bundle "$TEST_TMPDIR/amethyst.zip"
-    AMETHYST_BUNDLE="$TEST_TMPDIR/amethyst.zip"
-    stage_santactl lockdown
-    run_macos --wm amethyst --ignore-errors
-    AMETHYST_BUNDLE=
-    assert_status 0 &&
-    assert_not_called "brew " &&
-    assert_dir_not_exists "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_says "Get Amethyst from IT or your company's software portal"
-}
-
-# Run from setup, which has already said so, the to-dos stay and the
-# warning isn't repeated.
-test_lockdown_said_by_setup_is_not_repeated() {
-    stage_tilemo_machine
-    stage_santactl lockdown
-    SETUP_SANTA_WARNED=yes run_macos --wm tilemo --ignore-errors
-    assert_status 0 &&
-    assert_output_lacks "Santa is in Lockdown mode" &&
-    assert_says "Get Hammerspoon from IT"
-}
-
-test_without_lockdown_installs_from_homebrew() {
-    for _mode in monitor fails; do
-        stage_santactl "$_mode"
-        rm -f "$CALLS"
-        run_macos --wm tilemo
-        assert_status 0 &&
-        assert_called "brew install --cask hammerspoon" &&
-        assert_output_lacks "Santa" || return 1
-    done
+    assert_called "brew install --cask hammerspoon" &&
+    assert_called "brew install --cask karabiner-elements" &&
+    assert_called "brew install --cask linearmouse" &&
+    assert_called "brew install blueutil" &&
+    assert_called "brew install m1ddc" &&
+    assert_output_lacks "Santa" &&
+    assert_output_lacks "from IT"
 }
 
 test_tilemo_installs_m1ddc_on_apple_silicon() {
@@ -3435,14 +3372,8 @@ run_test "tilemo: ddcctl is installed on Intel" test_tilemo_installs_ddcctl_on_i
 run_test "tilemo: m1ddc isn't reinstalled" test_tilemo_does_not_reinstall_m1ddc
 run_test "tilemo: a failed DDC tool install is counted" test_tilemo_failed_ddc_install_is_counted
 run_test "amethyst: blueutil and the DDC tools aren't installed" test_amethyst_does_not_install_blueutil
-run_test "Lockdown: tilemo's apps and tools are to-dos, not brew installs" \
-    test_lockdown_lists_tilemo_apps_as_todos
-run_test "Lockdown: Amethyst is a to-do, not a brew install" \
-    test_lockdown_lists_amethyst_as_a_todo
-run_test "Lockdown said by setup isn't said again" \
-    test_lockdown_said_by_setup_is_not_repeated
-run_test "Monitor mode or a failing santactl installs from Homebrew" \
-    test_without_lockdown_installs_from_homebrew
+run_test "Lockdown: tilemo's apps and tools install as usual" \
+    test_lockdown_installs_apps_and_tools_as_usual
 
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
