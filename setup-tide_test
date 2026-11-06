@@ -1352,6 +1352,13 @@ check "mirror: the URL itself stays GitHub's, for the rule to rewrite" \
 check "mirror: no prefix on the command line" lacks "$calls" "-c url."
 teardown
 
+# A mirror without a repository answers that it has no such branch, so the
+# run names the repository and the mirror instead.
+setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CLONE_FAILS=quickshell-mirror/quickshell GITHUB_PREFIX=https://ghe.example.com
+check "mirror: a repository it lacks is named" \
+    has "$output" "ghe.example.com couldn't give git quickshell-mirror/quickshell.git, which stands in for GitHub; it may not mirror that repo or tag yet"
+teardown
+
 # A checkout cloned through the mirror names GitHub as its origin, so a
 # rerun's pull goes through the mirror too.
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(--github https://ghe.example.com); run
