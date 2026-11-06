@@ -117,6 +117,12 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 
 ## Decisions needing review
 
+- **setup asks for sudo and SSH at the start** (2026-11-06), so a run can
+  go unattended. sudo only on Linux: macOS needs it for a step or two at
+  most, and asking there would add a prompt. A failed or hung sign-in warns
+  and carries on rather than stopping, so offline runs and new machines
+  still work; the sign-in gets 60s, the agent check 5s. The SSH connection
+  is shared through `GIT_SSH_COMMAND`, unless you set your own. Reversible.
 - **setup-tide builds tidewm only with `--tidewm`** (2026-11-05), since
   tide's tidewm session is an option beside Hyprland's, not the default,
   and the build costs a run's time on every machine. It pins a commit, not

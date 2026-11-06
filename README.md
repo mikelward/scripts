@@ -31,6 +31,13 @@ a binary approved before it runs sees new versions at most weekly. The repos
 `setup` clones (`scripts`, `conf` and the rest) are config, so they're pulled
 on every run.
 
+`setup` asks for what it needs at the start, so the rest of the run can go
+unattended. On Linux it asks for your sudo password and keeps it fresh until
+it's done. When the repos come over SSH, it signs in to their host, so a
+security key asks for its touch then, and every pull shares that connection.
+A sign-in that hasn't finished in a minute, as with a hung security key, is
+given up on with a warning.
+
 ## Installing tools without root
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI

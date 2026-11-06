@@ -685,9 +685,27 @@ case "$GITHUB_PREFIX" in
     *)                    GITHUB_PREFIX_SSH=yes ;;
 esac
 
+# end_up_front: stops sudo_up_front's refresh and closes the SSH connections
+# ssh_up_front shares. Here, not beside them, as the trap below runs it.
+end_up_front() {
+    if test -n "${SUDO_REFRESH_PID:-}"; then
+        kill "$SUDO_REFRESH_PID" 2>/dev/null || true
+    fi
+    if test -n "${SSH_SHARE_DIR:-}"; then
+        for _euf_socket in "$SSH_SHARE_DIR"/*; do
+            test -S "$_euf_socket" || continue
+            # The host is ignored: the socket names the connection.
+            ssh -o ControlPath="$_euf_socket" -O exit host >/dev/null 2>&1 || true
+        done
+        rm -rf "$SSH_SHARE_DIR" || true
+    fi
+    return 0
+}
+
 # From here on, the run ends by repeating its warnings and errors.
 start_problem_recap
-trap 'recap_problems "$?"' EXIT
+# shellcheck disable=SC2154 # _exit_status is set as the trap runs
+trap '_exit_status=$?; end_up_front; recap_problems "$_exit_status"' EXIT
 
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the bootstrap pushes through failing steps. We toggle this only after
@@ -2933,29 +2951,170 @@ install_fnm() {
 
 # --- Generate SSH key ---
 
-# ssh_agent_has_key: whether ssh-agent holds a key. An agent that doesn't
-# answer -- a forwarded one whose connection is gone, or one that's stuck --
-# leaves ssh-add -l waiting for good, so it gets $SSH_AGENT_WAIT seconds (5)
-# and then counts as holding none. macOS has no timeout(1), hence the watcher.
-ssh_agent_has_key() {
-    command -v ssh-add >/dev/null 2>&1 || return 1
-    ssh-add -l </dev/null >/dev/null 2>&1 &
-    _sak_pid=$!
+# with_time_limit SECONDS COMMAND...: runs COMMAND, killing it if it's still
+# running after SECONDS. Its status is COMMAND's, or 143 when it was killed.
+# macOS has no timeout(1), hence the watcher. Only COMMAND is killed, not what
+# it started, so give it a command that does the waiting itself.
+with_time_limit() {
+    _wtl_secs=$1
+    shift
+    "$@" &
+    _wtl_pid=$!
     (
-        sleep "${SSH_AGENT_WAIT:-5}"
-        kill "$_sak_pid"
+        sleep "$_wtl_secs"
+        kill "$_wtl_pid"
     ) </dev/null >/dev/null 2>&1 &
-    _sak_watch=$!
-    _sak_status=0
-    wait "$_sak_pid" || _sak_status=$?
-    kill "$_sak_watch" 2>/dev/null || true
-    # ssh-add -l exits 0 with a key, 1 without, 2 with no agent; more than
-    # 128 is the watcher's signal.
-    if test "$_sak_status" -gt 128; then
-        warn "ssh-agent isn't answering, so checking for a key file instead"
-        return 1
+    _wtl_watch=$!
+    _wtl_status=0
+    wait "$_wtl_pid" || _wtl_status=$?
+    kill "$_wtl_watch" 2>/dev/null || true
+    return "$_wtl_status"
+}
+
+# ssh_agent_has_key: whether ssh-agent holds a key. An agent that doesn't
+# answer -- a forwarded one whose connection is gone, or one behind a hung
+# security key -- leaves ssh-add -l waiting for good, so it gets
+# $SSH_AGENT_WAIT seconds (5) and then counts as holding none. The answer is
+# kept, so a hung agent costs the run one wait, not one per question.
+ssh_agent_has_key() {
+    if test -z "${SSH_AGENT_KEY:-}"; then
+        SSH_AGENT_KEY=no
+        if command -v ssh-add >/dev/null 2>&1; then
+            _sak_status=0
+            with_time_limit "${SSH_AGENT_WAIT:-5}" ssh-add -l </dev/null >/dev/null 2>&1 \
+                || _sak_status=$?
+            # ssh-add -l exits 0 with a key, 1 without, 2 with no agent.
+            if test "$_sak_status" -eq 0; then
+                SSH_AGENT_KEY=yes
+            elif test "$_sak_status" -gt 128; then
+                warn "ssh-agent isn't answering, so checking for a key file instead"
+            fi
+        fi
     fi
-    test "$_sak_status" -eq 0
+    test "$SSH_AGENT_KEY" = yes
+}
+
+# ssh_key_file_exists: whether ~/.ssh holds a private key.
+ssh_key_file_exists() {
+    for _skf in "$HOME"/.ssh/id_*; do
+        case "$_skf" in
+            *.pub) continue ;;
+        esac
+        test -f "$_skf" && return 0
+    done
+    return 1
+}
+
+# --- Ask for passwords and keys up front ---
+
+# sudo_up_front: on Linux, where the package installs and the system config
+# always need sudo, asks for its password at the start rather than part way
+# through, and keeps it fresh until the run ends, so nothing later stops to
+# ask. macOS needs sudo for one or two steps at most, so it asks there as now.
+sudo_up_front() {
+    test "$SUDO" = yes || return 0
+    case "$OS" in
+        debian | redhat) ;;
+        *) return 0 ;;
+    esac
+    command -v sudo >/dev/null 2>&1 || return 0
+    if ! sudo -n true 2>/dev/null; then
+        info "Asking for your sudo password now, so the rest of the run doesn't stop for it"
+        if ! sudo -v; then
+            warn "sudo didn't take a password; the steps that need it will ask again"
+            return 0
+        fi
+    fi
+    # $$ is setup, even here: the refresh stops when setup does, however it
+    # ends, and when sudo stops refreshing.
+    (
+        while sleep 60 && kill -0 $$ && sudo -n -v; do
+            :
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    SUDO_REFRESH_PID=$!
+}
+
+# ssh_destination URL: print what ssh connects to for a git URL over SSH --
+# git@HOST from git@HOST:PATH, ssh://[USER@]HOST[:PORT] from an ssh:// URL --
+# or fail for one that isn't over SSH.
+ssh_destination() {
+    case "$1" in
+        ssh://*)
+            _sd_rest=${1#ssh://}
+            printf 'ssh://%s' "${_sd_rest%%/*}"
+            ;;
+        *://* | /* | ./* | ../*) return 1 ;;
+        *:*) printf '%s' "${1%%:*}" ;;
+        *) return 1 ;;
+    esac
+}
+
+# own_git_ssh_command: whether you've told git how to run ssh -- with
+# GIT_SSH_COMMAND or GIT_SSH, or core.sshCommand in your git config or in a
+# checkout setup pulls -- which a GIT_SSH_COMMAND of setup's would override.
+own_git_ssh_command() {
+    test -z "${GIT_SSH_COMMAND:-}" || return 0
+    test -z "${GIT_SSH:-}" || return 0
+    command -v git >/dev/null 2>&1 || return 1
+    git config --global --get core.sshCommand >/dev/null 2>&1 && return 0
+    git config --system --get core.sshCommand >/dev/null 2>&1 && return 0
+    for _ogs_dir in "$SCRIPTS_DIR" "$CONF_DIR" "$SRC_DIR"/*; do
+        test -d "$_ogs_dir/.git" || continue
+        git -C "$_ogs_dir" config --get core.sshCommand >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
+
+# ssh_up_front: when the repos come over SSH, signs in to their host at the
+# start, so a security key asks for its touch or PIN then, not part way
+# through. Every git command after it shares that connection, so the key
+# isn't asked again. A sign-in that hasn't finished in $SSH_SIGNIN_WAIT
+# seconds (60) is given up on, as a hung security key never finishes it.
+ssh_up_front() {
+    command -v ssh >/dev/null 2>&1 || return 0
+    # The pulls use the checkout's own remote, which may not be the prefix.
+    _suf_url=
+    if test -d "$SCRIPTS_DIR/.git" && command -v git >/dev/null 2>&1; then
+        _suf_url=$(git -C "$SCRIPTS_DIR" config --get remote.origin.url) || _suf_url=
+    fi
+    test -n "$_suf_url" || _suf_url=$SCRIPTS_REPO
+    _suf_dest=$(ssh_destination "$_suf_url") || return 0
+    _suf_host=${_suf_dest#ssh://}
+    _suf_host=${_suf_host#*@}
+    _suf_host=${_suf_host%%:*}
+    # A new machine has no key yet: generate_ssh_key makes one later.
+    if ! ssh_key_file_exists && ! ssh_agent_has_key; then
+        detail "Skipping the SSH sign-in to $_suf_host: no SSH key yet"
+        return 0
+    fi
+    # Shared through GIT_SSH_COMMAND, so setup's helpers share it too. That
+    # would override how you've told git to run ssh, so it's left out then.
+    _suf_share=
+    if ! own_git_ssh_command; then
+        # In /tmp, not $TMPDIR: macOS's is long, and a socket path can't be.
+        if SSH_SHARE_DIR=$(mktemp -d /tmp/setup-ssh.XXXXXX); then
+            _suf_share="-o ControlMaster=auto -o ControlPath=$SSH_SHARE_DIR/%C -o ControlPersist=2h"
+            # 2h rather than for good, in case setup is killed before it
+            # can close them.
+            GIT_SSH_COMMAND="ssh $_suf_share"
+            export GIT_SSH_COMMAND
+        else
+            warn "couldn't make a directory to share the SSH connection in; git may ask for your key again"
+        fi
+    fi
+    info "Signing in to $_suf_host over SSH"
+    _suf_status=0
+    # shellcheck disable=SC2086 # $_suf_share is options, split on purpose
+    with_time_limit "${SSH_SIGNIN_WAIT:-60}" ssh -T $_suf_share "$_suf_dest" </dev/null >/dev/null \
+        || _suf_status=$?
+    # ssh exits 255 when it can't connect or sign in; GitHub and Codeberg
+    # end a signed-in session with 1, as they don't give a shell.
+    if test "$_suf_status" -eq 255; then
+        warn "couldn't sign in to $_suf_host over SSH; pulling from it may fail"
+    elif test "$_suf_status" -gt 128; then
+        warn "the SSH sign-in to $_suf_host didn't finish in ${SSH_SIGNIN_WAIT:-60}s; git may stop for your key later"
+    fi
 }
 
 generate_ssh_key() {
@@ -2976,15 +3135,10 @@ generate_ssh_key() {
     # generate anyway, so it pushes past this check too. It still never
     # clobbers the file ssh-keygen would write.
     if test "$SSH" = auto; then
-        for key in "$HOME"/.ssh/id_*; do
-            case "$key" in
-                *.pub) continue ;;
-            esac
-            if test -f "$key"; then
-                detail "Skipping the SSH key: $key exists; --ssh makes one anyway"
-                return
-            fi
-        done
+        if ssh_key_file_exists; then
+            detail "Skipping the SSH key: $HOME/.ssh has one; --ssh makes one anyway"
+            return
+        fi
     elif test -f "$HOME/.ssh/id_ed25519"; then
         info "SSH key already exists: $HOME/.ssh/id_ed25519; not overwriting"
         return
@@ -3325,6 +3479,9 @@ resolve_crostini
 resolve_gui
 resolve_minimal
 resolve_extras
+# Before anything that could stop to ask.
+sudo_up_front
+ssh_up_front
 if test "$INSTALL" = yes; then
     resolve_upgrade
     install_packages

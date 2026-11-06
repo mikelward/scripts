@@ -3537,7 +3537,7 @@ test_a_hung_ssh_agent_is_given_up_on() {
     output="$(PATH="$agent_tmpdir/bin:$PATH" HOME="$agent_tmpdir" \
         sh -c "set -e
 SSH=auto
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS ssh_agent_has_key generate_ssh_key")
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS with_time_limit ssh_agent_has_key ssh_key_file_exists generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -3547,6 +3547,194 @@ echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     assert_output_contains "ssh-agent isn't answering" &&
     assert_output_lacks "ssh-agent has one" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# --- Up-front sudo and SSH ---
+
+UP_FRONT_FUNCTIONS="with_time_limit ssh_agent_has_key ssh_key_file_exists sudo_up_front ssh_destination own_git_ssh_command ssh_up_front end_up_front"
+
+# Run ssh_up_front against a mock ssh that records its arguments and then
+# signs in ($1=ok, exiting 1 as GitHub does), is refused ($1=refused, 255) or
+# never answers ($1=hung: it answers only when killed, and the stub sleep
+# ends the wait at once). The repos come from HARNESS_REPO (GitHub over SSH),
+# ~/.ssh has a key unless HARNESS_KEY=no, and GIT_SSH_COMMAND starts as
+# HARNESS_GIT_SSH_COMMAND. With HARNESS_CHECKOUT_SSH_COMMAND, a checkout in
+# ~/src has that core.sshCommand. end_up_front runs after it.
+run_ssh_up_front() {
+    suf_tmpdir="$(mktemp -d)"
+    mkdir -p "$suf_tmpdir/bin" "$suf_tmpdir/.ssh"
+    if test -n "${HARNESS_CHECKOUT_SSH_COMMAND:-}"; then
+        git init -q "$suf_tmpdir/src/tide"
+        git -C "$suf_tmpdir/src/tide" config core.sshCommand "$HARNESS_CHECKOUT_SSH_COMMAND"
+    fi
+    test "${HARNESS_KEY:-yes}" = no || : > "$suf_tmpdir/.ssh/id_ed25519"
+    case "$1" in
+        ok) suf_answer='exit 1' ;;
+        refused) suf_answer='exit 255' ;;
+        hung)
+            suf_answer="exec $(command -v sleep) 30"
+            printf '#!/bin/sh\nexit 0\n' > "$suf_tmpdir/bin/sleep"
+            chmod +x "$suf_tmpdir/bin/sleep"
+            ;;
+    esac
+    cat > "$suf_tmpdir/bin/ssh" <<MOCK
+#!/bin/sh
+printf '%s\n' "ssh \$*" >> "$suf_tmpdir/calls"
+$suf_answer
+MOCK
+    # No agent, so only the key file counts.
+    printf '#!/bin/sh\nexit 2\n' > "$suf_tmpdir/bin/ssh-add"
+    chmod +x "$suf_tmpdir/bin/ssh" "$suf_tmpdir/bin/ssh-add"
+    set +e
+    output="$(PATH="$suf_tmpdir/bin:$PATH" HOME="$suf_tmpdir" \
+        GIT_SSH_COMMAND="${HARNESS_GIT_SSH_COMMAND:-}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+        sh -c "set -e
+SCRIPTS_DIR='$suf_tmpdir/scripts'
+CONF_DIR='$suf_tmpdir/conf'
+SRC_DIR='$suf_tmpdir/src'
+SCRIPTS_REPO='${HARNESS_REPO:-git@github.com:mikelward/scripts.git}'
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
+ssh_up_front
+echo \"GIT_SSH_COMMAND=\$GIT_SSH_COMMAND\"
+share=\${SSH_SHARE_DIR:-}
+end_up_front
+test -z \"\$share\" || test -e \"\$share\" || echo SHARE_CLOSED
+echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$suf_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$suf_tmpdir"
+}
+
+# The sign-in comes first, so a security key asks for its touch at the
+# start, and git shares its connection for the rest of the run, so the key
+# isn't asked again. The shared connection closes as the run ends.
+test_ssh_sign_in_comes_first_and_is_shared() {
+    run_ssh_up_front ok
+    assert_status 0 &&
+    assert_output_contains "Signing in to github.com over SSH" &&
+    assert_output_lacks "sign in to" &&
+    assert_output_contains "GIT_SSH_COMMAND=ssh -o ControlMaster=auto" &&
+    assert_output_contains "SHARE_CLOSED" &&
+    case "$calls" in
+        "ssh -T -o ControlMaster=auto "*" git@github.com") ;;
+        *) echo "  FAIL: unexpected ssh call: $calls"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# An ssh:// URL keeps its port.
+test_ssh_sign_in_keeps_the_port() {
+    HARNESS_REPO=ssh://git@ghe.corp.example.com:2222/mikelward/scripts.git run_ssh_up_front ok
+    assert_status 0 &&
+    assert_output_contains "Signing in to ghe.corp.example.com over SSH" &&
+    case "$calls" in
+        *" ssh://git@ghe.corp.example.com:2222") ;;
+        *) echo "  FAIL: unexpected ssh call: $calls"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# A sign-in the host refuses is a warning; the run goes on.
+test_a_refused_ssh_sign_in_is_a_warning() {
+    run_ssh_up_front refused
+    assert_status 0 &&
+    assert_output_contains "couldn't sign in to github.com over SSH" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A hung security key never finishes the sign-in, so it's given up on.
+test_a_hung_ssh_sign_in_is_given_up_on() {
+    run_ssh_up_front hung
+    assert_status 0 &&
+    assert_output_contains "didn't finish in 60s" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Nothing to sign in with over HTTPS, or before there's a key.
+test_ssh_sign_in_is_skipped_without_ssh_or_a_key() {
+    HARNESS_REPO=https://github.com/mikelward/scripts.git run_ssh_up_front ok
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    HARNESS_KEY=no run_ssh_up_front ok &&
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_output_lacks "Signing in"
+}
+
+# A GIT_SSH_COMMAND of your own is left as it is.
+test_ssh_sign_in_leaves_your_git_ssh_command() {
+    HARNESS_GIT_SSH_COMMAND="ssh -i /tmp/key" run_ssh_up_front ok
+    assert_status 0 &&
+    assert_output_contains "GIT_SSH_COMMAND=ssh -i /tmp/key" &&
+    assert_eq "$calls" "ssh -T git@github.com"
+}
+
+# So is a checkout's own core.sshCommand, which GIT_SSH_COMMAND would override.
+test_ssh_sign_in_leaves_a_checkouts_ssh_command() {
+    HARNESS_CHECKOUT_SSH_COMMAND="ssh -i /tmp/key" run_ssh_up_front ok
+    assert_status 0 &&
+    assert_output_contains "GIT_SSH_COMMAND=" &&
+    assert_output_lacks "ControlMaster" &&
+    assert_eq "$calls" "ssh -T git@github.com"
+}
+
+# Run sudo_up_front on OS $1 with SUDO $2 against a mock sudo that records
+# its arguments; sudo -n true succeeds when HARNESS_SUDO_CACHED=yes. Then
+# end_up_front, which must stop the refresh.
+run_sudo_up_front() {
+    suo_tmpdir="$(mktemp -d)"
+    mkdir -p "$suo_tmpdir/bin"
+    cat > "$suo_tmpdir/bin/sudo" <<MOCK
+#!/bin/sh
+printf '%s\n' "sudo \$*" >> "$suo_tmpdir/calls"
+test "\$*" != "-n true" || test "${HARNESS_SUDO_CACHED:-no}" = yes
+MOCK
+    chmod +x "$suo_tmpdir/bin/sudo"
+    set +e
+    output="$(PATH="$suo_tmpdir/bin:$PATH" sh -c "set -e
+OS=$1
+SUDO=$2
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
+sudo_up_front
+refresh=\${SUDO_REFRESH_PID:-}
+end_up_front
+if test -n \"\$refresh\"; then
+    wait \"\$refresh\" 2>/dev/null || true
+    kill -0 \"\$refresh\" 2>/dev/null || echo REFRESH_STOPPED
+fi
+echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$suo_tmpdir/calls" 2>/dev/null)"
+    rm -rf "$suo_tmpdir"
+}
+
+# On Linux the password is asked for at the start, and kept fresh until the
+# run ends.
+test_sudo_asks_first_on_linux() {
+    run_sudo_up_front debian yes
+    assert_status 0 &&
+    assert_output_contains "Asking for your sudo password now" &&
+    assert_eq "$calls" "sudo -n true
+sudo -v" &&
+    assert_output_contains "REFRESH_STOPPED"
+}
+
+# Already signed in to sudo: nothing to ask.
+test_sudo_asks_nothing_when_signed_in() {
+    HARNESS_SUDO_CACHED=yes run_sudo_up_front redhat yes
+    assert_status 0 &&
+    assert_output_lacks "Asking for your sudo password" &&
+    assert_eq "$calls" "sudo -n true"
+}
+
+# macOS needs sudo for a step or two at most, and --no-sudo for none.
+test_sudo_asks_nothing_on_macos_or_with_no_sudo() {
+    run_sudo_up_front macos yes
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    run_sudo_up_front debian no &&
+    assert_status 0 &&
+    assert_eq "$calls" ""
 }
 
 # Run clone_or_pull's existing-checkout branch against a stub git, so nothing
@@ -5096,6 +5284,26 @@ run_test "atuin and carapace upgrade once a week" \
     test_shell_tools_upgrade_once_a_week
 run_test "a failed atuin upgrade is retried" \
     test_shell_tools_failed_upgrade_is_retried
+run_test "the SSH sign-in comes first and is shared" \
+    test_ssh_sign_in_comes_first_and_is_shared
+run_test "the SSH sign-in keeps an ssh:// URL's port" \
+    test_ssh_sign_in_keeps_the_port
+run_test "a refused SSH sign-in is a warning" \
+    test_a_refused_ssh_sign_in_is_a_warning
+run_test "a hung SSH sign-in is given up on" \
+    test_a_hung_ssh_sign_in_is_given_up_on
+run_test "no SSH sign-in over HTTPS or without a key" \
+    test_ssh_sign_in_is_skipped_without_ssh_or_a_key
+run_test "the SSH sign-in leaves your GIT_SSH_COMMAND" \
+    test_ssh_sign_in_leaves_your_git_ssh_command
+run_test "the SSH sign-in leaves a checkout's core.sshCommand" \
+    test_ssh_sign_in_leaves_a_checkouts_ssh_command
+run_test "sudo asks first on Linux" \
+    test_sudo_asks_first_on_linux
+run_test "sudo asks nothing when already signed in" \
+    test_sudo_asks_nothing_when_signed_in
+run_test "sudo asks nothing on macOS or with --no-sudo" \
+    test_sudo_asks_nothing_on_macos_or_with_no_sudo
 run_test "a hung ssh-agent is given up on" \
     test_a_hung_ssh_agent_is_given_up_on
 run_test "the release extras wait a week to upgrade" \
