@@ -40,6 +40,7 @@ check "the Hyprland clone is quiet" test -z "$clone_output"
 check "the Hyprland clone fetches udis86" test -e "$T/git/Hyprland-clone/subprojects/udis86/.git"
 check "the Hyprland clone skips Tracy" test ! -e "$T/git/Hyprland-clone/subprojects/tracy/.git"
 check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
+check "the build clones hyprland-protocols 0.8.0, which Hyprland 0.57 needs" has "$calls" "hyprland-protocols.git $T/src/hyprland-build/hyprland-protocols"
 check "wayland-protocols' headers skip the strict check" \
     test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
 check "the build installs under its prefix, by version" has "$calls" "-DCMAKE_INSTALL_PREFIX=$T/opt/hyprland/v0.57.1-"

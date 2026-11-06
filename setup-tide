@@ -249,7 +249,8 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 # each clone must check out exactly that commit before its build files run.
 # Each tag meets the next one's minimums (Hyprland v0.57.1's CMakeLists.txt
 # names them); wayland-protocols is here because Ubuntu 26.04 has 1.47 and
-# Hyprland needs 1.49. re2 is here because a distro's can lag its abseil:
+# Hyprland needs 1.49, and hyprland-protocols because it has 0.7.0 and
+# Hyprland needs 0.8.0. re2 is here because a distro's can lag its abseil:
 # Debian's libre2 was built against an abseil whose absl::string_view was
 # its own type, and its libabsl-dev's headers now make it std::string_view,
 # so Hyprland and hyprctl can't link it. Built here, against the abseil
@@ -257,6 +258,7 @@ HYPRLAND_BIN_DIR="${HYPRLAND_BIN_DIR:-/usr/local/bin}"
 HYPRLAND_PINS="
 wayland-protocols https://gitlab.freedesktop.org/wayland/wayland-protocols.git 1.49 ee78491a237eaff9389a0ccf8680521d074407d3 meson
 hyprwayland-scanner https://github.com/hyprwm/hyprwayland-scanner.git v0.4.6 b8632713a6beaf28b56f2a7b0ab2fb7088dbb404 cmake
+hyprland-protocols https://github.com/hyprwm/hyprland-protocols.git v0.8.0 044a434ec371f985655389bcef09286b1af3d77c meson
 hyprutils https://github.com/hyprwm/hyprutils.git v0.14.3 0d13d5a624eb093b600d1b2cbe448fb613c86424 cmake
 hyprwire https://github.com/hyprwm/hyprwire.git v0.3.1 3e6865ce5fd9237b58f5b2ce5de18814df3baff5 cmake
 hyprlang https://github.com/hyprwm/hyprlang.git v0.6.8 3a1c1b25b059dae2c6bbc46991562ba1158d125c cmake
