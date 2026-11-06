@@ -124,11 +124,13 @@ installs nothing there (the `homepkg` tools, `uv`) and removes the `atuin` and
 starting them. Nothing looks for a particular company or product; install the
 tools some other way (Homebrew, if the policy allows it) instead.
 
-**A Mac whose Santa is in Lockdown mode**, where each new binary needs an
-administrator's approval, gets nothing from Homebrew: `setup` says so once,
-installs and upgrades nothing from it, and carries on. `setup-macos` lists the
-apps it would have installed (Hammerspoon, Karabiner-Elements and the rest) as
-steps to get from IT.
+**A Mac whose Santa is in Lockdown mode**, where each new version of a
+binary needs an administrator's approval, gets no command-line tools: `setup`
+says so once and skips Homebrew's formulae and the tools it downloads (helix,
+jj, nushell, atuin, carapace, lf, node, uv and fnm). Homebrew and its apps
+(kitty, iTerm2, android-platform-tools) still install, the weekly upgrade
+upgrades only the apps, and `setup-macos` installs Hammerspoon,
+Karabiner-Elements and the rest as usual.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency

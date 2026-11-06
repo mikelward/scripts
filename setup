@@ -51,9 +51,12 @@
 # finished without failing. Pass --upgrade to upgrade now anyway. The repos
 # setup clones are config, not packages, and are pulled on every run.
 #
-# On a Mac whose Santa is in Lockdown mode, where each new binary needs an
-# administrator's approval, setup installs and upgrades nothing from Homebrew,
-# and says so once.
+# On a Mac whose Santa is in Lockdown mode, where each new version of a
+# binary needs an administrator's approval, setup says so once and skips the
+# command-line tools: Homebrew's formulae, and the helix, jj, nushell, atuin,
+# carapace, lf, node, uv and fnm it would download. Homebrew and its casks
+# (kitty, iTerm2, android-platform-tools) still install, and the weekly
+# upgrade covers only the casks.
 #
 # Every privileged command runs through sudo_or_warn, so an unexpected sudo
 # denial already degrades to a warning instead of aborting the bootstrap --
@@ -1090,44 +1093,41 @@ resolve_extras() {
 
 # Santa, the binary-authorization agent some managed Macs run, can be in
 # Lockdown mode, where every binary it hasn't been told to allow needs an
-# administrator's approval before it runs. Everything Homebrew installs is
-# such a binary, so there setup installs and upgrades nothing from Homebrew.
+# administrator's approval before it runs. Signed apps are allowed by their
+# developer, so Homebrew's casks run; but each new version of a command-line
+# tool -- a formula, or a release homepkg downloads into ~/.local -- would
+# need approving, so setup skips those. setup-macos's apps and tools change
+# rarely and have no good stand-ins, so it installs them as usual.
 # santactl status prints the mode as a "Mode | Lockdown" row; a Mac without
 # Santa, or a santactl that fails, counts as not locked down. The answer is
-# cached, and exported with whether it was said, so setup-macos, which has
-# the same two functions as it also runs on its own, neither asks nor says
-# it again.
+# cached for the run.
 santa_lockdown() {
-    if test -z "${SETUP_SANTA_LOCKDOWN:-}"; then
-        SETUP_SANTA_LOCKDOWN=no
+    if test -z "${SANTA_LOCKDOWN:-}"; then
+        SANTA_LOCKDOWN=no
         if command -v santactl >/dev/null 2>&1 \
                 && _sl_status=$(santactl status 2>/dev/null) \
                 && printf '%s\n' "$_sl_status" \
                     | grep -Eqi '^[[:space:]]*Mode[[:space:]]*\|[[:space:]]*Lockdown'; then
-            SETUP_SANTA_LOCKDOWN=yes
+            SANTA_LOCKDOWN=yes
         fi
-        export SETUP_SANTA_LOCKDOWN
     fi
-    test "$SETUP_SANTA_LOCKDOWN" = yes
+    test "$SANTA_LOCKDOWN" = yes
 }
 
-# homebrew_blocked: whether Homebrew's installs are to be skipped, saying why
-# the first time in a run. Every Homebrew step starts with it.
-homebrew_blocked() {
+# cli_tools_blocked: whether command-line tools are to be skipped, saying why
+# the first time in a run. Each formula and download step starts with it,
+# the downloads through local_bin_blocked.
+cli_tools_blocked() {
     santa_lockdown || return 1
-    if test -z "${SETUP_SANTA_WARNED:-}"; then
-        SETUP_SANTA_WARNED=yes
-        export SETUP_SANTA_WARNED
-        warn "Santa is in Lockdown mode, so nothing is installed or upgraded from Homebrew: each new binary would need your administrator's approval"
+    if test -z "${SANTA_WARNED:-}"; then
+        SANTA_WARNED=yes
+        warn "Santa is in Lockdown mode, so command-line tools like helix and jj aren't installed or upgraded: each new version would need your administrator's approval. Apps still install"
     fi
 }
 
 # --- Install Homebrew (macOS) ---
 
 install_homebrew() {
-    if homebrew_blocked; then
-        return 1
-    fi
     if command -v brew >/dev/null 2>&1; then
         detail "Skipping Homebrew: already installed"
         return 0
@@ -1435,11 +1435,17 @@ pkg_upgrade() {
 }
 
 # brew_upgrade: on an upgrade run, refreshes Homebrew's index and upgrades
-# every formula and cask, once a run. brew install upgrades nothing (see
+# every formula and cask, once a run; under Santa's Lockdown mode, only the
+# casks (see cli_tools_blocked). brew install upgrades nothing (see
 # HOMEBREW_NO_INSTALL_UPGRADE).
 brew_upgrade() {
     test "$UPGRADE" = yes && test -z "${BREW_UPGRADED:-}" || return 0
     BREW_UPGRADED=1
+    if cli_tools_blocked; then
+        info "Upgrading Homebrew's apps"
+        { brew_logged update && brew_logged upgrade --cask; } || upgrade_failed "Homebrew's apps"
+        return 0
+    fi
     info "Upgrading Homebrew packages"
     { brew_logged update && brew_logged upgrade; } || upgrade_failed "Homebrew packages"
 }
@@ -1634,9 +1640,6 @@ install_packages() {
             # Every brew step warns and continues rather than aborting,
             # matching the apt/dnf branches: one renamed formula or one tap
             # outage shouldn't take the whole bootstrap down under set -e.
-            if homebrew_blocked; then
-                return 0
-            fi
             if ! install_homebrew; then
                 warn "Homebrew unavailable; skipping macOS package installation"
                 return 0
@@ -1829,61 +1832,66 @@ install_os_packages() {
             # python3 and git come with the Command Line Tools, which
             # Homebrew needs anyway.
             brew_upgrade
-            if ! brew_install \
-                atool \
-                autoconf \
-                automake \
-                bat \
-                fd \
-                fzf \
-                gh \
-                git-delta \
-                go \
-                jq \
-                mercurial \
-                micro \
-                p7zip \
-                ripgrep \
-                shellcheck; then
-                warn "some core Homebrew packages could not be installed"
-            fi
-            # Separate, so a formula rename or a tap outage can't take the
-            # core package list down with it.
-            brew_install zoxide \
-                || warn "could not install zoxide; z/zi directory jumps will be unavailable"
-            # Its own step, matching zoxide; the shell config skips it when
-            # it's missing.
-            brew_install zsh-autosuggestions \
-                || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
-            # lf (terminal file manager) is a CLI tool, not graphical, so
-            # install it regardless of --no-gui (matching the Linux paths).
-            brew_install lf || warn "could not install lf"
-            # Node.js + tsc from Homebrew on the privileged path (setup-kde's
-            # source-build fallback for Krohnkite needs tsc; its normal path
-            # fetches a prebuilt release and needs neither). brew needs no
-            # sudo, so unlike the apt/dnf branches this can't self-skip under
-            # --no-root -- gate it on ROOT so an unprivileged macOS run gets
-            # node/tsc from conda-forge via homepkg (install_home_tools)
-            # instead of a second copy here. An Intel Mac gets them from
-            # homepkg too (install_node_home), as Homebrew would compile them.
-            if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
-                info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned"
-            elif test "$NPM" = yes && test "$ROOT" = yes; then
-                brew_install node \
-                    || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
-                # tsc lets setup-kde's fallback build Krohnkite from source
-                # without fetching typescript from the npm registry at build
-                # time. Installed on macOS too so the toolchain matches Linux.
-                brew_install typescript \
-                    || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
+            # Formulae are command-line tools, which Santa's Lockdown mode
+            # would have approved at each version (see cli_tools_blocked).
+            if ! cli_tools_blocked; then
+                if ! brew_install \
+                    atool \
+                    autoconf \
+                    automake \
+                    bat \
+                    fd \
+                    fzf \
+                    gh \
+                    git-delta \
+                    go \
+                    jq \
+                    mercurial \
+                    micro \
+                    p7zip \
+                    ripgrep \
+                    shellcheck; then
+                    warn "some core Homebrew packages could not be installed"
+                fi
+                # Separate, so a formula rename or a tap outage can't take the
+                # core package list down with it.
+                brew_install zoxide \
+                    || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+                # Its own step, matching zoxide; the shell config skips it when
+                # it's missing.
+                brew_install zsh-autosuggestions \
+                    || warn "could not install zsh-autosuggestions; inline history ghost text will be unavailable"
+                # lf (terminal file manager) is a CLI tool, not graphical, so
+                # install it regardless of --no-gui (matching the Linux paths).
+                brew_install lf || warn "could not install lf"
+                # Node.js + tsc from Homebrew on the privileged path (setup-kde's
+                # source-build fallback for Krohnkite needs tsc; its normal path
+                # fetches a prebuilt release and needs neither). brew needs no
+                # sudo, so unlike the apt/dnf branches this can't self-skip under
+                # --no-root -- gate it on ROOT so an unprivileged macOS run gets
+                # node/tsc from conda-forge via homepkg (install_home_tools)
+                # instead of a second copy here. An Intel Mac gets them from
+                # homepkg too (install_node_home), as Homebrew would compile them.
+                if test "$NPM" = yes && test "$ROOT" = yes && is_intel_mac; then
+                    info "Intel Mac: Node.js and tsc come from homepkg once the scripts repo is cloned"
+                elif test "$NPM" = yes && test "$ROOT" = yes; then
+                    brew_install node \
+                        || warn "could not install node; setup-kde's Krohnkite source-build fallback needs it"
+                    # tsc lets setup-kde's fallback build Krohnkite from source
+                    # without fetching typescript from the npm registry at build
+                    # time. Installed on macOS too so the toolchain matches Linux.
+                    brew_install typescript \
+                        || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
+                fi
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
-            # Linux paths which keep adb/android-tools as core packages.
+            # Linux paths which keep adb/android-tools as core packages. It's
+            # a cask, so Lockdown mode installs it too.
             brew_install --cask android-platform-tools \
                 || warn "could not install android-platform-tools; adb/fastboot will be unavailable"
             if test "$GUI_ENABLED" -eq 1; then
-                brew_install kitty \
+                brew_install --cask kitty \
                     || warn "skipping kitty installation"
                 # No Amethyst or Rectangle: setup-macos sets up tilemo, which
                 # they'd fight over keys and windows. `setup-macos --wm
@@ -2356,14 +2364,13 @@ install_extras_release() {
 
 # Dispatch to the resolved extras backend. When Homebrew is requested but
 # can't be made available, fall back to the release artifacts. Under Santa's
-# Lockdown mode homebrew_blocked has said Homebrew is skipped, so the
-# fallback goes without another warning.
+# Lockdown mode neither is tried (see cli_tools_blocked).
 install_extras() {
+    if cli_tools_blocked; then
+        info "Skipping helix, jj and nushell: Santa is in Lockdown mode"
+        return 0
+    fi
     if test "$EXTRAS_BACKEND" = brew; then
-        if homebrew_blocked; then
-            install_extras_release
-            return
-        fi
         if install_homebrew; then
             install_extras_brew
             return
@@ -2630,9 +2637,21 @@ prune_retired_tools() {
 # the directory's binaries don't run (killed by a policy, or a noexec home);
 # setup then installs nothing there and removes the shell tools it installed
 # there before, which the shell would otherwise start and see killed. Nothing
-# here looks for a particular company or product. Sets LOCAL_BIN_WHY to say
-# why. LOCAL_BIN_PROBE names the binary to copy, for the tests.
+# here looks for a particular company or product. Santa's Lockdown mode
+# counts too, without the check: there a new binary there would run only once
+# approved (see cli_tools_blocked). Sets LOCAL_BIN_WHY to say why.
+# LOCAL_BIN_PROBE names the binary to copy, for the tests.
 local_bin_blocked() {
+    if cli_tools_blocked; then
+        LOCAL_BIN_WHY="Santa is in Lockdown mode"
+        # The atuin and carapace an earlier run put there may no longer be
+        # allowed to run either, and the shell would keep starting them.
+        if test -z "${LOCAL_BIN_CLEANED:-}"; then
+            LOCAL_BIN_CLEANED=1
+            remove_blocked_shell_tools
+        fi
+        return 0
+    fi
     if test -z "${LOCAL_BIN_CHECKED:-}"; then
         LOCAL_BIN_CHECKED=1
         LOCAL_BIN_BLOCKED=no
@@ -2850,6 +2869,10 @@ install_uv() {
         # that installer leaves a receipt, which self update needs. One from
         # pipx, pip or Homebrew, even in ~/.local/bin, is left to them.
         test "$UPGRADE" = yes || return 0
+        if cli_tools_blocked; then
+            info "Skipping uv's update: Santa is in Lockdown mode"
+            return 0
+        fi
         if ! test -f "${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv-receipt.json"; then
             detail "Skipping uv's update: $uv_path wasn't installed by uv's installer"
             return 0
@@ -2890,6 +2913,10 @@ install_fnm() {
     fi
     if command -v fnm >/dev/null 2>&1; then
         detail "Skipping fnm: already installed"
+        return
+    fi
+    if cli_tools_blocked; then
+        info "Skipping fnm: Santa is in Lockdown mode"
         return
     fi
     info "Installing fnm"
