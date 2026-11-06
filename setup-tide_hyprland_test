@@ -75,7 +75,10 @@ check "the build checks Hyprland's commit" has "$calls" "git -C $T/src/hyprland-
 : > "$CALLS"
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "the same pins don't rebuild" lacks "$calls" "cmake"
-check "the same pins say so" has "$output" "already built from these pins"
+check "the same pins say so only with --verbose" lacks "$output" "already built from these pins"
+ARGS=(--verbose); run FAKE_APT_HYPRLAND=0.53.3+ds-4
+check "--verbose says the same pins are built" has "$output" "already built from these pins"
+ARGS=()
 # A new commit for the same tag is a new build, checked and built afresh.
 sed 's/ 0d13d5a624eb093b600d1b2cbe448fb613c86424 / 2222222222222222222222222222222222222222 /' "$SCRIPT" > "$T/setup-repinned"
 chmod +x "$T/setup-repinned"
@@ -290,7 +293,7 @@ setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CMAKE_FAILS=hyprlang
 : > "$CALLS"
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "a resumed build skips what it finished" lacks "$calls" "cmake -S $T/src/hyprland-build/hyprutils "
-check "a resumed build says so" has "$output" "Already built hyprutils v0.14.3"
+check "a resumed build says what it skips only with --verbose" lacks "$output" "Already built hyprutils"
 check "a resumed build redoes the failed step" has "$calls" "cmake -S $T/src/hyprland-build/hyprlang "
 check "a resumed build finishes" has "$calls" "cmake -S $T/src/hyprland-build/Hyprland "
 check "a resumed build marks itself complete" test -f "$(inst)/quickspace-pins"

@@ -207,7 +207,8 @@ check "default after --greeter: greetd stays the display manager" test "$(cat "$
 check "default after --greeter: puts GDM back for no boot" lacks "$calls" "enable --force gdm3.service"
 check "default after --greeter: rewrites greetd's config" \
     test "$(cat "$T/etc/greetd/config.toml")" = "$(sed -e 's/^user = .*/user = "_greetd"/' -e 's/^vt = .*/vt = 7/' "$T/greetd.toml")"
-check "default after --greeter: says where to pick tide" has "$output" "Pick the \"tide\" session at greetd's greeter"
+# Nothing about logging in changed on this run, so it isn't said again.
+check "default after --greeter: says where to pick tide only with --verbose" lacks "$output" "Pick the \"tide\" session at greetd's greeter"
 check "default after --greeter: the run succeeds" test "$status" -eq 0
 teardown
 

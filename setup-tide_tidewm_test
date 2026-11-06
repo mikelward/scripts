@@ -43,7 +43,7 @@ check "its build's output isn't shown" lacks "$output" "install -m 644"
 : > "$CALLS"
 run
 check "the same pin doesn't rebuild" lacks "$calls" "make -C $T/src/tidewm-build"
-check "the same pin says so" has "$output" "tidewm $short is already built in $(build)"
+check "the same pin says so only with --verbose" lacks "$output" "is already built"
 check "the same pin still links" test "$(readlink "$T/usr-local-bin/tidewm")" = "$T/opt/tidewm/current/bin/tidewm"
 teardown
 

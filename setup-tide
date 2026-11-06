@@ -304,6 +304,25 @@ SERVICE_PATH="${SETUP_SERVICE_PATH:-/usr/local/sbin:/usr/local/bin:/usr/sbin:/us
 # the login screen looks its TryExec up on, a system service's, which
 # check_session reads. Overridable for tests.
 SESSION_ENTRY="${SETUP_SESSION_ENTRY:-/usr/share/wayland-sessions/tide.desktop}"
+# Whether the session was there before this run, and whether this run
+# changed the display manager (DM_CHANGED), for say_news.
+if test -f "$SESSION_ENTRY"; then
+    SESSION_WAS_INSTALLED=yes
+else
+    SESSION_WAS_INSTALLED=no
+fi
+DM_CHANGED=no
+
+# say_news MESSAGE: how to log in to tide, and how to change that, is news
+# on the run that installs its session or changes the display manager;
+# after that, --verbose says it.
+say_news() {
+    if test "$SESSION_WAS_INSTALLED" = no || test "$DM_CHANGED" = yes; then
+        info "$@"
+    else
+        detail "$@"
+    fi
+}
 SESSION_PATH="${SETUP_SESSION_PATH:-$SERVICE_PATH}"
 # What the greeter runs from that PATH: tide-greeter, the Hyprland it
 # starts, the hyprctl that ends that Hyprland, and the qs it shows.
@@ -1620,7 +1639,7 @@ build_quickshell() {
     # Named for tide's old name, like Hyprland's quickspace-pins.
     qs_marker="$qs_dir/quickspace-build"
     if test -f "$qs_marker"; then
-        info "Quickshell $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
+        detail "Quickshell $QUICKSHELL_TAG is already built for Qt $qt_version in $qs_dir"
     else
         src="$QUICKSHELL_SRC/quickshell"
         # A stale clone or partial install left in place would be built into
@@ -1800,7 +1819,7 @@ build_tidewm() {
     tw_dir="$TIDEWM_PREFIX/$tw_short-$tw_sum"
     tw_marker="$tw_dir/setup-tide-build"
     if test -f "$tw_marker"; then
-        info "tidewm $tw_short is already built in $tw_dir"
+        detail "tidewm $tw_short is already built in $tw_dir"
     else
         src="$TIDEWM_SRC/tidewm"
         # A stale clone or partial install left in place would be built into
@@ -1895,7 +1914,7 @@ remove_old_tidewm_builds() {
 build_hyprland() {
     set_install_dir
     if test -f "$pins_file"; then
-        info "Hyprland is already built from these pins in $install_dir"
+        detail "Hyprland is already built from these pins in $install_dir"
         link_hyprland || return 1
         remove_old_builds
         remove_legacy_builds "$LEGACY_HYPRLAND_PREFIX" quickspace-pins "$HYPRLAND_BIN_DIR" "$HYPRLAND_COMMANDS"
@@ -1940,7 +1959,7 @@ build_hyprland() {
         test -n "$name" || continue
         stamp="$install_dir/.built-$name"
         if test -f "$stamp"; then
-            info "Already built $name $tag"
+            detail "Already built $name $tag"
             continue
         fi
         # printf, not :, which is a special builtin: dash exits when its
@@ -2217,7 +2236,7 @@ fetch_tide() {
         test -d "$TIDE_DIR/.git" \
             || error "no tide checkout at $TIDE_DIR (--no-fetch)"
     elif test -d "$TIDE_DIR/.git"; then
-        info "Updating $TIDE_DIR"
+        detail "Updating $TIDE_DIR"
         # The existing checkout is enough to install, so a failed pull (no
         # network, say) warns, saying why, rather than ending the run. A
         # checkout cloned through the mirror still names GitHub as its
@@ -2247,10 +2266,10 @@ install_tide() {
     if test "$(printf '%s\n%s\n' "$MIN_GO" "$go_version" | sort -V | head -n1)" != "$MIN_GO"; then
         error "tide needs Go $MIN_GO or newer to build tide-grant, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
     fi
-    info "Installing tide's user files"
+    detail "Installing tide's user files"
     run_logged make -C "$TIDE_DIR" install GO="$GO"
     if test "$INSTALL" = yes; then
-        info "Installing the tide session entry and commands under /usr"
+        detail "Installing the tide session entry and commands under /usr"
         sudo_logged make -C "$TIDE_DIR" install-session PREFIX=/usr \
             || warn "could not install the session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
     fi
@@ -2549,7 +2568,7 @@ install_launcher_entries() {
             *) rm -f "$_le_old" || warn "couldn't remove $_le_old, a launcher entry for a script that's gone" ;;
         esac
     done
-    info "Listing $_le_count app scripts in the launcher, with entries in $_le_dir"
+    detail "Listing $_le_count app scripts in the launcher, with entries in $_le_dir"
 }
 
 # --- Browser tabs in tide's switcher ---
@@ -2626,7 +2645,7 @@ tabs_browser_dirs() {
 install_tabs_host() {
     _th_dirs=$(tabs_browser_dirs)
     if test -z "$_th_dirs"; then
-        info "No Chrome or Brave here, so no host for tide's browser tabs"
+        detail "No Chrome or Brave here, so no host for tide's browser tabs"
         return 0
     fi
     if ! test -x "$TABS_HOST"; then
@@ -5992,8 +6011,10 @@ restore_display_manager() {
         return 1
     fi
     if test "$1" = none; then
+        DM_CHANGED=yes
         info "greetd is no longer the display manager; from the next boot, log in on a text console"
     else
+        DM_CHANGED=yes
         info "$1 is the display manager again from the next boot"
     fi
 }
@@ -6079,7 +6100,7 @@ setup_greeter() {
             elif test "$dm_now" = greetd.service; then
                 info "Leaving greetd's config as it is, since setup didn't make greetd the display manager; 'setup --greeter' has it run tide's greeter"
             else
-                info "Leaving $(describe_dm "$dm_now") as the display manager; 'setup --greeter' makes tide's greeter the login screen"
+                say_news "Leaving $(describe_dm "$dm_now") as the display manager; 'setup --greeter' makes tide's greeter the login screen"
             fi
             return 0
         fi
@@ -6153,6 +6174,7 @@ setup_greeter() {
         return 0
     fi
     GREETER_ACTIVE=yes
+    DM_CHANGED=yes
     info "From the next boot, greetd's greeter replaces $(describe_dm "$dm_before"). If it doesn't come up, press Ctrl+Alt+F3, log in, and run '$(way_back "$dm_before")', or rerun 'setup --no-greeter'"
 }
 
@@ -6255,6 +6277,7 @@ use_display_manager() {
     if test "$_ud_before" = greetd.service && ! sudo_logged systemctl disable greetd.service; then
         warn "couldn't disable greetd, so it may start beside $_ud_name from the next boot; run 'sudo systemctl disable greetd.service'"
     fi
+    DM_CHANGED=yes
     info "From the next boot, $_ud_name is the login screen, in place of $(describe_dm "$_ud_before")"
 }
 
@@ -6421,7 +6444,7 @@ fi
 if ! check_session; then
     info "tide installed, but its session isn't ready: see the warnings above."
 elif test "$GREETER_ACTIVE" = yes; then
-    info "tide installed. Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
+    say_news "tide installed. Pick the \"tide\" session at greetd's greeter; KDE Plasma stays available there."
 else
-    info "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+    say_news "tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
 fi

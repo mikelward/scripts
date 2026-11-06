@@ -367,7 +367,7 @@ MOCK
     run_kde --no-install
     assert_status 0 &&
     assert_not_called "sudo" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # --- installation: release path (the default; homepkg's codeberg backend) ---
@@ -644,7 +644,7 @@ MOCK
     run_kde --no-install
     unset TMPDIR
     assert_status 0 &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     assert_not_called "mktemp -d" &&
     # And nothing was left behind under TMPDIR either.
     ! ls "$TEST_TMPDIR" | grep -q '^krohnkite-'
@@ -760,10 +760,72 @@ MOCK
     run_kde --no-install
     assert_status 0 &&
     assert_output_contains "couldn't mask drkonqi-coredump-launcher.socket" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # --- what a run prints ---
+
+# kwriteconfig6 and kreadconfig6 that keep what's written, one line a key,
+# so a second run reads back what the first wrote; and a systemctl that
+# finds DrKonqi masked.
+mock_kconfig_store() {
+    store="$TEST_TMPDIR/kconfig"
+    cat > "$TEST_TMPDIR/bin/kwriteconfig6" <<MOCK
+#!/bin/bash
+printf "%s\\n" "kwriteconfig6 \$*" >> "$CALLS"
+key="\${*:1:\$#-1}"
+grep -vxF -- "\$key=\$(grep -F -- "\$key=" "$store" 2>/dev/null | head -1 | cut -d= -f2-)" "$store" 2>/dev/null > "$store.new"
+printf "%s=%s\\n" "\$key" "\${!#}" >> "$store.new"
+mv "$store.new" "$store"
+MOCK
+    cat > "$TEST_TMPDIR/bin/kreadconfig6" <<MOCK
+#!/bin/bash
+grep -F -- "\$*=" "$store" 2>/dev/null | tail -1 | cut -d= -f2-
+MOCK
+    cat > "$TEST_TMPDIR/bin/systemctl" <<MOCK
+#!/bin/sh
+printf "%s\\n" "systemctl \$*" >> "$CALLS"
+test "\$2" != is-enabled || for unit in \$3 \$4; do echo masked; done
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kwriteconfig6" "$TEST_TMPDIR/bin/kreadconfig6" "$TEST_TMPDIR/bin/systemctl"
+}
+
+# A write that fails partway through a step stops the run, as any failed
+# command does without --ignore-errors, and the step isn't reported done.
+test_a_failed_write_stops_the_run() {
+    cat > "$TEST_TMPDIR/bin/kwriteconfig6" <<MOCK
+#!/bin/sh
+printf "%s\\n" "kwriteconfig6 \$*" >> "$CALLS"
+case "\$*" in *FocusPolicy*) exit 1 ;; esac
+exit 0
+MOCK
+    run_kde --no-install
+    test "$status" -ne 0 || { echo "  FAIL: a failed write didn't stop the run"; TEST_FAILED=1; return 1; }
+    assert_output_lacks "Turned on focus follows mouse" &&
+    assert_not_called "kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse"
+}
+
+# A second run, with everything set already, says nothing: each step only
+# speaks when it changes a setting, and Krohnkite isn't installed again.
+test_a_second_run_says_nothing() {
+    add_release_mocks
+    for launcher in browser1 browser2 terminal terminal_on_workstation music \
+            google-chat google-calendar clipboard-menu fill-menu; do
+        add_launcher "$launcher"
+    done
+    : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
+    mock_kconfig_store
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "KDE settings" &&
+    mkdir -p "$TEST_TMPDIR/home/.local/share/kwin/scripts/krohnkite" &&
+    : > "$CALLS" &&
+    run_kde &&
+    assert_status 0 &&
+    assert_output_is "" &&
+    assert_not_called "kwriteconfig6" &&
+    assert_not_called "kpackagetool6"
+}
 
 # A run says only which step it's on: what homepkg, kpackagetool6,
 # systemctl and kbuildsycoca6 say goes to the log.
@@ -776,22 +838,18 @@ test_quiet_run_shows_only_its_steps() {
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
     run_kde
     assert_status 0 &&
-    assert_output_is "Fetching the Krohnkite release via homepkg
-Installing Krohnkite from $TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.3_beta.kwinscript
-Enabling Krohnkite plugin
-Configuring Krohnkite layouts: Tile, ThreeColumn, Columns, Monocle
-Enabling focus follows mouse (mouse precedence)
-Enabling dim inactive windows
-Configuring 9 virtual desktops
-Configuring keyboard layout: US Dvorak, Caps Lock as Compose
+    assert_output_is "Installing Krohnkite from $TEST_TMPDIR/home/.local/share/homepkg/assets/krohnkite/krohnkite-0.9.9.3_beta.kwinscript
+Turned on the Krohnkite plugin
+Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle
+Turned on focus follows mouse (mouse precedence)
+Turned on dimming inactive windows
+Set 9 virtual desktops
+Set the keyboard layout: US Dvorak, Caps Lock as Compose
 Masking DrKonqi's crash handler
-Reloading KWin configuration
-Configuring keybindings
-Configuring application shortcuts
-Reloading KWin configuration
-Applying shortcuts to the running session
+Set the keybindings
+Set the application shortcuts
 Shortcuts are live; no logout needed
-KDE configured successfully" &&
+Changed $(grep -c '^kwriteconfig6 ' "$CALLS") KDE settings" &&
     assert_log_contains "+ $TEST_TMPDIR/isolated/homepkg --backend codeberg install krohnkite
 Downloading krohnkite-0.9.9.3_beta.kwinscript" &&
     assert_log_contains "Successfully upgraded" &&
@@ -835,7 +893,7 @@ MOCK
     assert_output_contains "'systemctl --user mask --now drkonqi-coredump-launcher.socket drkonqi-coredump-pickup.service' exited with status 1; the end of what it said (all of it is in $TEST_TMPDIR/home/.local/state/setup/setup.log):
     Failed to connect to bus: No medium found
 Warning: couldn't mask drkonqi-coredump-launcher.socket" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # Where the log can't be made, what the commands say is shown instead, and
@@ -854,7 +912,7 @@ test_unmakeable_log_shows_the_output() {
     assert_status 0 &&
     assert_output_contains "couldn't make $TEST_TMPDIR/state-is-a-file/state/setup/setup.log to keep the installers' output in, so it's shown instead" &&
     assert_output_contains "Created symlink" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # --verbose shows what the commands say, as they say it, and makes no log;
@@ -863,7 +921,7 @@ test_verbose_shows_the_output() {
     run_kde --no-install --verbose
     assert_status 0 &&
     assert_output_contains "Created symlink" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     assert_output_lacks "couldn't make" &&
     if test -e "$TEST_TMPDIR/home/.local/state/setup/setup.log"; then
         echo "  FAIL: --verbose made a log"
@@ -1083,7 +1141,7 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/python3"
     run_kde --no-install
     assert_status 0 &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     # python3 is legitimate for kdeshortcut.py, which applies the shortcuts to
     # the running session -- so this can't assert python3 went unused, only
     # that the sweep itself didn't reach for it.
@@ -1133,7 +1191,7 @@ test_live_apply_is_on_by_default() {
     assert_status 0 &&
     assert_called "kdeshortcut.py --quiet --journal" &&
     assert_output_contains "Shortcuts are live; no logout needed" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
 
@@ -1144,7 +1202,7 @@ test_live_shortcuts_flag_is_accepted() {
     run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_called "kdeshortcut.py --quiet --journal" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # --no-live-shortcuts writes the config and stops there: nothing reaches the
@@ -1156,7 +1214,7 @@ test_no_live_shortcuts_skips_the_running_session() {
     assert_status 0 &&
     assert_not_called "kdeshortcut.py" &&
     assert_output_contains "they apply at next login" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     # The config is still written in full -- only the live push is skipped.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
@@ -1192,7 +1250,7 @@ test_declined_live_apply_allocates_no_batch() {
     assert_output_lacks "could not create a temporary file" &&
     assert_output_lacks "no shortcut batch was recorded" &&
     assert_output_contains "they apply at next login" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     assert_not_called "kdeshortcut.py" &&
     # The config writes are unaffected by any of this.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
@@ -1253,7 +1311,7 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
     assert_status 0 &&
     assert_output_contains "could not create a temporary file" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     # The config writes are the part that must survive.
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
@@ -1279,7 +1337,7 @@ test_uncreatable_journal_dir_skips_live_apply() {
     assert_output_contains "could not create the state directory" &&
     assert_output_contains "not applying shortcuts to the running session" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     # Nothing may reach the daemon without the journal.
     assert_not_called "kdeshortcut.py" &&
     # The config writes still happen; only the live push is skipped.
@@ -1336,7 +1394,7 @@ test_missing_python3_falls_back_to_logout_advice() {
     assert_status 0 &&
     assert_output_contains "no-such-python3 not found" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # A shortcut the daemon refuses (status 1) is reported, not swallowed, and the
@@ -1347,7 +1405,7 @@ test_failed_live_apply_warns_and_continues() {
     assert_status 0 &&
     assert_output_contains "some shortcuts could not be applied" &&
     assert_output_contains "shortcuts take effect after logging out" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # kglobalaccel unreachable (status 3) is a different message: nothing was
@@ -1357,7 +1415,7 @@ test_unreachable_daemon_warns_and_continues() {
     run_kde --no-install --live-shortcuts
     assert_status 0 &&
     assert_output_contains "could not reach kglobalaccel" &&
-    assert_output_contains "KDE configured successfully"
+    assert_output_contains "KDE settings"
 }
 
 # The launcher key map, pinned per launcher. Only browser1's key was asserted
@@ -1428,7 +1486,7 @@ test_missing_launcher_skipped_not_fatal() {
     # home directory the old message leaked.
     assert_output_contains "browser2 not found on PATH or beside this script; skipping its launch shortcut" &&
     assert_output_lacks "$TEST_TMPDIR/isolated" &&
-    assert_output_contains "KDE configured successfully" &&
+    assert_output_contains "KDE settings" &&
     assert_file_not_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser2.desktop" &&
     assert_file_exists "$TEST_TMPDIR/home/.local/share/applications/shortcut-browser1.desktop"
 }
@@ -1521,6 +1579,8 @@ run_test "Meta+[Shift+]Left/Right switch or move to the adjacent desktop" \
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
 run_test "a quiet run shows only its steps" test_quiet_run_shows_only_its_steps
+run_test "a second run says nothing" test_a_second_run_says_nothing
+run_test "a failed write stops the run" test_a_failed_write_stops_the_run
 run_test "the source build is quiet" test_source_build_is_quiet
 run_test "a failed command shows what it said" test_failed_command_shows_what_it_said
 run_test "a log that can't be made shows the output" test_unmakeable_log_shows_the_output
