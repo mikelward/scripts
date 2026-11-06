@@ -41,6 +41,10 @@ check "the Hyprland clone fetches udis86" test -e "$T/git/Hyprland-clone/subproj
 check "the Hyprland clone skips Tracy" test ! -e "$T/git/Hyprland-clone/subprojects/tracy/.git"
 check "the build clones wayland-protocols 1.49" has "$calls" "--branch 1.49"
 check "the build clones hyprland-protocols 0.8.0, which Hyprland 0.57 needs" has "$calls" "hyprland-protocols.git $T/src/hyprland-build/hyprland-protocols"
+check "hyprland-protocols builds with CMake, as v0.8.0 does" has "$calls" "cmake -S $T/src/hyprland-build/hyprland-protocols "
+check "the build pins glaze 7.2.0, which Hyprland would fetch past the mirror" has "$calls" "--branch v7.2.0"
+check "glaze builds without its developer mode" has "$calls" "-DBUILD_TESTING=OFF -Dglaze_DEVELOPER_MODE=OFF -Dglaze_ENABLE_FUZZING=OFF"
+check "glaze is built before Hyprland" test "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/glaze ' | cut -d: -f1 | head -1)" -lt "$(printf '%s\n' "$calls" | grep -n 'cmake -S .*/Hyprland ' | cut -d: -f1 | head -1)"
 check "wayland-protocols' headers skip the strict check" \
     test "$(cat "$T/src/hyprland-build/wayland-protocols/meson.build")" = "command: [scanner, 'enum-header']"
 check "the build installs under its prefix, by version" has "$calls" "-DCMAKE_INSTALL_PREFIX=$T/opt/hyprland/v0.57.1-"
@@ -71,6 +75,13 @@ check "the build links hyprctl onto PATH, through current" test "$(readlink "$T/
 check "the build links start-hyprland onto PATH, through current" test "$(readlink "$T/usr-local-bin/start-hyprland")" = "$T/opt/hyprland/current/bin/start-hyprland"
 check "the pins record Hyprland's commit" grep -q "Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c35ccf12b660a1ab9 cmake" "$(inst)/quickspace-pins"
 check "the build checks Hyprland's commit" has "$calls" "git -C $T/src/hyprland-build/Hyprland rev-parse HEAD"
+teardown
+# A pin that names the wrong build system builds the way its checkout does.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 FAKE_CHECKOUT_CMAKE=wayland-protocols
+check "a checkout with a CMakeLists.txt builds with CMake, whatever its pin says" has "$calls" "cmake -S $T/src/hyprland-build/wayland-protocols "
+check "and not with meson" lacks "$calls" "meson setup $T/src/hyprland-build/wayland-protocols/build"
+teardown
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 # A second run with the same pins doesn't rebuild.
 : > "$CALLS"
 run FAKE_APT_HYPRLAND=0.53.3+ds-4
