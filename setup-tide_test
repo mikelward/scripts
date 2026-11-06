@@ -28,6 +28,7 @@ check "masks the distro's waybar and swaync units, stopping them now" \
     has "$calls" "systemctl --user mask --now waybar.service swaync.service"
 check "leaves hypridle's unit to tide's session-only drop-in" lacks "$calls" "hypridle.service"
 check "touches no other user's units" lacks "$calls" "--global"
+check "the run that installs the session says how to start it" has "$output" "tide installed. Log out and pick the \"tide\" session"
 teardown
 
 setup; ARGS=(); run GO="$T/no-such-go"
@@ -188,7 +189,7 @@ check "the Quickshell build says why" has "$output" "apt has no Quickshell; buil
 : > "$CALLS"
 run FAKE_MISSING=quickshell
 check "the same Quickshell and Qt don't rebuild" lacks "$calls" "cmake -S"
-check "the same Quickshell and Qt say so" has "$output" "already built for Qt 6.10.2+dfsg-7"
+check "the same Quickshell and Qt say so only with --verbose" lacks "$output" "already built for Qt"
 first=$(qs_inst)
 : > "$CALLS"
 run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1
@@ -966,7 +967,7 @@ check "launcher: another app gets its theme icon" has "$(entry notepad)" "Icon=t
 check "launcher: another app names no window class" lacks "$(entry notepad)" "StartupWMClass"
 check "launcher: a command-line tool gets no entry" test ! -e "$T/$apps_dir/scripts-args.desktop"
 check "launcher: a listed script that isn't here gets no entry" test ! -e "$T/$apps_dir/scripts-irc.desktop"
-check "launcher: says how many it listed" has "$output" "Listing 2 app scripts in the launcher"
+check "launcher: says how many it listed only with --verbose" lacks "$output" "app scripts in the launcher"
 # A rerun reuses the icon rather than fetching it again.
 : > "$CALLS"; run
 check "launcher: a rerun fetches no icon it has" lacks "$calls" "curl"
@@ -1093,7 +1094,7 @@ check "tabs: no Brave, no Brave manifest" test ! -e "$T/home/.config/BraveSoftwa
 teardown
 setup; tabs_host; ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/no-tileco"
 check "tabs: no browser, nothing written" test ! -e "$T/home/.config/google-chrome"
-check "tabs: no browser, says so" has "$output" "No Chrome or Brave here"
+check "tabs: no browser, says so only with --verbose" lacks "$output" "No Chrome or Brave here"
 teardown
 
 # Brave found by its command alone, before it has ever run.
@@ -1194,14 +1195,7 @@ run
 check "quiet: a rerun shows only its steps" test "$output" = "Installing tide's apt packages
 Nothing new to install
 Installing Quickshell
-Nothing new to install
-Updating $T/src/tide
-Installing tide's user files
-Installing the tide session entry and commands under /usr
-Listing 0 app scripts in the launcher, with entries in $T/home/.local/share/applications
-No Chrome or Brave here, so no host for tide's browser tabs
-Leaving the text console login as the display manager; 'setup --greeter' makes tide's greeter the login screen
-tide installed. Log out and pick the \"tide\" session; KDE Plasma stays available."
+Nothing new to install"
 check "quiet: a rerun starts the log afresh" test "$(log | grep -c '^+ make -C .* install GO=go$')" -eq 1
 teardown
 

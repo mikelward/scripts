@@ -175,6 +175,42 @@ info() {
     printf "%s\n" "$*"
 }
 
+# detail: what a step found already done, which --verbose shows.
+detail() {
+    test "${VERBOSE:-no}" = yes || return 0
+    printf "%s\n" "$*"
+}
+
+# kde_write OPTION... VALUE: kwriteconfig6 OPTION... VALUE, unless kreadconfig6
+# reads VALUE back already. Each write it makes counts in KDE_WRITES, for
+# kde_step.
+KDE_WRITES=0
+kde_write() {
+    _kw_value=${!#}
+    if command -v kreadconfig6 >/dev/null 2>&1 \
+            && test "$(kreadconfig6 "${@:1:$#-1}" 2>/dev/null)" = "$_kw_value"; then
+        return 0
+    fi
+    kwriteconfig6 "$@" || return
+    KDE_WRITES=$((KDE_WRITES + 1))
+}
+
+# kde_step LABEL COMMAND...: runs COMMAND, then says LABEL if it changed a
+# setting, or leaves it to --verbose if everything was set already.
+kde_step() {
+    _ks_label=$1
+    shift
+    _ks_before=$KDE_WRITES
+    # Not "|| return": that would turn set -e off inside COMMAND, and a
+    # failed write partway through would pass for a finished step.
+    "$@"
+    if test "$KDE_WRITES" -gt "$_ks_before"; then
+        info "$_ks_label"
+    else
+        detail "$_ks_label: already set"
+    fi
+}
+
 warn() {
     printf "Warning: %s\n" "$*" >&2
     note_problem "Warning: $*"
@@ -511,7 +547,7 @@ install_krohnkite() {
         # it, so the fetched asset always lands here.
         asset_dir="$HOME/.local/share/homepkg/assets/krohnkite"
 
-        info "Fetching the Krohnkite release via homepkg"
+        detail "Fetching the Krohnkite release via homepkg"
         if run_logged "$homepkg" --backend codeberg install krohnkite; then
             kwinscript=$(find "$asset_dir" -name '*.kwinscript' -print -quit 2>/dev/null || true)
         else
@@ -555,7 +591,28 @@ install_krohnkite() {
 # where there's none, for -i to install it; what either says goes to the
 # log, and only -i's failure is shown.
 install_kwinscript() {
+    # A .kwinscript that was installed last run, and is installed still, is
+    # left as it is. A directory, from a source build, is installed each time.
+    _ik_stamp="${XDG_STATE_HOME:-$HOME/.local/state}/setup/krohnkite.sha256"
+    _ik_sum=
+    if test -f "$1" && command -v sha256sum >/dev/null 2>&1; then
+        _ik_sum=$(sha256sum < "$1") || _ik_sum=
+    fi
+    if test -n "$_ik_sum" && test "$(cat "$_ik_stamp" 2>/dev/null)" = "$_ik_sum" \
+            && test -d "$HOME/.local/share/kwin/scripts/krohnkite"; then
+        detail "Krohnkite is up to date"
+        return 0
+    fi
     info "Installing Krohnkite from $1"
+    install_kwinscript_now "$1" || return
+    if test -n "$_ik_sum"; then
+        if ! mkdir -p "${_ik_stamp%/*}" || ! printf '%s\n' "$_ik_sum" > "$_ik_stamp"; then
+            warn "couldn't note which Krohnkite is installed, so the next run installs it again"
+        fi
+    fi
+}
+
+install_kwinscript_now() {
     start_setup_log
     if test "$SETUP_LOG" = -; then
         kpackagetool6 -t KWin/Script -u "$1" 2>/dev/null && return 0
@@ -569,8 +626,7 @@ install_kwinscript() {
 # --- Enable Krohnkite ---
 
 enable_krohnkite() {
-    info "Enabling Krohnkite plugin"
-    kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled true
+    kde_write --file kwinrc --group Plugins --key krohnkiteEnabled true
 }
 
 # --- Configure Krohnkite ---
@@ -579,12 +635,11 @@ enable_krohnkite() {
 # value of 0 removes the layout from the cycle entirely (Krohnkite source:
 # KWinConfig.getSortedLayouts skips orders that validate to 0).
 configure_krohnkite() {
-    info "Configuring Krohnkite layouts: Tile, ThreeColumn, Columns, Monocle"
     set_layout_order() {
-        kwriteconfig6 --file kwinrc --group Script-krohnkite --key "$1" "$2"
+        kde_write --file kwinrc --group Script-krohnkite --key "$1" "$2"
     }
     # Columns layout has its own enable flag in addition to the order.
-    kwriteconfig6 --file kwinrc --group Script-krohnkite --key enableColumnsLayout true
+    kde_write --file kwinrc --group Script-krohnkite --key enableColumnsLayout true
     set_layout_order tileLayoutOrder 1
     set_layout_order threeColumnLayoutOrder 2
     set_layout_order columnsLayoutOrder 3
@@ -612,22 +667,20 @@ configure_krohnkite() {
 # user-initiated popups grab focus. 1/Low is the KDE default and also
 # works; 3/High or higher can suppress legitimate popups.
 configure_focus_follows_mouse() {
-    info "Enabling focus follows mouse (mouse precedence)"
-    kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse
-    kwriteconfig6 --file kwinrc --group Windows --key NextFocusPrefersMouse true
-    kwriteconfig6 --file kwinrc --group Windows --key FocusStealingPreventionLevel 2
+    kde_write --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse
+    kde_write --file kwinrc --group Windows --key NextFocusPrefersMouse true
+    kde_write --file kwinrc --group Windows --key FocusStealingPreventionLevel 2
 }
 
 # --- Dim inactive windows ---
 
 configure_dim_inactive() {
-    info "Enabling dim inactive windows"
-    kwriteconfig6 --file kwinrc --group Plugins --key diminactiveEnabled true
+    kde_write --file kwinrc --group Plugins --key diminactiveEnabled true
     # Strength is 0-100; KWin's default is 25, 15 is noticeably gentler.
-    kwriteconfig6 --file kwinrc --group Effect-diminactive --key Strength 15
-    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimByGroup true
-    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimPanels false
-    kwriteconfig6 --file kwinrc --group Effect-diminactive --key DimFullScreen false
+    kde_write --file kwinrc --group Effect-diminactive --key Strength 15
+    kde_write --file kwinrc --group Effect-diminactive --key DimByGroup true
+    kde_write --file kwinrc --group Effect-diminactive --key DimPanels false
+    kde_write --file kwinrc --group Effect-diminactive --key DimFullScreen false
 }
 
 # `kwin reconfigure` doesn't load a newly-enabled effect, and `loadEffect`
@@ -647,9 +700,8 @@ reload_diminactive_effect() {
 # --- Configure virtual desktops ---
 
 configure_desktops() {
-    info "Configuring 9 virtual desktops"
-    kwriteconfig6 --file kwinrc --group Desktops --key Number 9
-    kwriteconfig6 --file kwinrc --group Desktops --key Rows 1
+    kde_write --file kwinrc --group Desktops --key Number 9
+    kde_write --file kwinrc --group Desktops --key Rows 1
 }
 
 # --- Configure the keyboard layout ---
@@ -670,12 +722,11 @@ configure_desktops() {
 # name rather than an index and its behavior varies across Plasma versions --
 # same reasoning as the dvorak script.)
 configure_keyboard_layout() {
-    info "Configuring keyboard layout: US Dvorak, Caps Lock as Compose"
-    kwriteconfig6 --file kxkbrc --group Layout --key Use true
-    kwriteconfig6 --file kxkbrc --group Layout --key LayoutList us
-    kwriteconfig6 --file kxkbrc --group Layout --key VariantList dvorak
-    kwriteconfig6 --file kxkbrc --group Layout --key Options compose:caps
-    kwriteconfig6 --file kxkbrc --group Layout --key ResetOldOptions true
+    kde_write --file kxkbrc --group Layout --key Use true
+    kde_write --file kxkbrc --group Layout --key LayoutList us
+    kde_write --file kxkbrc --group Layout --key VariantList dvorak
+    kde_write --file kxkbrc --group Layout --key Options compose:caps
+    kde_write --file kxkbrc --group Layout --key ResetOldOptions true
 }
 
 # --- Turn off DrKonqi ---
@@ -691,6 +742,11 @@ DRKONQI_UNITS="drkonqi-coredump-launcher.socket drkonqi-coredump-pickup.service"
 disable_drkonqi() {
     if ! command -v systemctl >/dev/null 2>&1; then
         warn "systemctl not found; DrKonqi's crash handler is left as it is"
+        return 0
+    fi
+    # shellcheck disable=SC2086 # the list is meant to split
+    if test "$(systemctl --user is-enabled $DRKONQI_UNITS 2>/dev/null | sort -u)" = masked; then
+        detail "DrKonqi's crash handler is masked already"
         return 0
     fi
     info "Masking DrKonqi's crash handler"
@@ -726,14 +782,14 @@ set_shortcut() {
     action="$1"
     shortcut="$2"
     label="${3:-$action}"
-    kwriteconfig6 --file kglobalshortcutsrc --group kwin \
+    kde_write --file kglobalshortcutsrc --group kwin \
         --key "$action" "$(printf '%s' "$shortcut" | tr ' ' '\t'),none,$label"
     record_live_shortcut kwin "$action" "$shortcut" "$label"
 }
 
 unbind_shortcut() {
     action="$1"
-    kwriteconfig6 --file kglobalshortcutsrc --group kwin \
+    kde_write --file kglobalshortcutsrc --group kwin \
         --key "$action" "none,none,$action"
     record_live_shortcut kwin "$action" none "$action"
 }
@@ -741,7 +797,7 @@ unbind_shortcut() {
 unbind_shortcut_in() {
     group="$1"
     action="$2"
-    kwriteconfig6 --file kglobalshortcutsrc --group "$group" \
+    kde_write --file kglobalshortcutsrc --group "$group" \
         --key "$action" "none,none,$action"
     record_live_shortcut "$group" "$action" none "$action"
 }
@@ -754,7 +810,7 @@ unbind_shortcut_in() {
 # A launch shortcut in [services], as Plasma's own apps keep theirs:
 # set_app_shortcut COMPONENT KEYS NAME.
 set_app_shortcut() {
-    kwriteconfig6 --file kglobalshortcutsrc \
+    kde_write --file kglobalshortcutsrc \
         --group services --group "$1" --key _launch "$2,none,$3"
     record_live_shortcut "$1" _launch "$2" "$3"
 }
@@ -852,12 +908,12 @@ EOF
     # grabs, and the keypress falls through to the focused window -- the same
     # failure the X-KDE-GlobalAccel-CommandShortcut flag above fixes, and the
     # same 3-field rule that Meta+\, needs in configure_keybindings.
-    kwriteconfig6 --file kglobalshortcutsrc \
+    kde_write --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
         --key _launch "$shortcut,none,$name"
     # The component's display name in System Settings, written the way KDE
     # writes it for its own service shortcuts.
-    kwriteconfig6 --file kglobalshortcutsrc \
+    kde_write --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
         --key _k_friendly_name "$name"
     record_live_shortcut "$desktop_file" _launch "$shortcut" "$name"
@@ -926,7 +982,6 @@ remove_stale_app_shortcut_groups() {
 }
 
 configure_app_shortcuts() {
-    info "Configuring application shortcuts"
 
     remove_stale_app_shortcut_groups
 
@@ -948,7 +1003,6 @@ configure_app_shortcuts() {
 }
 
 configure_keybindings() {
-    info "Configuring keybindings"
 
     # Switch to desktop 1..N. KDE records the shifted variant as the
     # character produced (Meta+! rather than Meta+Shift+1); writing it
@@ -1030,7 +1084,7 @@ configure_keybindings() {
 # --- Reload KWin ---
 
 reload_kwin() {
-    info "Reloading KWin configuration"
+    detail "Reloading KWin configuration"
     # || warn: KWin may not be running (e.g. bootstrapping before the first
     # KDE login); a failed reload must not abort the script under set -e.
     if command -v qdbus6 >/dev/null 2>&1; then
@@ -1051,7 +1105,7 @@ reload_krohnkite() {
     command -v qdbus6 >/dev/null 2>&1 || return 0
     main_qml="$HOME/.local/share/kwin/scripts/krohnkite/contents/ui/main.qml"
     test -f "$main_qml" || return 0
-    info "Reloading Krohnkite so config changes apply"
+    detail "Reloading Krohnkite so config changes apply"
     qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript krohnkite >/dev/null 2>&1 || true
     qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.loadDeclarativeScript "$main_qml" krohnkite >/dev/null 2>&1 || true
     qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.start >/dev/null 2>&1 || true
@@ -1145,13 +1199,18 @@ apply_shortcuts_live() {
         return 0
     fi
 
-    info "Applying shortcuts to the running session"
+    detail "Applying shortcuts to the running session"
     status=0
     "$PYTHON" "$helper" --quiet --journal "$journal" \
         --batch "$LIVE_SHORTCUTS" || status=$?
     case "$status" in
         0)
-            info "Shortcuts are live; no logout needed"
+            # Worth saying when they changed; otherwise nothing's new.
+            if test "$KDE_WRITES" -gt 0; then
+                info "Shortcuts are live; no logout needed"
+            else
+                detail "Shortcuts are live; no logout needed"
+            fi
             ;;
         1)
             # The helper already named each shortcut it couldn't apply.
@@ -1176,17 +1235,17 @@ if test "$INSTALL" = yes; then
 else
     info "Skipping Krohnkite installation (--no-install)"
 fi
-enable_krohnkite
-configure_krohnkite
-configure_focus_follows_mouse
-configure_dim_inactive
-configure_desktops
-configure_keyboard_layout
+kde_step "Turned on the Krohnkite plugin" enable_krohnkite
+kde_step "Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle" configure_krohnkite
+kde_step "Turned on focus follows mouse (mouse precedence)" configure_focus_follows_mouse
+kde_step "Turned on dimming inactive windows" configure_dim_inactive
+kde_step "Set 9 virtual desktops" configure_desktops
+kde_step "Set the keyboard layout: US Dvorak, Caps Lock as Compose" configure_keyboard_layout
 disable_drkonqi
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
-configure_keybindings
-configure_app_shortcuts
+kde_step "Set the keybindings" configure_keybindings
+kde_step "Set the application shortcuts" configure_app_shortcuts
 # Rebuild the service database so KDE picks up the new .desktop files. This
 # also registers them with the running kglobalaccel: it rebuilds its service
 # components when sycoca changes, which is what lets apply_shortcuts_live bind
@@ -1208,4 +1267,8 @@ if is_command setup-kde.local; then
     source setup-kde.local
 fi
 
-info "KDE configured successfully"
+if test "$KDE_WRITES" -gt 0; then
+    info "Changed $KDE_WRITES KDE settings"
+else
+    detail "KDE was set up already"
+fi
