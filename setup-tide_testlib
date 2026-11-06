@@ -235,7 +235,38 @@ case " \$* " in
         fi
         ;;
 esac
+# Installing SDDM or GDM runs its postinst, unless \$FAKE_POSTINST_KEEPS.
+for arg; do
+    case "\$arg" in
+        sddm | gdm3) test -n "\$FAKE_POSTINST_KEEPS" || "$T/bin/fake-dm-postinst" ;;
+    esac
+done
 MOCK
+    # As Debian's SDDM and GDM postinsts do, fake-dm-postinst links
+    # display-manager.service to the display manager
+    # /etc/X11/default-display-manager names, whatever debconf's answer.
+    # debconf-set-selections FILE keeps FILE's answer in $T/debconf-answer,
+    # or fails with \$FAKE_DEBCONF_FAILS. dpkg-reconfigure runs the
+    # package's postinst again, or fails with \$FAKE_RECONFIGURE_FAILS.
+    cat > "$T/bin/fake-dm-postinst" <<MOCK
+#!/bin/sh
+test -s "$T/etc/X11/default-display-manager" || exit 0
+dm=\$(basename "\$(cat "$T/etc/X11/default-display-manager")")
+case "\$dm" in gdm3) echo gdm.service ;; *) echo "\$dm.service" ;; esac > "$T/dm"
+MOCK
+    cat > "$T/bin/debconf-set-selections" <<MOCK
+#!/bin/sh
+printf "%s\\n" "debconf-set-selections \$*" >> "$CALLS"
+test -z "\$FAKE_DEBCONF_FAILS" || exit 1
+cat "\$1" > "$T/debconf-answer"
+MOCK
+    cat > "$T/bin/dpkg-reconfigure" <<MOCK
+#!/bin/sh
+printf "%s\\n" "dpkg-reconfigure \$*" >> "$CALLS"
+test -z "\$FAKE_RECONFIGURE_FAILS" || exit 1
+"$T/bin/fake-dm-postinst"
+MOCK
+    chmod +x "$T/bin/fake-dm-postinst" "$T/bin/debconf-set-selections" "$T/bin/dpkg-reconfigure"
     # apt-cache policy knows every package but those in \$FAKE_MISSING,
     # offering Hyprland \$FAKE_APT_HYPRLAND (or a new enough one), g++-16
     # \$FAKE_APT_GXX and libxkbcommon-dev \$FAKE_APT_XKB (or Ubuntu 26.04's),

@@ -2,7 +2,8 @@
 # Bootstrap script for setting up a new machine.
 #
 # Usage:
-#     setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter] \
+#     setup [--gui | --no-gui] [--kde] [--no-tide] \
+#           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
 #           [--ssh | --no-ssh] [--no-npm] [--upgrade] [--github PREFIX] \
 #           [-v | --verbose] \
@@ -193,7 +194,7 @@ PURGE_OBSOLETE=no
 #   yes - KDE Plasma plus tide (the default; --tide says so)
 #   no  - KDE Plasma only (--no-tide)
 # tide is one more session at the login screen: the display manager stays
-# unless --greeter is given. The packages it needs are kept out of
+# unless --dm or --greeter says otherwise. The packages it needs are kept out of
 # --purge-obsolete.
 TIDE=yes
 # Flags for setup-tide only.
@@ -267,7 +268,8 @@ EXTRAS=auto
 
 usage() {
     cat <<'USAGE'
-Usage: setup [--gui | --no-gui] [--kde] [--no-tide] [--greeter | --no-greeter]
+Usage: setup [--gui | --no-gui] [--kde] [--no-tide]
+             [--dm tide|sddm|gdm|keep | --greeter | --no-greeter]
              [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
@@ -287,7 +289,10 @@ Options:
                    Use the distro's Hyprland for tide, even if it's too old
   --tidewm         Also build tidewm for tide's tidewm session, an option
                    beside Hyprland's (Debian testing and Arch)
-  --greeter        Make greetd, with tide's greeter, the display manager
+  --dm DM          The login screen from the next boot: tide (greetd with
+                   tide's greeter), sddm, gdm, or keep the one there is (the
+                   default). SDDM and GDM are installed if they aren't
+  --greeter        The same as --dm=tide
   --no-greeter     Put back the display manager greetd replaced
   --minimal        Skip the heavyweight extras (helix, jj, nushell)
   --full           Install everything, even when disk space looks tight
@@ -521,6 +526,19 @@ canonical_remote() {
 # option-looking value (a real host/prefix never starts with '-', so
 # "setup --github --no-install" is a forgotten value that would otherwise
 # swallow the flag and clone from "--no-install:mikelward/...").
+# require_dm DM: setup-tide's --dm takes these, checked here so a typo
+# stops the run before anything is installed.
+require_dm() {
+    case "$1" in
+        tide | sddm | gdm | keep) ;;
+        *)
+            error "--dm takes tide, sddm, gdm or keep, not '$1'"
+            usage >&2
+            exit 1
+            ;;
+    esac
+}
+
 require_github_prefix() {
     case "$1" in
         "" | -*)
@@ -562,6 +580,15 @@ while test $# -gt 0; do
             ;;
         --no-greeter)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"
+            ;;
+        --dm)
+            shift
+            require_dm "${1:-}"
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --dm=$1"
+            ;;
+        --dm=*)
+            require_dm "${1#--dm=}"
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS $1"
             ;;
         --minimal)
             MINIMAL=yes

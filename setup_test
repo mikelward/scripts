@@ -1528,6 +1528,22 @@ test_greeter_is_forwarded() {
     assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --greeter"
 }
 
+# setup takes --dm, as --dm DM or --dm=DM, and hands it to setup-tide; a
+# login screen setup-tide wouldn't take stops the run before anything runs.
+test_dm_is_forwarded() {
+    run_setup --dm sddm --help
+    assert_status 0 &&
+    assert_output_contains "--dm DM" &&
+    run_setup --dm=gdm --help &&
+    assert_status 0 &&
+    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --dm=$1"' &&
+    run_linux_desktop "" " --dm=sddm" &&
+    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --dm=sddm" &&
+    run_setup --dm=lightdm
+    assert_status 1 &&
+    assert_output_contains "--dm takes tide, sddm, gdm or keep, not 'lightdm'"
+}
+
 # setup takes --no-build-hyprland and hands it to setup-tide.
 test_no_build_hyprland_is_forwarded() {
     run_setup --no-build-hyprland --help
@@ -5019,6 +5035,7 @@ run_test "--tide is accepted" test_tide_flag_is_accepted
 run_test "tide is on by default" test_tide_on_by_default
 run_test "--no-tide skips tide" test_no_tide_skips_tide
 run_test "--greeter is forwarded to setup-tide" test_greeter_is_forwarded
+run_test "--dm is checked and passed to setup-tide" test_dm_is_forwarded
 run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
 run_test "--tidewm is forwarded to setup-tide" test_tidewm_is_forwarded
 run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
