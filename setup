@@ -119,6 +119,7 @@ SCRIPTS_REPO_PATH="mikelward/scripts.git"
 CONF_REPO_PATH="mikelward/conf.git"
 ROOT_REPO_PATH="mikelward/root.git"
 TIDE_REPO_PATH="mikelward/tide.git"
+VCS_REPO_PATH="mikelward/vcs.git"
 
 SCRIPTS_DIR="$HOME/scripts"
 CONF_DIR="$HOME/conf"
@@ -662,6 +663,7 @@ SCRIPTS_REPO="${GITHUB_PREFIX}${SCRIPTS_REPO_PATH}"
 CONF_REPO="${GITHUB_PREFIX}${CONF_REPO_PATH}"
 ROOT_REPO="${GITHUB_PREFIX}${ROOT_REPO_PATH}"
 TIDE_REPO="${GITHUB_PREFIX}${TIDE_REPO_PATH}"
+VCS_REPO="${GITHUB_PREFIX}${VCS_REPO_PATH}"
 
 # Whether the repos come from somewhere other than the default (github.com over
 # SSH), i.e. --github or GITHUB_PREFIX pointed them elsewhere. Compared after
@@ -1643,6 +1645,30 @@ check_go() {
     if ! go_at_least "$go_version" "$MIN_GO"; then
         warn "vcs needs Go $MIN_GO or newer, and $GO is $go_version; on Debian 12, install golang from bookworm-backports, or Go from https://go.dev/dl/"
         return 1
+    fi
+}
+
+# install_vcs clones or pulls vcs, the prompt's VCS status helper, into
+# conf/vcs, where conf's Makefile keeps it (conf's .gitignore leaves it out),
+# then builds and installs it. setup used to build it only if `make` in conf
+# had cloned it already, and said nothing otherwise. Run after run_confinst,
+# so confinst doesn't link vcs's own files into ~.
+install_vcs() {
+    # Optional for the shell, so a failed clone (offline, say) warns below
+    # rather than ending the run under set -e.
+    clone_or_pull "$VCS_REPO" "$CONF_DIR/vcs" yes \
+        || warn "couldn't clone or update vcs from $(redact_url_credentials "$VCS_REPO")"
+    if ! test -f "$CONF_DIR/vcs/Makefile"; then
+        warn "skipping vcs: $CONF_DIR/vcs has no Makefile, so the prompt shows no VCS status"
+        return 0
+    fi
+    if check_go; then
+        info "Installing vcs"
+        make -C "$CONF_DIR/vcs" install \
+            || warn "couldn't build vcs, so the prompt shows no VCS status; see make -C $CONF_DIR/vcs install"
+    else
+        # The prompt shows no VCS status without it, but the shell works.
+        warn "skipping vcs; rerun setup once Go $MIN_GO or newer is installed"
     fi
 }
 
@@ -3546,15 +3572,7 @@ else
 fi
 
 # After install_home_tools, which is where --no-root gets its Go.
-if test -f "$CONF_DIR/vcs/Makefile"; then
-    if check_go; then
-        info "Installing vcs"
-        make -C "$CONF_DIR/vcs" install
-    else
-        # The prompt shows no VCS status without it, but the shell works.
-        warn "skipping vcs; rerun setup once Go $MIN_GO or newer is installed"
-    fi
-fi
+install_vcs
 
 # atuin/carapace are small static binaries with no packaged build, and lf
 # has no reliable distro package -- all come from homepkg once the scripts

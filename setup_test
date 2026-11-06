@@ -1206,11 +1206,72 @@ test_go_is_installed_for_everything() {
     # homepkg install, which is where that Go comes from there.
     assert_source_contains '    if check_go; then'
     home_tools=$(grep -n '^    install_home_tools$' "$SETUP" | cut -d: -f1)
-    vcs=$(grep -n '^    if check_go; then$' "$SETUP" | cut -d: -f1)
+    vcs=$(grep -n '^install_vcs$' "$SETUP" | cut -d: -f1)
     if test -z "$home_tools" || test -z "$vcs" || test "$vcs" -le "$home_tools"; then
         echo "  FAIL: vcs is built before install_home_tools"
         TEST_FAILED=1
     fi
+}
+
+# Run install_vcs with conf at a temp dir, against stubs: clone_or_pull
+# records its call, and makes conf/vcs (with a Makefile), or fails as git
+# clone does offline if $1 is no-clone; check_go answers $2 (ok or old); make exits $3 (default 0).
+run_install_vcs() {
+    vcs_tmpdir="$(mktemp -d)"
+    set +e
+    output="$(sh -c "set -e
+CONF_DIR='$vcs_tmpdir/conf'
+VCS_REPO=\${VCS_REPO:-https://example.com/mikelward/vcs.git}
+MIN_GO=1.21
+clone_or_pull() {
+    echo \"clone_or_pull \$*\"
+    test '$1' = no-clone && return 1
+    mkdir -p \"\$2\" && : > \"\$2/Makefile\"
+}
+check_go() { test '$2' = ok; }
+make() { echo \"make \$*\"; return ${3:-0}; }
+$(extract_functions "info detail warn note_problem redact_url_credentials install_vcs")
+install_vcs
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$vcs_tmpdir"
+}
+
+# setup clones vcs itself, as conf's Makefile does, so a fresh conf gets it.
+test_vcs_is_cloned_and_built() {
+    run_install_vcs clone ok
+    assert_status 0 &&
+    assert_output_contains "clone_or_pull https://example.com/mikelward/vcs.git $vcs_tmpdir/conf/vcs yes" &&
+    assert_output_contains "make -C $vcs_tmpdir/conf/vcs install" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# With no vcs to build, as when its clone fails offline, it says so and the
+# run goes on, rather than stopping or skipping without a word.
+test_missing_vcs_is_said() {
+    run_install_vcs no-clone ok
+    assert_status 0 &&
+    assert_output_contains "couldn't clone or update vcs from https://example.com/mikelward/vcs.git" &&
+    assert_output_contains "skipping vcs: $vcs_tmpdir/conf/vcs has no Makefile, so the prompt shows no VCS status" &&
+    assert_output_lacks "make -C" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A mirror URL's credentials stay out of the warning.
+test_failed_vcs_clone_hides_credentials() {
+    VCS_REPO=https://user:s3cret@example.com/mikelward/vcs.git run_install_vcs no-clone ok
+    assert_status 0 &&
+    assert_output_contains "couldn't clone or update vcs from https://***@example.com/mikelward/vcs.git" &&
+    assert_eq "$(printf '%s\n' "$output" | grep '^Warning' | grep -c s3cret)" 0
+}
+
+# A failed build warns and the run goes on.
+test_failed_vcs_build_is_said() {
+    run_install_vcs clone ok 2
+    assert_status 0 &&
+    assert_output_contains "couldn't build vcs, so the prompt shows no VCS status" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
 # --- Crostini ---
@@ -5170,6 +5231,10 @@ run_test "check_go rejects a version it can't read" \
     test_check_go_rejects_a_version_it_cannot_read
 run_test "check_go rejects a missing Go" \
     test_check_go_rejects_no_go
+run_test "setup clones vcs and builds it" test_vcs_is_cloned_and_built
+run_test "a missing vcs is said, not skipped silently" test_missing_vcs_is_said
+run_test "a failed vcs build warns and the run goes on" test_failed_vcs_build_is_said
+run_test "a failed vcs clone keeps a mirror's credentials out of the warning" test_failed_vcs_clone_hides_credentials
 run_test "Go is installed by setup itself, and vcs waits for it" \
     test_go_is_installed_for_everything
 run_test "an AMD card driving the screens is held powered, now and from boot" \
