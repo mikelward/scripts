@@ -2152,9 +2152,10 @@ build_component() {
     info "Building $1 $(pin_label "$3" "$4")"
     rm -rf "$dir"
     if test "$3" = -; then
-        # A commit with no tag: a partial clone, which fetches only the
-        # files that commit has as it's checked out, through the mirror too.
-        build_logged "$1" git_github clone --quiet --filter=blob:none --no-checkout "$2" "$dir" \
+        # A commit with no tag: a whole clone, then that commit, through the
+        # mirror too. Not a partial clone (--filter): a server or mirror that
+        # doesn't serve one refuses it outright, and these repos are small.
+        build_logged "$1" git_github clone --quiet --no-checkout "$2" "$dir" \
             && build_logged "$1" git_github -C "$dir" -c advice.detachedHead=false checkout --quiet "$4" \
             || return 1
     else
