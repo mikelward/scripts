@@ -5,7 +5,8 @@
 #     setup [--gui | --no-gui] [--kde] [--no-tide] \
 #           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
-#           [--ssh | --no-ssh] [--no-npm] [--upgrade] [--github PREFIX] \
+#           [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade] \
+#           [--github PREFIX] \
 #           [-v | --verbose] \
 #           [-h | --help]
 #
@@ -49,7 +50,8 @@
 # need approving before it runs. The weekly pass upgrades setup's apt or dnf
 # packages, everything Homebrew has, the homepkg env, the release binaries
 # and uv; ~/.local/state/setup/last-upgrade records when the last one
-# finished without failing. Pass --upgrade to upgrade now anyway. The repos
+# finished without failing. Pass --upgrade to upgrade now anyway, or
+# --no-upgrade to leave them for a later run. The repos
 # setup clones are config, not packages, and are pulled on every run.
 #
 # On a Mac whose Santa is in Lockdown mode, where each new version of a
@@ -152,6 +154,7 @@ export HOMEBREW_AUTO_UPDATE_SECS=604800
 #   auto - when the last upgrade pass was a week or more ago, or never ran;
 #          resolve_upgrade decides (the default)
 #   yes  - upgrade now (--upgrade)
+#   no   - leave them for a later run (--no-upgrade)
 # resolve_upgrade turns auto into yes or no. UPGRADE_STAMP's time is when the
 # last upgrade pass finished without failing; record_upgrade touches it, and
 # any upgrade step that fails sets UPGRADE_FAILED so the next run tries again.
@@ -273,7 +276,8 @@ Usage: setup [--gui | --no-gui] [--kde] [--no-tide]
              [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
              [--ignore-errors] [--no-live-shortcuts]
-             [--ssh | --no-ssh] [--no-npm] [--upgrade] [--github PREFIX]
+             [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade]
+             [--github PREFIX]
              [-v | --verbose]
              [-h | --help]
 
@@ -314,6 +318,8 @@ Options:
   --no-npm         Skip installing Node.js and the TypeScript compiler
   --upgrade        Upgrade installed packages now, even if they were upgraded
                    less than a week ago
+  --no-upgrade     Don't upgrade installed packages this run, even if a week
+                   has passed; the next run catches up
   --github PREFIX  Clone from PREFIX instead of github.com, e.g.
                    git@ghe.example.com or https://ghe.example.com. Also
                    settable via GITHUB_PREFIX
@@ -659,6 +665,9 @@ while test $# -gt 0; do
             ;;
         --upgrade)
             UPGRADE=yes
+            ;;
+        --no-upgrade)
+            UPGRADE=no
             ;;
         --github)
             shift

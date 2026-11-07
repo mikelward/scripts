@@ -101,6 +101,7 @@ it's pulled on every run.
 | `--no-root` | Unprivileged install; CLI tools come from conda-forge via `homepkg` instead |
 | `--no-npm` | Skip node and tsc |
 | `--upgrade` | Upgrade installed packages now, even if they were upgraded less than a week ago |
+| `--no-upgrade` | Don't upgrade installed packages this run, even if a week has passed; the next run catches up |
 
 `--no-sudo` and `--no-root` change little on macOS. Homebrew never wants sudo
 and installing Amethyst needs write access to an Applications directory rather

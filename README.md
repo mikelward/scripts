@@ -26,7 +26,8 @@ installed at its version, upgrading only once a week. That pass upgrades
 `setup`'s apt or dnf packages, everything Homebrew has, the `homepkg` tools,
 the release binaries and `uv`, and `~/.local/state/setup/last-upgrade` records
 the last one that didn't fail; a failed one is tried again on the next run.
-`setup --upgrade` upgrades now. A managed machine that has each new version of
+`setup --upgrade` upgrades now, and `setup --no-upgrade` leaves it for a later
+run. A managed machine that has each new version of
 a binary approved before it runs sees new versions at most weekly. The repos
 `setup` clones (`scripts`, `conf`, `vcs` and the rest) are config, so they're pulled
 on every run.
