@@ -3669,6 +3669,56 @@ test_https_prefix_key_prompt_does_not_block() {
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
+# A command that finishes in time leaves nothing behind, under bash and the
+# sh that curl | sh runs: the timer is stopped along with its sleep, at once
+# and quietly. Killing only the timer's subshell left its sleep running, and
+# macOS's bash 3.2 printed "Terminated: 15" for the subshell. The stub sleep
+# records its pid once it's waiting, and notes if it runs to the end; the
+# command waits for the pid, so the timer is running when it's stopped. The
+# stub's own wait is only a bound, so that a timer that isn't stopped fails
+# rather than hangs; stopped, the stub stops it too, and nothing is left.
+run_command_in_time() {
+    wtl_tmpdir="$(mktemp -d)"
+    mkdir -p "$wtl_tmpdir/bin"
+    cat > "$wtl_tmpdir/bin/sleep" <<EOF
+#!/bin/sh
+trap 'kill \$child; exit 143' TERM
+$(command -v sleep) 10 &
+child=\$!
+echo \$\$ > $wtl_tmpdir/sleep.pid
+wait \$child
+echo > $wtl_tmpdir/sleep.ended
+EOF
+    chmod +x "$wtl_tmpdir/bin/sleep"
+    set +e
+    output="$(PATH="$wtl_tmpdir/bin:$PATH" "$1" -c "
+$(extract_functions with_time_limit)
+with_time_limit 5 sh -c 'until test -s $wtl_tmpdir/sleep.pid; do :; done'
+echo status \$?
+if test -e $wtl_tmpdir/sleep.ended; then
+    echo SLEEP_RAN_TO_THE_END
+fi
+if kill -0 \$(cat $wtl_tmpdir/sleep.pid) 2>/dev/null; then
+    echo SLEEP_LEFT_RUNNING
+    kill \$(cat $wtl_tmpdir/sleep.pid)
+fi" </dev/null 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$wtl_tmpdir"
+}
+
+test_a_command_in_time_leaves_no_timer_under_bash() {
+    run_command_in_time bash
+    assert_status 0 &&
+    assert_output_is "status 0"
+}
+
+test_a_command_in_time_leaves_no_timer_under_sh() {
+    run_command_in_time sh
+    assert_status 0 &&
+    assert_output_is "status 0"
+}
+
 # An ssh-agent that never answers ssh-add -l -- one behind a hung security
 # key, say -- must not stall setup: once the wait is up it counts as holding
 # no key, with a warning, and the key file check goes on. The stub sleep
@@ -5020,6 +5070,10 @@ run_test "a mirror prefix skips the SSH remote-switch offer" \
     test_mirror_skips_ssh_remote_offer
 run_test "the default prefix still reaches the remote-switch offer" \
     test_default_prefix_reaches_ssh_remote_offer
+run_test "a command that ends in time leaves no timer behind under bash" \
+    test_a_command_in_time_leaves_no_timer_under_bash
+run_test "a command that ends in time leaves no timer behind under sh" \
+    test_a_command_in_time_leaves_no_timer_under_sh
 run_test "an HTTPS prefix names its host and doesn't wait for the key" \
     test_https_prefix_key_prompt_does_not_block
 run_test "a mismatched existing checkout is reported under a mirror prefix" \
