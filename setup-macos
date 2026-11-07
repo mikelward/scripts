@@ -2369,6 +2369,17 @@ configure_lock_screen() {
     try sudo defaults write "$LOGINWINDOW_PLIST" LoginwindowText "$_host"
 }
 
+# Font smoothing at its lightest. Since Mojave, macOS's default thickens text,
+# which on a non-Retina display smears bold into gray; 1 keeps a little of it,
+# and 0 (off) is thinner still. It's per host (-currentHost), as System
+# Settings once wrote it, and apps read it as they launch, so it waits for the
+# logout.
+configure_fonts() {
+    info "Setting font smoothing to light"
+    try defaults -currentHost write -g AppleFontSmoothing -int 1
+    needs_logout "the font smoothing"
+}
+
 # --- Main ---
 
 preflight
@@ -2388,6 +2399,7 @@ configure_finder
 configure_screenshots
 configure_windows
 configure_lock_screen
+configure_fonts
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
