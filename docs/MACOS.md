@@ -586,6 +586,14 @@ focus-stealing prevention levels — that part *is* a platform limit.
 
 [amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
+**Subpixel text.** macOS dropped subpixel antialiasing in Mojave, so on a
+non-Retina display text is grayscale and bold smears. `setup-macos` sets font
+smoothing to light (`AppleFontSmoothing` 1), which thins text toward sharp; it
+takes effect as each app starts, or for everything at the next login. `0` turns
+it off, for the thinnest text; there's nothing between 0 and 1. To undo it:
+`defaults -currentHost delete -g AppleFontSmoothing`. conf's kitty also draws
+text at Linux's size and without the extra thickening on macOS.
+
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
 tide for macOS dims every window but the focused one itself; with Amethyst there's no
 dim.

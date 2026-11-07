@@ -86,20 +86,12 @@ The rest of the Crostini mode in mikelward/tideco's SPEC.md A.5, after
 
 ## Font smoothing on macOS
 
-- [ ] **Try both lighter settings, then set the one you like in
-      `setup-macos`.** macOS's default font smoothing draws text heavy.
-      Try each on the Mac, logging out and back in (or reopening apps) to
-      see it:
-
-      ```sh
-      defaults -currentHost write -g AppleFontSmoothing -int 0
-      defaults -currentHost write -g AppleFontSmoothing -int 1
-      ```
-
-      `0` turns smoothing off, for the thinnest text; `1` is light.
-      `defaults -currentHost delete -g AppleFontSmoothing` goes back to the
-      default. Then `setup-macos` writes the chosen value, with a test and
-      a line in `docs/MACOS.md`.
+- [ ] **Live with light smoothing a while, then settle it.** `setup-macos`
+      writes `AppleFontSmoothing` 1. Normal weights look right; bold may be
+      too blurry. If it is, either go to `0` and give kitty a little weight
+      back (`text_composition_strategy` in conf's `kitty.conf`), or keep
+      `1` and give kitty a lighter bold (`bold_font`). macOS has nothing
+      between 0 and 1.
 
 ## Decisions needing review
 
