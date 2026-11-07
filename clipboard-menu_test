@@ -26,7 +26,7 @@ setup() {
   CALLS="$TEST_TMPDIR/calls"
   mkdir -p "$BIN"
   : > "$CALLS"
-  for t in jq sed cut cat printf mktemp rm; do
+  for t in jq sed cut cat printf mktemp rm tr; do
     ln -s "$(command -v "$t")" "$BIN/$t"
   done
   # busctl: the history is $HISTORY_JSON, busctl's JSON for an "as", or
@@ -49,8 +49,26 @@ test -z "$SET_FAILS" || { echo "no seat" >&2; exit 1; }'
   fake tide-kwin-paste 'echo "tide-kwin-paste $*" >> "$CALLS"
 test -z "$PASTE_FAILS" || { echo "KWin offers org_kde_kwin_fake_input version 5, and pasting needs 6" >&2; exit 1; }'
   fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  # On sway: tide's history is $TIDE_LIST, and copy logs the ID it's given.
+  fake tide 'echo "tide $*" >> "$CALLS"
+case "$1 $2" in
+  "clipboard list") test -z "$LIST_FAILS" || { echo "tide clipboard: the keyring is locked" >&2; exit 1; }
+    printf "%s" "$TIDE_LIST" ;;
+  "clipboard copy") test -z "$COPY_FAILS" || { echo "no such entry" >&2; exit 1; } ;;
+esac'
+  # swaymsg: the tree has a focused window of app_id $FOCUSED_APP, or
+  # none with FOCUSED_APP empty (an empty workspace has the focus).
+  fake swaymsg 'echo "swaymsg $*" >> "$CALLS"
+if test -n "$FOCUSED_APP"; then
+  printf "%s" "{\"type\":\"root\",\"nodes\":[{\"type\":\"workspace\",\"focused\":false,\"nodes\":[{\"type\":\"con\",\"focused\":true,\"app_id\":\"$FOCUSED_APP\"}]}]}"
+else
+  printf "%s" "{\"type\":\"root\",\"nodes\":[{\"type\":\"workspace\",\"focused\":true,\"nodes\":[]}]}"
+fi'
+  fake wtype 'echo "wtype $*" >> "$CALLS"
+test -z "$WTYPE_FAILS" || { echo "compositor does not support virtual keyboard" >&2; exit 1; }'
   export TEST_TMPDIR CALLS
-  unset HISTORY_JSON BUSCTL_FAILS SET_FAILS FUZZEL_ANSWER PASTE_FAILS SESSION_DISPLAY
+  unset HISTORY_JSON BUSCTL_FAILS SET_FAILS FUZZEL_ANSWER PASTE_FAILS SESSION_DISPLAY \
+    SWAY TIDE_LIST LIST_FAILS COPY_FAILS FOCUSED_APP WTYPE_FAILS
 }
 
 teardown() {
@@ -59,7 +77,7 @@ teardown() {
 
 run() {
   set +e
-  OUTPUT=$(env PATH="$BIN" WAYLAND_DISPLAY="${SESSION_DISPLAY-wayland-0}" "$SCRIPT_DIR/clipboard-menu" 2>&1)
+  OUTPUT=$(env PATH="$BIN" WAYLAND_DISPLAY="${SESSION_DISPLAY-wayland-0}" SWAYSOCK="${SWAY:-}" "$SCRIPT_DIR/clipboard-menu" 2>&1)
   STATUS=$?
   set -e
 }
@@ -176,6 +194,83 @@ setup
 rm "$BIN/fuzzel"
 run
 check "without fuzzel it fails, naming it" called "fuzzel isn't installed"
+teardown
+
+# On sway: tide's history, newest first, as `tide clipboard list` prints it.
+SWAY_LIST=$(printf '7\tnewest copy\n3\t-rf is an option\n1\t[[ binary data 2 KiB png 10x10 ]]')
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=1 FOCUSED_APP=firefox
+run
+check "on sway, choosing an entry exits 0" test "$STATUS" -eq 0
+check "fuzzel shows tide's history, images too" \
+  shown "$(printf 'newest copy\n-rf is an option\n[[ binary data 2 KiB png 10x10 ]]')"
+check "the entry chosen goes back by its ID" called "tide clipboard copy 3"
+check "and is pasted with Ctrl+V" called "wtype -M ctrl -k v -m ctrl"
+check "Klipper isn't asked" not_called "busctl"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=Alacritty
+run
+check "a terminal gets Ctrl+Shift+V, its class in any case" called "wtype -M ctrl -M shift -k v -m shift -m ctrl"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=kitty
+run
+check "kitty, which pastes on Ctrl+V, gets Ctrl+V" called "wtype -M ctrl -k v -m ctrl"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=''
+run
+check "with no window focused it's copied" called "tide clipboard copy 7"
+check "and not pasted" not_called "wtype"
+check "and exits 0" test "$STATUS" -eq 0
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FOCUSED_APP=firefox
+run
+check "on sway, Esc exits 0" test "$STATUS" -eq 0
+check "copying and pasting nothing" not_called "tide clipboard copy"
+check "nor typing" not_called "wtype"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST='' FOCUSED_APP=firefox
+run
+check "on sway, an empty history says nothing's copied" called "notify-send -a Clipboard -t 2000 Nothing copied yet"
+check "and opens no menu" not_called "fuzzel"
+teardown
+
+setup
+export SWAY=/run/sway.sock LIST_FAILS=1 FOCUSED_APP=firefox
+run
+check "a history that can't be read fails" test "$STATUS" -eq 1
+check "saying why" called "Clipboard menu failed couldn't read the clipboard history: tide clipboard: the keyring is locked"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=firefox COPY_FAILS=1
+run
+check "a copy that fails exits 1" test "$STATUS" -eq 1
+check "and doesn't paste" not_called "wtype"
+teardown
+
+setup
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=firefox WTYPE_FAILS=1
+run
+check "a paste that fails exits 1" test "$STATUS" -eq 1
+check "saying it's copied, and to press Ctrl+V" called "Copied, not pasted wtype: compositor does not support virtual keyboard. Press Ctrl+V."
+teardown
+
+setup
+rm "$BIN/wtype"
+export SWAY=/run/sway.sock TIDE_LIST=$SWAY_LIST FUZZEL_ANSWER=0 FOCUSED_APP=firefox
+run
+check "without wtype it fails, naming it" called "wtype isn't installed"
 teardown
 
 echo

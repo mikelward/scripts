@@ -1,12 +1,22 @@
 #!/bin/sh
 #
-# clipboard-menu: KDE Plasma's Win+V. Lists Klipper's clipboard history in
-# fuzzel, and pastes the entry chosen into the window you were in, as tide's
-# picker does on Hyprland and tide for macOS's on macOS. Plasma's own Win+V menu
-# copies but doesn't paste.
+# clipboard-menu: Win+V on KDE Plasma and on sway. Lists the clipboard
+# history in fuzzel, and pastes the entry chosen into the window you were
+# in, as tide's picker does on Hyprland and tide for macOS's on macOS.
+# Plasma's own Win+V menu copies but doesn't paste, and sway has none.
 #
 #   clipboard-menu
 #
+# On sway ($SWAYSOCK set), the history is tide's own (`tide clipboard`),
+# the one tide's picker shows: kept encrypted under a key in the login
+# keyring, never holding a copy a password manager marks. conf's sway
+# config feeds it each copy. The entry chosen goes back with `tide
+# clipboard copy`, then wtype presses Ctrl+V in the window that had the
+# keyboard when the menu opened, or Ctrl+Shift+V in a terminal, by the
+# same list as tide's picker (tide's shell/lib/picker.mjs, TERMINALS).
+# With no window focused it's only copied.
+#
+# On Plasma:
 # The history comes from Klipper over D-Bus (busctl's JSON, read with jq).
 # The entry chosen goes back on the clipboard with wl-copy, then
 # tide-kwin-paste (from tide) presses Ctrl+V
@@ -33,6 +43,67 @@ klipper() {
     # -- so an entry starting with - is an argument, not an option.
     busctl --user --json=short -- call org.kde.klipper /klipper org.kde.klipper.klipper "$@"
 }
+
+# Terminals, by sway's app_id, which paste on Ctrl+Shift+V: their Ctrl+V
+# goes to the program running in them. Not kitty: conf's kitty.conf maps
+# Ctrl+V to paste. As tide's picker's list, matched in any case.
+TERMINALS=" foot footclient alacritty org.wezfurlong.wezterm com.mitchellh.ghostty org.kde.konsole org.gnome.terminal org.gnome.ptyxis org.gnome.console "
+
+# Win+V on sway: tide's history, pasted with wtype.
+sway_menu() {
+    for tool in tide fuzzel wtype swaymsg jq; do
+        command -v "$tool" >/dev/null 2>&1 || fail "$tool isn't installed; setup-tide installs it"
+    done
+    # The window with the keyboard now, before fuzzel takes it: its app_id,
+    # or an X window's class, or nothing on an empty workspace.
+    if ! tree=$(swaymsg -t get_tree 2>&1); then
+        fail "couldn't ask sway for the focused window: $tree"
+    fi
+    if ! app=$(printf '%s' "$tree" | jq -r '
+            first(.. | objects | select(.focused == true and (.type == "con" or .type == "floating_con")))
+            | .app_id // .window_properties.class // ""' 2>&1); then
+        fail "couldn't read sway's focused window: $app"
+    fi
+    focused=$(printf '%s' "$tree" | jq -r 'any(.. | objects; .focused == true and (.type == "con" or .type == "floating_con"))')
+
+    if ! entries=$(tide clipboard list 2>&1); then
+        fail "couldn't read the clipboard history: $entries"
+    fi
+    if test -z "$entries"; then
+        notify-send -a "Clipboard" -t 2000 "Nothing copied yet" ||
+            echo "$prog: nothing copied yet" >&2
+        exit 0
+    fi
+
+    chosen=$(printf '%s\n' "$entries" | cut -f 2- | fuzzel --dmenu --index --prompt "Clipboard: ") || exit 0
+    case "$chosen" in
+        '' | *[!0-9]*) fail "fuzzel answered '$chosen', not a line number" ;;
+    esac
+    id=$(printf '%s\n' "$entries" | sed -n "$((chosen + 1))p" | cut -f 1)
+    test -n "$id" || fail "fuzzel chose line $chosen, which it wasn't given"
+
+    if ! err=$(tide clipboard copy "$id" 2>&1); then
+        fail "couldn't put it back on the clipboard: $err"
+    fi
+    test "$focused" = true || exit 0
+
+    lower=$(printf '%s' "$app" | tr '[:upper:]' '[:lower:]')
+    case "$TERMINALS" in
+        *" $lower "*) set -- -M ctrl -M shift -k v -m shift -m ctrl ;;
+        *) set -- -M ctrl -k v -m ctrl ;;
+    esac
+    if ! err=$(wtype "$@" 2>&1); then
+        echo "$prog: wtype: $err" >&2
+        notify-send -a "Clipboard" -t 5000 "Copied, not pasted" "wtype: $err. Press Ctrl+V." ||
+            echo "$prog: notify-send failed too" >&2
+        exit 1
+    fi
+    exit 0
+}
+
+if test -n "${SWAYSOCK:-}" && test -n "${WAYLAND_DISPLAY:-}"; then
+    sway_menu
+fi
 
 command -v busctl >/dev/null 2>&1 || fail "busctl isn't installed, so Klipper can't be asked for the history"
 
