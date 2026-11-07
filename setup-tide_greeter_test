@@ -407,6 +407,13 @@ elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so"; run
 check "greetd: a tide-greeter its loader can load is the greeter's" test "$(cat "$T/dm")" = greetd.service
 check "greetd: which the loader is asked about" has "$calls" "ldd -r -- $T/usr-bin/tide-greeter"
 teardown
+# Fedora's greetd names its loader 569 KiB in, past the first 64 KiB read.
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; mkdir -p "$T/loader"; elf_program "$T/loader/ld.so" --type=3
+elf_program "$T/usr-sbin/greetd" --interp="$T/loader/ld.so" --far
+elf_program "$T/usr-bin/tide-greeter" --interp="$T/loader/ld.so" --far; run
+check "greetd: a greetd and tide-greeter that name their loader far in are the greeter's" test "$(cat "$T/dm")" = greetd.service
+check "greetd: and that loader is the one checked" has "$calls" "ldd -r -- $T/usr-bin/tide-greeter"
+teardown
 greeter_elf_not_ready() {
     greeter_not_ready "a tide-greeter that $1" "greetd's user _greetd can't start tide-greeter: $T/usr-bin/tide-greeter $2"
 }
