@@ -69,6 +69,21 @@ exit 0
 MOCK
     done
 
+    # sudo records itself and runs the rest, so the command it was given is
+    # recorded too. hostname answers host1, or fails where hostname_fails is
+    # staged.
+    cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
+#!/bin/sh
+printf "%s\\n" "sudo \$*" >> "$CALLS"
+exec "\$@"
+MOCK
+    cat > "$TEST_TMPDIR/bin/hostname" <<MOCK
+#!/bin/sh
+test -f "$TEST_TMPDIR/hostname_fails" && exit 1
+echo host1
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/sudo" "$TEST_TMPDIR/bin/hostname"
+
     # brew records its environment as well as its arguments: ask mode is
     # Homebrew's default, and the only evidence it's off is what brew inherits.
     # brew list answers from $TEST_TMPDIR/brew-casks, one "name version" line
@@ -1869,6 +1884,43 @@ test_configures_finder() {
     assert_called "killall Finder"
 }
 
+test_dialogs_open_expanded_and_save_to_disk() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode -bool true" &&
+    assert_called "defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true" &&
+    assert_called "defaults write NSGlobalDomain PMPrintingExpandedStateForPrint -bool true" &&
+    assert_called "defaults write NSGlobalDomain PMPrintingExpandedStateForPrint2 -bool true" &&
+    assert_called "defaults write NSGlobalDomain NSDocumentSaveNewDocumentsToCloud -bool false"
+}
+
+test_windows_dont_animate() {
+    run_macos
+    assert_status 0 &&
+    assert_called "defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false" &&
+    assert_called "defaults write NSGlobalDomain NSWindowResizeTime -float 0.001" &&
+    assert_called "defaults write com.apple.finder DisableAllAnimations -bool true"
+}
+
+test_lock_screen_shows_hostname() {
+    run_macos
+    assert_status 0 &&
+    assert_called "sudo defaults write /Library/Preferences/com.apple.loginwindow LoginwindowText host1"
+}
+
+test_no_sudo_leaves_lock_screen_as_a_step() {
+    run_macos --no-sudo --ignore-errors
+    assert_not_called "LoginwindowText" &&
+    assert_output_contains "/Library/Preferences/com.apple.loginwindow LoginwindowText host1"
+}
+
+test_lock_screen_without_hostname_warns() {
+    touch "$TEST_TMPDIR/hostname_fails"
+    run_macos --ignore-errors
+    assert_not_called "LoginwindowText" &&
+    assert_output_contains "couldn't read this Mac's hostname"
+}
+
 # Regression: this used to be `killall Finder 2>/dev/null || true`, which hid
 # every failure. An app that isn't running is the expected case, so it's
 # reported as information and doesn't count against the run -- and it's
@@ -3142,6 +3194,16 @@ run_test "cask installs leave installed casks at their versions" \
     test_cask_installs_do_not_upgrade
 run_test "missing brew does not abort the Karabiner step" \
     test_missing_brew_does_not_abort_karabiner
+run_test "dialogs open expanded and save to disk" \
+    test_dialogs_open_expanded_and_save_to_disk
+run_test "windows don't animate" \
+    test_windows_dont_animate
+run_test "the lock screen shows the hostname" \
+    test_lock_screen_shows_hostname
+run_test "--no-sudo leaves the lock screen's hostname as a step" \
+    test_no_sudo_leaves_lock_screen_as_a_step
+run_test "without a hostname, the lock screen warns" \
+    test_lock_screen_without_hostname_warns
 run_test "--no-sudo skips the Karabiner install" \
     test_no_sudo_skips_karabiner_install
 run_test "--no-sudo still installs Amethyst" \

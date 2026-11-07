@@ -85,9 +85,10 @@
 #
 # setup forwards --no-install, --no-sudo, --ignore-errors and --verbose here.
 # --no-install skips installing tilemo (or Amethyst) and Karabiner-Elements and
-# configures whatever is already there. --no-sudo skips only Karabiner's install, the one
-# step here that needs administrator rights -- its cask is a .pkg and Homebrew
-# hands those to the system installer. --ignore-errors keeps going past
+# configures whatever is already there. --no-sudo skips the two steps here that
+# need administrator rights: Karabiner's install -- its cask is a .pkg and
+# Homebrew hands those to the system installer -- and the hostname on the lock
+# screen. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
 # pause. --wm picks the tiling window manager: tilemo (or timo, its old name),
 # the default, so a plain setup sets it up, or amethyst. setup doesn't forward
@@ -131,9 +132,10 @@ TILEMO_REPO="https://github.com/mikelward/tilemo.git"
 # skips it too; see preflight.
 ASSUME_YES=no
 
-# Whether privileged commands may run at all. Only Karabiner's install needs
-# this: its cask is a .pkg and Homebrew hands those to the system installer,
-# which prompts for an administrator password. --no-sudo skips it.
+# Whether privileged commands may run at all. Karabiner's install needs this:
+# its cask is a .pkg and Homebrew hands those to the system installer, which
+# prompts for an administrator password. So does the lock screen's hostname,
+# which lives in a system-wide file. --no-sudo skips both.
 SUDO=yes
 
 # Homebrew's ask mode is on by default, so the cask installs below stop to
@@ -2301,6 +2303,46 @@ configure_screenshots() {
     restart_app SystemUIServer "the screenshot settings to take effect"
 }
 
+# --- Configure windows and dialogs ---
+
+# Closer to tide: Open, Save and Print dialogs that show their folders and
+# options, as GTK's do, and windows that appear and resize without animating,
+# so a retile lands at once. Each app reads these as it launches.
+configure_windows() {
+    info "Configuring windows and dialogs"
+    try defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode -bool true
+    try defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true
+    try defaults write NSGlobalDomain PMPrintingExpandedStateForPrint -bool true
+    try defaults write NSGlobalDomain PMPrintingExpandedStateForPrint2 -bool true
+    # Save to disk, not iCloud, the first time a new document is saved.
+    try defaults write NSGlobalDomain NSDocumentSaveNewDocumentsToCloud -bool false
+    try defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false
+    try defaults write NSGlobalDomain NSWindowResizeTime -float 0.001
+    try defaults write com.apple.finder DisableAllAnimations -bool true
+}
+
+# --- Configure the lock screen ---
+
+# tide's lock screen shows the short hostname; macOS's shows this message
+# under the clock, on the login window too. It's in a system-wide file, hence
+# sudo.
+LOGINWINDOW_PLIST=/Library/Preferences/com.apple.loginwindow
+
+configure_lock_screen() {
+    _host=$(hostname -s) || _host=
+    if test -z "$_host"; then
+        warn "couldn't read this Mac's hostname, so the lock screen doesn't show it"
+        return 0
+    fi
+    if test "$SUDO" = no; then
+        info "Skipping the hostname on the lock screen: it needs administrator rights and --no-sudo was given"
+        todo_optional "To show this Mac's name on the lock screen: sudo defaults write $LOGINWINDOW_PLIST LoginwindowText $_host"
+        return 0
+    fi
+    info "Showing $_host on the lock screen"
+    try sudo defaults write "$LOGINWINDOW_PLIST" LoginwindowText "$_host"
+}
+
 # --- Main ---
 
 preflight
@@ -2318,6 +2360,8 @@ configure_linearmouse
 configure_app_shortcuts
 configure_finder
 configure_screenshots
+configure_windows
+configure_lock_screen
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
