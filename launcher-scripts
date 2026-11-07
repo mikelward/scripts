@@ -1,9 +1,9 @@
 # The scripts here that open an app, one per line, as SCRIPT|NAME|ICON|MAC:
 # each is listed by NAME in tide's launcher (setup-tide writes it a desktop
-# entry) and in tilemo's switcher on macOS, which reads this file. NAME is
+# entry) and in tide for macOS's switcher on macOS, which reads this file. NAME is
 # the key binding's description in conf's hyprland.lua, where it has one.
 # ICON is an Adwaita icon name for tide; a web app shows its site's icon
-# there instead. MAC is the bundle ID of the Mac app whose icon tilemo
+# there instead. MAC is the bundle ID of the Mac app whose icon tide for macOS
 # shows, - for none, or linux for a script that only runs on Linux. The
 # other scripts here are command-line tools, which do nothing visible run
 # with no terminal and would crowd the launcher's matches, so a new app

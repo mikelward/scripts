@@ -1037,7 +1037,7 @@ CONF
 # Meta+. is Plasma's Emoji Selector by default, and it holds it as a
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
 # Krohnkite's Next Layout needs the launch-shortcut form. It moves to Meta+;,
-# the emoji key on tide and tilemo too.
+# the emoji key on tide and tide for macOS too.
 test_moves_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&

@@ -121,7 +121,7 @@ file changed on the machine keeps that version, apt's own default answer,
 and a warning names the package's new version beside it, to merge by hand:
 `FILE.dpkg-dist`, or dnf's `FILE.rpmnew` and pacman's `FILE.pacnew`.
 
-A checkout `setup` can't pull (this repo, conf, tide, tilemo) is used as it
+A checkout `setup` can't pull (this repo, conf, tide, tide for macOS) is used as it
 is, with a warning that says why: it can't reach origin, local changes are in
 the way, it has diverged, or its branch has no upstream. One that pulls but
 is on a branch other than its default gets a warning too, since that's how

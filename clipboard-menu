@@ -2,7 +2,7 @@
 #
 # clipboard-menu: KDE Plasma's Win+V. Lists Klipper's clipboard history in
 # fuzzel, and pastes the entry chosen into the window you were in, as tide's
-# picker does on Hyprland and tilemo's on macOS. Plasma's own Win+V menu
+# picker does on Hyprland and tide for macOS's on macOS. Plasma's own Win+V menu
 # copies but doesn't paste.
 #
 #   clipboard-menu
