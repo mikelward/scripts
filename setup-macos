@@ -1039,7 +1039,7 @@ configure_spaces() {
 # to be safe -- it owns every window on screen -- so they take effect at the
 # next login.
 # The other ways into Mission Control and App Exposé, off for the reason
-# configure_shortcuts_tilemo gives: the trackpad's swipe up and down, the
+# configure_shortcuts_tilemo gives: the trackpad's swipes, the
 # Magic Mouse's double tap, and any hot corner set to either. A corner set to
 # something else is left alone. The gesture keys are the ones System Settings
 # is reported to write *(unverified here, and per macOS release)*; the Dock
@@ -1051,6 +1051,11 @@ configure_mission_control_for_tilemo() {
     for _domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
         try defaults write "$_domain" TrackpadThreeFingerVertSwipeGesture -int 0
         try defaults write "$_domain" TrackpadFourFingerVertSwipeGesture -int 0
+        # And the swipe left and right between Spaces and full-screen apps:
+        # tilemo's own three-finger swipe steps through its workspaces
+        # instead, so the two can't both act.
+        try defaults write "$_domain" TrackpadThreeFingerHorizSwipeGesture -int 0
+        try defaults write "$_domain" TrackpadFourFingerHorizSwipeGesture -int 0
     done
     try defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseTwoFingerDoubleTapGesture -int 0
 
