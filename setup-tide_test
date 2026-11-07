@@ -469,8 +469,9 @@ check "a missing satty leaves the rest installed" has "$calls" "pacman -S --need
 main=$(printf '%s\n' "$calls" | grep 'hypridle')
 check "satty isn't in the main transaction" lacks "$main" "satty"
 check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfirm satty"
-check "cliphist is asked for on its own" has "$calls" "pacman -S --needed --noconfirm cliphist"
-check "cliphist isn't in the main transaction" lacks "$main" "cliphist"
+check "secret-tool and openssl are asked for on their own" has "$calls" "pacman -S --needed --noconfirm libsecret openssl"
+check "they aren't in the main transaction" lacks "$main" "libsecret"
+check "cliphist isn't installed any more" lacks "$calls" "cliphist"
 check "wtype, which types the picker's Fill, is in the main transaction" has "$main" " wtype "
 check "rbw, which Fedora lacks, is asked for on its own" has "$calls" "pacman -S --needed --noconfirm rbw"
 check "rbw isn't in the main transaction" lacks "$main" "rbw"
@@ -542,10 +543,10 @@ check "a missing rbw isn't fatal" test "$status" -eq 0
 check "a missing rbw is said, with what it costs and how to add it" has "$output" "Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
 teardown
 
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=cliphist
-check "a missing cliphist isn't fatal" test "$status" -eq 0
-check "a missing cliphist is said, with what it costs" has "$output" "couldn't install cliphist, so Super+V's picker keeps no clipboard history"
-check "a missing cliphist still enables the rest" has "$calls" "systemctl --user enable tide.service"
+setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=libsecret
+check "a missing secret-tool isn't fatal" test "$status" -eq 0
+check "a missing secret-tool is said, with what it costs" has "$output" "couldn't install libsecret and openssl, so Super+V's picker keeps no clipboard history"
+check "a missing secret-tool still enables the rest" has "$calls" "systemctl --user enable tide.service"
 teardown
 
 # Arch, like Fedora, refuses the lot over one unknown name, so pacman is
@@ -639,8 +640,8 @@ check "a failed pull says why" has "$output" "Warning: couldn't update $T/src/ti
 check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/tide install"
 teardown
 
-setup; ARGS=(); run TIDE_REPO="https://user:secret@example.com/tide.git"
-check "the clone message doesn't print the URL" lacks "$output" "secret"
+setup; ARGS=(); run TIDE_REPO="https://user:hunter2@example.com/tide.git"
+check "the clone message doesn't print the URL" lacks "$output" "hunter2"
 teardown
 
 setup; mkdir -p "$T/src/tide/.git"; ARGS=(--no-fetch); run
