@@ -650,10 +650,23 @@ configure_keyboard() {
 #   Physical Ctrl (E0/E4) → Command (E3/E7)
 #   Physical Win  (E3/E7) → Option  (E2/E6)
 #   Physical Alt  (E2/E6) → Control (E0/E4)
-KEY_REMAPPING='{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}]}'
+KEY_ROTATION='{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}'
+# With tilemo, Caps Lock (39) sends F18 (6D) too, which tilemo takes as
+# Compose, as Linux's Caps Lock is (tilemo SPEC.md §10). Amethyst has no use
+# for F18, so there Caps Lock stays.
+KEY_CAPS_COMPOSE='{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}'
+if test "$WM" = tilemo; then
+    KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION,$KEY_CAPS_COMPOSE]}"
+else
+    KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION]}"
+fi
 
 configure_modifier_keys() {
-    info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
+    if test "$WM" = tilemo; then
+        info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control) and Caps Lock to Compose"
+    else
+        info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
+    fi
 
     # Applies to the running session immediately; hidutil mappings are lost on
     # reboot, which is what the LaunchAgent below is for.

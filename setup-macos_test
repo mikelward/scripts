@@ -776,6 +776,24 @@ test_disables_text_substitutions() {
 
 # --- modifier keys ---
 
+# tilemo takes F18 as Compose, so Caps Lock sends it, in the same mapping as
+# the rotation, live and at login; Amethyst keeps Caps Lock.
+test_tilemo_makes_caps_lock_compose() {
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_called '{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}' &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
+    assert_file_contains "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" \
+        '{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}'
+}
+
+test_amethyst_keeps_caps_lock() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
+    assert_not_called '0x700000039'
+}
+
 # The three-key rotation: Ctrl→Cmd, Win→Option, Alt→Control, on both sides of
 # the keyboard. E0/E4 are the Controls, E2/E6 the Options, E3/E7 the Commands.
 test_remaps_modifier_keys() {
@@ -3218,6 +3236,10 @@ run_test "without a hostname, the lock screen warns" \
     test_lock_screen_without_hostname_warns
 run_test "tilemo: takes the sideways swipe from Spaces" \
     test_tilemo_takes_the_sideways_swipe
+run_test "tilemo: Caps Lock is Compose" \
+    test_tilemo_makes_caps_lock_compose
+run_test "amethyst: Caps Lock stays" \
+    test_amethyst_keeps_caps_lock
 run_test "--no-sudo skips the Karabiner install" \
     test_no_sudo_skips_karabiner_install
 run_test "--no-sudo still installs Amethyst" \
