@@ -331,7 +331,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Previous layout | `Win+,` | `Win+,` | Amethyst `cycle-layout-backward` |
 | Next layout | `Win+.` | `Win+.` | Amethyst `cycle-layout` |
 | Set master window | `Win+Return` | `Win+Return` | Amethyst `swap-main` |
-| Launcher / Spotlight | — | `Win+Space` | symbolichotkeys (ID 64) |
+| Launcher / Spotlight | `Win+Space` (`tide-launcher`: tide's launcher, or KRunner) | `Win+Space` | symbolichotkeys (ID 64) |
 | Browser 1 | `Win+G` | `Win+G` | Automator Quick Action |
 | Browser 2 | `Win+F` | `Win+F` | Automator Quick Action |
 | Terminal | `Win+T` | `Win+T` | Automator Quick Action |

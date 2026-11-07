@@ -810,7 +810,7 @@ MOCK
 test_a_second_run_says_nothing() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu; do
+            google-chat google-calendar clipboard-menu fill-menu tide-launcher; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -832,7 +832,7 @@ test_a_second_run_says_nothing() {
 test_quiet_run_shows_only_its_steps() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu; do
+            google-chat google-calendar clipboard-menu fill-menu tide-launcher; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -1432,7 +1432,8 @@ test_launch_shortcut_keys() {
     assert_called "--group shortcut-google-chat.desktop --key _launch Meta+C," &&
     assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C," &&
     assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V," &&
-    assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V,"
+    assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V," &&
+    assert_called "--group shortcut-tide-launcher.desktop --key _launch Meta+Space,"
 }
 
 # Win+V is the clipboard menu, which pastes; Plasma's own popup, which only

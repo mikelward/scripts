@@ -2801,7 +2801,7 @@ EOF2
 
 enable_unit() {
     if ! is_command systemctl || ! systemctl --user show-environment >/dev/null 2>&1; then
-        warn "no systemd user manager; run 'systemctl --user enable tide.service tide-clipboard.service' in your session"
+        warn "no systemd user manager; run 'systemctl --user enable tide.service tide-clipboard.service tide-kde.service' in your session"
         return 0
     fi
     run_logged systemctl --user daemon-reload
@@ -2820,6 +2820,11 @@ enable_unit() {
     # only the history.
     run_logged systemctl --user enable tide-clipboard.service \
         || warn "couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history; update tide and run setup again"
+    # tide's launcher on KDE Plasma's Meta+Space (tide SPEC.md §8.5),
+    # started now if this is Plasma; its unit skips any other session.
+    # Without it, Meta+Space opens KRunner (tide-launcher).
+    run_logged systemctl --user enable --now tide-kde.service \
+        || warn "couldn't enable tide-kde.service, so Meta+Space on Plasma opens KRunner, not tide's launcher; update tide and run setup again"
 }
 
 # --- logind ---
