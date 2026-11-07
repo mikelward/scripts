@@ -3552,7 +3552,9 @@ ELF_IDENT_AWK='
 # first 65536 bytes or all of it, and prints what the kernel makes of it as
 # a program to start, given its size, size, and ident, the system's class,
 # byte order and machine: static, for one it starts itself, interp and the
-# loader it names, for one it starts with that loader, or why it won't:
+# loader it names, for one it starts with that loader, interpat and where
+# its name is and how long, for one whose name lies past what was read, as
+# Fedora's greetd's does, or why it won't:
 # notelf, arch, noident, type, for an ELF file that isn't a program, entry,
 # for one whose entry point isn't in code it loads from the file, headers,
 # for program headers that aren't whole within what was read, short, for a
@@ -3600,7 +3602,10 @@ ELF_EXEC_AWK='
             if (ptype == 1 && flags % 2 == 1 && entry >= vaddr && entry < vaddr + filesz) code = 1
             # PT_INTERP, a name ending in a NUL.
             if (ptype == 3) {
-                if (filesz < 2 || off + filesz > n || b[off + filesz - 1] != 0) { print "interp"; exit }
+                if (filesz < 2 || filesz > 4096 || off + filesz > size) { print "interp"; exit }
+                if (off + filesz > n) { far = off " " filesz; continue }
+                far = ""
+                if (b[off + filesz - 1] != 0) { print "interp"; exit }
                 interp = ""
                 for (i = off; i < off + filesz - 1; i++) {
                     if (b[i] < 33 || b[i] > 126) { print "interp"; exit }
@@ -3609,8 +3614,23 @@ ELF_EXEC_AWK='
             }
         }
         if (!code) { print "entry"; exit }
-        if (interp == "") print "static"
+        if (far != "") print "interpat", far
+        else if (interp == "") print "static"
         else print "interp", interp
+    }'
+
+# ELF_INTERP_AWK reads a loader's name, as od -An -v -tu1 prints it, and
+# prints it when it's printable and ends in its only NUL.
+# shellcheck disable=SC2016  # $i and the rest are awk's
+ELF_INTERP_AWK='
+    { for (i = 1; i <= NF; i++) b[n++] = $i + 0 }
+    END {
+        if (n < 2 || b[n - 1] != 0) exit
+        for (i = 0; i < n - 1; i++) {
+            if (b[i] < 33 || b[i] > 126) exit
+            name = name sprintf("%c", b[i])
+        }
+        print name
     }'
 
 # ELF_AWK reads a file, as od -An -v -tu1 prints it, and prints exports
@@ -5063,6 +5083,11 @@ program_elf_starts() {
     case "$_pe_verdict" in
         static) return 0 ;;
         "interp "?*) _pe_loader=${_pe_verdict#interp } ;;
+        "interpat "*)
+            _pe_at=${_pe_verdict#interpat }
+            _pe_loader=$(od -An -v -tu1 -j "${_pe_at% *}" -N "${_pe_at#* }" -- "$1" | LC_ALL=C awk "$ELF_INTERP_AWK")
+            test -n "$_pe_loader" || why="$1 names a loader setup can't read"
+            ;;
         arch) why="$1 is built for another kind of machine than this one" ;;
         noident) why="setup can't tell $1 is built for this machine, since it couldn't read /bin/sh as one" ;;
         type) why="$1 is an ELF file, but not a program the kernel can start" ;;

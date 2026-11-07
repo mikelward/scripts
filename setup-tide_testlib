@@ -936,7 +936,7 @@ pam_module() {
 # PT_LOAD of the whole file, mapped as FLAGS, readable and executable by
 # default, that runs past its end when --short. Executable.
 elf_program() {
-    local file=$1 machine type=2 entry=64 flags=5 interp='' short='' phnum=1 size filesz out
+    local file=$1 machine type=2 entry=64 flags=5 interp='' short='' far='' phnum=1 size filesz out at pad=0
     shift
     machine=$(od -An -tu1 -j18 -N2 /bin/sh | awk '{ print $1 + 256 * $2 }')
     for arg; do
@@ -947,22 +947,27 @@ elf_program() {
             --flags=*) flags=${arg#--flags=} ;;
             --interp=*) interp=${arg#--interp=} ;;
             --short) short=yes ;;
+            # The loader's name past the first 64 KiB, as in Fedora's greetd.
+            --far) far=yes ;;
         esac
     done
     test -z "$interp" || phnum=2
     size=$((64 + 56 * phnum))
-    test -z "$interp" || size=$((size + ${#interp} + 1))
+    at=$size
+    test -z "$far" || { pad=$((70000 - size)); at=70000; }
+    test -z "$interp" || size=$((at + ${#interp} + 1))
     filesz=$size
     test -z "$short" || filesz=$((size + 4096))
     out='\x7fELF'$(elf_le 2 1)$(elf_le 1 1)$(elf_le 1 1)$(elf_le 0 9)
     out+=$(elf_le "$type" 2)$(elf_le "$machine" 2)$(elf_le 1 4)$(elf_le "$entry" 8)
     out+=$(elf_le 64 8)$(elf_le 0 8)$(elf_le 0 4)$(elf_le 64 2)$(elf_le 56 2)$(elf_le "$phnum" 2)$(elf_le 0 6)
     # PT_INTERP, the name after the headers, and PT_LOAD, the whole file.
-    test -z "$interp" || out+=$(elf_le 3 4)$(elf_le 4 4)$(elf_le $((64 + 56 * phnum)) 8)$(elf_le 0 16)$(elf_le $((${#interp} + 1)) 8)$(elf_le $((${#interp} + 1)) 8)$(elf_le 1 8)
+    test -z "$interp" || out+=$(elf_le 3 4)$(elf_le 4 4)$(elf_le "$at" 8)$(elf_le 0 16)$(elf_le $((${#interp} + 1)) 8)$(elf_le $((${#interp} + 1)) 8)$(elf_le 1 8)
     out+=$(elf_le 1 4)$(elf_le "$flags" 4)$(elf_le 0 24)$(elf_le "$filesz" 8)$(elf_le "$filesz" 8)$(elf_le 4096 8)
-    test -z "$interp" || out+="$interp\\x00"
     # shellcheck disable=SC2059  # the format is the bytes
     printf "$out" > "$file"
+    test "$pad" -eq 0 || head -c "$pad" /dev/zero >> "$file"
+    test -z "$interp" || printf '%s\0' "$interp" >> "$file"
     chmod +x "$file"
 }
 # Real git, for the fixtures and for replaying the options setup-tide gave a
