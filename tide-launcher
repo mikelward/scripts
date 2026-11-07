@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# tide-launcher: KDE Plasma's Meta+Space. Opens or closes tide's launcher
+# there, kde.qml, which tide-kde.service keeps running (tide's SPEC.md
+# §8.5), so it opens at once. When no launcher answers (no tide, as with
+# `setup --no-tide`, or its unit stopped), it opens KRunner instead, so the
+# key still finds apps.
+#
+#   tide-launcher
+#
+# setup-kde binds it.
+
+kde_qml=${TIDE_KDE_QML:-$HOME/.config/quickshell/tide/kde.qml}
+
+if command -v qs >/dev/null 2>&1 && test -f "$kde_qml" &&
+    qs -p "$kde_qml" ipc call launcher toggle >/dev/null 2>&1; then
+    exit 0
+fi
+exec krunner

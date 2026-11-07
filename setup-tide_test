@@ -23,6 +23,7 @@ check "tells make install which Go to build with" has "$calls" "make -C $T/src/t
 check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/tide install-session PREFIX=/usr"
 check "enables tide.service" has "$calls" "systemctl --user enable tide.service"
 check "enables the clipboard history" has "$calls" "systemctl --user enable tide-clipboard.service"
+check "enables tide's launcher on Plasma, starting it now there" has "$calls" "systemctl --user enable --now tide-kde.service"
 check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
 check "masks the distro's waybar and swaync units, stopping them now" \
     has "$calls" "systemctl --user mask --now waybar.service swaync.service"
@@ -1361,6 +1362,11 @@ setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-clipboard.service
 check "units: a failed enable of tide-clipboard.service isn't fatal" test "$status" -eq 0
 check "units: it shows what systemctl said" has "$output" "'systemctl --user enable tide-clipboard.service' exited with status 1; the end of what it said"
 check "units: and warns" has "$output" "Warning: couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history"
+teardown
+
+setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-kde.service
+check "units: a failed enable of tide-kde.service isn't fatal" test "$status" -eq 0
+check "units: and warns that Meta+Space opens KRunner" has "$output" "Warning: couldn't enable tide-kde.service, so Meta+Space on Plasma opens KRunner, not tide's launcher"
 teardown
 
 # Every warning and error is repeated at the end, where it's seen: a
