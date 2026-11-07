@@ -1,0 +1,88 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for tide-launcher, Plasma's Meta+Space: it toggles tide's launcher
+# over Quickshell's IPC, and opens KRunner when no launcher answers. Runs
+# the real script against fake qs and krunner that log their calls. A real
+# Quickshell and KRunner can only be checked on Plasma.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN" "$TEST_TMPDIR/home/.config/quickshell/tide"
+  : > "$CALLS"
+  : > "$TEST_TMPDIR/home/.config/quickshell/tide/kde.qml"
+  # qs answers the toggle, unless $QS_FAILS, as with no instance running.
+  fake qs 'echo "qs $*" >> "$CALLS"
+test -z "$QS_FAILS" || { echo "No running instances for $3" >&2; exit 255; }'
+  fake krunner 'echo "krunner $*" >> "$CALLS"'
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run() {
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$TEST_TMPDIR/home" CALLS="$CALLS" "$@" \
+    sh "$SCRIPT_DIR/tide-launcher" > "$TEST_TMPDIR/out" 2>&1 && status=0 || status=$?
+}
+
+check() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "${@:2}"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "FAIL: $1" >&2
+    echo "  calls: $(cat "$CALLS")" >&2
+  fi
+}
+
+calls_are() { test "$(cat "$CALLS")" = "$1"; }
+
+setup
+run
+check "it toggles tide's launcher" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call launcher toggle"
+check "and exits 0" test "$status" -eq 0
+check "and prints nothing" test ! -s "$TEST_TMPDIR/out"
+teardown
+
+setup
+run QS_FAILS=1
+check "with no launcher running, it opens KRunner" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call launcher toggle
+krunner "
+teardown
+
+setup
+rm "$TEST_TMPDIR/home/.config/quickshell/tide/kde.qml"
+run
+check "without kde.qml, it opens KRunner without asking qs" calls_are "krunner "
+teardown
+
+setup
+rm "$BIN/qs"
+run
+check "without qs, it opens KRunner" calls_are "krunner "
+teardown
+
+setup
+: > "$TEST_TMPDIR/other.qml"
+run TIDE_KDE_QML="$TEST_TMPDIR/other.qml"
+check "TIDE_KDE_QML names another launcher" calls_are "qs -p $TEST_TMPDIR/other.qml ipc call launcher toggle"
+teardown
+
+echo "tide-launcher_test: $TESTS_PASSED/$TESTS_RUN passed"
+test "$TESTS_FAILED" -eq 0

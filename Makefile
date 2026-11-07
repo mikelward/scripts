@@ -39,6 +39,7 @@ TESTS = \
 	confinst_test \
 	screenshot_test \
 	clipboard-menu_test \
+	tide-launcher_test \
 	fill-menu_test \
 	terminal_on_workstation_test \
 	terminal_on_vm_test \

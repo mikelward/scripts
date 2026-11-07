@@ -7,7 +7,8 @@
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music, chat, calendar),
 #   Win+V's clipboard menu, which pastes (clipboard-menu), and Win+Shift+V's
-#   snippets and Bitwarden menu, which types (fill-menu); Plasma's Emoji
+#   snippets and Bitwarden menu, which types (fill-menu), and Win+Space's
+#   tide launcher, or KRunner without it (tide-launcher); Plasma's Emoji
 #   Selector moves from Win+. to Win+;
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
@@ -1000,6 +1001,9 @@ configure_app_shortcuts() {
     # Snippets and Bitwarden logins, typed where you were, as tide's
     # picker's Fill tab on Super+Shift+V.
     add_app_shortcut "fill-menu" "Meta+Shift+V"
+    # tide's launcher, as on tide (tide's SPEC.md §8.5), or KRunner where
+    # it isn't running. Kickoff keeps the tap of Meta.
+    add_app_shortcut "tide-launcher" "Meta+Space"
 }
 
 configure_keybindings() {

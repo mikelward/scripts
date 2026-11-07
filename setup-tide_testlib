@@ -534,11 +534,13 @@ case "\$*" in
         if test -s "$T/dm" && test "\$(cat "$T/dm")" = greetd.service; then : > "$T/dm"; fi
         ;;
     "--user enable "*)
-        if test "\$3" = "\$FAKE_USER_ENABLE_FAILS"; then
-            echo "Failed to enable unit: Unit \$3 does not exist" >&2
+        # The unit is the last word, after any --now.
+        for unit; do :; done
+        if test "\$unit" = "\$FAKE_USER_ENABLE_FAILS"; then
+            echo "Failed to enable unit: Unit \$unit does not exist" >&2
             exit 1
         fi
-        echo "Created symlink '$T/home/.config/systemd/user/tide-session.target.wants/\$3' → '$T/home/.config/systemd/user/\$3'." >&2
+        echo "Created symlink '$T/home/.config/systemd/user/tide-session.target.wants/\$unit' → '$T/home/.config/systemd/user/\$unit'." >&2
         ;;
     "--user mask "*)
         for unit; do
