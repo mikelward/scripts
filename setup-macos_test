@@ -2517,11 +2517,23 @@ test_tilemo_leaves_other_hot_corners_alone() {
     assert_not_called "wvous-br-modifier"
 }
 
+# tilemo's three-finger swipe steps through its workspaces, so macOS's own
+# swipe between Spaces, with three fingers or four, is off.
+test_tilemo_takes_the_sideways_swipe() {
+    run_macos --wm tilemo
+    assert_status 0 &&
+    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadThreeFingerHorizSwipeGesture -int 0" &&
+    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadFourFingerHorizSwipeGesture -int 0" &&
+    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerHorizSwipeGesture -int 0" &&
+    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadFourFingerHorizSwipeGesture -int 0"
+}
+
 test_amethyst_leaves_mission_control_alone() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_not_called "showMissionControlGestureEnabled" &&
-    assert_not_called "TrackpadFourFingerVertSwipeGesture"
+    assert_not_called "TrackpadFourFingerVertSwipeGesture" &&
+    assert_not_called "HorizSwipeGesture"
 }
 
 test_tilemo_keeps_the_menu_bar_shown_for_its_bar() {
@@ -3204,6 +3216,8 @@ run_test "--no-sudo leaves the lock screen's hostname as a step" \
     test_no_sudo_leaves_lock_screen_as_a_step
 run_test "without a hostname, the lock screen warns" \
     test_lock_screen_without_hostname_warns
+run_test "tilemo: takes the sideways swipe from Spaces" \
+    test_tilemo_takes_the_sideways_swipe
 run_test "--no-sudo skips the Karabiner install" \
     test_no_sudo_skips_karabiner_install
 run_test "--no-sudo still installs Amethyst" \
