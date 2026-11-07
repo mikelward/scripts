@@ -3049,6 +3049,21 @@ test_upgrade_flag_upgrades_within_the_week() {
     assert_eq "$stamp" fresh
 }
 
+# --no-upgrade leaves upgrades for a later run, a week or not: Homebrew
+# installs what's missing, upgrades nothing, and the stale stamp stays, so
+# the next run catches up.
+test_no_upgrade_flag_skips_a_due_upgrade() {
+    run_setup --no-upgrade --help
+    assert_status 0 &&
+    assert_output_contains "--no-upgrade     Don't upgrade installed packages this run" &&
+    HARNESS_UPGRADE=no HARNESS_STAMP=stale run_macos_packages 0 arm64 ok &&
+    assert_status 0 &&
+    assert_calls_lack "brew update" &&
+    assert_calls_lack "brew upgrade" &&
+    assert_calls_contain "brew install zoxide" &&
+    assert_eq "$stamp" stale
+}
+
 # apt-get install upgrades a package it's asked for again, so in the week it
 # runs with --no-upgrade, and nothing asks for an upgrade.
 test_in_week_run_does_not_upgrade_apt() {
@@ -5457,6 +5472,8 @@ run_test "a stale or missing stamp upgrades Homebrew packages and records it" \
     test_stale_stamp_upgrades_brew_and_records_it
 run_test "a failed Homebrew upgrade drops the stamp, so the next run retries" \
     test_failed_brew_upgrade_drops_the_stamp
+run_test "--no-upgrade skips an upgrade that's due" \
+    test_no_upgrade_flag_skips_a_due_upgrade
 run_test "--upgrade upgrades within the week" \
     test_upgrade_flag_upgrades_within_the_week
 run_test "an in-week run doesn't upgrade apt packages" \
