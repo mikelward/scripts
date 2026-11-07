@@ -3086,20 +3086,28 @@ install_fnm() {
 # with_time_limit SECONDS COMMAND...: runs COMMAND, killing it if it's still
 # running after SECONDS. Its status is COMMAND's, or 143 when it was killed.
 # macOS has no timeout(1), hence the watcher. Only COMMAND is killed, not what
-# it started, so give it a command that does the waiting itself.
+# it started, so give it a command that does the waiting itself. Stopping the
+# watcher stops its sleep too, and it exits rather than dying of the signal,
+# which macOS's bash 3.2 would report as "Terminated: 15".
 with_time_limit() {
     _wtl_secs=$1
     shift
     "$@" &
     _wtl_pid=$!
     (
-        sleep "$_wtl_secs"
+        # Until sleep starts, $! is still COMMAND's. (jobs -p would do, but
+        # dash's lists nothing in $(...).) The wait reaps the sleep before
+        # the watcher exits.
+        trap 'test "$!" = "$_wtl_pid" || kill "$!" 2>/dev/null; wait; exit 0' TERM
+        sleep "$_wtl_secs" &
+        wait $!
         kill "$_wtl_pid"
     ) </dev/null >/dev/null 2>&1 &
     _wtl_watch=$!
     _wtl_status=0
     wait "$_wtl_pid" || _wtl_status=$?
     kill "$_wtl_watch" 2>/dev/null || true
+    wait "$_wtl_watch" 2>/dev/null || true
     return "$_wtl_status"
 }
 
