@@ -38,7 +38,8 @@
 #   entry, its compositor wrapper, and the tide commands);
 # - enables tide.service, which hangs it off the tide session's
 #   target only, and tide-clipboard.service, which keeps the clipboard
-#   history (with cliphist, installed on its own; rbw too, for the Fill
+#   history, encrypted (with secret-tool and openssl, installed on their
+#   own; rbw too, for the Fill
 #   tab), and masks the distro's waybar and swaync user units, which
 #   would otherwise start in every session, Plasma's included;
 # - keeps blueman's applet, which autostarts in every desktop, out of
@@ -1301,11 +1302,17 @@ install_packages() {
     if test -z "$nerd_font" || ! install_all "$nerd_font"; then
         install_nerd_symbols
     fi
-    # cliphist keeps the clipboard history that Super+V's picker lists
-    # (tide SPEC.md §8.4). It's asked for on its own too, so a distro
-    # without it still gets the rest.
-    if ! install_all cliphist; then
-        warn "couldn't install cliphist, so Super+V's picker keeps no clipboard history; its Characters tab still works"
+    # tide keeps the clipboard history that Super+V's picker lists
+    # encrypted, with openssl, under a key secret-tool keeps in the login
+    # keyring (tide SPEC.md §8.4). They're asked for on their own, so a
+    # distro without them still gets the rest. Debian packages secret-tool
+    # as libsecret-tools; Fedora and Arch, in libsecret.
+    case "$(detect_os)" in
+        debian) secret_tool=libsecret-tools ;;
+        *) secret_tool=libsecret ;;
+    esac
+    if ! install_all "$secret_tool" openssl; then
+        warn "couldn't install $secret_tool and openssl, so Super+V's picker keeps no clipboard history; its Characters tab still works"
     fi
     # rbw is the Bitwarden client behind the picker's Fill tab on
     # Super+Shift+V (tide SPEC.md §8.4). On its own: Fedora doesn't package
