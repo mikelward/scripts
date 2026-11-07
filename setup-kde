@@ -990,7 +990,7 @@ configure_app_shortcuts() {
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
-    # Chat and Calendar, as on tide and tilemo.
+    # Chat and Calendar, as on tide and tide for macOS.
     add_app_shortcut "google-chat" "Meta+C"
     add_app_shortcut "google-calendar" "Meta+Shift+C"
     # The clipboard menu, which pastes what you choose, as tide's picker
@@ -1036,7 +1036,7 @@ configure_keybindings() {
     # script already cleared yours, System Settings > Shortcuts restores it.
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
     # not a [kwin] action, so it needs the launch-shortcut form. It moves to
-    # Meta+;, the emoji and characters key on tide and tilemo too.
+    # Meta+;, the emoji and characters key on tide and tide for macOS too.
     set_app_shortcut org.kde.plasma.emojier.desktop "Meta+;" "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
     # Klipper's popup, in plasmashell, holds Meta+V. clipboard-menu opens
     # it itself in an X11 session, where its fuzzel menu can't run.
@@ -1071,7 +1071,7 @@ configure_keybindings() {
     # the file as "\\" (KConfig doubles it on write, halves it on read), which
     # is the escape deserializeList needs to keep the comma out of the split.
     # Meta+\ above needs two backslashes for the same round trip.
-    # Meta+O ("one window") as well as Meta+`: tileco has only Search+O, since
+    # Meta+O ("one window") as well as Meta+`: tide for Chrome has only Search+O, since
     # Chrome can't bind a backtick, so O works on every desktop.
     set_shortcut KrohnkiteMonocleLayout "Meta+\` Meta+O" "Krohnkite: Select Layout - Monocle"
     set_shortcut KrohnkitePreviousLayout "Meta+\\," "Krohnkite: Previous Layout"

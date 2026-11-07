@@ -1066,7 +1066,7 @@ crostini_settings() {
     info "  keyboard layout and Caps Lock: Settings > Device > Keyboard and inputs"
     info "  sleep and lock: Settings > Device > Power, and Privacy > Lock screen"
     info "  more disk for Linux: Settings > About ChromeOS > Linux development environment > Disk size"
-    info "tileco's options page has the full checklist."
+    info "tide for Chrome's options page has the full checklist."
 }
 
 # --- Detect GUI ---
@@ -1500,7 +1500,7 @@ pkg_note() {
 #
 # One stamp covers every package manager, as one pass upgrades them all, and
 # a failure anywhere has the next run try the whole pass again. The repos
-# setup clones (scripts, conf, root, tide, and setup-macos's tilemo) are
+# setup clones (scripts, conf, root, tide, and setup-macos's tide for macOS) are
 # config, not packages, and are pulled on every run.
 
 # resolve_upgrade: turns UPGRADE=auto into yes or no by UPGRADE_STAMP's age.
@@ -2043,7 +2043,7 @@ install_os_packages() {
             if test "$GUI_ENABLED" -eq 1; then
                 brew_install --cask kitty \
                     || warn "skipping kitty installation"
-                # No Amethyst or Rectangle: setup-macos sets up tilemo, which
+                # No Amethyst or Rectangle: setup-macos sets up tide for macOS, which
                 # they'd fight over keys and windows. `setup-macos --wm
                 # amethyst` installs Amethyst itself.
                 brew_install --cask iterm2 \

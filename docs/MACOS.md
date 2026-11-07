@@ -6,8 +6,8 @@ title: macOS desktop setup
 
 How the KDE/Krohnkite setup in `setup-kde` is reproduced on macOS by
 `setup-macos`, what carries over, what doesn't, and why Amethyst was chosen
-over the alternatives. tilemo, tide's tiling on Hammerspoon, has since
-replaced it as the default (see [tilemo, the default](#tilemo-the-default));
+over the alternatives. tide for macOS, tide's tiling on Hammerspoon, has since
+replaced it as the default (see [tide for macOS, the default](#tide-for-macos-the-default));
 `--wm amethyst` still sets up Amethyst, which most of this file describes.
 
 The window manager config itself lives in the `conf` repo as `amethyst.yml`,
@@ -24,7 +24,7 @@ For why Amethyst rather than yabai or AeroSpace, skip to the
   - [Desktop configuration on its own](#desktop-configuration-on-its-own)
   - [What `setup-macos` requires](#what-setup-macos-requires)
   - [Install backends for Amethyst](#install-backends-for-amethyst)
-  - [tilemo, the default](#tilemo-the-default)
+  - [tide for macOS, the default](#tide-for-macos-the-default)
 - [Do these by hand first](#do-these-by-hand-first)
   - [And afterwards](#and-afterwards)
 - [Key mapping](#key-mapping)
@@ -62,7 +62,7 @@ On macOS this installs Homebrew if it's missing, then, by category:
 | Directory jumping | zoxide |
 | Node toolchain | node, typescript (skip with `--no-npm`; an Intel Mac gets them from conda-forge via `homepkg`, as Homebrew would compile them) |
 | Android CLI tools | android-platform-tools (adb, fastboot) |
-| Graphical apps | kitty, iTerm2 (skip with `--no-gui`); `setup-macos` installs Hammerspoon for tilemo, or Amethyst with `--wm amethyst` |
+| Graphical apps | kitty, iTerm2 (skip with `--no-gui`); `setup-macos` installs Hammerspoon for tide for macOS, or Amethyst with `--wm amethyst` |
 | Heavyweight extras | helix, jj, nushell (`--minimal` skips, `--brew` / `--release` picks the source) |
 | Dotfiles | clones the `conf` repo and symlinks it via `confinst`, then clones `vcs` into `conf/vcs` and builds it for the prompt |
 
@@ -86,7 +86,7 @@ since a managed Mac can need each new version of a binary approved before it
 runs. Once a week, or the first time, it also runs `brew update` and `brew
 upgrade` and upgrades the release binaries, the `homepkg` tools and `uv`;
 `~/.local/state/setup/last-upgrade` records the last pass that didn't fail.
-`setup-macos` on its own upgrades nothing. tilemo's checkout is config, so
+`setup-macos` on its own upgrades nothing. tide for macOS's checkout is config, so
 it's pulled on every run.
 
 `setup` flags that matter here:
@@ -128,17 +128,17 @@ LinearMouse and logging out. Its own output is a line per step.
 
 | Flag | Effect |
 | --- | --- |
-| `--no-install` | Configure whatever tilemo (or Amethyst) is already there; don't install |
+| `--no-install` | Configure whatever tide for macOS (or Amethyst) is already there; don't install |
 | `--ignore-errors` | Keep going past failures instead of aborting on the first |
 | `--yes` | Skip the preflight pause |
 | `--no-sudo` | Skip anything needing administrator rights — only Karabiner's installer does |
-| `--wm tilemo\|amethyst` | The tiling window manager; `tilemo` by default. See [tilemo, the default](#tilemo-the-default) |
+| `--wm tide\|amethyst` | The tiling window manager; `tide` by default. See [tide for macOS, the default](#tide-for-macos-the-default) |
 | `--help` | Usage |
 
 `setup` forwards `--no-install`, `--no-sudo` and `--ignore-errors` when it
-dispatches here, but not `--wm`, so a plain `setup` sets up tilemo. For
+dispatches here, but not `--wm`, so a plain `setup` sets up tide for macOS. For
 Amethyst, run `setup-macos --wm amethyst` again after `setup`. `--wm timo`,
-tilemo's old name, still works. The
+tide for macOS's old name, still works. The
 preflight pause is skipped automatically when stdin isn't a terminal, so an
 unattended bootstrap doesn't block on an Enter that can never arrive.
 
@@ -186,58 +186,60 @@ manager's own layouts and keybindings are missing.
 There's no third backend. If Amethyst is already installed in either location,
 both are skipped.
 
-### tilemo, the default
+### tide for macOS, the default
 
-`setup-macos` sets up [tilemo](https://github.com/mikelward/tilemo) unless
+`setup-macos` sets up [tide for macOS](https://github.com/mikelward/tidemo) unless
 `--wm amethyst` says otherwise: a Hammerspoon config with tide's tiling, named
 workspaces done by minimizing windows rather than with Spaces, focus follows
-mouse, and a launcher. tilemo's `SPEC.md` (sections 6.4 and 7.3) says what it
+mouse, and a launcher. tide for macOS's `SPEC.md` (sections 6.4 and 7.3) says what it
 needs from here, and the run does that:
 
-- **Keys.** tilemo registers its keys with `RegisterEventHotKey`, which fails
+- **Keys.** tide for macOS registers its keys with `RegisterEventHotKey`, which fails
   silently on a key the system holds, so the hotkeys the Amethyst setup moved
   onto Option go back to stock: Spotlight on Cmd+Space (physical Ctrl+Space),
   Finder search on Cmd+Option+Space and enabled, and Switch to Desktop 1–9 and
   move-a-Space turned off at their stock Ctrl bindings.
-- **Mission Control.** tilemo uses one Space per display, so there's no
+- **Mission Control.** tide for macOS uses one Space per display, so there's no
   nine-Spaces step; extra Spaces can be removed in Mission Control.
   `mru-spaces` stays off. Stage Manager, Sequoia's edge and Option-drag
   tiling, and click-wallpaper-to-show-desktop are turned off in
   `com.apple.WindowManager`, taking effect at the next login. Those keys are
   unverified on the newest macOS.
 - **Install.** Hammerspoon from Homebrew (`brew install --cask hammerspoon`;
-  no administrator rights, so `--no-sudo` doesn't skip it). tilemo is cloned
-  to `$TILEMO_DIR` (default `~/tilemo`) if it isn't there, and
-  `make -C "$TILEMO_DIR" install` copies it into `~/.hammerspoon/tilemo`. An
+  no administrator rights, so `--no-sudo` doesn't skip it). tide for macOS is cloned
+  to `$TIDEMO_DIR` (default `~/tidemo`) if it isn't there, and
+  `make -C "$TIDEMO_DIR" install` copies it into `~/.hammerspoon/tide`. An
   existing checkout is pulled first, fast-forward only, as `setup` pulls
   tide, so a plain `setup` keeps it current. One with commits of its own, or
   changes a pull would overwrite, is installed as it stands, with a warning.
   `--no-install` skips Hammerspoon, the clone and the pull.
 - **blueutil** from Homebrew (`brew install blueutil`, a formula, so no
-  administrator either), which tilemo's bar asks whether Bluetooth is on.
-  It's free and open source. Without it, or when it fails, tilemo hides
+  administrator either), which tide for macOS's bar asks whether Bluetooth is on.
+  It's free and open source. Without it, or when it fails, tide for macOS hides
   only that icon; its headphones icons don't need it. `--no-install` skips
   it too, saying so.
-- **Renamed from timo.** A `~/timo` checkout an earlier run cloned is used
-  when there's no `~/tilemo`, rather than cloning a second copy, and
-  `$TIMO_DIR` is still read when `$TILEMO_DIR` isn't set. One from before
-  the rename installs `~/.hammerspoon/timo` rather than `tilemo`, so the run
-  warns to pull it.
-- **`~/.hammerspoon/init.lua`** is written with `tilemo = require("tilemo")`
-  and `tilemo.start({})` only when there's no file; an existing one is never
-  overwritten, and if it doesn't load tilemo the run says what to add. An old
-  `require("timo")` counts, since tilemo keeps that name working.
+- **Renamed from tilemo and timo.** A `~/tilemo` or `~/timo` checkout an
+  earlier run cloned is used when there's no `~/tidemo`, rather than cloning
+  a second copy, and `$TILEMO_DIR` and `$TIMO_DIR` are still read when
+  `$TIDEMO_DIR` isn't set. `--wm tilemo` and `--wm timo` still mean tide. A
+  checkout from before the rename installs `~/.hammerspoon/tilemo` rather
+  than `~/.hammerspoon/tide`, so the run warns to pull it.
+- **`~/.hammerspoon/init.lua`** is written with `tide = require("tide")`
+  and `tide.start({})` only when there's no file; an existing one is never
+  overwritten, and if it doesn't load tide for macOS the run says what to add. An old
+  `require("tilemo")` or `require("timo")` counts, since tide for macOS keeps
+  those names working.
 - **Other tilers.** Amethyst installed or running, or Rectangle installed
   (its defaults sit on Ctrl+Option+arrows), gets a warning to quit it and
   remove it from Login Items. Nothing is uninstalled.
-- **Karabiner.** The conf repo's `tilemo.json` rule, whose name starts
-  `tilemo:`, makes the physical Win key tilemo's Super (Ctrl+Option+Command).
-  Enable it above the arrow rule. Without it, tilemo falls back to Option. A
-  conf checkout from before the rename has `timo.json`, named `timo:`
-  instead, which tilemo also accepts.
+- **Karabiner.** The conf repo's `tide.json` rule, whose name starts
+  `tide:`, makes the physical Win key tide for macOS's Super (Ctrl+Option+Command).
+  Enable it above the arrow rule. Without it, tide for macOS falls back to Option. A
+  conf checkout from before the renames has `tilemo.json` or `timo.json`,
+  named `tilemo:` or `timo:` instead, which tide for macOS also accepts.
 
 Hammerspoon then needs Accessibility access granted by hand, as Amethyst does.
-Hammerspoon and tilemo are free and open source, and nothing here touches the
+Hammerspoon and tide for macOS are free and open source, and nothing here touches the
 network after the install. If Hammerspoon is missing or not granted
 Accessibility, nothing tiles and the workspace keys do nothing; the rest of the
 setup still applies.
@@ -266,22 +268,22 @@ doesn't scroll away under the run's own output, with where to click for each.
 Most of it can only be done *after* the run: on a first run the apps aren't
 installed yet, so there's nothing to grant a permission to. What's on it:
 
-**Accessibility for Amethyst**, or for Hammerspoon with `--wm tilemo`: System
+**Accessibility for Amethyst**, or for Hammerspoon with `--wm tide`: System
 Settings > Privacy & Security > Accessibility, turn it on, or click `+` to add
 it if it isn't listed. Amethyst moves and resizes windows through the
 Accessibility API and is completely inert without it — it will run, show its
-menu bar icon, and tile nothing. tilemo needs Hammerspoon's Reload Config
+menu bar icon, and tile nothing. tide for macOS needs Hammerspoon's Reload Config
 after, to start again with it.
 
 **Karabiner-Elements' setup.** Its own Setup page, in its sidebar, lists what
 it needs allowed — its driver extension, background services, input capture
 — each with a button that opens the System Settings page for it.
 
-**Karabiner's rules.** With tilemo, the default, there's nothing to do: tilemo
+**Karabiner's rules.** With tide for macOS, the default, there's nothing to do: tide for macOS
 turns conf's rules on itself, editing `karabiner.json`, keeps Karabiner's
 copies up to date with conf, and has each On or Off under Keyboard in tide's
 settings. Karabiner's Devices page needs Modify events turned on for each
-mouse and trackpad, for tilemo's Win+click and Win+drag.
+mouse and trackpad, for tide for macOS's Win+click and Win+drag.
 
 With `--wm amethyst`: in Karabiner-Elements, Complex Modifications, then **Add
 predefined rule** — not "Add your own rule", which opens an editor. Each of
@@ -303,8 +305,8 @@ there's none, or only the empty one LinearMouse makes as it first starts:
 LinearMouse rewrites it whenever its settings change, so its Scrolling
 settings are where to tune the number. Without LinearMouse, or without the
 permission, the wheel scrolls as stock macOS does: a line or so a notch,
-faster as you spin it. With `--wm tilemo`, tide's settings window has a
-LinearMouse settings button under Mouse, and tilemo says when LinearMouse
+faster as you spin it. With `--wm tide`, tide's settings window has a
+LinearMouse settings button under Mouse, and tide for macOS says when LinearMouse
 isn't installed or isn't running.
 
 ## Key mapping
@@ -337,7 +339,7 @@ match on all but two rows, which is the muscle memory being preserved.
 | Music | `Win+Y` | `Win+Y` | Automator Quick Action |
 | Chat | `Win+C` | `Win+C` | Automator Quick Action |
 | Calendar | `Win+Shift+C` | `Win+Shift+C` | Automator Quick Action |
-| Clipboard history, pasting the entry chosen | `Win+V` (`clipboard-menu`) | `Win+V` | tilemo's picker (with tilemo); not configured without it |
+| Clipboard history, pasting the entry chosen | `Win+V` (`clipboard-menu`) | `Win+V` | tide for macOS's picker (with tide for macOS); not configured without it |
 | Snippets and Bitwarden logins, typing the field chosen | `Win+Shift+V` (`fill-menu`) | — | not yet on macOS |
 | Close window | `Win+Backspace` | **`Ctrl+W`** | macOS default, not configured |
 | Switch applications | `Alt+Tab` | right `Ctrl+Tab` † | the rotation alone; the Tab rule takes only left Ctrl |
@@ -369,7 +371,7 @@ kitty's own `Ctrl+C` and `Ctrl+V` maps, from the same `kitty.conf` as Linux;
 `Ctrl+U` is Cmd+U and never reaches the shell.
 
 † Physical `Alt+Tab` no longer switches applications: it goes to the next tab,
-as left `Ctrl+Tab` does, and with `--wm tilemo` it is tilemo's swap with the
+as left `Ctrl+Tab` does, and with `--wm tide` it is tide for macOS's swap with the
 master instead. Right `Ctrl+Tab` switches applications. Without Karabiner,
 left `Ctrl+Tab` does too. Its driver
 extension is the one part of this setup a managed Mac can refuse; see
@@ -417,23 +419,23 @@ something Linux does with Alt. Left alone, the rotation swaps the two round:
 
 `setup-macos` installs Karabiner-Elements, and the conf repo ships a complex
 modification, "Ctrl+Tab goes to the next tab", that puts the next tab back
-on physical `Ctrl+Tab`. Physical `Alt+Tab` is tilemo's, in tilemo's own rule
-(the conf repo's `config/karabiner/README.md`, tilemo's SPEC.md §7.2):
+on physical `Ctrl+Tab`. Physical `Alt+Tab` is tide for macOS's, in tide for macOS's own rule
+(the conf repo's `config/karabiner/README.md`, tide for macOS's SPEC.md §7.2):
 
-| Physical keys | Rotation alone | With the Tab rule | With tilemo's rule too |
+| Physical keys | Rotation alone | With the Tab rule | With tide for macOS's rule too |
 | --- | --- | --- | --- |
 | `Ctrl+Tab` | switch applications | **next tab in app** | next tab in app |
 | `Alt+Tab` | next tab in app | next tab in app | **swap with the master** |
 
 So `Alt+Tab` no longer switches applications. The rule used to swap the two
 both ways, making `Alt+Tab` switch applications, and gave that up when
-tilemo took the key. The rule takes only left Ctrl, so physical right
+tide for macOS took the key. The rule takes only left Ctrl, so physical right
 `Ctrl+Tab`, which the rotation makes Cmd+Tab, still switches applications on
-a keyboard that has a right Ctrl. tilemo's switcher has a Windows tab for it
+a keyboard that has a right Ctrl. tide for macOS's switcher has a Windows tab for it
 too. A Mac keyboard's own `Cmd+Tab` doesn't: `hidutil` applies the rotation
-to every keyboard, so its Command key sends Option. Without tilemo, physical `Alt+Tab` is
+to every keyboard, so its Command key sends Option. Without tide for macOS, physical `Alt+Tab` is
 left to the rotation: the next tab. `Shift+Ctrl+Tab` goes to the previous
-tab, and so does `Shift+Alt+Tab`, which tilemo's rule leaves alone.
+tab, and so does `Shift+Alt+Tab`, which tide for macOS's rule leaves alone.
 
 **This is the one part of the setup that a managed Mac can refuse.** Karabiner
 installs a driver extension, and an MDM profile can block system extensions
@@ -457,7 +459,7 @@ Karabiner needs two things done by hand, neither of them scriptable: what its
 Setup page lists allowed (the driver extension, background services and input
 capture), and the rules enabled under Complex Modifications > Add predefined
 rule, each under its file's title ("PC keyboard Ctrl+Tab", "PC keyboard
-arrows", "PC keyboard terminals", "tilemo"). The run's closing list says how.
+arrows", "PC keyboard terminals", "tide for macOS"). The run's closing list says how.
 Until then Ctrl+Tab keeps switching applications and the arrow keys behave as
 plain macOS. Enabling copies the rule into
 `karabiner.json`, so after a conf update changes one, remove it and add it
@@ -585,7 +587,7 @@ focus-stealing prevention levels — that part *is* a platform limit.
 [amethyst-277]: https://github.com/ianyh/Amethyst/issues/277
 
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
-tilemo dims every window but the focused one itself; with Amethyst there's no
+tide for macOS dims every window but the focused one itself; with Amethyst there's no
 dim.
 
 

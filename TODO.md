@@ -88,7 +88,7 @@
 
 ## Crostini
 
-The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
+The rest of the Crostini mode in mikelward/tideco's SPEC.md A.5, after
 `setup` learned to detect it and skip the desktop:
 
 - Set `BROWSER` to `garcon-url-handler`, if the container doesn't already
@@ -145,10 +145,10 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
 - **setup-tide writes tide-tabs's host manifest for Chrome and Brave**
   (2026-11-01), in each one's `NativeMessagingHosts`, when its config
   directory exists or its command is on `PATH`. It allows the Web Store's
-  tileco ID, and an unpacked checkout's at `$TILECO_DIR` (`~/src/tileco`),
+  tide for Chrome ID, and an unpacked checkout's at `$TIDECO_DIR` (`~/src/tideco`),
   worked out from the manifest's `key` or else the folder's real path, as
   Chromium does. Sub-choices, each reversible in `install_tabs_host`:
-  - setup doesn't clone tileco; it says where to put it. The alternative
+  - setup doesn't clone tide for Chrome; it says where to put it. The alternative
     is cloning it beside tide, one more network fetch per run.
   - No host installed (`--no-install`, or an old tide) writes no manifest
     and warns, rather than a manifest pointing at nothing.
@@ -174,7 +174,7 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
   the masks cover only the user who ran setup. It's reversible with
   `systemctl --user unmask waybar.service swaync.service`, or by bringing back
   a `sudo systemctl --global disable`.
-- **On macOS, tilemo's app keys open apps through `open`.** `chrome` runs
+- **On macOS, tide for macOS's app keys open apps through `open`.** `chrome` runs
   `open -na "Google Chrome" --args …` (the beta if stable isn't in
   `/Applications` or `~/Applications`), so `browser1`–`3`, the Google web
   apps and `youtube-music` keep their Linux flags: the same
@@ -187,9 +187,9 @@ The rest of the Crostini mode in mikelward/tileco's SPEC.md A.5, after
   opening each installed app by its bundle id. It's reversible: one branch
   per script on `uname -s`.
 - **setup-macos still names conf's old "Alt+Tab switches applications"
-  rule without `--wm tilemo`, when the conf checkout predates it.** That
+  rule without `--wm tide`, when the conf checkout predates it.** That
   rule still works as it always did there, so the run names it as it is,
   as it does a stale arrow rule, and says an update replaces it. Under
-  `--wm tilemo` it isn't named: it would make Alt+Tab Cmd+Tab, which is
-  tilemo's key now. The alternative was to warn and name nothing in both
+  `--wm tide` it isn't named: it would make Alt+Tab Cmd+Tab, which is
+  tide for macOS's key now. The alternative was to warn and name nothing in both
   modes. It's reversible: one `elif` arm in `configure_karabiner`.

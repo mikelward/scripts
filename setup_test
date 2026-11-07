@@ -1398,7 +1398,7 @@ test_crostini_settings_point_at_chromeos() {
     output="$(sh -c "$(extract_functions "info crostini_settings")
 crostini_settings" 2>&1)"
     assert_output_contains "Settings > Device > Keyboard and inputs" &&
-    assert_output_contains "tileco's options page has the full checklist"
+    assert_output_contains "tide for Chrome's options page has the full checklist"
 }
 
 run_test() {
@@ -3257,7 +3257,7 @@ test_shell_tools_failed_upgrade_is_retried() {
     assert_output_contains "UPGRADE_FAILED=yes"
 }
 
-# setup-macos sets up tilemo by default, which Amethyst and Rectangle fight
+# setup-macos sets up tide for macOS by default, which Amethyst and Rectangle fight
 # over keys and windows, so setup installs neither; `setup-macos --wm
 # amethyst` installs Amethyst itself.
 test_macos_installs_no_other_tiler() {
@@ -5255,7 +5255,7 @@ run_test "macOS brew failures warn instead of aborting the bootstrap" \
     test_macos_brew_failures_are_not_fatal
 run_test "a failing brew still attempts the later macOS steps" \
     test_macos_brew_failure_still_attempts_later_steps
-run_test "setup installs no tiler but tilemo's on a Mac" test_macos_installs_no_other_tiler
+run_test "setup installs no tiler but tide for macOS's on a Mac" test_macos_installs_no_other_tiler
 run_test "setup leaves git, python3, vim, zsh, curl and unzip to macOS" \
     test_macos_core_install_uses_the_system_tools
 run_test "setup logs brew's output on a Mac and says what it installed" test_macos_brew_output_is_logged_and_summarized

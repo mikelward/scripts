@@ -8,16 +8,16 @@
 #   Move left/right a space on Control+Option+arrow, which the conf repo's
 #   Karabiner rule puts under physical Win+Left/Right
 # - Disables auto-correct, auto-capitalize, smart quotes/dashes
-# - tilemo, the tiling window manager by default: a Hammerspoon config with
+# - tide, the tiling window manager by default: a Hammerspoon config with
 #   tide's tiling and named workspaces of its own, done by minimizing windows
-#   rather than with Spaces. It clones tilemo, or pulls an existing checkout
+#   rather than with Spaces. It clones tide, or pulls an existing checkout
 #   (--ff-only), and installs it. It needs the keys the Amethyst setup binds,
 #   so it hands Spotlight back Cmd+Space, turns the Switch to Desktop and
 #   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
 #   tiling features that would fight it. It also keeps the menu bar shown,
-#   for tilemo's own bar to cover, and installs blueutil (Homebrew) so that bar can show
+#   for tide's own bar to cover, and installs blueutil (Homebrew) so that bar can show
 #   whether Bluetooth is on, and m1ddc (Apple silicon) or ddcctl (Intel) so it
-#   can show and set a monitor's speaker volume over DDC. See configure_tilemo and tilemo's SPEC.md (sections 6.4,
+#   can show and set a monitor's speaker volume over DDC. See configure_tide and tide's SPEC.md (sections 6.4,
 #   7.3 and 8), which say what it needs from here.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
@@ -81,16 +81,16 @@
 #
 # Usage:
 #     setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-#                 [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
+#                 [--wm tide|amethyst] [-v | --verbose] [-h | --help]
 #
 # setup forwards --no-install, --no-sudo, --ignore-errors and --verbose here.
-# --no-install skips installing tilemo (or Amethyst) and Karabiner-Elements and
+# --no-install skips installing tide (or Amethyst) and Karabiner-Elements and
 # configures whatever is already there. --no-sudo skips the two steps here that
 # need administrator rights: Karabiner's install -- its cask is a .pkg and
 # Homebrew hands those to the system installer -- and the hostname on the lock
 # screen. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
-# pause. --wm picks the tiling window manager: tilemo (or timo, its old name),
+# pause. --wm picks the tiling window manager: tide (or timo, its old name),
 # the default, so a plain setup sets it up, or amethyst. setup doesn't forward
 # --wm, so an Amethyst machine runs this a second time with --wm amethyst.
 
@@ -107,26 +107,28 @@ VERBOSE=no
 # manager (Krohnkite) under the same flag.
 INSTALL=yes
 
-# Which tiling window manager to set up (--wm): tilemo, the default, or
-# amethyst. A plain `setup`, which passes no --wm, sets up tilemo.
-WM=tilemo
+# Which tiling window manager to set up (--wm): tide, the default, or
+# amethyst. A plain `setup`, which passes no --wm, sets up tide.
+WM=tide
 
-# Where tilemo's checkout lives, or will once cloned. A checkout rather than a
-# package because tilemo is a Hammerspoon config with no release to install:
+# Where tide's checkout lives, or will once cloned. A checkout rather than a
+# package because tide is a Hammerspoon config with no release to install:
 # `make install` copies its Lua out of the checkout into ~/.hammerspoon.
 #
-# tilemo was called timo, and earlier runs cloned it into ~/timo (or took
-# $TIMO_DIR). Either is still honored, so a machine set up then reuses its
-# checkout rather than cloning a second copy beside it; see install_tilemo.
-TILEMO_OLD_DIR="$HOME/timo"
-TILEMO_DIR="${TILEMO_DIR:-${TIMO_DIR:-}}"
-if test -z "$TILEMO_DIR"; then
-    TILEMO_DIR="$HOME/tilemo"
-    if ! test -e "$TILEMO_DIR" && test -d "$TILEMO_OLD_DIR"; then
-        TILEMO_DIR="$TILEMO_OLD_DIR"
-    fi
+# tide's repo is tidemo. It was tilemo, and timo before that, and earlier
+# runs cloned it into ~/tilemo or ~/timo (or took $TILEMO_DIR or $TIMO_DIR).
+# Each is still honored, so a machine set up then reuses its checkout rather
+# than cloning a second copy beside it; see install_tide.
+TIDEMO_DIR="${TIDEMO_DIR:-${TILEMO_DIR:-${TIMO_DIR:-}}}"
+if test -z "$TIDEMO_DIR"; then
+    TIDEMO_DIR="$HOME/tidemo"
+    for _old in "$HOME/tilemo" "$HOME/timo"; do
+        if ! test -e "$TIDEMO_DIR" && test -d "$_old"; then
+            TIDEMO_DIR="$_old"
+        fi
+    done
 fi
-TILEMO_REPO="https://github.com/mikelward/tilemo.git"
+TIDEMO_REPO="https://github.com/mikelward/tidemo.git"
 
 # Whether to skip the preflight pause (--yes). A stdin that isn't a terminal
 # skips it too; see preflight.
@@ -443,7 +445,7 @@ restart_app() {
 # first so it isn't found later as a dead keybinding: no API creates a
 # Space, and System Settings, left open, writes its cached shortcuts back
 # over these. The rest waits for the end-of-run list, since most of it is
-# for apps the run installs. tilemo uses one Space per display, so the
+# for apps the run installs. tide uses one Space per display, so the
 # nine-Spaces step is Amethyst's alone.
 preflight_notes() {
     info ""
@@ -482,18 +484,18 @@ preflight() {
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
-                   [--wm tilemo|amethyst] [-v | --verbose] [-h | --help]
+                   [--wm tide|amethyst] [-v | --verbose] [-h | --help]
 
 Configure the macOS desktop environment.
 
 Options:
-  --no-install     Don't install Hammerspoon, tilemo (or, with --wm amethyst,
+  --no-install     Don't install Hammerspoon, tide (or, with --wm amethyst,
                    Amethyst), Karabiner-Elements or LinearMouse; configure
                    whatever is already there
   --no-sudo        Skip what needs administrator rights (Karabiner's installer)
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Don't pause before starting
-  --wm WM          The tiling window manager: tilemo (the default) or amethyst
+  --wm WM          The tiling window manager: tide (the default) or amethyst
   -v, --verbose    Show what Homebrew prints, instead of keeping it in
                    ~/.local/state/setup/setup.log, and what was already so
   -h, --help       Show this help and exit
@@ -535,7 +537,7 @@ while test $# -gt 0; do
             ;;
         --wm)
             if test $# -lt 2; then
-                warn "--wm needs a value: amethyst or tilemo"
+                warn "--wm needs a value: amethyst or tide"
                 usage >&2
                 exit 1
             fi
@@ -559,14 +561,14 @@ while test $# -gt 0; do
 done
 
 case "$WM" in
-    amethyst|tilemo) ;;
-    # tilemo's name before its repo was renamed, so a command line or note
+    amethyst|tide) ;;
+    # tide's names before its repo was renamed, so a command line or note
     # from then still works.
-    timo)
-        WM=tilemo
+    tilemo|timo)
+        WM=tide
         ;;
     *)
-        warn "Unknown window manager for --wm: '$WM' (expected amethyst or tilemo)"
+        warn "Unknown window manager for --wm: '$WM' (expected amethyst or tide)"
         usage >&2
         exit 1
         ;;
@@ -651,18 +653,18 @@ configure_keyboard() {
 #   Physical Win  (E3/E7) → Option  (E2/E6)
 #   Physical Alt  (E2/E6) → Control (E0/E4)
 KEY_ROTATION='{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}'
-# With tilemo, Caps Lock (39) sends F18 (6D) too, which tilemo takes as
-# Compose, as Linux's Caps Lock is (tilemo SPEC.md §10). Amethyst has no use
+# With tide, Caps Lock (39) sends F18 (6D) too, which tide takes as
+# Compose, as Linux's Caps Lock is (tide SPEC.md §10). Amethyst has no use
 # for F18, so there Caps Lock stays.
 KEY_CAPS_COMPOSE='{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}'
-if test "$WM" = tilemo; then
+if test "$WM" = tide; then
     KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION,$KEY_CAPS_COMPOSE]}"
 else
     KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION]}"
 fi
 
 configure_modifier_keys() {
-    if test "$WM" = tilemo; then
+    if test "$WM" = tide; then
         info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control) and Caps Lock to Compose"
     else
         info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
@@ -733,8 +735,8 @@ warn_if_settings_app_running() {
         fi
         case "$_settings_running" in
             0)
-                if test "$WM" = tilemo; then
-                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if tilemo's keys don't register"
+                if test "$WM" = tide; then
+                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if tide's keys don't register"
                 else
                     warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
                 fi
@@ -766,16 +768,16 @@ write_symbolic_hotkey() {
         </dict>'
 }
 
-# tilemo registers its keys with RegisterEventHotKey, which fails silently on a
-# key someone else already holds (tilemo's SPEC.md, section 7.3), so the system
+# tide registers its keys with RegisterEventHotKey, which fails silently on a
+# key someone else already holds (tide's SPEC.md, section 7.3), so the system
 # hotkeys the Amethyst setup moved onto Option -- and the move-a-Space chord --
 # have to be let go first. Each goes back to its stock binding rather than
 # merely off, so the shortcut still reads sensibly in System Settings and
 # turning it back on there gets the macOS default, not a blank.
-configure_shortcuts_tilemo() {
+configure_shortcuts_tide() {
     # Spotlight back on Cmd+Space (1048576 is Command), which is physical
-    # Ctrl+Space under the rotation. That leaves Option+Space free: tilemo's
-    # Super is Ctrl+Option+Command with the Karabiner tilemo rule, but falls back
+    # Ctrl+Space under the rotation. That leaves Option+Space free: tide's
+    # Super is Ctrl+Option+Command with the Karabiner tide rule, but falls back
     # to Option without it.
     write_symbolic_hotkey 64 true 32 49 1048576
 
@@ -785,7 +787,7 @@ configure_shortcuts_tilemo() {
     write_symbolic_hotkey 65 true 32 49 1572864
 
     # Switch to Desktop 1-9 (118-126) off, at their stock Ctrl+1..9 (262144 is
-    # Control): tilemo's workspaces are its own, on Super+1..9, and don't use
+    # Control): tide's workspaces are its own, on Super+1..9, and don't use
     # Spaces at all. Same non-sequential keycodes as configure_shortcuts.
     set -- \
         118 49 18 \
@@ -805,23 +807,23 @@ configure_shortcuts_tilemo() {
     # Move left/right a Space (79 and 81) off, at their stock Ctrl+arrows
     # (8650752 is Control plus the arrow keys' function-key flag). The
     # Karabiner arrow rule sends Ctrl+Option+arrow for physical Win+arrow, and
-    # tilemo takes that chord for itself.
+    # tide takes that chord for itself.
     write_symbolic_hotkey 79 false 65535 123 8650752
     write_symbolic_hotkey 81 false 65535 124 8650752
 
     # Mission Control (32) and App Exposé (33) off, at their stock Ctrl+Up
-    # and Ctrl+Down: tilemo parks hidden workspaces' windows on one Space,
-    # so Mission Control would show every workspace at once, and tilemo
-    # takes both keys for its own overview (tilemo's SPEC.md, section 6.9).
+    # and Ctrl+Down: tide parks hidden workspaces' windows on one Space,
+    # so Mission Control would show every workspace at once, and tide
+    # takes both keys for its own overview (tide's SPEC.md, section 6.9).
     write_symbolic_hotkey 32 false 65535 126 8650752
     write_symbolic_hotkey 33 false 65535 125 8650752
 }
 
 configure_shortcuts() {
-    if test "$WM" = tilemo; then
-        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for tilemo)"
+    if test "$WM" = tide; then
+        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for tide)"
         warn_if_settings_app_running
-        configure_shortcuts_tilemo
+        configure_shortcuts_tide
         activate_shortcuts
         return 0
     fi
@@ -1007,18 +1009,18 @@ configure_spaces() {
     # default, and it reorders the Spaces behind the Option+1..9 bindings
     # above -- so the shortcut that switched to a given desktop a moment ago
     # switches somewhere else now. Numbered shortcuts only mean anything with
-    # a fixed order. tilemo's spec (section 6.4) keeps it off too.
+    # a fixed order. tide's spec (section 6.4) keeps it off too.
     try defaults write com.apple.dock mru-spaces -bool false
 
-    if test "$WM" = tilemo; then
-        configure_mission_control_for_tilemo
+    if test "$WM" = tide; then
+        configure_mission_control_for_tide
     fi
 
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
 
-    if test "$WM" = tilemo; then
-        configure_window_manager_for_tilemo
+    if test "$WM" = tide; then
+        configure_window_manager_for_tide
         return 0
     fi
 
@@ -1027,7 +1029,7 @@ configure_spaces() {
     check_spaces_count
 }
 
-# The Mission Control side of tilemo's SPEC.md, section 6.4. tilemo does its
+# The Mission Control side of tide's SPEC.md, section 6.4. tide does its
 # workspaces by minimizing windows on one Space per display, so the nine
 # Spaces the Amethyst setup asks for are dead weight rather than missing --
 # but there is no API to delete a Space any more than to create one, so the
@@ -1036,7 +1038,7 @@ configure_spaces() {
 # The rest turns off the macOS features that move windows on their own and
 # would fight a tiler: Stage Manager groups windows itself, Sequoia's tiling
 # snaps a window dragged to an edge -- and, with Option held, on any drag,
-# which collides with tilemo's Super+drag whenever Super falls back to Option --
+# which collides with tide's Super+drag whenever Super falls back to Option --
 # and clicking the wallpaper sweeps every window aside to show the desktop.
 # The last is false rather than absent: false is "Only in Stage Manager",
 # which with Stage Manager off means never.
@@ -1052,20 +1054,20 @@ configure_spaces() {
 # to be safe -- it owns every window on screen -- so they take effect at the
 # next login.
 # The other ways into Mission Control and App Exposé, off for the reason
-# configure_shortcuts_tilemo gives: the trackpad's swipes, the
+# configure_shortcuts_tide gives: the trackpad's swipes, the
 # Magic Mouse's double tap, and any hot corner set to either. A corner set to
 # something else is left alone. The gesture keys are the ones System Settings
 # is reported to write *(unverified here, and per macOS release)*; the Dock
 # reads them at its restart, the trackpad and mouse drivers at the next login.
-configure_mission_control_for_tilemo() {
-    info "Turning off Mission Control's gestures and hot corners (tilemo has its own overview)"
+configure_mission_control_for_tide() {
+    info "Turning off Mission Control's gestures and hot corners (tide has its own overview)"
     try defaults write com.apple.dock showMissionControlGestureEnabled -bool false
     try defaults write com.apple.dock showAppExposeGestureEnabled -bool false
     for _domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
         try defaults write "$_domain" TrackpadThreeFingerVertSwipeGesture -int 0
         try defaults write "$_domain" TrackpadFourFingerVertSwipeGesture -int 0
         # And the swipe left and right between Spaces and full-screen apps:
-        # tilemo's own three-finger swipe steps through its workspaces
+        # tide's own three-finger swipe steps through its workspaces
         # instead, so the two can't both act.
         try defaults write "$_domain" TrackpadThreeFingerHorizSwipeGesture -int 0
         try defaults write "$_domain" TrackpadFourFingerHorizSwipeGesture -int 0
@@ -1085,10 +1087,10 @@ configure_mission_control_for_tilemo() {
     needs_logout "the trackpad and mouse gestures"
 }
 
-configure_window_manager_for_tilemo() {
-    todo_optional "Remove the Spaces you don't need, since tilemo uses one per display: open Mission Control (open -a 'Mission Control' in a terminal), point at a Space along the top, and click its x."
+configure_window_manager_for_tide() {
+    todo_optional "Remove the Spaces you don't need, since tide uses one per display: open Mission Control (open -a 'Mission Control' in a terminal), point at a Space along the top, and click its x."
 
-    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind tilemo's back)"
+    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind tide's back)"
     try defaults write com.apple.WindowManager GloballyEnabled -bool false
     try defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false
     try defaults write com.apple.WindowManager EnableTilingOptionAccelerator -bool false
@@ -1368,7 +1370,7 @@ configure_amethyst() {
     todo_accessibility Amethyst "It can't tile without it."
 }
 
-# --- Configure tilemo (Hammerspoon) ---
+# --- Configure tide (Hammerspoon) ---
 
 # Where NAME.app is, or empty if it isn't installed, by the same rule as
 # amethyst_path: either Applications directory, and only a usable bundle.
@@ -1386,10 +1388,10 @@ hammerspoon_path() {
     app_path Hammerspoon
 }
 
-# What a machine without Hammerspoon or tilemo loses, for the warnings below.
-TILEMO_MISSING_EFFECT="nothing will tile and tilemo's workspace keys will do nothing"
+# What a machine without Hammerspoon or tide loses, for the warnings below.
+TIDEMO_MISSING_EFFECT="nothing will tile and tide's workspace keys will do nothing"
 
-# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: tilemo
+# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: tide
 # itself comes from a git clone, so a machine with no network can't get it
 # either way. The cask installs into /Applications without an administrator
 # prompt, so --no-sudo doesn't skip it.
@@ -1398,31 +1400,31 @@ install_hammerspoon() {
         return 0
     fi
     if test "$INSTALL" = no; then
-        warn "Hammerspoon is not installed and --no-install was given; $TILEMO_MISSING_EFFECT until it is"
+        warn "Hammerspoon is not installed and --no-install was given; $TIDEMO_MISSING_EFFECT until it is"
         return 0
     fi
     if ! is_command brew; then
-        warn "Homebrew not found, so Hammerspoon can't be installed; $TILEMO_MISSING_EFFECT until it is"
+        warn "Homebrew not found, so Hammerspoon can't be installed; $TIDEMO_MISSING_EFFECT until it is"
         return 0
     fi
-    if stale_cask_record hammerspoon Hammerspoon "until then, $TILEMO_MISSING_EFFECT"; then
+    if stale_cask_record hammerspoon Hammerspoon "until then, $TIDEMO_MISSING_EFFECT"; then
         return 0
     fi
     info "Installing Hammerspoon"
     brew_logged install --cask hammerspoon \
-        || warn "could not install Hammerspoon; $TILEMO_MISSING_EFFECT until it is"
+        || warn "could not install Hammerspoon; $TIDEMO_MISSING_EFFECT until it is"
 }
 
-# What a tilemo machine without blueutil loses: tilemo reads whether
-# Bluetooth is on through it (tilemo's SPEC.md, section 8), and hides that
+# What a tide machine without blueutil loses: tide reads whether
+# Bluetooth is on through it (tide's SPEC.md, section 8), and hides that
 # icon without it. Its headphones icons need nothing from here.
-BLUEUTIL_MISSING_EFFECT="tilemo's bar won't show whether Bluetooth is on"
+BLUEUTIL_MISSING_EFFECT="tide's bar won't show whether Bluetooth is on"
 
-# What a tilemo machine without its DDC tool loses: a monitor's own speakers
-# have no volume macOS can read, so tilemo asks the monitor over DDC/CI
-# (tilemo's SPEC.md, section 8), and without the tool the speaker shows no
+# What a tide machine without its DDC tool loses: a monitor's own speakers
+# have no volume macOS can read, so tide asks the monitor over DDC/CI
+# (tide's SPEC.md, section 8), and without the tool the speaker shows no
 # level.
-DDC_MISSING_EFFECT="tilemo's bar won't show a monitor's speaker volume"
+DDC_MISSING_EFFECT="tide's bar won't show a monitor's speaker volume"
 
 # The DDC tool for this Mac: m1ddc on Apple silicon, ddcctl on Intel, whose
 # IOFramebuffer calls don't reach displays on Apple silicon.
@@ -1434,7 +1436,7 @@ ddc_tool() {
     fi
 }
 
-# Installs Homebrew formula $1, a command tilemo runs, saying what's lost
+# Installs Homebrew formula $1, a command tide runs, saying what's lost
 # ($2) while it's missing. A formula (free, open source), not a cask, so it
 # needs no administrator and --no-sudo doesn't skip it. It's a command, so
 # it's found on PATH rather than in an Applications directory.
@@ -1457,8 +1459,8 @@ install_brew_tool() {
         || warn "could not install $_tool; $_effect until it is"
 }
 
-# Clone tilemo if there's no checkout, then copy its modules into
-# ~/.hammerspoon/tilemo with its own `make install`, so what lands there is
+# Clone tide if there's no checkout, then copy its modules into
+# ~/.hammerspoon/tide with its own `make install`, so what lands there is
 # whatever its Makefile says belongs there rather than a list kept here.
 #
 # An existing checkout is pulled with --ff-only first, as setup pulls tide, so
@@ -1466,10 +1468,10 @@ install_brew_tool() {
 # to setup's weekly upgrades. A checkout with commits of its own, or
 # changes a pull would overwrite, is left as it is, with a warning, and
 # installed as it stands. --no-install skips the clone and the pull, which
-# would bring in a newer tilemo -- copying an existing checkout's files is
+# would bring in a newer tide -- copying an existing checkout's files is
 # configuring what's already there. That includes one from before the rename,
 # whose `make install` writes ~/.hammerspoon/timo instead; the init.lua written
-# below loads tilemo, so that's checked for afterwards and a stale checkout
+# below loads tide, so that's checked for afterwards and a stale checkout
 # gets told to update.
 # default_branch DIR: origin's default branch, as DIR's clone recorded it,
 # or main or master when it recorded none.
@@ -1552,85 +1554,87 @@ pull_checkout() {
     return "$_pc_status"
 }
 
-install_tilemo() {
-    if test "$TILEMO_DIR" = "$TILEMO_OLD_DIR"; then
-        info "Using the checkout in $TILEMO_DIR, cloned before timo was renamed tilemo; rename it to $HOME/tilemo whenever suits"
-    fi
-    if test -d "$TILEMO_DIR"; then
+install_tide() {
+    case "$TIDEMO_DIR" in
+        "$HOME/tilemo" | "$HOME/timo")
+            info "Using the checkout in $TIDEMO_DIR, cloned before its repo was renamed tidemo; rename it to $HOME/tidemo whenever suits"
+            ;;
+    esac
+    if test -d "$TIDEMO_DIR"; then
         if test "$INSTALL" = no; then
-            info "Installing $TILEMO_DIR as it stands, without pulling it (--no-install)"
+            info "Installing $TIDEMO_DIR as it stands, without pulling it (--no-install)"
         elif ! is_command git; then
-            warn "git not found, so $TILEMO_DIR isn't updated; installing it as it stands"
+            warn "git not found, so $TIDEMO_DIR isn't updated; installing it as it stands"
         else
-            pull_checkout "$TILEMO_DIR" "installing it as it is" git -C "$TILEMO_DIR" pull --ff-only || :
+            pull_checkout "$TIDEMO_DIR" "installing it as it is" git -C "$TIDEMO_DIR" pull --ff-only || :
         fi
     else
         if test "$INSTALL" = no; then
-            warn "$TILEMO_DIR not found and --no-install was given; clone $TILEMO_REPO there and re-run, or $TILEMO_MISSING_EFFECT"
+            warn "$TIDEMO_DIR not found and --no-install was given; clone $TIDEMO_REPO there and re-run, or $TIDEMO_MISSING_EFFECT"
             return 0
         fi
         if ! is_command git; then
-            warn "git not found, so tilemo can't be cloned into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+            warn "git not found, so tide can't be cloned into $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
             return 0
         fi
-        info "Cloning tilemo into $TILEMO_DIR"
+        info "Cloning tide into $TIDEMO_DIR"
         # git removes the directory it created when a clone fails, so a failure
         # here leaves nothing for the next run to mistake for a checkout.
-        if ! git clone "$TILEMO_REPO" "$TILEMO_DIR"; then
-            warn "could not clone $TILEMO_REPO into $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+        if ! git clone "$TIDEMO_REPO" "$TIDEMO_DIR"; then
+            warn "could not clone $TIDEMO_REPO into $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
             return 0
         fi
     fi
     if ! is_command make; then
-        warn "make not found, so tilemo can't be installed from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+        warn "make not found, so tide can't be installed from $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
         return 0
     fi
-    info "Installing tilemo from $TILEMO_DIR"
-    if ! make -C "$TILEMO_DIR" install; then
-        warn "could not install tilemo from $TILEMO_DIR; $TILEMO_MISSING_EFFECT until it is"
+    info "Installing tide from $TIDEMO_DIR"
+    if ! make -C "$TIDEMO_DIR" install; then
+        warn "could not install tide from $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
         return 0
     fi
-    if ! test -d "$HOME/.hammerspoon/tilemo"; then
-        warn "$TILEMO_DIR installed no $HOME/.hammerspoon/tilemo, so it predates the rename from timo; update it (git -C $TILEMO_DIR pull) and re-run, or require(\"tilemo\") will fail"
+    if ! test -d "$HOME/.hammerspoon/tide"; then
+        warn "$TIDEMO_DIR installed no $HOME/.hammerspoon/tide, so it predates the rename from tilemo; update it (git -C $TIDEMO_DIR pull) and re-run, or require(\"tide\") will fail"
     fi
 }
 
-# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so tilemo only
+# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so tide only
 # starts if that file loads it. Written only when there's no file at all: an
 # existing init.lua is someone's own Hammerspoon config, and overwriting it
-# would lose it. One that doesn't load tilemo gets the lines to add instead.
+# would lose it. One that doesn't load tide gets the lines to add instead.
 configure_hammerspoon_init() {
     _hs_dir="$HOME/.hammerspoon"
     _hs_init="$_hs_dir/init.lua"
     # -L as well as -e, so a dangling symlink (say, into a conf checkout that
     # moved) counts as someone's file rather than being replaced by ours.
     if test -e "$_hs_init" || test -L "$_hs_init"; then
-        # require("tilemo"), require 'tilemo' and require "tilemo" all load it,
-        # as does require("timo"), its old name, which tilemo keeps as a shim;
-        # one after a -- is commented out and doesn't.
-        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"'](tilemo|timo)[\"']" "$_hs_init"; then
+        # require("tide"), require 'tide' and require "tide" all load it,
+        # as do require("tilemo") and require("timo"), its old names, which
+        # tide keeps as shims; one after a -- is commented out and doesn't.
+        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"'](tide|tilemo|timo)[\"']" "$_hs_init"; then
             _hs_status=0
         else
             _hs_status=$?
         fi
         case "$_hs_status" in
             0)
-                detail "Skipping $_hs_init: it already loads tilemo"
+                detail "Skipping $_hs_init: it already loads tide"
                 ;;
             1)
-                warn "$_hs_init exists and doesn't load tilemo, so it was left alone; add these two lines to it, or $TILEMO_MISSING_EFFECT: tilemo = require(\"tilemo\") and tilemo.start({})"
+                warn "$_hs_init exists and doesn't load tide, so it was left alone; add these two lines to it, or $TIDEMO_MISSING_EFFECT: tide = require(\"tide\") and tide.start({})"
                 ;;
             *)
-                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads tilemo with tilemo = require(\"tilemo\") and tilemo.start({})"
+                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads tide with tide = require(\"tide\") and tide.start({})"
                 ;;
         esac
         return 0
     fi
-    info "Writing $_hs_init to start tilemo"
+    info "Writing $_hs_init to start tide"
     try mkdir -p "$_hs_dir"
     try write_file "$_hs_init" <<'LUA'
-tilemo = require("tilemo")
-tilemo.start({})
+tide = require("tide")
+tide.start({})
 LUA
 }
 
@@ -1664,33 +1668,33 @@ warn_if_other_tiler() {
     esac
 }
 
-configure_tilemo() {
-    info "Configuring tilemo"
+configure_tide() {
+    info "Configuring tide"
 
     install_hammerspoon
     install_brew_tool blueutil "$BLUEUTIL_MISSING_EFFECT"
     install_brew_tool "$(ddc_tool)" "$DDC_MISSING_EFFECT"
-    install_tilemo
+    install_tide
     configure_hammerspoon_init
 
-    warn_if_other_tiler Amethyst "it and tilemo would both tile the same windows"
-    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (tilemo's
-    # SPEC.md, section 7.3, unverified there), the chord tilemo takes.
-    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which tilemo needs"
+    warn_if_other_tiler Amethyst "it and tide would both tile the same windows"
+    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (tide's
+    # SPEC.md, section 7.3, unverified there), the chord tide takes.
+    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which tide needs"
 
-    # tilemo draws its own bar along the top, over the menu bar (tilemo's
+    # tide draws its own bar along the top, over the menu bar (tide's
     # SPEC.md, section 8). An auto-hidden menu bar slides in over it whenever
     # the pointer reaches the top edge, so keep it shown; the Apple logo's
     # Show Menu Bar reveals it. Apps read it at launch, so it takes effect
     # everywhere after the next login.
     try defaults write NSGlobalDomain _HIHideMenuBar -bool false
-    info "The menu bar stays shown, under tilemo's bar, after the next login"
+    info "The menu bar stays shown, under tide's bar, after the next login"
     needs_logout "the menu bar setting"
 
     # Same as Amethyst's: no defaults key grants it, so say so rather than
-    # leave tilemo looking configured but inert.
-    todo_accessibility Hammerspoon "tilemo runs in it, and can't tile without it." \
-        "Then click Hammerspoon's icon in the menu bar and choose Reload Config, so tilemo starts again with it."
+    # leave tide looking configured but inert.
+    todo_accessibility Hammerspoon "tide runs in it, and can't tile without it." \
+        "Then click Hammerspoon's icon in the menu bar and choose Reload Config, so tide starts again with it."
 }
 
 # --- Configure Karabiner-Elements ---
@@ -1700,7 +1704,7 @@ configure_tilemo() {
 # rather than a file Karabiner owns -- Karabiner rewrites karabiner.json on
 # every UI change but never touches an asset.
 KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.json"
-# That rule's name since conf gave Alt+Tab to tilemo. A checkout from before
+# That rule's name since conf gave Alt+Tab to tide. A checkout from before
 # names it "Alt+Tab switches applications" and swaps Ctrl+Tab and Alt+Tab both
 # ways, so the name tells the two apart.
 KARABINER_TAB="Ctrl+Tab goes to the next tab"
@@ -1722,11 +1726,12 @@ KARABINER_TERMINAL_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc
 # The same file's second rule, which puts the interrupt (Control+C) on
 # physical Ctrl+Shift+C in Terminal and iTerm2, whose copy is Ctrl+C.
 KARABINER_INTERRUPT="Ctrl+Shift+C interrupts in Terminal and iTerm2"
-# The rule that makes the physical Win key tilemo's Super (Ctrl+Option+Command),
-# for --wm tilemo. Its name starts "tilemo:".
+# The rule that makes the physical Win key tide's Super (Ctrl+Option+Command),
+# for --wm tide. Its name starts "tide:".
+KARABINER_TIDE_RULE="$HOME/.config/karabiner/assets/complex_modifications/tide.json"
+# The same rule from conf checkouts older than the renames, named "tilemo:"
+# and "timo:". tide accepts those prefixes too, so they still work.
 KARABINER_TILEMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/tilemo.json"
-# The same rule from a conf checkout older than the rename, named "timo:".
-# tilemo accepts that prefix too, so it still works.
 KARABINER_TIMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/timo.json"
 # The rule that makes Ctrl+U clear the password at the lock screen, as on
 # Linux. Checked separately, for older conf checkouts.
@@ -1753,7 +1758,7 @@ karabiner_path() {
 # binding that inverts under it -- macOS switches applications with Cmd+Tab
 # where Linux uses Alt+Tab -- so app switching lands on the physical Ctrl key.
 # The rule in the conf repo puts the next tab back there; physical Alt+Tab is
-# tilemo's, in tilemo's rule, and the next tab without it. See
+# tide's, in tide's rule, and the next tab without it. See
 # config/karabiner/README.md there for why the rule emits left_option.
 #
 # Homebrew only. Unlike Amethyst there's no staged-bundle path: Karabiner
@@ -1816,15 +1821,15 @@ configure_karabiner() {
     _karabiner_stale=no
     if test -f "$KARABINER_RULE" && grep -qF "$KARABINER_TAB" "$KARABINER_RULE"; then
         karabiner_rule "$KARABINER_TAB" "$KARABINER_RULE"
-    elif test -f "$KARABINER_RULE" && test "$WM" = tilemo; then
-        # The old rule makes Alt+Tab Cmd+Tab, which is tilemo's key now, so
+    elif test -f "$KARABINER_RULE" && test "$WM" = tide; then
+        # The old rule makes Alt+Tab Cmd+Tab, which is tide's key now, so
         # it isn't named; updating the checkout brings the current one.
-        warn "$KARABINER_RULE predates tilemo taking Alt+Tab; update the conf repo and run confinst, then enable \"$KARABINER_TAB\" in place of \"Alt+Tab switches applications\", or Ctrl+Tab keeps switching applications"
+        warn "$KARABINER_RULE predates tide taking Alt+Tab; update the conf repo and run confinst, then enable \"$KARABINER_TAB\" in place of \"Alt+Tab switches applications\", or Ctrl+Tab keeps switching applications"
         _karabiner_stale=yes
     elif test -f "$KARABINER_RULE"; then
-        # Without tilemo the old rule still works as it always did, so it's
+        # Without tide the old rule still works as it always did, so it's
         # named as it is, as the stale arrow rule is below.
-        info "$KARABINER_RULE predates tilemo taking Alt+Tab and still makes Alt+Tab switch applications; update the conf repo and run confinst for the current rule"
+        info "$KARABINER_RULE predates tide taking Alt+Tab and still makes Alt+Tab switch applications; update the conf repo and run confinst for the current rule"
         karabiner_rule "Alt+Tab switches applications" "$KARABINER_RULE"
     else
         warn "$KARABINER_RULE not found; run confinst after cloning the conf repo, or Ctrl+Tab keeps switching applications"
@@ -1850,7 +1855,7 @@ configure_karabiner() {
     fi
     # The rules below go above the arrow rule, because Karabiner applies the
     # first rule that matches a key: the kitty rule and the arrow rule both
-    # want Ctrl+Left/Right, and the tilemo rule and the arrow rule both want
+    # want Ctrl+Left/Right, and the tide rule and the arrow rule both want
     # the physical Win key. Karabiner puts each rule enabled at the top, so
     # enabling them after it does that.
     if test -f "$KARABINER_TERMINAL_RULE"; then
@@ -1865,18 +1870,21 @@ configure_karabiner() {
         warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
         _karabiner_stale=yes
     fi
-    if test "$WM" = tilemo; then
-        if test -f "$KARABINER_TILEMO_RULE"; then
+    if test "$WM" = tide; then
+        if test -f "$KARABINER_TIDE_RULE"; then
+            karabiner_rule "tide:" "$KARABINER_TIDE_RULE"
+        elif test -f "$KARABINER_TILEMO_RULE"; then
+            info "$KARABINER_TILEMO_RULE predates the rename to tide and still works; update the conf repo and run confinst to get the \"tide:\" rule"
             karabiner_rule "tilemo:" "$KARABINER_TILEMO_RULE"
         elif test -f "$KARABINER_TIMO_RULE"; then
-            info "$KARABINER_TIMO_RULE predates the rename to tilemo and still works; update the conf repo and run confinst to get the \"tilemo:\" rule"
+            info "$KARABINER_TIMO_RULE predates the rename to tide and still works; update the conf repo and run confinst to get the \"tide:\" rule"
             karabiner_rule "timo:" "$KARABINER_TIMO_RULE"
         else
-            warn "$KARABINER_TILEMO_RULE not found; run confinst after updating the conf repo, or tilemo falls back to Option for its Super key"
+            warn "$KARABINER_TIDE_RULE not found; run confinst after updating the conf repo, or tide falls back to Option for its Super key"
             _karabiner_stale=yes
         fi
     fi
-    # Last, above every other, tilemo's included, which would take a Mac
+    # Last, above every other, tide's included, which would take a Mac
     # keyboard's Command+U at the lock screen as Super+U.
     if test -f "$KARABINER_LOCK_RULE"; then
         karabiner_rule "Ctrl+U clears the password at the lock screen" "$KARABINER_LOCK_RULE"
@@ -1894,25 +1902,25 @@ configure_karabiner() {
 
     todo "Finish setting up Karabiner-Elements, or none of its rules work: open Karabiner-Elements, from Applications, and click Setup in its sidebar. Allow each item it lists."
 
-    # tilemo turns conf's rules on itself, editing karabiner.json, and keeps
-    # Karabiner's copies up to date with them (tilemo's SPEC.md, section
+    # tide turns conf's rules on itself, editing karabiner.json, and keeps
+    # Karabiner's copies up to date with them (tide's SPEC.md, section
     # 15), so with it there's nothing to enable by hand.
     #
-    # Without tilemo, Karabiner lists an asset but doesn't enable it, and
+    # Without tide, Karabiner lists an asset but doesn't enable it, and
     # this script doesn't edit karabiner.json: the app rewrites it, so
     # editing it from here would be racing the GUI. Enabling copies the rule
     # into karabiner.json, and Karabiner runs that copy, so an updated asset
     # only takes effect once the rule is added again.
-    if test -n "$_karabiner_rules" && test "$WM" != tilemo; then
+    if test -n "$_karabiner_rules" && test "$WM" != tide; then
         todo "Turn on conf's Karabiner rules, or Ctrl+Tab switches applications: in Karabiner-Elements, click Complex Modifications in the sidebar, then Add predefined rule (not Add your own rule). Click Enable beside each of these, in this order; type a title in the box at the top to find one:" \
             "$_karabiner_rules" \
             "One enabled on an earlier run doesn't pick up changes to it: click the trash icon beside it in that list, then enable it again as above."
     fi
 
     # Karabiner leaves pointing devices alone until told, so Win+click and
-    # Win+drag carry plain Option to tilemo (conf's config/karabiner).
-    if test "$WM" = tilemo; then
-        todo "Let Karabiner see your mouse and trackpad, for tilemo's Win+click, Win+drag and Win+middle-click: in Karabiner-Elements, click Devices in the sidebar and turn on Modify events beside each one."
+    # Win+drag carry plain Option to tide (conf's config/karabiner).
+    if test "$WM" = tide; then
+        todo "Let Karabiner see your mouse and trackpad, for tide's Win+click, Win+drag and Win+middle-click: in Karabiner-Elements, click Devices in the sidebar and turn on Modify events beside each one."
     fi
 }
 
@@ -1926,7 +1934,7 @@ configure_karabiner() {
 LINEARMOUSE_SUPPORT_CONFIG="$HOME/Library/Application Support/linearmouse/linearmouse.json"
 LINEARMOUSE_CONFIG="$HOME/.config/linearmouse/linearmouse.json"
 # Lines per notch for a mouse, in the config written below: tide's 3x
-# scroll speed at three lines a notch, as tilemo applies it. A trackpad is
+# scroll speed at three lines a notch, as tide applies it. A trackpad is
 # left as macOS has it.
 LINEARMOUSE_LINES=9
 # A mouse's pointer: macOS's acceleration and LinearMouse's speed, gentler
@@ -2308,7 +2316,7 @@ configure_finder() {
 
 # tide saves every screenshot to ~/Pictures/Screenshots. macOS's go to the
 # Desktop unless Screenshot's options say otherwise, and only once the
-# floating thumbnail has gone; tilemo copies each new one to the clipboard
+# floating thumbnail has gone; tide copies each new one to the clipboard
 # from the folder, so the thumbnail would hold that back too. SystemUIServer
 # applies the options.
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
@@ -2368,8 +2376,8 @@ configure_keyboard
 configure_modifier_keys
 configure_shortcuts
 configure_spaces
-if test "$WM" = tilemo; then
-    configure_tilemo
+if test "$WM" = tide; then
+    configure_tide
 else
     configure_amethyst
 fi
