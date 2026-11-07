@@ -468,11 +468,12 @@ check "a moved pin's clone is removed" test ! -e "$T/src/hyprland-build/hyprgrap
 check "a moved pin isn't stamped built" test ! -e "$(inst)/.built-hyprgraphics"
 check "a moved pin isn't marked complete" test ! -e "$(inst)/quickspace-pins"
 teardown
-# A pin with no tag is its commit, checked out from a partial clone, through
+# A pin with no tag is its commit, checked out from a whole clone, through
 # the mirror's rule as a tag's clone is; a checkout that isn't that commit
 # isn't built either.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
-check "a commit pin is a partial clone" has "$calls" "git clone --quiet --filter=blob:none --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine"
+check "a commit pin is a whole clone, which any server serves" has "$calls" "git clone --quiet --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine"
+check "not a partial one, which some refuse" lacks "$calls" "--filter"
 check "of the commit Hyprland's flake.lock names" has "$calls" "git -C $T/src/hyprland-build/aquamarine -c advice.detachedHead=false checkout --quiet ad4484335fc327a6cf010f455ae258c397861ee0"
 check "a commit pin is named by its commit" has "$output" "Building aquamarine ad44843"
 teardown
@@ -481,7 +482,7 @@ check "a commit pin checked out as another commit is named" has "$output" "aquam
 check "and isn't built" lacks "$calls" "cmake -S $T/src/hyprland-build/aquamarine "
 teardown
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4 GITHUB_PREFIX=https://ghe.example.com GIT_CONFIG_COUNT=0
-check "a commit pin's clone goes through the mirror" has "$calls" "git clone --quiet --filter=blob:none --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine
+check "a commit pin's clone goes through the mirror" has "$calls" "git clone --quiet --no-checkout https://github.com/hyprwm/aquamarine.git $T/src/hyprland-build/aquamarine
 git config: url.https://ghe.example.com/.insteadOf=https://github.com/"
 check "and so does its checkout" has "$calls" "checkout --quiet ad4484335fc327a6cf010f455ae258c397861ee0
 git config: url.https://ghe.example.com/.insteadOf=https://github.com/"
