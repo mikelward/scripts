@@ -84,6 +84,22 @@ echo host1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/sudo" "$TEST_TMPDIR/bin/hostname"
 
+    # pmset records its arguments, and `pmset -g batt` answers as a Mac mini
+    # does, with no battery: as a laptop does where has_battery is staged,
+    # and fails where pmset_fails is.
+    cat > "$TEST_TMPDIR/bin/pmset" <<MOCK
+#!/bin/sh
+printf "%s\\n" "pmset \$*" >> "$CALLS"
+test -f "$TEST_TMPDIR/pmset_fails" && { echo "pmset: no power sources" >&2; exit 1; }
+if test "\$*" = "-g batt"; then
+    echo "Now drawing from 'AC Power'"
+    test -f "$TEST_TMPDIR/has_battery" &&
+        echo " -InternalBattery-0 (id=1234)	100%; charged; 0:00 remaining present: true"
+fi
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/pmset"
+
     # brew records its environment as well as its arguments: ask mode is
     # Homebrew's default, and the only evidence it's off is what brew inherits.
     # brew list answers from $TEST_TMPDIR/brew-casks, one "name version" line
@@ -1964,6 +1980,34 @@ test_lock_screen_without_hostname_warns() {
     assert_output_contains "couldn't read this Mac's hostname"
 }
 
+# Regression: a Mac mini slept once a monitor's KVM switched away, and missed
+# the keyboard and mouse coming back, so only its power button woke it.
+test_desktop_stays_awake_when_plugged_in() {
+    run_macos
+    assert_status 0 &&
+    assert_called "sudo pmset -c sleep 0 autorestart 1"
+}
+
+test_laptop_sleeps_as_before() {
+    touch "$TEST_TMPDIR/has_battery"
+    run_macos
+    assert_status 0 &&
+    assert_not_called "sleep 0"
+}
+
+test_no_sudo_leaves_staying_awake_as_a_step() {
+    run_macos --no-sudo --ignore-errors
+    assert_not_called "sudo pmset" &&
+    assert_output_contains "sudo pmset -c sleep 0 autorestart 1"
+}
+
+test_unknown_battery_warns_and_sleeps_as_before() {
+    touch "$TEST_TMPDIR/pmset_fails"
+    run_macos --ignore-errors
+    assert_not_called "sleep 0" &&
+    assert_output_contains "couldn't tell whether this Mac has a battery"
+}
+
 # Regression: this used to be `killall Finder 2>/dev/null || true`, which hid
 # every failure. An app that isn't running is the expected case, so it's
 # reported as information and doesn't count against the run -- and it's
@@ -2982,6 +3026,14 @@ run_test "--no-sudo leaves the lock screen's hostname as a step" \
     test_no_sudo_leaves_lock_screen_as_a_step
 run_test "without a hostname, the lock screen warns" \
     test_lock_screen_without_hostname_warns
+run_test "a Mac without a battery stays awake when plugged in" \
+    test_desktop_stays_awake_when_plugged_in
+run_test "a laptop sleeps as before" \
+    test_laptop_sleeps_as_before
+run_test "--no-sudo leaves staying awake as a step" \
+    test_no_sudo_leaves_staying_awake_as_a_step
+run_test "without a battery reading, it warns and sleeps as before" \
+    test_unknown_battery_warns_and_sleeps_as_before
 run_test "tide: Caps Lock is Compose" \
     test_tilemo_makes_caps_lock_compose
 run_test "amethyst: Caps Lock stays" \
