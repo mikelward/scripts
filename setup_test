@@ -130,7 +130,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_was_busy apt_busy apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages"
+QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_was_busy apt_busy apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages os_release install_wallpapers"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -557,6 +557,7 @@ OS=$linux_os
 NPM=${HARNESS_NPM:-no}
 GUI_ENABLED=$linux_gui
 CROSTINI=0
+OS_RELEASE='${HARNESS_OS_RELEASE:-/nonexistent}'
 SUDO=yes
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
@@ -2272,6 +2273,31 @@ test_fuzzel_installed_for_kde() {
     run_linux_packages redhat 1 &&
     assert_status 0 &&
     assert_calls_contain "dnf install -y --setopt=best=False fuzzel wl-clipboard"
+}
+
+# The distro's wallpapers come with the desktop, one package per step so a
+# release without one keeps the rest: Ubuntu's own only on Ubuntu, and
+# Fedora's extras for its release.
+test_wallpapers_installed_with_the_desktop() {
+    _wp_dir=$(mktemp -d)
+    printf 'ID=ubuntu\nVERSION_ID="26.04"\n' > "$_wp_dir/ubuntu"
+    printf 'ID=fedora\nVERSION_ID=44\n' > "$_wp_dir/fedora"
+    run_linux_packages debian 1
+    assert_status 0 &&
+    assert_calls_contain "--install-recommends plasma-workspace-wallpapers " &&
+    assert_calls_contain "--install-recommends gnome-backgrounds " &&
+    assert_calls_lack "ubuntu-wallpapers" &&
+    HARNESS_OS_RELEASE="$_wp_dir/ubuntu" run_linux_packages debian 1 &&
+    assert_calls_contain "--install-recommends ubuntu-wallpapers " &&
+    HARNESS_OS_RELEASE="$_wp_dir/fedora" run_linux_packages redhat 1 &&
+    assert_calls_contain "best=False plasma-workspace-wallpapers " &&
+    assert_calls_contain "best=False gnome-backgrounds " &&
+    assert_calls_contain "best=False f44-backgrounds-extras-base " &&
+    run_linux_packages debian &&
+    assert_calls_lack "wallpapers"
+    _wp_status=$?
+    rm -rf "$_wp_dir"
+    return "$_wp_status"
 }
 
 test_file_managers_not_in_dnf_transaction() {
@@ -5280,6 +5306,8 @@ run_test "lf is not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
 run_test "fuzzel and wl-clipboard are installed for KDE's Win+V, in their own step" \
     test_fuzzel_installed_for_kde
+run_test "the distro's wallpapers are installed with the desktop, each in its own step" \
+    test_wallpapers_installed_with_the_desktop
 run_test "--purge-obsolete prunes homepkg's retired tools" \
     test_purge_obsolete_prunes_retired_tools
 run_test "a failed prune of retired tools warns and setup continues" \
