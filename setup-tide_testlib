@@ -830,7 +830,7 @@ run() {
         QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
         TIDEWM_PREFIX="$T/opt/tidewm" TIDEWM_SRC="$T/src/tidewm-build" TIDEWM_BIN_DIR="$T/usr-local-bin" \
         SETUP_GREETD_DIR="$T/etc/greetd" SETUP_GREETD_TEMPLATE="$T/greetd.toml" \
-        SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" \
+        SETUP_GREETER_PATH="$T/usr-local-bin:$T/usr-bin" SETUP_GREETER_HOME="$T/var/lib/tide-greeter" SETUP_LOOK_ROOT="$T/var/lib/tide/look" \
         SETUP_STATE_DIR="$T/var/lib/setup-tide" SETUP_PAM_DIR="$T/pam.d" SETUP_LOGIN_DEFS="$T/login.defs" \
         SETUP_PAM_VENDOR_DIR="$T/vendor-pam.d" SETUP_PAM_AT_INCLUDE=yes \
         SETUP_SESSION_ENTRY="$T/share/wayland-sessions/tide.desktop" SETUP_SESSION_PATH="$T/usr-local-bin:$T/usr-bin" \

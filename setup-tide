@@ -35,7 +35,9 @@
 # - clones or updates the tide repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
 #   sudo, `make install-session PREFIX=/usr` (the display manager's session
-#   entry, its compositor wrapper, and the tide commands);
+#   entry, its compositor wrapper, and the tide commands), and with sudo a
+#   folder of your own under /var/lib/tide/look, where tide's shell copies
+#   your wallpaper and light and dark settings for the greeter;
 # - enables tide.service, which hangs it off the tide session's
 #   target only, and tide-clipboard.service, which keeps the clipboard
 #   history, encrypted (with secret-tool and openssl, installed on their
@@ -349,6 +351,9 @@ LOGIN_DEFS="${SETUP_LOGIN_DEFS:-/etc/login.defs}"
 # The home setup gives greetd's user when it has none of its own to write,
 # where the greeter remembers the last login.
 GREETER_HOME="${SETUP_GREETER_HOME:-/var/lib/tide-greeter}"
+# Where tide's shell keeps a copy of your look for the greeter, a folder
+# per user (tide SPEC.md §11). Overridable for tests.
+LOOK_ROOT="${SETUP_LOOK_ROOT:-/var/lib/tide/look}"
 # PAM's config, where greetd's stack is.
 PAM_DIR="${SETUP_PAM_DIR:-/etc/pam.d}"
 # Where PAM looks for a file PAM_DIR hasn't got: the vendor's.
@@ -2366,6 +2371,23 @@ install_tide() {
         detail "Installing the tide session entry and commands under /usr"
         sudo_logged make -C "$TIDE_DIR" install-session PREFIX=/usr \
             || warn "could not install the session entry; run 'sudo make -C $TIDE_DIR install-session PREFIX=/usr'"
+    fi
+}
+
+# make_look_dir: makes LOOK_ROOT/<you>, owned by you and readable by all,
+# where tide's shell copies your wallpaper and light and dark settings for
+# the greeter, which runs as greetd's own user and can't read your home
+# (tide SPEC.md §11). Without it the greeter shows its own look.
+make_look_dir() {
+    _mld_user=$(id -un)
+    _mld_dir=$LOOK_ROOT/$_mld_user
+    if test -d "$_mld_dir" && test -O "$_mld_dir"; then
+        return 0
+    fi
+    detail "Making $_mld_dir, for the greeter's copy of your wallpaper"
+    if ! sudo_logged install -d -m 755 "$LOOK_ROOT" ||
+        ! sudo_logged install -d -m 755 -o "$_mld_user" -g "$(id -gn)" "$_mld_dir"; then
+        warn "couldn't make $_mld_dir, so the greeter shows its own look, not your wallpaper; run 'sudo install -d -m 755 -o $_mld_user $_mld_dir'"
     fi
 }
 
@@ -6571,6 +6593,7 @@ if test "$SUDO" = no; then
 else
     remove_old_lid_dropins
     gdm_hostname_banner
+    make_look_dir
     setup_greeter
 fi
 
