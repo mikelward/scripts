@@ -3,6 +3,9 @@
 # Takes a screenshot on Wayland (grim, slurp, wl-copy), copies it to the
 # clipboard as PNG and saves it to ~/Pictures/Screenshots. tide's Print
 # bindings run it. Wayland and GNU mktemp only; the X11 scrot version is gone.
+# It asks Hyprland (hyprctl) for the focused monitor and window, or tidewm
+# (tide-msg, which tide installs) where SWAYSOCK is set, as in tide's tidewm
+# session.
 #
 # A notification says when the shot is there: a full ultrawide shot takes a
 # moment, and the clipboard is otherwise silent. It shows the shot and offers
@@ -20,11 +23,12 @@ usage() {
 Usage: $scriptname [-d <delay>] [-h] [-s | -o <output> | -r | -w | -g <geometry>]
        $scriptname [--delay <delay>] [--help]
                   [--screen | --output <output> | --region | --window |
-                   --window-id <stableId> | --geometry <geometry>]
+                   --window-id <id> | --geometry <geometry>]
 
 Copies the focused monitor (the default), a named one, a region picked with
-slurp, the focused window or one named by its Hyprland stableId, or the
-rectangle 'X,Y WxH' to the clipboard as PNG, and saves it as
+slurp, the focused window or one named by its Hyprland stableId (on
+tidewm, its id), or the rectangle 'X,Y WxH' to the clipboard as PNG, and
+saves it as
 ~/Pictures/Screenshots/YYYY-MM-DD_HH-MM-SS.png (-2, -3 and so on for a
 second shot in the same second).
 EOF
@@ -83,7 +87,7 @@ fi
 # Only the mode that wins is checked: a later option overrides an earlier
 # one, empty or not, as --screen overrides --output.
 if test "$mode" = window && test -n "$picked" && test -z "$wanted"; then
-    echo "--window-id needs a window's stableId, from hyprctl clients -j" >&2
+    echo "--window-id needs a window's stableId, from hyprctl clients -j, or on tidewm its id, from tide-msg --type get_tree" >&2
     usage
     exit 2
 fi
@@ -108,15 +112,116 @@ trap 'exit 1' HUP INT TERM
 
 sleep "$delay" 2>"$e" || fail "sleep: $(cat "$e")"
 
+# tidewm speaks sway's IPC, which names its socket in SWAYSOCK.
+tidewm=
+if test -n "${SWAYSOCK:-}"; then
+    tidewm=1
+fi
+# Prints the focused monitor's name, or nothing for none.
+focused_output() {
+    if test -n "$tidewm"; then
+        outputs=$(tide-msg --type get_outputs 2>"$e") || fail "tide-msg: $(cat "$e")"
+    else
+        outputs=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+    fi
+    printf '%s\n' "$outputs" \
+        | jq -r 'first(.[] | select(.focused) | .name) // ""' 2>"$e" \
+        || fail "jq: $(cat "$e")"
+}
+# A window in tidewm's tree, picked by the jq filter $1 ($id is $2), as
+# JSON, or nothing.
+tidewm_window() {
+    printf '%s\n' "$tree" \
+        | jq -c --arg id "$2" "first(.. | objects | select((.type == \"con\" or .type == \"floating_con\") and ($1))) // empty" 2>"$e" \
+        || fail "jq: $(cat "$e")"
+}
+
+# find_tidewm_window and find_hyprland_window set geometry to the window's
+# rectangle (empty for none) and toplevel to what grim -T takes, named by
+# idname.
+find_tidewm_window() {
+    # As find_hyprland_window, but by its container id, and on screen when
+    # tidewm says it's visible: on the current workspace, not minimized.
+    idname=foreign_toplevel_identifier
+    # Empty unless a window sets them, as find_hyprland_window leaves them,
+    # so a --geometry given before --window isn't taken for the window.
+    geometry=
+    toplevel=
+    tree=$(tide-msg --type get_tree 2>"$e") || fail "tide-msg: $(cat "$e")"
+    window=
+    if test -n "$wanted"; then
+        # shellcheck disable=SC2016  # $id is jq's
+        window=$(tidewm_window '(.id | tostring) == $id' "$wanted") || exit 1
+        if test -z "$window"; then
+            echo "$scriptname: window $wanted is gone; taking the focused window" >&2
+        else
+            shown=$(printf '%s\n' "$window" \
+                | jq -r 'if .visible == true and .minimized != true then "yes" else "" end' 2>"$e") \
+                || fail "jq: $(cat "$e")"
+            if test -z "$shown"; then
+                echo "$scriptname: window $wanted isn't on screen; taking the focused window" >&2
+                window=
+            fi
+        fi
+    fi
+    # An empty workspace has the focus itself, so no window does.
+    if test -z "$window"; then
+        window=$(tidewm_window '.focused == true') || exit 1
+    fi
+    if test -n "$window"; then
+        geometry=$(printf '%s\n' "$window" \
+            | jq -r '.rect | "\(.x),\(.y) \(.width)x\(.height)"' 2>"$e") \
+            || fail "jq: $(cat "$e")"
+        toplevel=$(printf '%s\n' "$window" | jq -r '.foreign_toplevel_identifier // ""' 2>"$e") \
+            || fail "jq: $(cat "$e")"
+    fi
+}
+
+find_hyprland_window() {
+    # A window named by its stableId (tide's launcher records the one it
+    # opened over) is looked up where it is now. If it has closed, or
+    # isn't on screen (its workspace isn't showing on any monitor, or it
+    # is hidden), the focused window is the next best thing, and stderr
+    # says so: grim -T can wait on a window that isn't shown until it is.
+    idname=stableId
+    window=
+    if test -n "$wanted"; then
+        clients=$(hyprctl clients -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+        window=$(printf '%s\n' "$clients" \
+            | jq -c --arg id "$wanted" 'first(.[] | select((.stableId // "" | tostring) == $id)) // empty' 2>"$e") \
+            || fail "jq: $(cat "$e")"
+        if test -z "$window"; then
+            echo "$scriptname: window $wanted is gone; taking the focused window" >&2
+        else
+            monitors=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+            shown=$(printf '%s\n' "$window" \
+                | jq -r --argjson m "$monitors" \
+                    '[$m[] | .activeWorkspace.id, .specialWorkspace.id] as $ws
+                     | if .hidden != true and .mapped != false and (.workspace.id as $w | $ws | index($w)) then "yes" else "" end' 2>"$e") \
+                || fail "jq: $(cat "$e")"
+            if test -z "$shown"; then
+                echo "$scriptname: window $wanted isn't on screen; taking the focused window" >&2
+                window=
+            fi
+        fi
+    fi
+    # An empty workspace has no active window: hyprctl prints {} then.
+    if test -z "$window"; then
+        window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
+    fi
+    geometry=$(printf '%s\n' "$window" \
+        | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else "" end' 2>"$e") \
+        || fail "jq: $(cat "$e")"
+    toplevel=$(printf '%s\n' "$window" | jq -r '.stableId // "" | tostring' 2>"$e") \
+        || fail "jq: $(cat "$e")"
+}
+
 case "$mode" in
     screen)
         # The monitor the focus is on, unless one was named (tide's launcher
         # names the one it opened on, so closing it can't move the shot).
         if test -z "$output"; then
-            monitors=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
-            output=$(printf '%s\n' "$monitors" \
-                | jq -r 'first(.[] | select(.focused) | .name) // ""' 2>"$e") \
-                || fail "jq: $(cat "$e")"
+            output=$(focused_output) || exit 1
             test -n "$output" || fail "no focused monitor"
         fi
         ;;
@@ -129,41 +234,11 @@ case "$mode" in
         fi
         ;;
     window)
-        # A window named by its stableId (tide's launcher records the one it
-        # opened over) is looked up where it is now. If it has closed, or
-        # isn't on screen (its workspace isn't showing on any monitor, or it
-        # is hidden), the focused window is the next best thing, and stderr
-        # says so: grim -T can wait on a window that isn't shown until it is.
-        window=
-        if test -n "$wanted"; then
-            clients=$(hyprctl clients -j 2>"$e") || fail "hyprctl: $(cat "$e")"
-            window=$(printf '%s\n' "$clients" \
-                | jq -c --arg id "$wanted" 'first(.[] | select((.stableId // "" | tostring) == $id)) // empty' 2>"$e") \
-                || fail "jq: $(cat "$e")"
-            if test -z "$window"; then
-                echo "$scriptname: window $wanted is gone; taking the focused window" >&2
-            else
-                monitors=$(hyprctl monitors -j 2>"$e") || fail "hyprctl: $(cat "$e")"
-                shown=$(printf '%s\n' "$window" \
-                    | jq -r --argjson m "$monitors" \
-                        '[$m[] | .activeWorkspace.id, .specialWorkspace.id] as $ws
-                         | if .hidden != true and .mapped != false and (.workspace.id as $w | $ws | index($w)) then "yes" else "" end' 2>"$e") \
-                    || fail "jq: $(cat "$e")"
-                if test -z "$shown"; then
-                    echo "$scriptname: window $wanted isn't on screen; taking the focused window" >&2
-                    window=
-                fi
-            fi
+        if test -n "$tidewm"; then
+            find_tidewm_window
+        else
+            find_hyprland_window
         fi
-        # An empty workspace has no active window: hyprctl prints {} then.
-        if test -z "$window"; then
-            window=$(hyprctl activewindow -j 2>"$e") || fail "hyprctl: $(cat "$e")"
-        fi
-        geometry=$(printf '%s\n' "$window" \
-            | jq -r 'if .at then "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" else "" end' 2>"$e") \
-            || fail "jq: $(cat "$e")"
-        toplevel=$(printf '%s\n' "$window" | jq -r '.stableId // "" | tostring' 2>"$e") \
-            || fail "jq: $(cat "$e")"
         if test -z "$geometry"; then
             notify-send -a Screenshot -t 2000 'No window to screenshot'
             exit 0
@@ -197,7 +272,7 @@ case "$mode" in
         # it indefinitely (hyprwm/Hyprland discussion 13710), and a hung
         # key binding is worse than a rectangle.
         if test -z "$toplevel"; then
-            echo "$scriptname: the window has no stableId; taking its rectangle" >&2
+            echo "$scriptname: the window has no $idname; taking its rectangle" >&2
         elif timeout 5 grim -l 1 -T "$toplevel" "$f" 2>"$e"; then
             geometry=
         else
