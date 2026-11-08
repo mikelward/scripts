@@ -27,11 +27,15 @@
 #   source, at pinned tags, into /opt/hyprland (see build_hyprland). Both
 #   builds are outside $HOME because the greeter runs them too, as greetd's
 #   own user, which can't read a home directory;
-# - installs fcitx5 and builds Schnelle Umlaute, its add-on, from a pinned
-#   release (see build_schnelle_umlaute), so a held letter and Space types
-#   an accent in tide; writes fcitx5's profile and config where you have
-#   none (see configure_fcitx5), and hides fcitx5's autostart entry, which
-#   would start it in Plasma too (see hide_fcitx5_autostart);
+# - installs fcitx5 and, once tide is fetched, builds tide's own add-on
+#   for it, tide-accents, from the tide checkout and installs it as root
+#   (see build_tide_accents), so holding a letter offers its accents in
+#   tide; writes fcitx5's profile and config where you have none, and
+#   moves a profile an older setup-tide wrote for Schnelle Umlaute over to
+#   tide-accents (see configure_fcitx5). An old Schnelle Umlaute build is
+#   left installed, just no longer the input method. It hides fcitx5's
+#   autostart entry, which would start it in Plasma too, and Schnelle
+#   Umlaute's overlay's (see hide_fcitx5_autostart);
 # - with --tidewm, builds tidewm, tide's fork of dwl, from a pinned commit
 #   into /opt/tidewm and links it onto PATH, so the tide (tidewm) session,
 #   an option beside Hyprland's, shows at the login screen (see
@@ -241,25 +245,11 @@ TIDEWM_APT_DEPS="build-essential pkgconf git libwlroots-0.20-dev libwayland-dev 
 TIDEWM_PACMAN_DEPS="base-devel git wlroots0.20 wayland wayland-protocols libinput libxkbcommon
     libxcb xcb-util-wm json-c pcre2 pkgconf xorg-xwayland"
 
-# Schnelle Umlaute, the fcitx5 add-on that types an accent on a held letter
-# and Space (tide SPEC.md §8.6), which build_schnelle_umlaute builds from
-# this release: no distro packages it. A tag can be moved, so the clone
-# must check out exactly this commit before its build files run. Its CMake
-# installs into fcitx5's own directories, as root. Overridable for tests.
-SCHNELLE_UMLAUTE_REPO=https://github.com/Maik-0000FF/schnelle-umlaute.git
-SCHNELLE_UMLAUTE_TAG=v1.10.1
-SCHNELLE_UMLAUTE_COMMIT=0030eacfc5bbac2af6a280bbb23decdbf12ce612
-SCHNELLE_UMLAUTE_SRC="${SCHNELLE_UMLAUTE_SRC:-$HOME/src/schnelle-umlaute-build}"
-SCHNELLE_UMLAUTE_CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release"
-# What the build needs, from its install.sh, plus the QML modules its
-# editor and overlay load at run time on Debian and Ubuntu.
-SCHNELLE_UMLAUTE_APT_DEPS="libfcitx5core-dev fcitx5-modules-dev libfcitx5-qt6-dev qt6-base-dev
-    qt6-declarative-dev libxkbcommon-dev liblayershellqtinterface-dev cmake extra-cmake-modules g++
-    gettext pkg-config qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts
-    qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtqml-workerscript"
-SCHNELLE_UMLAUTE_DNF_DEPS="fcitx5-devel fcitx5-qt-devel qt6-qtbase-devel qt6-qtdeclarative-devel
-    layer-shell-qt-devel cmake extra-cmake-modules gcc-c++ gettext"
-SCHNELLE_UMLAUTE_PACMAN_DEPS="cmake extra-cmake-modules gcc pkgconf qt6-declarative layer-shell-qt"
+# What build_tide_accents needs to build tide's fcitx5 add-on
+# (tide's fcitx5/CMakeLists.txt), beside fcitx5 itself.
+TIDE_ACCENTS_APT_DEPS="libfcitx5core-dev fcitx5-modules-dev cmake extra-cmake-modules g++ pkg-config"
+TIDE_ACCENTS_DNF_DEPS="fcitx5-devel cmake extra-cmake-modules gcc-c++"
+TIDE_ACCENTS_PACMAN_DEPS="cmake extra-cmake-modules gcc pkgconf"
 
 # Where build_hyprland builds and installs Hyprland, and where it links its
 # commands. Its own prefix keeps its libraries out of the system's library
@@ -1993,9 +1983,9 @@ remove_old_tidewm_builds() {
     done
 }
 
-# --- fcitx5 and Schnelle Umlaute, for accents ---
+# --- fcitx5 and tide's accents ---
 
-# fcitx5 types an accent on a held letter, through Schnelle Umlaute, in
+# fcitx5 offers a held letter's accents, through tide-accents, in
 # tide's sessions only: tide's tide-fcitx5.service starts it (tide SPEC.md
 # §8.6). Without it there are no accents, and nothing else is lost, so
 # each step here warns and goes on.
@@ -2030,70 +2020,61 @@ install_fcitx5() {
     return 0
 }
 
-# build_schnelle_umlaute builds SCHNELLE_UMLAUTE_TAG as this user and
-# installs it as root, where its CMake puts it: fcitx5's own directories.
-# It's built against fcitx5's headers, so a new fcitx5 rebuilds it; a stamp
-# records the release and the fcitx5 it was built for, so a rerun with
-# neither changed builds nothing.
-SCHNELLE_UMLAUTE_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/setup/schnelle-umlaute-build"
+# build_tide_accents builds tide-accents, tide's own fcitx5 add-on, from
+# the tide checkout (`make fcitx5`, into its build/fcitx5) as this user,
+# and installs it as root, where its CMake puts it: fcitx5's own
+# directories. It's built against fcitx5's headers, so a new fcitx5
+# rebuilds it, as does a new tide commit; a stamp records both, so a rerun
+# with neither changed builds nothing.
+TIDE_ACCENTS_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/setup/tide-accents-build"
 
-build_schnelle_umlaute() {
-    if ! _su_fcitx5=$(fcitx5 --version 2>&1); then
-        warn "couldn't ask fcitx5 which version it is, which Schnelle Umlaute has to be built for: $(printf '%s\n' "$_su_fcitx5" | tail -n 1)"
+build_tide_accents() {
+    if ! test -f "$TIDE_DIR/fcitx5/CMakeLists.txt"; then
+        warn "the tide checkout in $TIDE_DIR has no accents add-on (fcitx5/); update it"
         return 1
     fi
-    _su_record=$(printf '%s\n' "$SCHNELLE_UMLAUTE_REPO $SCHNELLE_UMLAUTE_TAG $SCHNELLE_UMLAUTE_COMMIT" \
-        "cmake $SCHNELLE_UMLAUTE_CMAKE_FLAGS" "fcitx5 $(printf '%s\n' "$_su_fcitx5" | head -n 1)")
-    if test -f "$SCHNELLE_UMLAUTE_STAMP" && test "$(cat "$SCHNELLE_UMLAUTE_STAMP")" = "$_su_record"; then
-        detail "Schnelle Umlaute $SCHNELLE_UMLAUTE_TAG is already built for this fcitx5"
+    if ! _ta_fcitx5=$(fcitx5 --version 2>&1); then
+        warn "couldn't ask fcitx5 which version it is, which tide's accents have to be built for: $(printf '%s\n' "$_ta_fcitx5" | tail -n 1)"
+        return 1
+    fi
+    if ! _ta_commit=$(git -C "$TIDE_DIR" rev-parse HEAD 2>&1); then
+        warn "couldn't tell which tide commit is in $TIDE_DIR: $(printf '%s\n' "$_ta_commit" | tail -n 1)"
+        return 1
+    fi
+    _ta_record=$(printf '%s\n' "tide $_ta_commit" "fcitx5 $(printf '%s\n' "$_ta_fcitx5" | head -n 1)")
+    if test -f "$TIDE_ACCENTS_STAMP" && test "$(cat "$TIDE_ACCENTS_STAMP")" = "$_ta_record"; then
+        detail "tide's accents are already built from this tide, for this fcitx5"
         return 0
     fi
     case "$(detect_os)" in
-        debian) _su_deps=$SCHNELLE_UMLAUTE_APT_DEPS ;;
-        redhat) _su_deps=$SCHNELLE_UMLAUTE_DNF_DEPS ;;
-        arch) _su_deps=$SCHNELLE_UMLAUTE_PACMAN_DEPS ;;
+        debian) _ta_deps=$TIDE_ACCENTS_APT_DEPS ;;
+        redhat) _ta_deps=$TIDE_ACCENTS_DNF_DEPS ;;
+        arch) _ta_deps=$TIDE_ACCENTS_PACMAN_DEPS ;;
         *)
-            warn "Schnelle Umlaute isn't built on $(detect_os)"
+            warn "tide's accents aren't built on $(detect_os)"
             return 1
             ;;
     esac
-    info "Building Schnelle Umlaute $SCHNELLE_UMLAUTE_TAG, for accents in tide, from source"
-    pkg_begin "$(pkg_manager)" "Installing Schnelle Umlaute's build dependencies"
-    deps_status=0
+    info "Building tide's accents, for fcitx5"
+    pkg_begin "$(pkg_manager)" "Installing what tide's accents need to build"
+    _ta_status=0
     # shellcheck disable=SC2086  # word-split the package list
-    install_all $_su_deps || deps_status=$?
+    install_all $_ta_deps || _ta_status=$?
     pkg_end
-    if test "$deps_status" -ne 0; then
+    if test "$_ta_status" -ne 0; then
         # shellcheck disable=SC2086  # word-split the package list
-        warn "could not install Schnelle Umlaute's build dependencies:$(printf ' %s' $not_installed)"
+        warn "could not install what tide's accents need to build:$(printf ' %s' $not_installed)"
         return 1
     fi
-    src="$SCHNELLE_UMLAUTE_SRC/schnelle-umlaute"
-    # A stale clone would be built into.
-    if ! rm -rf "$src"; then
-        warn "couldn't remove the old Schnelle Umlaute sources in $src; not building"
+    start_build_log tide-accents || return 1
+    build_logged "tide's accents" make -C "$TIDE_DIR" fcitx5 || return 1
+    if ! sudo_logged cmake --install "$TIDE_DIR/build/fcitx5"; then
+        warn "couldn't install tide's accents into fcitx5's directories"
         return 1
     fi
-    mkdir -p "$SCHNELLE_UMLAUTE_SRC" || return 1
-    start_build_log schnelle-umlaute || return 1
-    build_logged "Schnelle Umlaute" git_github clone -c advice.detachedHead=false --quiet --depth 1 \
-        --branch "$SCHNELLE_UMLAUTE_TAG" "$SCHNELLE_UMLAUTE_REPO" "$src" || return 1
-    commit=$(git -C "$src" rev-parse HEAD) || return 1
-    if test "$commit" != "$SCHNELLE_UMLAUTE_COMMIT"; then
-        warn "Schnelle Umlaute's $SCHNELLE_UMLAUTE_TAG tag is commit $commit, not the pinned $SCHNELLE_UMLAUTE_COMMIT; not building it"
-        rm -rf "$src" || warn "couldn't remove the rejected clone in $src"
-        return 1
-    fi
-    # shellcheck disable=SC2086  # word-split the flags
-    build_logged "Schnelle Umlaute" cmake -S "$src/addon" -B "$src/addon/build" $SCHNELLE_UMLAUTE_CMAKE_FLAGS \
-        && build_logged "Schnelle Umlaute" cmake --build "$src/addon/build" || return 1
-    if ! sudo_logged cmake --install "$src/addon/build"; then
-        warn "couldn't install Schnelle Umlaute into fcitx5's directories"
-        return 1
-    fi
-    info "Built and installed Schnelle Umlaute $SCHNELLE_UMLAUTE_TAG; the build's output is in $build_log"
-    if ! mkdir -p "${SCHNELLE_UMLAUTE_STAMP%/*}" || ! printf '%s\n' "$_su_record" > "$SCHNELLE_UMLAUTE_STAMP"; then
-        warn "couldn't write $SCHNELLE_UMLAUTE_STAMP, so the next run builds Schnelle Umlaute again"
+    info "Built and installed tide's accents; the build's output is in $build_log"
+    if ! mkdir -p "${TIDE_ACCENTS_STAMP%/*}" || ! printf '%s\n' "$_ta_record" > "$TIDE_ACCENTS_STAMP"; then
+        warn "couldn't write $TIDE_ACCENTS_STAMP, so the next run builds tide's accents again"
     fi
     return 0
 }
@@ -2115,7 +2096,8 @@ fcitx5_layout() {
     printf '%s%s\n' "$_fl_layout" "${_fl_variant:+-$_fl_variant}"
 }
 
-# write_new_file PATH TEXT: writes TEXT to PATH, which isn't there, whole.
+# write_new_file PATH TEXT: writes TEXT to PATH whole, replacing any file
+# there in one step.
 write_new_file() {
     mkdir -p "${1%/*}" || return 1
     _wn_tmp=$(mktemp "${1%/*}/.${1##*/}.XXXXXX") || return 1
@@ -2125,33 +2107,73 @@ write_new_file() {
     fi
 }
 
-# configure_fcitx5 writes fcitx5's profile and config where you have
-# none: Schnelle Umlaute is the input method, on by default, over the
-# session's keyboard layout, and fcitx5 takes no keys of its own, so
-# Ctrl+Space, Shift and the rest reach apps. Yours are left alone.
-configure_fcitx5() {
-    is_command fcitx5 || return 0
-    _cf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5
-    if test -e "$_cf_dir/profile" || test -L "$_cf_dir/profile"; then
-        detail "Leaving your fcitx5 input methods, in $_cf_dir/profile, as they are"
-    else
-        _cf_layout=$(fcitx5_layout)
-        if write_new_file "$_cf_dir/profile" "[Groups/0]
+# fcitx5_profile LAYOUT IM: the fcitx5 profile setup-tide writes: input
+# method IM, on by default, over keyboard layout LAYOUT.
+fcitx5_profile() {
+    printf '%s\n' "[Groups/0]
 Name=Default
-Default Layout=$_cf_layout
-DefaultIM=schnelle-umlaute
+Default Layout=$1
+DefaultIM=$2
 
 [Groups/0/Items/0]
-Name=keyboard-$_cf_layout
+Name=keyboard-$1
 Layout=
 
 [Groups/0/Items/1]
-Name=schnelle-umlaute
+Name=$2
 Layout=
 
 [GroupOrder]
-0=Default"; then
-            info "Made Schnelle Umlaute fcitx5's input method, over the $_cf_layout keyboard layout, in $_cf_dir/profile"
+0=Default"
+}
+
+# old_fcitx5_profile FILE: whether FILE is the profile an older setup-tide
+# wrote for Schnelle Umlaute, over any layout. fcitx5 may have saved it
+# since, adding its comments, so comments and blank lines aren't compared.
+old_fcitx5_profile() {
+    test -f "$1" && ! test -L "$1" || return 1
+    _of_layout=$(sed -n 's/^Default Layout=//p' "$1" | head -n 1)
+    test -n "$_of_layout" || return 1
+    _of_strip='/^[[:space:]]*#/d; /^[[:space:]]*$/d'
+    test "$(sed "$_of_strip" "$1")" = "$(fcitx5_profile "$_of_layout" schnelle-umlaute | sed "$_of_strip")"
+}
+
+# configure_fcitx5 writes fcitx5's profile and config where you have
+# none: tide-accents is the input method, on by default, over the
+# session's keyboard layout, and fcitx5 takes no keys of its own, so
+# Ctrl+Space, Shift and the rest reach apps. A profile an older setup-tide
+# wrote for Schnelle Umlaute is moved over to tide-accents, keeping its
+# layout. Yours are left alone.
+# Where fcitx5 finds tide-accents once it's installed. Overridable for tests.
+TIDE_ACCENTS_IM_CONFS="${SETUP_TIDE_ACCENTS_IM_CONFS:-/usr/share/fcitx5/inputmethod/tide-accents.conf /usr/local/share/fcitx5/inputmethod/tide-accents.conf}"
+
+tide_accents_installed() {
+    for _ti_conf in $TIDE_ACCENTS_IM_CONFS; do
+        test -f "$_ti_conf" && return 0
+    done
+    return 1
+}
+
+configure_fcitx5() {
+    is_command fcitx5 || return 0
+    _cf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5
+    if ! tide_accents_installed; then
+        # Naming an input method fcitx5 doesn't have would leave a held
+        # letter with nothing to offer, or with Schnelle Umlaute gone.
+        detail "tide's accents aren't installed yet, so fcitx5's input methods are left as they are; setup-tide without --no-install builds them"
+    elif old_fcitx5_profile "$_cf_dir/profile"; then
+        _cf_layout=$(sed -n 's/^Default Layout=//p' "$_cf_dir/profile" | head -n 1)
+        if write_new_file "$_cf_dir/profile" "$(fcitx5_profile "$_cf_layout" tide-accents)"; then
+            info "Switched fcitx5 from Schnelle Umlaute to tide's own accents, in $_cf_dir/profile"
+        else
+            warn "couldn't write $_cf_dir/profile, so fcitx5 still uses Schnelle Umlaute in tide"
+        fi
+    elif test -e "$_cf_dir/profile" || test -L "$_cf_dir/profile"; then
+        detail "Leaving your fcitx5 input methods, in $_cf_dir/profile, as they are"
+    else
+        _cf_layout=$(fcitx5_layout)
+        if write_new_file "$_cf_dir/profile" "$(fcitx5_profile "$_cf_layout" tide-accents)"; then
+            info "Made tide's accents fcitx5's input method, over the $_cf_layout keyboard layout, in $_cf_dir/profile"
         else
             warn "couldn't write $_cf_dir/profile, so fcitx5 may not offer accents in tide"
         fi
@@ -2202,7 +2224,9 @@ ShareInputState=All
 hide_fcitx5_autostart() {
     is_command fcitx5 || return 0
     hide_autostart org.fcitx.Fcitx5 "Fcitx 5" fcitx5
-    # Schnelle Umlaute's overlay, which its install starts at every login.
+    # Schnelle Umlaute's overlay, which its install started at every login,
+    # on a machine an older setup-tide built it on. It's still installed
+    # there, and hiding an entry that isn't there costs nothing.
     hide_autostart schnelle-umlaute-overlay "Schnelle Umlaute Overlay" "Schnelle Umlaute's overlay"
 }
 
@@ -6830,9 +6854,6 @@ else
     join_video_group
     install_quickshell
     install_fcitx5
-    if is_command fcitx5; then
-        build_schnelle_umlaute || warn "Schnelle Umlaute wasn't built, so a held letter types no accents in tide; rerun setup-tide to retry"
-    fi
     # Only once the distro's is there to replace them.
     if test "$DISTRO_HYPRLAND" = yes; then
         unlink_hyprland || warn "couldn't remove the links to a source-built Hyprland in $HYPRLAND_BIN_DIR"
@@ -6856,6 +6877,10 @@ fi
 check_hyprland_version
 fetch_tide
 install_tide
+# tide-accents is built from the tide checkout, so only once it's fetched.
+if test "$INSTALL" != no && test "$SUDO" != no && is_command fcitx5; then
+    build_tide_accents || warn "tide's accents weren't built, so a held letter offers no accents in tide; rerun setup-tide to retry"
+fi
 enable_unit
 if is_command systemctl; then
     mask_distro_units
