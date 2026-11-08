@@ -1,0 +1,226 @@
+#!/bin/bash
+# Tests for lightspeed-reset: a receiver with its mouse is left alone; one
+# without is reset through its USB port, or by reauthorizing it where the
+# port can't be controlled; the run that follows its own reset gives up
+# rather than reset forever, though an old reset doesn't stop a new one;
+# and a receiver that's gone again needs nothing. Runs the real script
+# against a fake sysfs shaped like the kernel's for a PRO 2's receiver.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+NAME=1-4.1.2.2
+DEVPATH=/devices/pci0000:00/0000:01:00.0/usb1/1-4/1-4.1/1-4.1.2/$NAME
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  SYS="$TEST_TMPDIR/sys"
+  STATE="$TEST_TMPDIR/state"
+  DEV="$SYS$DEVPATH"
+  HUB="$SYS/devices/pci0000:00/0000:01:00.0/usb1/1-4/1-4.1/1-4.1.2"
+  mkdir -p "$DEV" "$HUB/1-4.1.2:1.0/1-4.1.2-port2"
+  echo 1 > "$DEV/authorized"
+  echo 046d > "$DEV/idVendor"
+  echo c543 > "$DEV/idProduct"
+  echo 15 > "$DEV/devnum"
+  echo 0 > "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable"
+  ln -s "../1-4.1.2:1.0/1-4.1.2-port2" "$DEV/port"
+  # The receiver's own HID devices, one per interface; the kernel gives
+  # them hidraw nodes but no input ones.
+  mkdir -p "$DEV/$NAME:1.0/0003:046D:C543.0233" "$DEV/$NAME:1.1/0003:046D:C543.0234" \
+    "$DEV/$NAME:1.2/0003:046D:C543.0235"
+}
+
+teardown() { rm -rf "$TEST_TMPDIR"; }
+
+# The mouse paired through the receiver, as logitech-dj adds it.
+pair_mouse() {
+  mkdir -p "$DEV/$NAME:1.2/0003:046D:C543.0235/0003:046D:40A8.0236/input/input262"
+}
+
+run() {
+  set +e
+  output="$(LIGHTSPEED_WAIT=0 LIGHTSPEED_SYSFS="$SYS" LIGHTSPEED_STATE="$STATE" \
+    "$SCRIPT_DIR/lightspeed-reset" "$@" 2>&1)"
+  status=$?
+  set -e
+  disable=$(cat "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable" 2>/dev/null || echo none)
+  authorized=$(cat "$DEV/authorized" 2>/dev/null || echo none)
+}
+
+fail_test() { echo "  FAIL: $1"; echo "  output: $output"; TEST_FAILED=1; }
+assert_status() { test "$status" -eq "$1" || fail_test "expected exit $1, got $status"; }
+assert_output() { case "$output" in *"$1"*) ;; *) fail_test "expected output with '$1'" ;; esac; }
+assert_eq() { test "$1" = "$2" || fail_test "$3: expected '$2', got '$1'"; }
+assert_marked() { test -e "$STATE/$NAME" || fail_test "no mark of the reset"; }
+assert_unmarked() { test ! -e "$STATE/$NAME" || fail_test "a mark of a reset was left"; }
+
+run_test() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  setup
+  TEST_FAILED=
+  if "$2" && test -z "$TEST_FAILED"; then
+    echo "ok $TESTS_RUN $1"; TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    echo "not ok $TESTS_RUN $1"; TESTS_FAILED=$((TESTS_FAILED + 1))
+  fi
+  teardown
+}
+
+test_mouse_present_left_alone() {
+  pair_mouse
+  echo untouched > "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable"
+  echo untouched > "$DEV/authorized"
+  run "$DEVPATH"
+  assert_status 0
+  assert_eq "$disable" untouched "the port"
+  assert_eq "$authorized" untouched "the receiver's authorization"
+  assert_unmarked
+}
+
+# A mouse that's come back clears the mark, so the next lost one is reset.
+test_mouse_present_clears_mark() {
+  pair_mouse
+  mkdir -p "$STATE"
+  : > "$STATE/$NAME"
+  run "$DEVPATH"
+  assert_status 0
+  assert_unmarked
+}
+
+test_no_mouse_resets_port() {
+  echo untouched > "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable"
+  echo untouched > "$DEV/authorized"
+  run "$DEVPATH"
+  assert_status 0
+  assert_output "came up without its mouse; resetting it"
+  # Disabled, then enabled again.
+  assert_eq "$disable" 0 "the port"
+  assert_eq "$authorized" untouched "the receiver's authorization"
+  assert_marked
+}
+
+# The receiver's own HID devices aren't a paired mouse.
+test_receiver_interfaces_are_not_a_mouse() {
+  mkdir -p "$DEV/$NAME:1.1/0003:046D:C543.0234/input/input250"
+  run "$DEVPATH"
+  assert_status 0
+  assert_output "resetting it"
+}
+
+test_no_port_control_reauthorizes() {
+  rm "$DEV/port"
+  echo untouched > "$DEV/authorized"
+  run "$DEVPATH"
+  assert_status 0
+  assert_output "resetting it"
+  # Deauthorized, then authorized again.
+  assert_eq "$authorized" 1 "the receiver's authorization"
+  assert_marked
+}
+
+test_second_run_gives_up() {
+  mkdir -p "$STATE"
+  : > "$STATE/$NAME"
+  echo untouched > "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable"
+  echo untouched > "$DEV/authorized"
+  run "$DEVPATH"
+  assert_status 1
+  assert_output "still has no mouse after a reset"
+  assert_eq "$disable" untouched "the port"
+  assert_eq "$authorized" untouched "the receiver's authorization"
+  # So the next time it's plugged in, it's reset again.
+  assert_unmarked
+}
+
+# A reset whose receiver never came back, long ago, doesn't count.
+test_old_mark_still_resets() {
+  mkdir -p "$STATE"
+  touch -t 200001010000 "$STATE/$NAME"
+  run "$DEVPATH"
+  assert_status 0
+  assert_output "resetting it"
+  assert_eq "$disable" 0 "the port"
+}
+
+test_receiver_gone() {
+  rm -rf "$DEV"
+  mkdir -p "$STATE"
+  : > "$STATE/$NAME"
+  run "$DEVPATH"
+  assert_status 0
+  assert_output "has gone"
+  assert_unmarked
+}
+
+# Another device that takes the receiver's place while it waits, or the
+# receiver added again (whose own run follows), isn't reset. The wait is
+# a fake sleep that swaps the device, as an unplug and plug would.
+test_replaced_device_left_alone() {
+  mkdir -p "$TEST_TMPDIR/bin"
+  # shellcheck disable=SC2016 # Expanded when the fake runs.
+  printf '#!/bin/sh\necho "$SWAP" > "$SWAP_FILE"\n' > "$TEST_TMPDIR/bin/sleep"
+  chmod +x "$TEST_TMPDIR/bin/sleep"
+  for swap in idVendor=05ac idProduct=c52b devnum=16; do
+    echo untouched > "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable"
+    echo untouched > "$DEV/authorized"
+    set +e
+    output="$(PATH="$TEST_TMPDIR/bin:$PATH" SWAP="${swap#*=}" SWAP_FILE="$DEV/${swap%%=*}" \
+      LIGHTSPEED_WAIT=0 LIGHTSPEED_SYSFS="$SYS" LIGHTSPEED_STATE="$STATE" \
+      "$SCRIPT_DIR/lightspeed-reset" "$DEVPATH" 2>&1)"
+    status=$?
+    set -e
+    assert_status 0
+    assert_output "has gone"
+    assert_eq "$(cat "$HUB/1-4.1.2:1.0/1-4.1.2-port2/disable")" untouched "the port ($swap)"
+    assert_eq "$(cat "$DEV/authorized")" untouched "the authorization ($swap)"
+    echo 046d > "$DEV/idVendor"; echo c543 > "$DEV/idProduct"; echo 15 > "$DEV/devnum"
+  done
+}
+
+test_failed_reset_reported() {
+  rm "$DEV/port" "$DEV/authorized"
+  # A directory can't be written like a file.
+  mkdir "$DEV/authorized"
+  run "$DEVPATH"
+  assert_status 1
+  assert_output "unplug it and plug it in again"
+  assert_unmarked
+}
+
+test_bad_devpath() {
+  for bad in "" "$NAME" "/devices/../../etc"; do
+    run "$bad"
+    assert_status 2
+  done
+}
+
+test_bad_wait() {
+  set +e
+  output="$(LIGHTSPEED_WAIT=soon LIGHTSPEED_SYSFS="$SYS" LIGHTSPEED_STATE="$STATE" \
+    "$SCRIPT_DIR/lightspeed-reset" "$DEVPATH" 2>&1)"
+  status=$?
+  set -e
+  assert_status 2
+  assert_output "LIGHTSPEED_WAIT must be a number"
+}
+
+run_test "a receiver with its mouse is left alone" test_mouse_present_left_alone
+run_test "a receiver with its mouse back clears the mark of a reset" test_mouse_present_clears_mark
+run_test "a receiver without its mouse is reset through its port" test_no_mouse_resets_port
+run_test "the receiver's own HID devices aren't taken for a mouse" test_receiver_interfaces_are_not_a_mouse
+run_test "without port control, the receiver is reauthorized" test_no_port_control_reauthorizes
+run_test "the run after its own reset gives up" test_second_run_gives_up
+run_test "an old reset doesn't stop a new one" test_old_mark_still_resets
+run_test "a receiver that's gone again needs nothing" test_receiver_gone
+run_test "another device in the receiver's place isn't reset" test_replaced_device_left_alone
+run_test "a reset that fails says to re-plug" test_failed_reset_reported
+run_test "a path that isn't a device's is refused" test_bad_devpath
+run_test "a wait that isn't a number is refused" test_bad_wait
+
+echo "$TESTS_PASSED/$TESTS_RUN tests passed"
+test "$TESTS_FAILED" -eq 0

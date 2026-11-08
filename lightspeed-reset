@@ -1,0 +1,123 @@
+#!/bin/sh
+#
+# lightspeed-reset: resets a Logitech Lightspeed receiver that came back
+# without its mouse, as a re-plug would.
+#
+# A KVM switch that hands the receiver back can leave it up with its mouse
+# never reported: the kernel finds the receiver, but no "connected on slot"
+# follows, so no mouse appears until the receiver is unplugged and plugged
+# in again (seen with a PRO 2's receiver, 046d:c543, on 2026-11-08). Its
+# udev rule, which setup installs, runs this through systemd-run whenever
+# one is added, with the receiver's devpath (/devices/...).
+#
+# After WAIT seconds, if the same receiver is still there (not one added
+# again, or another device in its place), it looks for a device paired
+# through the receiver: a HID device under the receiver's own, with an
+# input node. With none, it disables and re-enables the receiver's USB
+# port, so the receiver is found again from scratch; without that port
+# control, it deauthorizes and reauthorizes the receiver. The reset adds the receiver again, and so runs
+# this again; if that run still finds no mouse, it gives up rather than
+# reset forever, say for a mouse that's switched off.
+#
+# Usage: lightspeed-reset DEVPATH
+#
+# LIGHTSPEED_WAIT (default 5), LIGHTSPEED_SYSFS (default /sys) and
+# LIGHTSPEED_STATE (default /run/lightspeed-reset) are for the tests. Linux
+# only.
+
+wait="${LIGHTSPEED_WAIT:-5}"
+sysfs="${LIGHTSPEED_SYSFS:-/sys}"
+state="${LIGHTSPEED_STATE:-/run/lightspeed-reset}"
+
+case "${1:-}" in
+    /devices/*) ;;
+    *)
+        echo "Usage: lightspeed-reset DEVPATH (a receiver's /devices/... path)" >&2
+        exit 2
+        ;;
+esac
+case "$1" in
+    *..*)
+        echo "lightspeed-reset: not a device path: $1" >&2
+        exit 2
+        ;;
+esac
+dev=$sysfs$1
+name=${1##*/}
+# Set when this run follows a reset of its own, within the last two
+# minutes: a stale one, from a reset that was never followed by the
+# receiver coming back, doesn't count.
+marker=$state/$name
+
+case "$wait" in
+    ''|*[!0-9.]*|*.*.*|.)
+        echo "lightspeed-reset: LIGHTSPEED_WAIT must be a number of seconds, not '$wait'" >&2
+        exit 2
+        ;;
+esac
+# Which device this is: its IDs, and its number on the bus, which a device
+# gets afresh each time it's added.
+identity() {
+    cat "$dev/idVendor" "$dev/idProduct" "$dev/devnum" 2>/dev/null
+}
+added=$(identity)
+sleep "$wait"
+
+if ! test -d "$dev"; then
+    # Unplugged again, or the KVM switched away: nothing to reset.
+    echo "lightspeed-reset: receiver $name has gone; nothing to do"
+    rm -f "$marker"
+    exit 0
+fi
+if test -z "$added" || test "$(identity)" != "$added"; then
+    # Another device in its place, or the receiver added again, which runs
+    # this again: that run decides, so its mark of a reset stays.
+    echo "lightspeed-reset: receiver $name has gone; nothing to do"
+    exit 0
+fi
+
+# Whether a device is paired through the receiver: the receiver's HID
+# device, on one of its interfaces, has a HID device of its own for each
+# paired one, such as 0003:046D:40A8.0236 for a PRO 2, with an input node.
+has_paired_device() {
+    for input in "$dev/$name":*/0003:046D:*/0003:046D:*/input; do
+        test -d "$input" && return 0
+    done
+    return 1
+}
+
+if has_paired_device; then
+    rm -f "$marker"
+    exit 0
+fi
+
+if test -n "$(find "$marker" -mmin -2 2>/dev/null)"; then
+    rm -f "$marker"
+    echo "lightspeed-reset: receiver $name still has no mouse after a reset; leaving it (is the mouse on?)" >&2
+    exit 1
+fi
+
+if ! mkdir -p "$state" || ! : > "$marker"; then
+    # Without the mark, the reset's own run couldn't tell it had reset.
+    echo "lightspeed-reset: couldn't mark $marker, so not resetting receiver $name" >&2
+    exit 1
+fi
+
+echo "lightspeed-reset: receiver $name came up without its mouse; resetting it"
+# The port's path first: disabling it removes the receiver, and its link.
+if port=$(cd "$dev/port" 2>/dev/null && pwd -P) && test -w "$port/disable"; then
+    if echo 1 > "$port/disable" && echo 0 > "$port/disable"; then
+        exit 0
+    fi
+    echo "lightspeed-reset: couldn't disable and re-enable $port; reauthorizing receiver $name instead" >&2
+    # The port may have stayed disabled; this is the last chance to bring
+    # it back.
+    echo 0 > "$port/disable" 2>/dev/null \
+        || echo "lightspeed-reset: couldn't re-enable $port" >&2
+fi
+if echo 0 > "$dev/authorized" && echo 1 > "$dev/authorized"; then
+    exit 0
+fi
+echo "lightspeed-reset: couldn't reset receiver $name; unplug it and plug it in again" >&2
+rm -f "$marker"
+exit 1
