@@ -288,7 +288,7 @@ shift
 for pkg; do
     case " \$FAKE_MISSING " in *" \$pkg "*) continue ;; esac
     case "\$pkg" in
-        hyprland) version="\${FAKE_APT_HYPRLAND:-0.56.2-1}" ;;
+        hyprland) version="\${FAKE_APT_HYPRLAND:-0.57.1-1}" ;;
         g++-16) version="\${FAKE_APT_GXX:-16-20260322-1ubuntu1}" ;;
         libxkbcommon-dev) version="\${FAKE_APT_XKB:-1.13.1-1}" ;;
         qt6-base-dev) version="\${FAKE_APT_QT:-6.10.2+dfsg-7}" ;;
@@ -710,7 +710,7 @@ if ! test -d "\$XDG_RUNTIME_DIR"; then
     exit 134
 fi
 printf '%s\\n' "\$XDG_RUNTIME_DIR" > "$T/greeter-runtime-dir"
-echo "Hyprland \${FAKE_GREETER_HYPRLAND_VERSION:-0.56.2} built from branch main"
+echo "Hyprland \${FAKE_GREETER_HYPRLAND_VERSION:-0.57.1} built from branch main"
 MOCK
     printf '#!/bin/sh\necho "${FAKE_GREETER_QS_VERSION:-Quickshell 0.3.1 (revision 1a4716c, distributed by test)}" >&2\n' > "$T/usr-bin/qs"
     printf '_greetd:x:999:999::%s:/usr/sbin/nologin\n' "$T/etc/greetd" > "$T/passwd"
@@ -832,7 +832,7 @@ fi
 MOCK
     cat > "$T/bin/Hyprland" <<MOCK
 #!/bin/sh
-echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.56.2} built from branch main"
+echo "Hyprland \${FAKE_HYPRLAND_VERSION:-0.57.1} built from branch main"
 MOCK
     chmod +x "$T"/bin/*
     # Nerd Fonts' release, for a distro without Symbols Nerd Font's package,

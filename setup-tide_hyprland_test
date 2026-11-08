@@ -14,6 +14,12 @@ check "a new enough apt Hyprland is installed" has "$calls" "apt-get install -y 
 check "a new enough apt Hyprland isn't built" lacks "$calls" "cmake"
 teardown
 
+# Debian testing's 0.56.2 is older than the 0.57 tide needs: build it.
+setup; ARGS=(); run FAKE_APT_HYPRLAND=0.56.2+ds-1
+check "apt's 0.56.2 builds from source" has "$calls" "--branch v0.57.1"
+check "apt's 0.56.2 isn't installed" lacks "$calls" "apt-get install -y hyprland"
+teardown
+
 # apt's Hyprland is too old (Ubuntu 26.04's 0.53): build it.
 setup; ARGS=(); run FAKE_APT_HYPRLAND=0.53.3+ds-4
 check "an old apt Hyprland builds from source" test "$status" -eq 0
