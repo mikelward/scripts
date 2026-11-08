@@ -237,13 +237,15 @@ TIDEWM_COMMANDS=tidewm
 # With XWayland, for X11 apps, as tidewm's CI builds it.
 TIDEWM_XWAYLAND=-DXWAYLAND
 TIDEWM_XLIBS="xcb xcb-icccm"
-# What the build needs, from tidewm's CI, plus Xwayland to run X11 apps.
-# It builds against wlroots 0.20, which Debian testing and Arch package and
-# Ubuntu 26.04 doesn't (it has 0.19).
+# What the build needs, from tidewm's CI, plus Xwayland to run X11 apps
+# and wlroots' portal, without which sharing a screen or window (in Meet,
+# say) fails. It builds against wlroots 0.20, which Debian testing and
+# Arch package and Ubuntu 26.04 doesn't (it has 0.19).
 TIDEWM_APT_DEPS="build-essential pkgconf git libwlroots-0.20-dev libwayland-dev wayland-protocols
-    libinput-dev libxkbcommon-dev libxcb1-dev libxcb-icccm4-dev libjson-c-dev libpcre2-dev xwayland"
+    libinput-dev libxkbcommon-dev libxcb1-dev libxcb-icccm4-dev libjson-c-dev libpcre2-dev xwayland
+    xdg-desktop-portal-wlr"
 TIDEWM_PACMAN_DEPS="base-devel git wlroots0.20 wayland wayland-protocols libinput libxkbcommon
-    libxcb xcb-util-wm json-c pcre2 pkgconf xorg-xwayland"
+    libxcb xcb-util-wm json-c pcre2 pkgconf xorg-xwayland xdg-desktop-portal-wlr"
 
 # What build_tide_accents needs to build tide's fcitx5 add-on
 # (tide's fcitx5/CMakeLists.txt), beside fcitx5 itself.
