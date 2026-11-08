@@ -203,7 +203,7 @@ setup's own choices:
   move-a-Space, Mission Control and App Exposé off at their stock keys),
   keeps the menu bar shown, and warns about Amethyst and Rectangle. Its
   README and `SPEC.md` (§7.3) say more. The run passes on `--no-install`,
-  `--ignore-errors` and `--verbose`; the installer's warnings join the
+  `--no-sudo`, `--ignore-errors` and `--verbose`; the installer's warnings join the
   run's, and its Accessibility and log-out steps join the list at the end.
 - **Mission Control.** tide for macOS uses one Space per display, so there's no
   nine-Spaces step; extra Spaces can be removed in Mission Control.
@@ -230,11 +230,12 @@ setup's own choices:
   earlier run cloned is used when there's no `~/tidemo`, rather than cloning
   a second copy, and `$TILEMO_DIR` and `$TIMO_DIR` are still read when
   `$TIDEMO_DIR` isn't set. `--wm tilemo` and `--wm timo` still mean tide.
-- **Karabiner.** The conf repo's `tide.json` rule, whose name starts
-  `tide:`, makes the physical Win key tide for macOS's Super (Ctrl+Option+Command).
-  Enable it above the arrow rule. Without it, tide for macOS falls back to Option. A
-  conf checkout from before the renames has `tilemo.json` or `timo.json`,
-  named `tilemo:` or `timo:` instead, which tide for macOS also accepts.
+- **Super.** The run passes tide's installer `--super win`, so tide's own
+  Karabiner rule makes the physical Win key tide's Super
+  (Ctrl+Option+Command): the rotation makes Win into Option, which the rule
+  takes over. The installer copies the rule into Karabiner's folder, and
+  tide turns it on. Karabiner is installed first, by this run, so its
+  setup steps are listed once.
 
 Hammerspoon then needs Accessibility access granted by hand, as Amethyst does.
 Hammerspoon and tide for macOS are free and open source, and nothing here touches the
