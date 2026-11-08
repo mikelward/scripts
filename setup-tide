@@ -22,8 +22,8 @@
 #   pinned release from source into /opt/quickshell (see
 #   build_quickshell). Without it the bar can't run, and waybar stays the
 #   bar;
-# - on Debian and Ubuntu, where apt's Hyprland is older than the 0.56 the
-#   Lua config needs, builds Hyprland and the hyprwm libraries it needs from
+# - on Debian and Ubuntu, where apt's Hyprland is older than the 0.57 tide
+#   needs, builds Hyprland and the hyprwm libraries it needs from
 #   source, at pinned tags, into /opt/hyprland (see build_hyprland). Both
 #   builds are outside $HOME because the greeter runs them too, as greetd's
 #   own user, which can't read a home directory;
@@ -167,8 +167,8 @@ QUICKSHELL_COPR=errornointernet/quickshell
 # Fedora 43 and 44 package neither Hyprland nor uwsm. This COPR, a
 # continuation of the abandoned solopasha/hyprland, has both.
 HYPRLAND_COPR=lionheartp/Hyprland
-# Hyprland reads only hyprland.lua from 0.56 on.
-MIN_HYPRLAND=0.56
+# The oldest Hyprland tide supports: the one build_hyprland builds.
+MIN_HYPRLAND=0.57
 
 # The Quickshell release build_quickshell builds where apt has none, from
 # the GitHub mirror tide's SPEC.md cites. Its own prefix, like
@@ -297,7 +297,7 @@ re2 https://github.com/google/re2.git 2025-08-05 85c7c0fb1163b0bd83a7951f5a205ee
 glaze https://github.com/stephenberry/glaze.git v7.2.0 b518eec7a22e56ffa238b072c07f47efa7cea97f cmake
 Hyprland https://github.com/hyprwm/Hyprland.git v0.57.1 acc1aa0bfd4bd575dcb0f76c35ccf12b660a1ab9 cmake
 "
-# The GCC every pin builds with. Hyprland 0.56 uses std::ranges::starts_with,
+# The GCC every pin builds with. Hyprland 0.57.1 uses std::ranges::starts_with,
 # which libstdc++ first has in GCC 16; Ubuntu 26.04's default g++ is 15, but
 # it packages g++-16, and its libstdc++6 runtime is already 16's.
 HYPRLAND_GCC=16
@@ -543,7 +543,7 @@ Options:
   --ignore-errors  Keep going past failures instead of aborting on the first
   --no-build-hyprland
                    On Debian and Ubuntu, don't build Hyprland from source when
-                   apt's is older than 0.56 (the build takes 10-20 minutes)
+                   apt's is older than 0.57 (the build takes 10-20 minutes)
   --tidewm         Also build tidewm, tide's fork of dwl, for the tide
                    (tidewm) session, an option beside Hyprland's: on Debian
                    testing and Arch, which package the wlroots 0.20 it needs
@@ -1246,7 +1246,7 @@ decide_hyprland_build() {
         BUILD_NOW=yes
         return 0
     fi
-    # Hyprland 0.56 needs GCC 16's libstdc++, xkbcommon 1.11 and Lua 5.5,
+    # Hyprland 0.57.1 needs GCC 16's libstdc++, xkbcommon 1.11 and Lua 5.5,
     # which Debian 13 doesn't have.
     gxx=$(candidate "g++-$HYPRLAND_GCC")
     xkb=$(candidate libxkbcommon-dev)
@@ -2519,7 +2519,8 @@ build_component() {
     esac
 }
 
-# Hyprland before 0.56 reads hyprland.conf, which conf no longer ships.
+# tide needs MIN_HYPRLAND. Hyprland before 0.56 reads hyprland.conf, which
+# conf no longer ships.
 check_hyprland_version() {
     if ! is_command Hyprland; then
         warn "Hyprland isn't installed; the tide session won't start"
@@ -2531,7 +2532,7 @@ check_hyprland_version() {
         return 0
     fi
     if test "$(printf '%s\n%s\n' "$MIN_HYPRLAND" "$version" | sort -V | head -n1)" != "$MIN_HYPRLAND"; then
-        warn "Hyprland $version is older than $MIN_HYPRLAND, which the Lua config needs; upgrade it"
+        warn "Hyprland $version is older than $MIN_HYPRLAND, which tide needs; upgrade it"
     fi
 }
 
@@ -6162,7 +6163,7 @@ greeter_ready() {
         why="greetd's user $greeter couldn't ask its Hyprland for its version"
         return 1
     fi
-    # The number has to end the word: a prerelease, 0.56.0-rc1, isn't 0.56.0.
+    # The number has to end the word: a prerelease, 0.57.0-rc1, isn't 0.57.0.
     _version=$(printf '%s\n' "$_version" | sed -n 's/^Hyprland \([0-9][0-9.]*\)\([ ,].*\)\{0,1\}$/\1/p' | head -n1)
     if test -z "$_version" || ! version_at_least "$_version" "$MIN_HYPRLAND"; then
         why="the greeter's Hyprland is ${_version:-of no version setup can read}, and it needs $MIN_HYPRLAND or later"

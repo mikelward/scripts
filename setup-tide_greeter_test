@@ -292,10 +292,10 @@ setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; : > "$T/passwd"; run
 greeter_not_ready "no greetd user" "greetd has no system account to run the greeter as (setup looked for greeter _greetd greetd)"
 teardown
 # The Hyprland on the greeter's PATH is the one checked, not this user's.
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.55.0
-greeter_not_ready "an old Hyprland" "the greeter's Hyprland is 0.55.0, and it needs 0.56 or later"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.56.2
+greeter_not_ready "an old Hyprland" "the greeter's Hyprland is 0.56.2, and it needs 0.57 or later"
 teardown
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_HYPRLAND_VERSION=0.55.0
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_HYPRLAND_VERSION=0.56.2
 check "greetd: an old Hyprland only on this user's PATH doesn't stop the switch" test "$(cat "$T/dm")" = greetd.service
 teardown
 # Its Quickshell has to load the greeter's QML, so it's asked too.
@@ -310,8 +310,8 @@ teardown
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run "$(good_session_qs)" FAKE_GREETER_QS_VERSION="Quickshell 0.3.0-rc1 (revision 0000000)"
 greeter_not_ready "a prerelease Quickshell" "the greeter's Quickshell is of no version setup can read, and it needs 0.3.0 or later"
 teardown
-setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.56.0-rc1
-greeter_not_ready "a prerelease Hyprland" "the greeter's Hyprland is of no version setup can read, and it needs 0.56 or later"
+setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"; run FAKE_GREETER_HYPRLAND_VERSION=0.57.0-rc1
+greeter_not_ready "a prerelease Hyprland" "the greeter's Hyprland is of no version setup can read, and it needs 0.57 or later"
 teardown
 # The one first on the greeter's PATH is the one asked.
 setup; ARGS=(--greeter); echo gdm3.service > "$T/dm"

@@ -679,8 +679,8 @@ check "--no-sudo leaves the drop-in" test -e "$T/logind/10-hypr-lid.conf"
 check "--no-sudo still enables the user unit" has "$calls" "systemctl --user enable tide.service"
 teardown
 
-setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.55.1
-check "an old Hyprland is warned about" has "$output" "Hyprland 0.55.1 is older than 0.56"
+setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.56.2
+check "an old Hyprland is warned about" has "$output" "Hyprland 0.56.2 is older than 0.57"
 teardown
 
 setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.57.0
