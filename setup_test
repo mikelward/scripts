@@ -519,6 +519,14 @@ case "${HARNESS_PM_MODE:-ok} \$*" in
         echo "E: Failed to fetch the upgrades" >&2
         exit 100
         ;;
+    # unlisted: dnf can't install the extra wallpapers.
+    "unlisted install "*backgrounds-extras*)
+        echo "Failed to resolve the transaction:" >&2
+        echo "No match for argument: f44-backgrounds-extras-base" >&2
+        echo "You can try to add to command line:" >&2
+        echo "  --skip-unavailable to skip unavailable packages" >&2
+        exit 1
+        ;;
 esac
 echo "Setting up \$*"
 exit 0
@@ -2315,6 +2323,22 @@ test_wallpapers_installed_with_the_desktop() {
     assert_calls_contain "best=False f44-backgrounds-extras-base " &&
     run_linux_packages debian &&
     assert_calls_lack "wallpapers"
+    _wp_status=$?
+    rm -rf "$_wp_dir"
+    return "$_wp_status"
+}
+
+# A failed install shows the end of what dnf said once, without its last
+# line again as a warning of its own.
+test_failed_install_says_why_once() {
+    _wp_dir=$(mktemp -d)
+    printf 'ID=fedora\nVERSION_ID=44\n' > "$_wp_dir/fedora"
+    HARNESS_PM_MODE=unlisted HARNESS_OS_RELEASE="$_wp_dir/fedora" run_linux_packages redhat 1
+    assert_status 0 &&
+    assert_output_contains "No match for argument: f44-backgrounds-extras-base" &&
+    assert_output_contains "couldn't install the f44-backgrounds-extras-base wallpapers" &&
+    assert_output_lacks "Warning: sudo dnf" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
     _wp_status=$?
     rm -rf "$_wp_dir"
     return "$_wp_status"
@@ -5331,6 +5355,8 @@ run_test "Plasma Keyboard is installed with KDE" \
     test_plasma_keyboard_installed_for_kde
 run_test "the distro's wallpapers are installed with the desktop, each in its own step" \
     test_wallpapers_installed_with_the_desktop
+run_test "a failed install says why once" \
+    test_failed_install_says_why_once
 run_test "--purge-obsolete prunes homepkg's retired tools" \
     test_purge_obsolete_prunes_retired_tools
 run_test "a failed prune of retired tools warns and setup continues" \
