@@ -1413,9 +1413,13 @@ run_tide_installer() {
         warn "$TIDEMO_DIR has no install/tide-setup, so it predates tide's own installer; update it (git -C $TIDEMO_DIR pull) and rerun setup-macos, or $TIDEMO_MISSING_EFFECT"
         return 0
     fi
+    # The Win key is Super: this setup's rotation makes it Option, and
+    # tide's Win rule turns it into Super.
     set -- --verbose
     test "$VERBOSE" = yes || set --
+    set -- "$@" --super win
     test "$INSTALL" = yes || set -- "$@" --no-install
+    test "$SUDO" = yes || set -- "$@" --no-sudo
     test "$IGNORE_ERRORS" = no || set -- "$@" --ignore-errors
     if ! _ti_todo=$(mktemp "${TMPDIR:-/tmp}/setup-todo-XXXXXX"); then
         warn "couldn't make a file for tide's installer's steps, so it lists them itself"
@@ -1476,6 +1480,9 @@ install_tide() {
 
 configure_tide() {
     info "Configuring tide"
+    # Before tide's installer, which would install it too: this run's
+    # Karabiner steps, below, then cover it.
+    install_karabiner
     install_tide
 }
 
@@ -1508,13 +1515,6 @@ KARABINER_TERMINAL_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc
 # The same file's second rule, which puts the interrupt (Control+C) on
 # physical Ctrl+Shift+C in Terminal and iTerm2, whose copy is Ctrl+C.
 KARABINER_INTERRUPT="Ctrl+Shift+C interrupts in Terminal and iTerm2"
-# The rule that makes the physical Win key tide's Super (Ctrl+Option+Command),
-# for --wm tide. Its name starts "tide:".
-KARABINER_TIDE_RULE="$HOME/.config/karabiner/assets/complex_modifications/tide.json"
-# The same rule from conf checkouts older than the renames, named "tilemo:"
-# and "timo:". tide accepts those prefixes too, so they still work.
-KARABINER_TILEMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/tilemo.json"
-KARABINER_TIMO_RULE="$HOME/.config/karabiner/assets/complex_modifications/timo.json"
 # The rule that makes Ctrl+U clear the password at the lock screen, as on
 # Linux. Checked separately, for older conf checkouts.
 KARABINER_LOCK_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-lock.json"
@@ -1652,20 +1652,8 @@ configure_karabiner() {
         warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
         _karabiner_stale=yes
     fi
-    if test "$WM" = tide; then
-        if test -f "$KARABINER_TIDE_RULE"; then
-            karabiner_rule "tide:" "$KARABINER_TIDE_RULE"
-        elif test -f "$KARABINER_TILEMO_RULE"; then
-            info "$KARABINER_TILEMO_RULE predates the rename to tide and still works; update the conf repo and run confinst to get the \"tide:\" rule"
-            karabiner_rule "tilemo:" "$KARABINER_TILEMO_RULE"
-        elif test -f "$KARABINER_TIMO_RULE"; then
-            info "$KARABINER_TIMO_RULE predates the rename to tide and still works; update the conf repo and run confinst to get the \"tide:\" rule"
-            karabiner_rule "timo:" "$KARABINER_TIMO_RULE"
-        else
-            warn "$KARABINER_TIDE_RULE not found; run confinst after updating the conf repo, or tide falls back to Option for its Super key"
-            _karabiner_stale=yes
-        fi
-    fi
+    # tide's own rule, for its Super key, is tide's installer's to add
+    # (configure_tide), and tide turns it on.
     # Last, above every other, tide's included, which would take a Mac
     # keyboard's Command+U at the lock screen as Super+U.
     if test -f "$KARABINER_LOCK_RULE"; then

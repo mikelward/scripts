@@ -2560,19 +2560,19 @@ test_amethyst_does_not_run_tides_installer() {
     assert_not_called "/install/tide-setup"
 }
 
-# tide's installer is told what to rerun, and gets the options that apply
-# to it: not --no-sudo or --yes, which mean nothing to it.
+# tide's installer is told what to rerun, makes the Win key Super, as this
+# setup's rotation wants, and gets the options that apply to it: not --yes.
 test_tide_installer_gets_the_options_that_apply() {
     stage_checkout "$TEST_TMPDIR/home/tidemo"
     run_macos --no-install --ignore-errors --verbose --no-sudo --yes
     assert_status 0 &&
-    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup --verbose --no-install --ignore-errors [SETUP_COMMAND=setup-macos]"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup --verbose --super win --no-install --no-sudo --ignore-errors [SETUP_COMMAND=setup-macos]"
 }
 
 test_tide_installer_gets_no_options_by_default() {
     run_macos
     assert_status 0 &&
-    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup  [SETUP_COMMAND=setup-macos]"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup --super win [SETUP_COMMAND=setup-macos]"
 }
 
 # Its steps join this run's list, in order, with its logout in the one
@@ -2607,9 +2607,24 @@ test_ignore_errors_goes_on_past_a_failed_tide_installer() {
     touch "$TEST_TMPDIR/installer_fails"
     run_macos --ignore-errors
     assert_status 0 &&
-    assert_output_contains "Warning: failed (exit 1): $TEST_TMPDIR/home/tidemo/install/tide-setup --ignore-errors" &&
+    assert_output_contains "Warning: failed (exit 1): $TEST_TMPDIR/home/tidemo/install/tide-setup --super win --ignore-errors" &&
     assert_output_contains "Configuring Karabiner-Elements" &&
     assert_says "Turn on Accessibility for Hammerspoon"
+}
+
+# Karabiner is installed before tide's installer runs, so this run's own
+# Karabiner steps cover it and the installer's don't repeat them.
+test_karabiner_is_installed_before_tides_installer() {
+    remove_karabiner
+    run_macos
+    assert_status 0 || return 1
+    _k=$(grep -n "brew install --cask karabiner-elements" "$CALLS" | cut -d: -f1 | head -n 1)
+    _t=$(grep -n "/install/tide-setup" "$CALLS" | cut -d: -f1 | head -n 1)
+    if test -z "$_k" || test -z "$_t" || test "$_k" -ge "$_t"; then
+        echo "  FAIL: Karabiner (call ${_k:-none}) isn't installed before tide's installer (call ${_t:-none})"
+        TEST_FAILED=1
+        return 1
+    fi
 }
 
 # A checkout from before tide had its own installer is told to update.
@@ -2788,43 +2803,6 @@ test_tilemo_old_tab_karabiner_rule_is_not_enabled() {
     assert_status 0 &&
     assert_output_contains "pc-alt-tab.json predates tide taking Alt+Tab; update the conf repo" &&
     assert_says "Bring conf's Karabiner rules up to date"
-}
-
-test_tilemo_missing_karabiner_rule_warns() {
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "tide.json not found; run confinst after updating the conf repo, or tide falls back to Option"
-}
-
-# A conf checkout from before the rename has timo.json, named "timo:", which
-# tide still accepts: name that rule rather than warn it's missing.
-test_tilemo_names_the_karabiner_rule_from_before_the_rename() {
-    remove_amethyst
-    stage_not_running Amethyst
-    stage_not_running Rectangle
-    printf '%s\n' '"description": "timo: Win is Super (Ctrl+Option+Command)"' \
-        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/timo.json"
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_says "click Setup in its sidebar" &&
-    assert_output_contains "timo.json predates the rename to tide and still works" &&
-    assert_output_lacks "tide.json not found" &&
-    assert_output_contains "macOS configured successfully"
-}
-
-# A conf checkout from before tide's rename has tilemo.json, named "tilemo:",
-# which tide still accepts: name that rule rather than warn it's missing.
-test_tilemo_names_the_karabiner_rule_from_before_tides_rename() {
-    remove_amethyst
-    stage_not_running Amethyst
-    stage_not_running Rectangle
-    printf '%s\n' '"description": "tilemo: Win is Super (Ctrl+Option+Command)"' \
-        > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/tilemo.json"
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_output_contains "tilemo.json predates the rename to tide and still works" &&
-    assert_output_lacks "tide.json not found" &&
-    assert_output_contains "macOS configured successfully"
 }
 
 test_amethyst_does_not_mention_the_tilemo_rule() {
@@ -3143,8 +3121,6 @@ run_test "Amethyst runs leave Mission Control's gestures alone" \
     test_amethyst_leaves_mission_control_alone
 run_test "Amethyst runs leave the menu bar alone" \
     test_amethyst_leaves_the_menu_bar_alone
-run_test "tide: a tilemo.json Karabiner rule is still named" \
-    test_tilemo_names_the_karabiner_rule_from_before_tides_rename
 run_test "tide: clones and installs tide" test_tilemo_clones_and_installs_tide
 run_test "tide: an existing checkout is pulled, then installed" \
     test_tilemo_updates_an_existing_checkout
@@ -3176,10 +3152,6 @@ run_test "tide: the run doesn't explain Alt+Tab" \
     test_tilemo_does_not_explain_alt_tab
 run_test "tide: a Tab rule from before tide took Alt+Tab isn't enabled" \
     test_tilemo_old_tab_karabiner_rule_is_not_enabled
-run_test "tide: a missing tide Karabiner rule warns" \
-    test_tilemo_missing_karabiner_rule_warns
-run_test "tide: names a Karabiner rule from before the rename" \
-    test_tilemo_names_the_karabiner_rule_from_before_the_rename
 run_test "Amethyst runs don't mention the tide rule" \
     test_amethyst_does_not_mention_the_tilemo_rule
 run_test "tide: the preflight names tide's manual steps" test_tilemo_preflight
@@ -3192,6 +3164,7 @@ run_test "tide: the installer's steps join the list" test_tide_installers_steps_
 run_test "tide: the installer's warnings are counted" test_tide_installers_warnings_are_counted
 run_test "tide: a failed installer stops the run" test_failed_tide_installer_stops_the_run
 run_test "tide: --ignore-errors goes on past a failed installer" test_ignore_errors_goes_on_past_a_failed_tide_installer
+run_test "tide: Karabiner is installed before tide's installer" test_karabiner_is_installed_before_tides_installer
 run_test "tide: a checkout without an installer is told to update" test_checkout_without_an_installer_is_told_to_update
 run_test "Lockdown: tide's apps and tools install as usual" \
     test_lockdown_installs_apps_and_tools_as_usual
