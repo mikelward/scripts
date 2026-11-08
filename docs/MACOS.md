@@ -192,14 +192,19 @@ both are skipped.
 `setup-macos` sets up [tide for macOS](https://github.com/mikelward/tidemo) unless
 `--wm amethyst` says otherwise: a Hammerspoon config with tide's tiling, named
 workspaces done by minimizing windows rather than with Spaces, focus follows
-mouse, and a launcher. tide for macOS's `SPEC.md` (sections 6.4 and 7.3) says what it
-needs from here, and the run does that:
+mouse, and a launcher. tide installs itself, with its own
+`install/tide-setup`; the run gets its checkout, runs that, then adds this
+setup's own choices:
 
-- **Keys.** tide for macOS registers its keys with `RegisterEventHotKey`, which fails
-  silently on a key the system holds, so the hotkeys the Amethyst setup moved
-  onto Option go back to stock: Spotlight on Cmd+Space (physical Ctrl+Space),
-  Finder search on Cmd+Option+Space and enabled, and Switch to Desktop 1–9 and
-  move-a-Space turned off at their stock Ctrl bindings.
+- **tide's installer.** It installs Hammerspoon, `blueutil` and the DDC
+  tool from Homebrew, copies tide into `~/.hammerspoon/tide`, writes
+  `~/.hammerspoon/init.lua` where there's none, frees the keys tide takes
+  from macOS (Spotlight back on Cmd+Space; Switch to Desktop 1–9,
+  move-a-Space, Mission Control and App Exposé off at their stock keys),
+  keeps the menu bar shown, and warns about Amethyst and Rectangle. Its
+  README and `SPEC.md` (§7.3) say more. The run passes on `--no-install`,
+  `--ignore-errors` and `--verbose`; the installer's warnings join the
+  run's, and its Accessibility and log-out steps join the list at the end.
 - **Mission Control.** tide for macOS uses one Space per display, so there's no
   nine-Spaces step; extra Spaces can be removed in Mission Control.
 - **macOS's own settings are tide's.** The run writes its choices to tide's
@@ -214,33 +219,17 @@ needs from here, and the run does that:
   Settings goes to `macos.local.json`, which the run leaves alone. With
   `--wm amethyst`, the run writes these with `defaults` itself, as before,
   less the tide-only ones.
-- **Install.** Hammerspoon from Homebrew (`brew install --cask hammerspoon`;
-  no administrator rights, so `--no-sudo` doesn't skip it). tide for macOS is cloned
-  to `$TIDEMO_DIR` (default `~/tidemo`) if it isn't there, and
-  `make -C "$TIDEMO_DIR" install` copies it into `~/.hammerspoon/tide`. An
-  existing checkout is pulled first, fast-forward only, as `setup` pulls
-  tide, so a plain `setup` keeps it current. One with commits of its own, or
-  changes a pull would overwrite, is installed as it stands, with a warning.
-  `--no-install` skips Hammerspoon, the clone and the pull.
-- **blueutil** from Homebrew (`brew install blueutil`, a formula, so no
-  administrator either), which tide for macOS's bar asks whether Bluetooth is on.
-  It's free and open source. Without it, or when it fails, tide for macOS hides
-  only that icon; its headphones icons don't need it. `--no-install` skips
-  it too, saying so.
+- **The checkout.** tide for macOS is cloned to `$TIDEMO_DIR` (default
+  `~/tidemo`) if it isn't there. An existing checkout is pulled first,
+  fast-forward only, as `setup` pulls tide, so a plain `setup` keeps it
+  current. One with commits of its own, or changes a pull would overwrite,
+  is installed as it stands, with a warning. `--no-install` skips the clone
+  and the pull. A checkout from before tide had its installer gets a
+  warning to pull it.
 - **Renamed from tilemo and timo.** A `~/tilemo` or `~/timo` checkout an
   earlier run cloned is used when there's no `~/tidemo`, rather than cloning
   a second copy, and `$TILEMO_DIR` and `$TIMO_DIR` are still read when
-  `$TIDEMO_DIR` isn't set. `--wm tilemo` and `--wm timo` still mean tide. A
-  checkout from before the rename installs `~/.hammerspoon/tilemo` rather
-  than `~/.hammerspoon/tide`, so the run warns to pull it.
-- **`~/.hammerspoon/init.lua`** is written with `tide = require("tide")`
-  and `tide.start({})` only when there's no file; an existing one is never
-  overwritten, and if it doesn't load tide for macOS the run says what to add. An old
-  `require("tilemo")` or `require("timo")` counts, since tide for macOS keeps
-  those names working.
-- **Other tilers.** Amethyst installed or running, or Rectangle installed
-  (its defaults sit on Ctrl+Option+arrows), gets a warning to quit it and
-  remove it from Login Items. Nothing is uninstalled.
+  `$TIDEMO_DIR` isn't set. `--wm tilemo` and `--wm timo` still mean tide.
 - **Karabiner.** The conf repo's `tide.json` rule, whose name starts
   `tide:`, makes the physical Win key tide for macOS's Super (Ctrl+Option+Command).
   Enable it above the arrow rule. Without it, tide for macOS falls back to Option. A

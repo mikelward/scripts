@@ -143,8 +143,8 @@ binary needs an administrator's approval, gets no command-line tools: `setup`
 says so once and skips Homebrew's formulae and the tools it downloads (helix,
 jj, nushell, atuin, carapace, lf, node, uv and fnm). Homebrew and its apps
 (kitty, iTerm2, android-platform-tools) still install, the weekly upgrade
-upgrades only the apps, and `setup-macos` installs Hammerspoon,
-Karabiner-Elements and the rest as usual.
+upgrades only the apps, and `setup-macos` (with tide's installer)
+installs Hammerspoon, Karabiner-Elements and the rest as usual.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency

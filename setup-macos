@@ -11,14 +11,9 @@
 # - tide, the tiling window manager by default: a Hammerspoon config with
 #   tide's tiling and named workspaces of its own, done by minimizing windows
 #   rather than with Spaces. It clones tide, or pulls an existing checkout
-#   (--ff-only), and installs it. It needs the keys the Amethyst setup binds,
-#   so it hands Spotlight back Cmd+Space, turns the Switch to Desktop and
-#   move-a-Space hotkeys off, and turns off the Stage Manager and Sequoia
-#   tiling features that would fight it. It also keeps the menu bar shown,
-#   for tide's own bar to cover, and installs blueutil (Homebrew) so that bar can show
-#   whether Bluetooth is on, and m1ddc (Apple silicon) or ddcctl (Intel) so it
-#   can show and set a monitor's speaker volume over DDC. See configure_tide and tide's SPEC.md (sections 6.4,
-#   7.3 and 8), which say what it needs from here.
+#   (--ff-only), and runs tide's own installer, install/tide-setup, which
+#   installs Hammerspoon and the bar's helpers, installs tide, frees the keys
+#   tide takes from macOS and keeps the menu bar shown. See configure_tide.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
 #   Win+Shift+Left/Right moving the window a Space (with Amethyst), and Ctrl
@@ -113,7 +108,7 @@ WM=tide
 
 # Where tide's checkout lives, or will once cloned. A checkout rather than a
 # package because tide is a Hammerspoon config with no release to install:
-# `make install` copies its Lua out of the checkout into ~/.hammerspoon.
+# its install/tide-setup installs it from the checkout.
 #
 # tide's repo is tidemo. It was tilemo, and timo before that, and earlier
 # runs cloned it into ~/tilemo or ~/timo (or took $TILEMO_DIR or $TIMO_DIR).
@@ -737,11 +732,7 @@ warn_if_settings_app_running() {
         fi
         case "$_settings_running" in
             0)
-                if test "$WM" = tide; then
-                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if tide's keys don't register"
-                else
-                    warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
-                fi
+                warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
                 ;;
             1) ;;
             *)
@@ -751,84 +742,9 @@ warn_if_settings_app_running() {
     done
 }
 
-# Write one symbolic hotkey: ID, enabled (true or false), then its three
-# parameters (ASCII code, virtual keycode, modifier flags). Always the whole
-# entry, for the reason given at 65 below: -dict-add replaces it outright, so
-# a disabled hotkey written without its parameters loses its binding.
-write_symbolic_hotkey() {
-    try defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add "$1" '
-        <dict>
-            <key>enabled</key><'"$2"'/>
-            <key>value</key><dict>
-                <key>parameters</key><array>
-                    <integer>'"$3"'</integer>
-                    <integer>'"$4"'</integer>
-                    <integer>'"$5"'</integer>
-                </array>
-                <key>type</key><string>standard</string>
-            </dict>
-        </dict>'
-}
-
-# tide registers its keys with RegisterEventHotKey, which fails silently on a
-# key someone else already holds (tide's SPEC.md, section 7.3), so the system
-# hotkeys the Amethyst setup moved onto Option -- and the move-a-Space chord --
-# have to be let go first. Each goes back to its stock binding rather than
-# merely off, so the shortcut still reads sensibly in System Settings and
-# turning it back on there gets the macOS default, not a blank.
-configure_shortcuts_tide() {
-    # Spotlight back on Cmd+Space (1048576 is Command), which is physical
-    # Ctrl+Space under the rotation. That leaves Option+Space free: tide's
-    # Super is Ctrl+Option+Command with the Karabiner tide rule, but falls back
-    # to Option without it.
-    write_symbolic_hotkey 64 true 32 49 1048576
-
-    # Finder search back on, at its stock Cmd+Option+Space: the Amethyst
-    # setup only turned it off because Option+Space was Spotlight's, and with
-    # Spotlight back on Cmd+Space nothing collides with it.
-    write_symbolic_hotkey 65 true 32 49 1572864
-
-    # Switch to Desktop 1-9 (118-126) off, at their stock Ctrl+1..9 (262144 is
-    # Control): tide's workspaces are its own, on Super+1..9, and don't use
-    # Spaces at all. Same non-sequential keycodes as configure_shortcuts.
-    set -- \
-        118 49 18 \
-        119 50 19 \
-        120 51 20 \
-        121 52 21 \
-        122 53 23 \
-        123 54 22 \
-        124 55 26 \
-        125 56 28 \
-        126 57 25
-    while test $# -ge 3; do
-        write_symbolic_hotkey "$1" false "$2" "$3" 262144
-        shift 3
-    done
-
-    # Move left/right a Space (79 and 81) off, at their stock Ctrl+arrows
-    # (8650752 is Control plus the arrow keys' function-key flag). The
-    # Karabiner arrow rule sends Ctrl+Option+arrow for physical Win+arrow, and
-    # tide takes that chord for itself.
-    write_symbolic_hotkey 79 false 65535 123 8650752
-    write_symbolic_hotkey 81 false 65535 124 8650752
-
-    # Mission Control (32) and App Exposé (33) off, at their stock Ctrl+Up
-    # and Ctrl+Down: tide parks hidden workspaces' windows on one Space,
-    # so Mission Control would show every workspace at once, and tide
-    # takes both keys for its own overview (tide's SPEC.md, section 6.9).
-    write_symbolic_hotkey 32 false 65535 126 8650752
-    write_symbolic_hotkey 33 false 65535 125 8650752
-}
-
 configure_shortcuts() {
-    if test "$WM" = tide; then
-        info "Configuring keyboard shortcuts (Spotlight back on Cmd+Space, desktop switching off, for tide)"
-        warn_if_settings_app_running
-        configure_shortcuts_tide
-        activate_shortcuts
-        return 0
-    fi
+    # tide's installer frees the keys tide takes (configure_tide).
+    test "$WM" = tide && return 0
 
     info "Configuring keyboard shortcuts (Mission Control and Spotlight on Option)"
 
@@ -1351,7 +1267,7 @@ configure_amethyst() {
     todo_accessibility Amethyst "It can't tile without it."
 }
 
-# --- Configure tide (Hammerspoon) ---
+# --- Configure tide ---
 
 # Where NAME.app is, or empty if it isn't installed, by the same rule as
 # amethyst_path: either Applications directory, and only a usable bundle.
@@ -1365,95 +1281,23 @@ app_path() {
     return 1
 }
 
-hammerspoon_path() {
-    app_path Hammerspoon
-}
-
-# What a machine without Hammerspoon or tide loses, for the warnings below.
+# What a machine without tide loses, for the warnings below.
 TIDEMO_MISSING_EFFECT="nothing will tile and tide's workspace keys will do nothing"
 
-# Homebrew only. Unlike Amethyst there's no staged-bundle path yet: tide
-# itself comes from a git clone, so a machine with no network can't get it
-# either way. The cask installs into /Applications without an administrator
-# prompt, so --no-sudo doesn't skip it.
-install_hammerspoon() {
-    if hammerspoon_path >/dev/null; then
-        return 0
-    fi
-    if test "$INSTALL" = no; then
-        warn "Hammerspoon is not installed and --no-install was given; $TIDEMO_MISSING_EFFECT until it is"
-        return 0
-    fi
-    if ! is_command brew; then
-        warn "Homebrew not found, so Hammerspoon can't be installed; $TIDEMO_MISSING_EFFECT until it is"
-        return 0
-    fi
-    if stale_cask_record hammerspoon Hammerspoon "until then, $TIDEMO_MISSING_EFFECT"; then
-        return 0
-    fi
-    info "Installing Hammerspoon"
-    brew_logged install --cask hammerspoon \
-        || warn "could not install Hammerspoon; $TIDEMO_MISSING_EFFECT until it is"
-}
-
-# What a tide machine without blueutil loses: tide reads whether
-# Bluetooth is on through it (tide's SPEC.md, section 8), and hides that
-# icon without it. Its headphones icons need nothing from here.
-BLUEUTIL_MISSING_EFFECT="tide's bar won't show whether Bluetooth is on"
-
-# What a tide machine without its DDC tool loses: a monitor's own speakers
-# have no volume macOS can read, so tide asks the monitor over DDC/CI
-# (tide's SPEC.md, section 8), and without the tool the speaker shows no
-# level.
-DDC_MISSING_EFFECT="tide's bar won't show a monitor's speaker volume"
-
-# The DDC tool for this Mac: m1ddc on Apple silicon, ddcctl on Intel, whose
-# IOFramebuffer calls don't reach displays on Apple silicon.
-ddc_tool() {
-    if test "$(uname -m)" = arm64; then
-        echo m1ddc
-    else
-        echo ddcctl
-    fi
-}
-
-# Installs Homebrew formula $1, a command tide runs, saying what's lost
-# ($2) while it's missing. A formula (free, open source), not a cask, so it
-# needs no administrator and --no-sudo doesn't skip it. It's a command, so
-# it's found on PATH rather than in an Applications directory.
-install_brew_tool() {
-    _tool=$1
-    _effect=$2
-    if is_command "$_tool"; then
-        return 0
-    fi
-    if test "$INSTALL" = no; then
-        warn "$_tool is not installed and --no-install was given; $_effect until it is"
-        return 0
-    fi
-    if ! is_command brew; then
-        warn "Homebrew not found, so $_tool can't be installed; $_effect until it is"
-        return 0
-    fi
-    info "Installing $_tool"
-    brew_logged install "$_tool" \
-        || warn "could not install $_tool; $_effect until it is"
-}
-
-# Clone tide if there's no checkout, then copy its modules into
-# ~/.hammerspoon/tide with its own `make install`, so what lands there is
-# whatever its Makefile says belongs there rather than a list kept here.
+# tide installs itself: its install/tide-setup installs Hammerspoon and the
+# bar's helpers, copies tide into ~/.hammerspoon, writes init.lua, frees the
+# keys tide takes from macOS and keeps the menu bar shown. This gets the
+# checkout and runs it. What stays here is this setup's own: the modifier
+# rotation and Caps Lock as Compose, Karabiner's rules, LinearMouse and
+# macOS's settings in tide's macos.json.
 #
-# An existing checkout is pulled with --ff-only first, as setup pulls tide, so
-# a plain run keeps it current: it's config, not a package, so it isn't held
-# to setup's weekly upgrades. A checkout with commits of its own, or
-# changes a pull would overwrite, is left as it is, with a warning, and
-# installed as it stands. --no-install skips the clone and the pull, which
-# would bring in a newer tide -- copying an existing checkout's files is
-# configuring what's already there. That includes one from before the rename,
-# whose `make install` writes ~/.hammerspoon/timo instead; the init.lua written
-# below loads tide, so that's checked for afterwards and a stale checkout
-# gets told to update.
+# An existing checkout is pulled with --ff-only first, as setup pulls tide
+# for Linux, so a plain run keeps it current: it's config, not a package, so
+# it isn't held to setup's weekly upgrades. A checkout with commits of its
+# own, or changes a pull would overwrite, is left as it is, with a warning,
+# and installed as it stands. --no-install skips the clone and the pull,
+# which would bring in a newer tide -- installing an existing checkout is
+# configuring what's already there.
 # default_branch DIR: origin's default branch, as DIR's clone recorded it,
 # or main or master when it recorded none.
 default_branch() {
@@ -1535,6 +1379,67 @@ pull_checkout() {
     return "$_pc_status"
 }
 
+# The installer's lines for what's left to do, a step a line: "todo" and its
+# paragraphs, "optional" and its text, or "logout" and what needs it, tab
+# separated. Each joins this run's own list.
+take_tide_todo() {
+    while IFS= read -r _tt_line || test -n "$_tt_line"; do
+        _tt_kind=${_tt_line%%	*}
+        _tt_rest=${_tt_line#*	}
+        case "$_tt_kind" in
+            todo)
+                _tt_old_ifs=$IFS
+                IFS='	'
+                set -f
+                # shellcheck disable=SC2086 # split on tabs, into paragraphs
+                set -- $_tt_rest
+                set +f
+                IFS=$_tt_old_ifs
+                todo "$@"
+                ;;
+            optional) todo_optional "$_tt_rest" ;;
+            logout) needs_logout "$_tt_rest" ;;
+            *) warn "tide's installer left a step this doesn't know: $_tt_line" ;;
+        esac
+    done < "$1"
+}
+
+# Runs the checkout's installer with the options that apply to it. Its
+# warnings go to this run's $SETUP_PROBLEMS, which counts them here too, and
+# what it leaves to do joins this run's list.
+run_tide_installer() {
+    _ti_setup="$TIDEMO_DIR/install/tide-setup"
+    if ! test -x "$_ti_setup"; then
+        warn "$TIDEMO_DIR has no install/tide-setup, so it predates tide's own installer; update it (git -C $TIDEMO_DIR pull) and rerun setup-macos, or $TIDEMO_MISSING_EFFECT"
+        return 0
+    fi
+    set -- --verbose
+    test "$VERBOSE" = yes || set --
+    test "$INSTALL" = yes || set -- "$@" --no-install
+    test "$IGNORE_ERRORS" = no || set -- "$@" --ignore-errors
+    if ! _ti_todo=$(mktemp "${TMPDIR:-/tmp}/setup-todo-XXXXXX"); then
+        warn "couldn't make a file for tide's installer's steps, so it lists them itself"
+        _ti_todo=
+    fi
+    _ti_before=0
+    if test -n "${SETUP_PROBLEMS:-}"; then
+        _ti_before=$(wc -l < "$SETUP_PROBLEMS")
+    fi
+    info "Running $_ti_setup"
+    _ti_status=0
+    SETUP_COMMAND=setup-macos SETUP_TODO="$_ti_todo" "$_ti_setup" "$@" || _ti_status=$?
+    if test -n "${SETUP_PROBLEMS:-}"; then
+        WARNINGS=$((WARNINGS + $(wc -l < "$SETUP_PROBLEMS") - _ti_before))
+    fi
+    if test -n "$_ti_todo"; then
+        take_tide_todo "$_ti_todo"
+        rm -f "$_ti_todo"
+    fi
+    if test "$_ti_status" -ne 0; then
+        report_failure "$_ti_status" "$_ti_setup" "$@"
+    fi
+}
+
 install_tide() {
     case "$TIDEMO_DIR" in
         "$HOME/tilemo" | "$HOME/timo")
@@ -1566,116 +1471,12 @@ install_tide() {
             return 0
         fi
     fi
-    if ! is_command make; then
-        warn "make not found, so tide can't be installed from $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
-        return 0
-    fi
-    info "Installing tide from $TIDEMO_DIR"
-    if ! make -C "$TIDEMO_DIR" install; then
-        warn "could not install tide from $TIDEMO_DIR; $TIDEMO_MISSING_EFFECT until it is"
-        return 0
-    fi
-    if ! test -d "$HOME/.hammerspoon/tide"; then
-        warn "$TIDEMO_DIR installed no $HOME/.hammerspoon/tide, so it predates the rename from tilemo; update it (git -C $TIDEMO_DIR pull) and re-run, or require(\"tide\") will fail"
-    fi
-}
-
-# Hammerspoon runs ~/.hammerspoon/init.lua and nothing else, so tide only
-# starts if that file loads it. Written only when there's no file at all: an
-# existing init.lua is someone's own Hammerspoon config, and overwriting it
-# would lose it. One that doesn't load tide gets the lines to add instead.
-configure_hammerspoon_init() {
-    _hs_dir="$HOME/.hammerspoon"
-    _hs_init="$_hs_dir/init.lua"
-    # -L as well as -e, so a dangling symlink (say, into a conf checkout that
-    # moved) counts as someone's file rather than being replaced by ours.
-    if test -e "$_hs_init" || test -L "$_hs_init"; then
-        # require("tide"), require 'tide' and require "tide" all load it,
-        # as do require("tilemo") and require("timo"), its old names, which
-        # tide keeps as shims; one after a -- is commented out and doesn't.
-        if grep -qE "^[^-]*require[[:space:]]*[(]?[[:space:]]*[\"'](tide|tilemo|timo)[\"']" "$_hs_init"; then
-            _hs_status=0
-        else
-            _hs_status=$?
-        fi
-        case "$_hs_status" in
-            0)
-                detail "Skipping $_hs_init: it already loads tide"
-                ;;
-            1)
-                warn "$_hs_init exists and doesn't load tide, so it was left alone; add these two lines to it, or $TIDEMO_MISSING_EFFECT: tide = require(\"tide\") and tide.start({})"
-                ;;
-            *)
-                warn "could not read $_hs_init (grep exited $_hs_status); make sure it loads tide with tide = require(\"tide\") and tide.start({})"
-                ;;
-        esac
-        return 0
-    fi
-    info "Writing $_hs_init to start tide"
-    try mkdir -p "$_hs_dir"
-    try write_file "$_hs_init" <<'LUA'
-tide = require("tide")
-tide.start({})
-LUA
-}
-
-# Warn about another tiler, NAME, being installed or running: two tilers
-# fight over the same windows, each undoing the other's layout. Warned rather
-# than removed -- uninstalling an app is a bigger step than this run should
-# take on its own, and switching back to Amethyst is a re-run away.
-warn_if_other_tiler() {
-    _tiler="$1"
-    _tiler_why="$2"
-    if _tiler_path=$(app_path "$_tiler"); then
-        warn "$_tiler is installed at $_tiler_path; quit it and remove it from System Settings > General > Login Items, since $_tiler_why"
-        return 0
-    fi
-    # Not installed where this looks, but it could still be running from
-    # somewhere else.
-    is_command pgrep || return 0
-    if app_running "$_tiler"; then
-        _tiler_running=0
-    else
-        _tiler_running=$?
-    fi
-    case "$_tiler_running" in
-        0)
-            warn "$_tiler is running; quit it and remove it from System Settings > General > Login Items, since $_tiler_why"
-            ;;
-        1) ;;
-        *)
-            warn "could not tell whether $_tiler is running (pgrep exited $_tiler_running); quit it if it is, since $_tiler_why"
-            ;;
-    esac
+    run_tide_installer
 }
 
 configure_tide() {
     info "Configuring tide"
-
-    install_hammerspoon
-    install_brew_tool blueutil "$BLUEUTIL_MISSING_EFFECT"
-    install_brew_tool "$(ddc_tool)" "$DDC_MISSING_EFFECT"
     install_tide
-    configure_hammerspoon_init
-
-    warn_if_other_tiler Amethyst "it and tide would both tile the same windows"
-    # Rectangle's default shortcuts sit on Ctrl+Option+arrows (tide's
-    # SPEC.md, section 7.3, unverified there), the chord tide takes.
-    warn_if_other_tiler Rectangle "its default shortcuts sit on Ctrl+Option+arrows, which tide needs"
-
-    # tide draws its own bar along the top, over the menu bar (tide's
-    # SPEC.md, section 8). An auto-hidden menu bar slides in over it whenever
-    # the pointer reaches the top edge, so keep it shown; the Apple logo's
-    # Show Menu Bar reveals it. Apps read it at launch, so it takes effect
-    # everywhere after the next login.
-    try defaults write NSGlobalDomain _HIHideMenuBar -bool false
-    info "The menu bar stays shown, under tide's bar, after the next login"
-    needs_logout "the menu bar setting"
-
-    # Same as Amethyst's: no defaults key grants it, so say so rather than
-    # leave tide looking configured but inert.
-    todo_accessibility Hammerspoon "tide runs in it, and can't tile without it." \
-        "Then click Hammerspoon's icon in the menu bar and choose Reload Config, so tide starts again with it."
 }
 
 # --- Configure Karabiner-Elements ---
