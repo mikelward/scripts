@@ -1,5 +1,7 @@
 #!/bin/bash
-# Tests for setup-tide: packages, Quickshell, the checkout, units and GDM
+# Tests for setup-tide: that it runs tide's installer, and its own extras:
+# the tide checkout, the launcher entries, the old lid drop-ins and GDM's
+# banner. tide's installer is tested in tide (install/tide-setup_*test).
 #
 # The harness, its fixtures and mocks are in setup-tide_testlib.
 
@@ -10,644 +12,78 @@ set -e
 
 setup; ARGS=(); run
 check "exits 0" test "$status" -eq 0
-check "installs Hyprland, hypridle and uwsm" has "$calls" "hyprland hypridle hyprlock uwsm"
-check "installs hyprlock, the lock screen Super+L and hypridle run" has "$calls" " hyprlock "
-check "installs the transitional owners" has "$calls" "waybar"
 check "clones tide when it isn't there, quietly" has "$calls" "git clone --quiet https://example.com/tide.git $T/src/tide"
-check "clones from mikelward/tide by default" grep -q '^TIDE_REPO="${TIDE_REPO:-https://github.com/mikelward/tide.git}"$' "$SCRIPT"
-check "runs tide's make install" has "$calls" "make -C $T/src/tide install"
-# Go too, for a run without setup.
-check "installs Go itself" has "$calls" "golang"
-
-check "tells make install which Go to build with" has "$calls" "make -C $T/src/tide install GO=go"
-check "installs the session under /usr with sudo" has "$calls" "sudo make -C $T/src/tide install-session PREFIX=/usr"
-check "enables tide.service" has "$calls" "systemctl --user enable tide.service"
-check "enables the clipboard history" has "$calls" "systemctl --user enable tide-clipboard.service"
-check "enables tide's launcher on Plasma, starting it now there" has "$calls" "systemctl --user enable --now tide-kde.service"
-check "reloads units before enabling" has "$calls" "systemctl --user daemon-reload"
-check "masks the distro's waybar and swaync units, stopping them now" \
-    has "$calls" "systemctl --user mask --now waybar.service swaync.service"
-check "leaves hypridle's unit to tide's session-only drop-in" lacks "$calls" "hypridle.service"
-check "touches no other user's units" lacks "$calls" "--global"
-check "the run that installs the session says how to start it" has "$output" "tide installed. Log out and pick the \"tide\" session"
+check "runs tide's installer" has "$calls" "tide-setup "
+check "which says to rerun setup, and puts setup-tide on setup's list" \
+    has "$calls" "tide-setup env: SETUP_COMMAND=setup SETUP_APT_RETRY_NAME=setup-tide"
+check "and adds to this run's problems" lacks "$calls" "no SETUP_PROBLEMS"
 teardown
 
-setup; ARGS=(); run GO="$T/no-such-go"
-check "no Go is an error" test "$status" -ne 0
-check "no Go names the packages to install" has "$output" "tide needs Go 1.22 or newer to build tide-grant"
-check "no Go stops before make install" lacks "$calls" "make -C $T/src/tide install"
+# Without TIDE_REPO, it clones mikelward/tide.
+setup; ARGS=(); DEFAULT_REPO=1 run
+check "clones mikelward/tide by default" has "$calls" "git clone --quiet https://github.com/mikelward/tide.git $T/src/tide"
 teardown
 
-setup; ARGS=(); run FAKE_GO_VERSION=go1.19.8
-check "a Go older than 1.22 is an error" test "$status" -ne 0
-check "an old Go says which it found and where to get a newer one" \
-    has "$output" "and go is 1.19.8; on Debian 12, install golang from bookworm-backports"
-check "an old Go stops before make install" lacks "$calls" "make -C $T/src/tide install"
+# --help shows what this adds and the installer's own help, and changes
+# nothing: no fetch, no launcher entries, no lid drop-ins or GDM.
+setup; checkout; : > "$T/logind/10-hypr-lid.conf"; ARGS=(--help); run
+check "--help exits 0" test "$status" -eq 0
+check "--help says what setup-tide adds" has "$output" "Usage: setup-tide"
+check "--help shows the installer's options" has "$calls" "tide-setup --help"
+check "--help fetches nothing" lacks "$calls" "git "
+check "--help leaves the lid drop-ins" test -e "$T/logind/10-hypr-lid.conf"
+check "--help runs no sudo" lacks "$calls" "sudo "
+check "--help writes no launcher entries" test ! -d "$T/home/.local/share/applications"
+teardown
+setup; ARGS=(-h); run
+check "-h without a checkout still exits 0" test "$status" -eq 0
+check "and says how to get the installer" has "$output" "No installer at $T/src/tide/install/tide-setup yet"
+check "and clones nothing" lacks "$calls" "git clone"
 teardown
 
-setup; ARGS=(); run FAKE_GO_VERSION=go1.24.7
-check "a newer Go is fine" test "$status" -eq 0
+# Every option but --fetch and --no-fetch is the installer's.
+setup; checkout; ARGS=(--no-fetch --greeter --tidewm --dm=gdm --github https://ghe.example.com -v); run
+check "passes on tide-setup's options, not --no-fetch" has "$calls" "tide-setup --greeter --tidewm --dm=gdm --github https://ghe.example.com -v"
+check "and the mirror" has "$calls" "GITHUB_PREFIX=https://ghe.example.com"
 teardown
 
-setup; ARGS=(); run SETUP_OS=redhat
-check "Fedora installs Hyprland and Go with dnf" has "$calls" "dnf install -y hyprland hypridle"
-check "Fedora installs its swaync, notify-send, Go and python3" has "$calls" "SwayNotificationCenter libnotify golang python3"
+# The installer's warnings are repeated once, at the end, with this one's.
+setup; checkout; ARGS=(--no-fetch); run FAKE_TIDE_SETUP_WARNS="a tide warning"
+check "repeats the installer's warnings at the end" \
+    has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
+  Warning: a tide warning"
 teardown
 
-# Fedora has no swww, and dnf refuses the lot over one unknown name, so dnf
-# is asked first and the rest, Hyprland too, install together. swaybg
-# draws the wallpaper in swww's place, so its absence isn't a failure.
-setup; ARGS=(); run SETUP_OS=redhat FAKE_MISSING=swww
-check "Fedora: a missing package isn't fatal" test "$status" -eq 0
-check "Fedora: a missing swww, beside swaybg, isn't named" lacks "$output" "swww"
-check "Fedora: nor warned about" lacks "$output" "Warning:"
-check "Fedora: the rest install in one go" has "$calls" "dnf install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
+# A failed install still gets the extras, and fails the run.
+setup; checkout; ARGS=(--no-fetch); run FAKE_TIDE_SETUP_EXIT=3
+check "a failed install fails the run with its status" test "$status" -eq 3
+check "and still lists the app scripts" test -d "$T/home/.local/share/applications"
 teardown
 
-setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_QUERY_FAILS=1
-check "Fedora: a dnf query failure says so" has "$output" "couldn't ask dnf which packages exist"
-check "Fedora: a dnf query failure installs everything" has "$calls" "dnf install -y hyprland hypridle"
+# An old checkout, from before tide had its installer.
+setup; mkdir -p "$T/src/tide/.git"; ARGS=(--no-fetch); run
+check "a checkout without the installer fails" test "$status" -ne 0
+check "and says to update it" has "$output" "has no installer (install/tide-setup); update it"
 teardown
 
-setup; ARGS=(); run SETUP_OS=redhat
-check "Fedora installs dnf's copr plugin, whichever dnf it has" has "$calls" "sudo dnf install -y dnf-command(copr)"
-check "Fedora enables Quickshell's COPR" has "$calls" "sudo dnf copr enable -y errornointernet/quickshell"
-check "then installs Quickshell on its own" has "$calls" "dnf install -y quickshell"
-check "Fedora's Qt has the effects module already" lacks "$calls" "qml6-module-qtquick-effects"
-check "so Fedora warns of nothing missing" lacks "$output" "won't load"
-teardown
-
-# Fedora 43 and 44 don't package Hyprland or uwsm, so their COPR is enabled
-# before the main install asks dnf for them.
-setup; ARGS=(); run SETUP_OS=redhat
-check "Fedora enables Hyprland's COPR" has "$calls" "sudo dnf copr enable -y lionheartp/Hyprland"
-first=$(printf '%s\n' "$calls" | grep -n -e 'copr enable -y lionheartp/Hyprland' -e 'install -y hyprland' | cut -d: -f2- | head -n 1)
-check "before it installs Hyprland" has "$first" "copr enable"
-teardown
-
-setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_COPR_FAILS=lionheartp/Hyprland
-check "a failed Hyprland COPR isn't fatal" test "$status" -eq 0
-check "a failed Hyprland COPR says the session won't start" has "$output" "couldn't enable the lionheartp/Hyprland COPR"
-check "a failed Hyprland COPR still installs the rest" has "$calls" "dnf install -y hyprland hypridle"
-check "a failed Hyprland COPR still enables Quickshell's" has "$calls" "dnf copr enable -y errornointernet/quickshell"
-teardown
-
-# brightnessctl writes the backlight itself where it's built without logind
-# (Debian and Ubuntu), through a file its udev rule gives the video group,
-# so the brightness keys need this user in it.
-setup; ARGS=(); run FAKE_GROUPS="user sudo"
-check "a user outside the video group is added to it" has "$calls" "usermod -aG video"
-check "and told it takes a new login" has "$output" "log out and back in"
-teardown
-
-setup; ARGS=(); run
-check "a user in the video group already is left alone" lacks "$calls" "usermod -aG video"
-teardown
-
-setup; ARGS=(); run FAKE_GROUPS="user" FAKE_USERMOD_FAILS=1
-check "a failed usermod isn't fatal" test "$status" -eq 0
-check "a failed usermod says the brightness keys won't work" has "$output" "brightness keys won't change the backlight"
-teardown
-
-setup; ARGS=(--no-sudo); run FAKE_GROUPS="user"
-check "--no-sudo adds no group" lacks "$calls" "usermod -aG video"
-teardown
-
-# Without the copr plugin there's no COPR, and that costs only the bar.
-setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_PLUGIN_FAILS=1
-check "a missing copr plugin isn't fatal" test "$status" -eq 0
-check "a missing copr plugin says the bar won't run" has "$output" "couldn't install dnf's copr plugin"
-check "a missing copr plugin says the session won't start" has "$output" "couldn't install dnf's copr plugin, so Hyprland and uwsm"
-check "a missing copr plugin doesn't try the COPR" lacks "$calls" "dnf copr enable"
-teardown
-
-# A COPR that won't enable costs only the bar.
-setup; ARGS=(); run SETUP_OS=redhat FAKE_DNF_COPR_FAILS=1
-check "a failed COPR isn't fatal" test "$status" -eq 0
-check "a failed COPR says the bar won't run" has "$output" "couldn't enable the errornointernet/quickshell COPR"
-check "a failed COPR doesn't try to install Quickshell" lacks "$calls" "dnf install -y quickshell"
-teardown
-
-setup; ARGS=(); run
-check "Debian and Ubuntu install Quickshell and its effects module from apt" has "$calls" "apt-get install -y quickshell qml6-module-qtquick-effects"
-check "Quickshell isn't in the main install, so its absence can't block it" lacks "$calls" "golang quickshell"
-teardown
-
-setup; ARGS=(); run FAKE_MISSING=qml6-module-qtquick-effects
-check "a missing effects module isn't fatal" test "$status" -eq 0
-check "a missing effects module says the bar won't load" has "$output" "couldn't install qml6-module-qtquick-effects, so tide's bar won't load"
-check "Quickshell still installs without it" has "$calls" "apt-get install -y quickshell"
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=quickshell
-check "a distro without Quickshell isn't fatal" test "$status" -eq 0
-check "a distro without Quickshell says the bar won't run" has "$output" "couldn't install Quickshell (the distro may not package it)"
-check "and that waybar stays" has "$output" "waybar stays the bar"
-teardown
-
-# The directory this run's Quickshell build installs into.
-qs_inst() { printf '%s\n' "$T"/opt/quickshell/v0.3.1-*; }
-
-# apt without Quickshell (Ubuntu 26.04): build the pinned release.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-check "apt without Quickshell builds it" test "$status" -eq 0
-check "the Quickshell build never asks apt for quickshell" lacks "$calls" "apt-get install -y quickshell"
-check "the Quickshell build installs Qt's private headers" has "$calls" "qt6-declarative-private-dev"
-check "the Quickshell build installs the effects module the bar needs" has "$calls" "qml6-module-qtquick-effects"
-check "the Quickshell build installs the GLES headers Qt's GUI module needs" has "$calls" " libgles-dev "
-check "the Quickshell build clones the pinned tag" \
-    has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v0.3.1 https://github.com/quickshell-mirror/quickshell.git $T/src/quickshell-build/quickshell"
-# Real git, given the Quickshell clone's own options, checks out the tag
-# without a word about detached HEADs.
-g init -q "$T/git/quickshell" && g -C "$T/git/quickshell" commit -q --allow-empty -m quickshell
-replay_clone quickshell v0.3.1
-# Without its own option the same clone shows the advice, even for a caller
-# whose config turns it off, so the quiet check above can fail.
-printf '[advice]\n\tdetachedHead = false\n' > "$T/quiet.gitconfig"
-# shellcheck disable=SC2086  # word-split the logged options
-noisy_output=$(GIT_CONFIG_GLOBAL="$T/quiet.gitconfig" g clone ${opts#-c advice.detachedHead=false } \
-    "file://$T/git/quickshell" "$T/git/quickshell-noisy" 2>&1)
-check "without its option the clone shows the advice, whatever the caller's config" has "$noisy_output" "detached HEAD"
-# Nor does a caller's config that signs every commit and tag with no working
-# key.
-printf '[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[gpg]\n\tprogram = false\n' > "$T/signing.gitconfig"
-commit_and_tag_signing() {
-    GIT_CONFIG_GLOBAL="$T/signing.gitconfig" g -C "$T/git/quickshell" commit -q --allow-empty -m signed &&
-        GIT_CONFIG_GLOBAL="$T/signing.gitconfig" g -C "$T/git/quickshell" tag signed
-}
-check "the fixtures commit and tag whatever the caller's signing config" commit_and_tag_signing
-check "the Quickshell clone's options work with real git" test "$clone_status" -eq 0
-check "the Quickshell clone is quiet" test -z "$clone_output"
-check "the Quickshell build installs under its prefix" has "$calls" "-DCMAKE_INSTALL_PREFIX=$(qs_inst)"
-check "the Quickshell build leaves out the crash handler Ubuntu can't build" has "$calls" "-DCRASH_HANDLER=OFF"
-check "the Quickshell build installs without sudo" lacks "$calls" "sudo cmake"
-check "the Quickshell build records the Qt it was built for" has "$(cat "$(qs_inst)/quickspace-build")" "qt6-base-private-dev 6.10.2+dfsg-7"
-check "the Quickshell build is current" test "$(readlink -f "$T/opt/quickshell/current")" = "$(qs_inst)"
-check "the Quickshell build links qs onto PATH, through current" \
-    test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
-check "the Quickshell build doesn't warn" lacks "$output" "waybar stays the bar"
-check "the Quickshell build says why" has "$output" "apt has no Quickshell; building v0.3.1 from source"
-: > "$CALLS"
-run FAKE_MISSING=quickshell
-check "the same Quickshell and Qt don't rebuild" lacks "$calls" "cmake -S"
-check "the same Quickshell and Qt say so only with --verbose" lacks "$output" "already built for Qt"
-first=$(qs_inst)
-: > "$CALLS"
-run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1
-check "a new Qt rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
-check "a new Qt's build is current" test "$(readlink -f "$T/opt/quickshell/current")" = "$(qs_inst)"
-check "a new Qt's build replaces the old one" test ! -e "$first"
-: > "$CALLS"
-run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_QTDECL_VERSION=6.10.3-1
-check "a new Qt Declarative alone rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
-# A new pin for the same tag is a new build too.
-sed 's/^QUICKSHELL_COMMIT=.*/QUICKSHELL_COMMIT=2222222222222222222222222222222222222222/' "$SCRIPT" > "$T/setup-repinned"
-chmod +x "$T/setup-repinned"
-: > "$CALLS"
-SCRIPT="$T/setup-repinned" run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_QTDECL_VERSION=6.10.3-1 \
-    FAKE_QS_COMMIT=2222222222222222222222222222222222222222
-check "a new pinned commit alone rebuilds Quickshell" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
-teardown
-
-# A source build's output goes to a log, not the terminal: upstream's
-# warnings run to thousands of lines and buried the one that said the
-# build failed. The run says where the log is.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-check "quiet build: Quickshell's build output isn't shown" lacks "$output" "CMake Warning"
-check "quiet build: it's in the log" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "CMake Warning: the link target"
-check "quiet build: the log names each command" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "+ cmake --build $T/src/quickshell-build/quickshell/build"
-check "quiet build: the run says it built, and where its output is" \
-    has "$output" "Built Quickshell v0.3.1; the build's output is in $T/home/.local/state/setup-tide/quickshell-build.log"
-check "quiet build: its build dependencies are a package step" has "$output" "Installing Quickshell's build dependencies
-Installed: build-essential cmake ninja-build"
-check "quiet build: Quickshell builds without assuming strict aliasing" has "$calls" "-DCMAKE_CXX_FLAGS=-fno-strict-aliasing"
-teardown
-
-setup; ARGS=(--ignore-errors); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "quiet build: a failure says which command failed and where the log is" \
-    has "$output" "Warning: building Quickshell failed: 'cmake' exited with status 1; its output is in $T/home/.local/state/setup-tide/quickshell-build.log"
-check "quiet build: and shows the log's last lines" has "$output" "    CMake Warning: the link target"
-check "quiet build: and the failure is repeated at the end" \
-    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "building Quickshell failed: 'cmake' exited with status 1"
-teardown
-
-# --verbose shows what apt, make and the builds say as they run, and makes
-# no setup log; a build's output is kept in its own log too, which the run
-# still names.
-setup; ARGS=(--verbose); run FAKE_MISSING=quickshell
-check "--verbose succeeds" test "$status" -eq 0
-check "--verbose: apt's output is shown" has "$output" "Reading package lists..."
-check "--verbose: tide's make is shown" has "$output" "install -m 644 tide.service"
-check "--verbose: there's no setup log" test ! -e "$T/home/.local/state/setup/setup.log"
-check "--verbose build: Quickshell's build output is shown" has "$output" "CMake Warning: the link target"
-check "--verbose build: and it's in the log" has "$(cat "$T/home/.local/state/setup-tide/quickshell-build.log")" "CMake Warning: the link target"
-check "--verbose build: the run says it built, and where its output is" \
-    has "$output" "Built Quickshell v0.3.1; the build's output is in $T/home/.local/state/setup-tide/quickshell-build.log"
-check "--verbose: the steps still say what changed" has "$output" "Installing Quickshell's build dependencies"
-teardown
-
-setup; ARGS=(--verbose --ignore-errors); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "--verbose build: a failure says which command failed and where the log is" \
-    has "$output" "Warning: building Quickshell failed: 'cmake' exited with status 1; its output is in $T/home/.local/state/setup-tide/quickshell-build.log"
-check "--verbose build: and doesn't show its output twice" \
-    test "$(printf '%s\n' "$output" | sed '/from this run, again:/,$d' | grep -c 'CMake Warning: the link target')" -eq 1
-teardown
-
-# apt's Quickshell older than tide's shell loads in (Debian's 0.2.1) is
-# passed over for the build, as if apt had none.
-setup; ARGS=(); run FAKE_APT_QS=0.2.1-3
-check "apt's old Quickshell isn't fatal" test "$status" -eq 0
-check "apt's old Quickshell isn't installed" lacks "$calls" "apt-get install -y quickshell"
-check "apt's old Quickshell is named" has "$output" "apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0; building v0.3.1 from source"
-check "apt's old Quickshell is replaced by the build" has "$calls" "cmake -S $T/src/quickshell-build/quickshell "
-check "the build replacing it is linked onto PATH" \
-    test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
-teardown
-
-# 0.3.0 is new enough, with an epoch too...
-setup; ARGS=(); run FAKE_APT_QS=1:0.3.0-1build1
-check "apt's Quickshell 0.3.0 is installed" has "$calls" "apt-get install -y quickshell"
-check "apt's Quickshell 0.3.0 isn't built" lacks "$calls" "quickshell-mirror"
-teardown
-
-# ...but a pre-release of it isn't: Debian orders 0.3.0~rc1 before 0.3.0.
-setup; ARGS=(); run FAKE_APT_QS=0.3.0~rc1-1
-check "apt's Quickshell 0.3.0~rc1 isn't installed" lacks "$calls" "apt-get install -y quickshell"
-check "apt's Quickshell 0.3.0~rc1 is named" has "$output" "apt's Quickshell is 0.3.0~rc1, and tide's shell needs 0.3.0"
-teardown
-
-# A pre-release of a later one is new enough.
-setup; ARGS=(); run FAKE_APT_QS=0.3.1~rc1-1
-check "apt's Quickshell 0.3.1~rc1 is installed" has "$calls" "apt-get install -y quickshell"
-teardown
-
-# With apt's Quickshell too old and its Qt too old to build one, there's
-# none, and the warning says both.
-setup; ARGS=(); run FAKE_APT_QS=0.2.1-3 FAKE_APT_QT=6.4.2+dfsg-21.1build5
-check "an old Quickshell and Qt isn't fatal" test "$status" -eq 0
-check "an old Quickshell and Qt says why" has "$output" "apt's Quickshell is 0.2.1, and tide's shell needs 0.3.0, and building it needs Qt 6.6"
-check "an old Quickshell and Qt installs no Quickshell" lacks "$calls" "apt-get install -y quickshell"
-check "an old Quickshell and Qt clones nothing" lacks "$calls" "quickshell-mirror"
-teardown
-
-# apt's Quickshell without its effects module still takes over from a
-# source build's links.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run FAKE_MISSING=qml6-module-qtquick-effects
-check "apt's Quickshell without the effects module removes the build's qs link" test ! -L "$T/usr-local-bin/qs"
-teardown
-
-# A Qt older than Quickshell needs (Ubuntu 24.04's 6.4) can't build it, so
-# nothing is installed or cloned for it.
-setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_APT_QT=6.4.2+dfsg-21.1build5
-check "an old Qt isn't fatal" test "$status" -eq 0
-check "an old Qt says why there's no Quickshell" has "$output" "building it needs Qt 6.6, but apt's Qt is 6.4.2"
-check "an old Qt installs no build dependencies" lacks "$calls" "qt6-declarative-private-dev"
-check "an old Qt clones nothing" lacks "$calls" "quickshell-mirror"
-teardown
-
-# A tag moved to another commit isn't built: its build files never run.
-setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_QS_COMMIT=0000000000000000000000000000000000000000
-check "a moved Quickshell tag isn't fatal" test "$status" -eq 0
-check "a moved Quickshell tag is named" has "$output" "not the pinned 1a4716cde794a59928d9d9fc15f2afc7a95de360; not building it"
-check "a moved Quickshell tag runs no cmake" lacks "$calls" "cmake -S $T/src/quickshell-build/quickshell"
-check "a moved Quickshell tag's clone is removed" test ! -e "$T/src/quickshell-build/quickshell"
-teardown
-
-# A rejected clone that can't be removed is named, not left silently.
-setup; ARGS=()
-cat > "$T/bin/rm" <<MOCK
-#!/bin/sh
-case "\$*" in *"$T/src/quickshell-build/quickshell") test -d "$T/src/quickshell-build/quickshell/.git" && exit 1 ;; esac
-exec /bin/rm "\$@"
-MOCK
-chmod +x "$T/bin/rm"
-run FAKE_MISSING=quickshell FAKE_QS_COMMIT=0000000000000000000000000000000000000000
-check "an unremovable rejected clone is named" has "$output" "couldn't remove the rejected clone"
-rm -f "$T/bin/rm"
-teardown
-
-# Only setup's own finished builds are cleaned up: not a directory without
-# its marker, nor one a command still links into directly, as one does when
-# relinking it failed.
-setup; ARGS=()
-mkdir -p "$T/opt/quickshell/v0.2.0-1" "$T/opt/quickshell/v0.2.0-2/bin"
-: > "$T/opt/quickshell/v0.2.0-2/quickspace-build"
-ln -s "$T/opt/quickshell/v0.2.0-2/bin/quickshell" "$T/usr-local-bin/quickshell"
-mkdir -p "$T/opt/quickshell/v0.2.0-3"
-: > "$T/opt/quickshell/v0.2.0-3/quickspace-build"
-run FAKE_MISSING=quickshell FAKE_LN_FAILS=1
-check "an unmarked directory isn't removed" test -d "$T/opt/quickshell/v0.2.0-1"
-check "a build a command links into isn't removed" test -d "$T/opt/quickshell/v0.2.0-2"
-check "an unused old build is removed" test ! -e "$T/opt/quickshell/v0.2.0-3"
-teardown
-
-# A partial build that can't be removed isn't built into and marked complete.
-setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "a failed build leaves a partial one" test -d "$(qs_inst)"
-: > "$CALLS"
-cat > "$T/bin/rm" <<MOCK
-#!/bin/sh
-case "\$*" in *"$T/opt/quickshell/"*) exit 1 ;; esac
-exec /bin/rm "\$@"
-MOCK
-chmod +x "$T/bin/rm"
-run FAKE_MISSING=quickshell
-check "an unremovable partial build isn't fatal" test "$status" -eq 0
-check "an unremovable partial build is named" has "$output" "couldn't remove the old Quickshell sources or partial build"
-check "an unremovable partial build isn't built into" lacks "$calls" "cmake -S $T/src/quickshell-build/quickshell"
-rm -f "$T/bin/rm"
-teardown
-
-# A rebuild for a new Qt that fails leaves no build made for the old Qt on
-# PATH, so waybar takes over rather than a qs that would crash.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_CMAKE_FAILS=quickshell
-check "a failed rebuild for a new Qt removes the old qs link" test ! -L "$T/usr-local-bin/qs"
-check "a failed rebuild for a new Qt leaves nothing current" test ! -e "$T/opt/quickshell/current"
-teardown
-
-# A failed rebuild for an unchanged Qt (a new pin, say) keeps the build that
-# still works.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-sed 's/^QUICKSHELL_COMMIT=.*/QUICKSHELL_COMMIT=3333333333333333333333333333333333333333/' "$SCRIPT" > "$T/setup-repinned"
-chmod +x "$T/setup-repinned"
-SCRIPT="$T/setup-repinned" run FAKE_MISSING=quickshell FAKE_QS_COMMIT=3333333333333333333333333333333333333333 FAKE_CMAKE_FAILS=quickshell
-check "a failed rebuild for the same Qt keeps the qs link" test -L "$T/usr-local-bin/qs"
-teardown
-
-# apt's Quickshell failing to install, after Qt changed, also leaves no
-# build made for the old Qt on PATH.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run FAKE_APT_GET_FAILS=1 FAKE_QT_VERSION=6.10.3-1
-check "a failed apt Quickshell after a Qt change removes the old qs link" test ! -L "$T/usr-local-bin/qs"
-teardown
-
-# A link that can't be removed keeps current, so it doesn't dangle.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run FAKE_MISSING=quickshell FAKE_QT_VERSION=6.10.3-1 FAKE_CMAKE_FAILS=quickshell FAKE_RM_KEEPS=qs
-check "an unremovable qs link keeps current" test -L "$T/opt/quickshell/current"
-check "an unremovable qs link still resolves" test -e "$T/usr-local-bin/qs"
-teardown
-
-# On the way to apt's Quickshell, a link that can't be removed is warned
-# about and setup carries on.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run FAKE_RM_KEEPS=qs
-check "an unremovable qs link doesn't stop setup" test "$status" -eq 0
-check "an unremovable qs link is named" has "$output" "couldn't remove $T/usr-local-bin/qs"
-teardown
-
-# A failed build costs only the bar.
-setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "a failed Quickshell build isn't fatal" test "$status" -eq 0
-check "a failed Quickshell build says waybar stays" has "$output" "building Quickshell failed"
-check "a failed Quickshell build links nothing" test ! -e "$T/usr-local-bin/qs"
-check "a failed Quickshell build isn't marked built" test ! -e "$T/opt/quickshell/current"
-teardown
-
-# Once apt has Quickshell, the build's links go, so /usr/bin/qs wins.
-setup; ARGS=(); run FAKE_MISSING=quickshell
-run
-check "apt's Quickshell removes the build's qs link" test ! -L "$T/usr-local-bin/qs"
-check "apt's Quickshell removes the build's quickshell link" test ! -L "$T/usr-local-bin/quickshell"
-teardown
-
-# What earlier versions built in $HOME is setup's own, for Quickshell too.
-legacy_quickshell() {
-    legacy="$T/home/.local/opt/quickshell"
-    mkdir -p "$legacy/v0.3.1-1/bin"
-    : > "$legacy/v0.3.1-1/quickspace-build"
-    ln -s v0.3.1-1 "$legacy/current"
-    for cmd in qs quickshell; do
-        printf '#!/bin/sh\n' > "$legacy/v0.3.1-1/bin/$cmd"
-        chmod +x "$legacy/v0.3.1-1/bin/$cmd"
-        ln -s "$legacy/current/bin/$cmd" "$T/usr-local-bin/$cmd"
-    done
-}
-setup; ARGS=(); legacy_quickshell; run FAKE_MISSING=quickshell
-check "a qs link into the old prefix is replaced" test "$(readlink "$T/usr-local-bin/qs")" = "$T/opt/quickshell/current/bin/qs"
-check "the old Quickshell build is removed" test ! -e "$legacy"
-check "the Quickshell build is handed to root" has "$calls" "sudo chown -R 0:0 $(qs_inst)"
-teardown
-
-setup; ARGS=(); legacy_quickshell; run
-check "apt's Quickshell removes links into the old prefix" test ! -L "$T/usr-local-bin/qs"
-teardown
-
-# An old prefix's build still linked is checked against Qt, as the new
-# prefix's would be: when the new build fails, one made for an older Qt is
-# unlinked rather than left to crash, and one made for this Qt stays.
-qt_marker() {
-    printf 'qt6-base-private-dev %s\nqt6-declarative-private-dev 6.10.2+dfsg-3\nqt6-wayland-private-dev 6.10.2-4\n' "$1" \
-        > "$legacy/v0.3.1-1/quickspace-build"
-}
-setup; ARGS=(); legacy_quickshell; qt_marker 6.10.1-1; run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "a failed build unlinks an old prefix's build for another Qt" test ! -L "$T/usr-local-bin/qs"
-check "and removes its current" test ! -L "$legacy/current"
-teardown
-setup; ARGS=(); legacy_quickshell; qt_marker 6.10.2+dfsg-7; run FAKE_MISSING=quickshell FAKE_CMAKE_FAILS=quickshell
-check "a failed build keeps an old prefix's build for this Qt" test "$(readlink "$T/usr-local-bin/qs")" = "$legacy/current/bin/qs"
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch
-check "Arch installs Quickshell with pacman" has "$calls" "pacman -S --needed --noconfirm quickshell"
-check "Arch's Qt has the effects module already, so nothing is missing" lacks "$output" "won't load"
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch
-check "Arch installs Hyprland and Go with pacman" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
-check "Arch installs its swaync, notify-send, Go and python" has "$calls" "swaync libnotify go python"
-check "Arch never builds Hyprland" lacks "$calls" "cmake"
-teardown
-
-# pacman (like dnf) refuses a whole transaction over one unknown package, so
-# satty, which not every distro packages, goes in a transaction of its own.
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=satty
-check "a missing satty isn't fatal" test "$status" -eq 0
-check "a missing satty is said" has "$output" "couldn't install satty"
-check "a missing satty leaves the rest installed" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
-main=$(printf '%s\n' "$calls" | grep 'hypridle')
-check "satty isn't in the main transaction" lacks "$main" "satty"
-check "satty is asked for on its own" has "$calls" "pacman -S --needed --noconfirm satty"
-check "secret-tool and openssl are asked for on their own" has "$calls" "pacman -S --needed --noconfirm libsecret openssl"
-check "they aren't in the main transaction" lacks "$main" "libsecret"
-check "cliphist isn't installed any more" lacks "$calls" "cliphist"
-check "wtype, which types the picker's Fill, is in the main transaction" has "$main" " wtype "
-check "rbw, which Fedora lacks, is asked for on its own" has "$calls" "pacman -S --needed --noconfirm rbw"
-check "rbw isn't in the main transaction" lacks "$main" "rbw"
-teardown
-# waybar's icons come from Symbols Nerd Font, which not every release
-# packages, so it's asked for on its own, and its absence costs only them.
-setup; ARGS=(); run
-check "nerd font: Debian installs the icons-only font" has "$calls" "apt-get install -y fonts-nerd-symbols"
-check "nerd font: not in the main transaction" lacks "$(printf '%s\n' "$calls" | grep 'hypridle')" "fonts-nerd-symbols"
-teardown
-# A release without the package gets the font from Nerd Fonts' own release,
-# checked against its pinned checksum, into your fonts.
-nerd_tarball() {
-    mkdir -p "$T/nerd"
-    printf 'regular' > "$T/nerd/SymbolsNerdFont-Regular.ttf"
-    printf 'mono' > "$T/nerd/SymbolsNerdFontMono-Regular.ttf"
-    printf 'readme' > "$T/nerd/README.md"
-    tar -cJf "$T/nerd.tar.xz" -C "$T/nerd" SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf README.md
-    nerd_sum=$(sha256sum < "$T/nerd.tar.xz" | cut -d' ' -f1)
-}
-nerd_dir() { printf '%s' "$T/home/.local/share/fonts/SymbolsNerdFont"; }
-setup; nerd_tarball; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
-check "nerd font: a release without it isn't fatal" test "$status" -eq 0
-check "nerd font: gets it from Nerd Fonts' release instead" has "$calls" "NerdFontsSymbolsOnly.tar.xz"
-check "nerd font: into your fonts" test "$(cat "$(nerd_dir)/SymbolsNerdFont-Regular.ttf")" = regular
-check "nerd font: the mono one too" test -f "$(nerd_dir)/SymbolsNerdFontMono-Regular.ttf"
-check "nerd font: and nothing else from the tarball" test ! -e "$(nerd_dir)/README.md"
-check "nerd font: says so" has "$output" "Installing Symbols Nerd Font from Nerd Fonts' release"
-check "nerd font: no longer says to fetch it yourself" lacks "$output" "nerdfonts.com"
-# Once it's there, a rerun leaves it, quietly.
-: > "$CALLS"
-run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
-check "nerd font: a rerun fetches nothing" lacks "$calls" "NerdFontsSymbolsOnly"
-check "nerd font: and says nothing" lacks "$output" "Symbols Nerd Font"
-teardown
-# A download that isn't the pinned release isn't installed.
-setup; nerd_tarball; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256=0000
-check "nerd font: a changed download isn't installed" test ! -e "$(nerd_dir)/SymbolsNerdFont-Regular.ttf"
-check "nerd font: and says why" has "$output" "isn't the release it was pinned at"
-check "nerd font: and isn't fatal" test "$status" -eq 0
-teardown
-# A failed download costs waybar's icons, and says so.
-setup; ARGS=(); run FAKE_MISSING=fonts-nerd-symbols FAKE_NERD_TARBALL=
-check "nerd font: a failed download says what it costs" has "$output" "couldn't download Symbols Nerd Font"
-check "nerd font: and isn't fatal" test "$status" -eq 0
-teardown
-setup; ARGS=(); run SETUP_OS=arch
-check "nerd font: Arch installs its package" has "$calls" "pacman -S --needed --noconfirm ttf-nerd-fonts-symbols"
-check "nerd font: and fetches no release" lacks "$calls" "NerdFontsSymbolsOnly"
-teardown
-setup; nerd_tarball; ARGS=(); run SETUP_OS=redhat FAKE_NERD_TARBALL="$T/nerd.tar.xz" SETUP_NERD_SYMBOLS_SHA256="$nerd_sum"
-check "nerd font: Fedora, which doesn't package it, gets the release" test -f "$(nerd_dir)/SymbolsNerdFont-Regular.ttf"
-check "nerd font: and asks dnf for nothing" lacks "$(printf '%s\n' "$calls" | grep dnf)" "nerd"
-teardown
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=nwg-displays
-check "a missing nwg-displays isn't fatal" test "$status" -eq 0
-check "a missing nwg-displays is said" has "$output" "couldn't install nwg-displays"
-main=$(printf '%s\n' "$calls" | grep 'hypridle')
-check "nwg-displays isn't in the main transaction" lacks "$main" "nwg-displays"
-check "nwg-displays is asked for on its own" has "$calls" "pacman -S --needed --noconfirm nwg-displays"
-for tool in pavucontrol nm-connection-editor blueman; do
-    check "$tool is asked for on its own" has "$calls" "pacman -S --needed --noconfirm $tool"
-    check "$tool isn't in the main transaction" lacks "$main" "$tool"
-done
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=rbw
-check "a missing rbw isn't fatal" test "$status" -eq 0
-check "a missing rbw is said, with what it costs and how to add it" has "$output" "Super+Shift+V lists only your snippets; 'cargo install rbw' adds Bitwarden"
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=libsecret
-check "a missing secret-tool isn't fatal" test "$status" -eq 0
-check "a missing secret-tool is said, with what it costs" has "$output" "couldn't install libsecret and openssl, so Super+V's picker keeps no clipboard history"
-check "a missing secret-tool still enables the rest" has "$calls" "systemctl --user enable tide.service"
-teardown
-
-# Arch, like Fedora, refuses the lot over one unknown name, so pacman is
-# asked first and the rest install together.
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING="swww grim"
-check "Arch: a missing package isn't fatal" test "$status" -eq 0
-check "Arch: a missing package is named" has "$output" "could not install: grim; install them manually"
-check "Arch: the rest install in one go" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel slurp"
-teardown
-
-# An AUR package isn't in the sync databases, and pacman -S refuses it too.
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww FAKE_INSTALLED=swww
-check "Arch: an AUR-installed package isn't named as missing" lacks "$output" "could not install"
-check "Arch: an AUR-installed package isn't asked for" lacks "$calls" " swww "
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch FAKE_PACMAN_QUERY_FAILS=1
-check "Arch: a pacman query failure says so" has "$output" "couldn't ask pacman which packages exist"
-check "Arch: a pacman query failure installs everything" has "$calls" "pacman -S --needed --noconfirm hyprland hypridle"
-teardown
-
-setup; ARGS=(); run SETUP_OS=unknown
-check "an unknown OS names what to install" has "$output" "unknown OS; install Hyprland"
-check "an unknown OS names hyprlock among the packages" has "$output" " hypridle hyprlock uwsm "
-check "an unknown OS names the portal and clipboard tools" has "$output" "xdg-desktop-portal-hyprland"
-check "an unknown OS names python3, for tide doctor" has "$output" "python3"
-check "an unknown OS installs nothing" lacks "$calls" "install -y"
-teardown
-
-# A package the distro lacks (swww on Ubuntu 26.04) would make apt refuse
-# the lot, so apt is asked first and the rest install together. swww and
-# swaybg each draw the wallpaper, so one missing beside the other isn't a
-# failure: it's neither warned about nor under Failed.
-setup; ARGS=(); run FAKE_MISSING=swww
-check "a missing package isn't fatal" test "$status" -eq 0
-check "a missing swww, beside swaybg, isn't named" lacks "$output" "swww"
-check "nor warned about" lacks "$output" "Warning:"
-check "nor a failure" lacks "$output" "Failed:"
-check "swaybg is installed in its place" has "$output" " swaybg "
-check "the rest install in one go" has "$calls" "apt-get install -y hyprland hypridle hyprlock uwsm xdg-desktop-portal-hyprland xdg-desktop-portal-gtk waybar swaybg fuzzel"
-check "the rest install in one go, notify-send, Go and python3 too" has "$calls" "playerctl jq sway-notification-center libnotify-bin golang python3"
-check "satty is asked for, for the screenshot's Annotate" has "$calls" "apt-get install -y satty"
-check "Debian gets nm-connection-editor from network-manager-gnome" has "$calls" "apt-get install -y network-manager-gnome"
-check "a missing package is never asked for" lacks "$calls" "swww"
-teardown
-
-setup; ARGS=(); run FAKE_MISSING=swaybg
-check "a missing swaybg, beside swww, isn't named either" lacks "$output" "swaybg"
-check "nor warned about either" lacks "$output" "Warning:"
-teardown
-
-setup; ARGS=(); run FAKE_MISSING="swww swaybg"
-check "without swww or swaybg, both are named" has "$output" "could not install: swww swaybg; install them manually"
-check "without swww or swaybg, no wallpaper is warned about" has "$output" "without swww or swaybg there's no wallpaper"
-teardown
-
-setup; ARGS=(); run FAKE_MISSING="swww fuzzel"
-check "a missing package is named" has "$output" "Warning: could not install: fuzzel; install them manually"
-check "and swww, beside swaybg, isn't" lacks "$output" "swww"
-teardown
-
-# When apt itself fails (offline, say), that's one failure, not one per
-# package.
-setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1
-check "a failed apt is reported once" test "$(printf '%s\n' "$calls" | grep -c '^apt-get install -y hyprland')" -eq 1
-check "a failed apt names what didn't install" has "$output" "could not install: hyprland hypridle"
-teardown
-
-# The fake apt fails as when another program holds dpkg's lock. Run on its
-# own, that's a warning to run again; run by setup, setup tries again.
-setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1
-check "a busy apt says to run setup-tide again" has "$output" "another program is using apt; run setup-tide again once it's done"
-teardown
-setup; ARGS=(); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1 SETUP_APT_RETRY="$T/apt-retry"
-check "under setup, a busy apt waits for setup's second try" has "$output" "Another program is using apt, so setup tries again at the end"
-check "and setup-tide is on the list to run again" has "$(cat "$T/apt-retry")" "setup-tide"
-teardown
-setup; ARGS=(--verbose); run FAKE_MISSING=nothing FAKE_APT_GET_FAILS=1 SETUP_APT_RETRY="$T/apt-retry"
-check "--verbose still spots a busy apt" has "$(cat "$T/apt-retry" 2>/dev/null)" "setup-tide"
-check "and still shows what apt said" has "$output" "Could not get lock"
-teardown
-
-setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run
+setup; checkout; ARGS=(); run
 check "updates an existing checkout, quietly" has "$calls" "git -C $T/src/tide pull --quiet --ff-only"
 check "doesn't clone over it" lacks "$calls" "git clone"
 teardown
 
-setup; mkdir -p "$T/src/tide/.git"; ARGS=(); run FAKE_PULL_FAILS=1
+setup; checkout; ARGS=(); run FAKE_PULL_FAILS=1
 check "a failed pull still installs" test "$status" -eq 0
 check "a failed pull says why" has "$output" "Warning: couldn't update $T/src/tide: can't reach origin; installing it as it is"
-check "a failed pull installs the existing checkout" has "$calls" "make -C $T/src/tide install"
+check "a failed pull installs the existing checkout" has "$calls" "tide-setup"
 teardown
 
 setup; ARGS=(); run TIDE_REPO="https://user:hunter2@example.com/tide.git"
 check "the clone message doesn't print the URL" lacks "$output" "hunter2"
 teardown
 
-setup; mkdir -p "$T/src/tide/.git"; ARGS=(--no-fetch); run
+setup; checkout; ARGS=(--no-fetch); run
 check "--no-fetch neither pulls nor clones" lacks "$calls" "git "
-check "--no-fetch installs the checkout" has "$calls" "make -C $T/src/tide install"
+check "--no-fetch installs the checkout" has "$calls" "tide-setup"
 teardown
 
 setup; ARGS=(--no-fetch); run
@@ -666,62 +102,9 @@ teardown
 setup; ARGS=(); run
 check "no old drop-in, no logind reload" lacks "$calls" "systemd-logind"
 teardown
-
-setup; ARGS=(--no-install); run
-check "--no-install skips packages" lacks "$calls" "hypridle"
-check "--no-install skips the system-wide session install" lacks "$calls" "install-session"
-check "--no-install still installs the user files" has "$calls" "make -C $T/src/tide install"
-teardown
-
 setup; : > "$T/logind/10-hypr-lid.conf"; ARGS=(--no-sudo); run
 check "--no-sudo runs no sudo" lacks "$calls" "sudo "
 check "--no-sudo leaves the drop-in" test -e "$T/logind/10-hypr-lid.conf"
-check "--no-sudo still enables the user unit" has "$calls" "systemctl --user enable tide.service"
-teardown
-
-setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.56.2
-check "an old Hyprland is warned about" has "$output" "Hyprland 0.56.2 is older than 0.57"
-teardown
-
-setup; ARGS=(); run FAKE_HYPRLAND_VERSION=0.57.0
-check "a newer Hyprland is fine" lacks "$output" "older than"
-teardown
-
-setup; ARGS=(); run FAKE_NO_USER_MANAGER=1
-check "no user manager is a warning, not a failure" test "$status" -eq 0
-check "no user manager says how to enable it" has "$output" "systemctl --user enable tide.service tide-clipboard.service"
-check "no user manager enables nothing" lacks "$calls" "--user enable"
-check "no user manager still masks, just not --now" \
-    has "$calls" "systemctl --user mask waybar.service swaync.service"
-check "no user manager says a running bar isn't stopped" \
-    has "$output" "masking waybar.service swaync.service without stopping them"
-teardown
-
-# Any installed daemon that D-Bus can activate for the notification name is
-# masked through its unit; one without a unit is named; KDE's is left alone.
-setup; ARGS=()
-mkdir -p "$T/dbus" "$T/units"
-printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/lib/xfce4/notifyd/xfce4-notifyd\nSystemdService=xfce4-notifyd.service\n' \
-    > "$T/dbus/org.xfce.xfce4-notifyd.Notifications.service"
-printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/dunst\nSystemdService=dunst.service\n' \
-    > "$T/dbus/org.knopwob.dunst.service"
-printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/swaync\nSystemdService=swaync.service\n' \
-    > "$T/dbus/org.erikreider.swaync.service"
-printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/libexec/mate-notification-daemon/mate-notification-daemon\n' \
-    > "$T/dbus/org.freedesktop.mate.Notifications.service"
-printf '[D-BUS Service]\nName=org.freedesktop.Notifications\nExec=/usr/bin/plasma_waitforname org.freedesktop.Notifications\n' \
-    > "$T/dbus/org.kde.plasma.Notifications.service"
-printf '[D-BUS Service]\nName=org.xfce.Notifyd\nExec=/usr/lib/xfce4/notifyd/xfce4-notifyd\nSystemdService=other.service\n' \
-    > "$T/dbus/org.xfce.Notifyd.service"
-touch "$T/units/xfce4-notifyd.service" "$T/units/swaync.service" "$T/units/other.service"
-run SETUP_DBUS_SERVICE_DIRS="$T/no-such-dir $T/dbus" SETUP_USER_UNIT_DIRS="$T/units"
-check "masks every installed notification daemon's unit, stopping it now" \
-    has "$calls" "systemctl --user mask --now waybar.service swaync.service xfce4-notifyd.service"
-check "skips a daemon whose unit isn't installed" lacks "$calls" "dunst.service"
-check "masks only units for the notification name" lacks "$calls" "other.service"
-check "names a daemon that has no unit to mask" \
-    has "$output" "$T/dbus/org.freedesktop.mate.Notifications.service can start a notification daemon"
-check "leaves KDE's, which only waits for plasmashell" lacks "$output" "org.kde.plasma.Notifications.service"
 teardown
 
 # GDM shows the short hostname, through the gdm dconf database.
@@ -758,15 +141,16 @@ check "GDM: even when the shipped profile reads it" test ! -e "$T/dconf/db/gdm.d
 teardown
 
 # A failed temporary write installs nothing. mktemp hands back a directory,
-# which even root can't write as a file; --no-install keeps every earlier
-# step off mktemp.
-setup; ARGS=(--no-install); : > "$T/gdm-defaults"; mkdir "$T/not-a-file"
+# which even root can't write as a file; a problems file of setup's keeps
+# the run's own off mktemp.
+setup; ARGS=(); : > "$T/gdm-defaults"; mkdir "$T/not-a-file"
 cat > "$T/bin/mktemp" <<MOCK
 #!/bin/sh
 echo "$T/not-a-file"
 MOCK
 chmod +x "$T/bin/mktemp"
-run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
+: > "$T/problems"
+run SETUP_GDM_DEFAULTS="$T/gdm-defaults" SETUP_PROBLEMS="$T/problems"
 check "GDM: a failed temporary write installs no profile" test ! -e "$T/dconf/profile/gdm"
 check "GDM: and says so" has "$output" "couldn't write a temporary copy of $T/dconf/profile/gdm"
 teardown
@@ -777,199 +161,6 @@ teardown
 
 setup; ARGS=(--no-sudo); : > "$T/gdm-defaults"; run SETUP_GDM_DEFAULTS="$T/gdm-defaults"
 check "--no-sudo leaves GDM alone" test ! -e "$T/dconf/db/gdm.d/50-tide-hostname"
-teardown
-
-# --- The session at the login screen ---
-
-# The run ends by checking the session will be listed and can start, from
-# what the login screen sees, not the user's PATH.
-setup; ARGS=(); run
-check "session: a ready session says to pick it" has "$output" "the \"tide\" session"
-check "session: a ready session raises nothing" lacks "$output" "the tide session won't"
-teardown
-
-# The login screen hides an entry whose TryExec isn't installed: how the
-# session went missing on Fedora without uwsm.
-setup; ARGS=(); rm "$T/usr-bin/uwsm"; run
-check "session: no uwsm ends the run" test "$status" -ne 0
-check "session: no uwsm says the session won't be listed" \
-    has "$output" "the tide session won't show at the login screen: it's listed only where uwsm is installed, and it isn't; install uwsm"
-check "session: no uwsm says how to carry on" has "$output" "pass --ignore-errors to carry on"
-check "session: no uwsm doesn't say to pick the session" lacks "$output" "the \"tide\" session"
-check "session: no uwsm still installs the rest" has "$calls" "systemctl --user enable tide.service"
-check "session: no uwsm still sets up the greeter" has "$calls" "systemctl show --property=LoadState --value display-manager.service"
-teardown
-
-# uwsm on the user's PATH alone isn't on the login screen's.
-setup; ARGS=(); mv "$T/usr-bin/uwsm" "$T/bin/uwsm"; run
-check "session: a uwsm only the user can find isn't enough" has "$output" "it's listed only where uwsm is installed"
-teardown
-
-setup; ARGS=(); rm "$T/usr-bin/uwsm"; run SETUP_OS=redhat
-check "session: Fedora without uwsm names the COPR it comes from" \
-    has "$output" "install uwsm (Fedora has it only in the lionheartp/Hyprland COPR)"
-teardown
-
-setup; ARGS=(--ignore-errors); rm "$T/usr-bin/uwsm"; run
-check "session: --ignore-errors carries on past it" test "$status" -eq 0
-check "session: --ignore-errors still says why" has "$output" "it's listed only where uwsm is installed"
-check "session: --ignore-errors says the session isn't ready" \
-    has "$output" "tide installed, but its session isn't ready: see the warnings above."
-teardown
-
-setup; ARGS=(); run FAKE_NO_ENTRY=1
-check "session: no entry ends the run" test "$status" -ne 0
-check "session: no entry names it and how to install it" \
-    has "$output" "there's no $T/share/wayland-sessions/tide.desktop; run 'sudo make -C $T/src/tide install-session PREFIX=/usr'"
-teardown
-
-# A run that skipped installing the entry only warns.
-for skip in --no-install --no-sudo; do
-    setup; ARGS=("$skip"); run
-    check "session: $skip without an entry isn't fatal" test "$status" -eq 0
-    check "session: $skip without an entry says so" has "$output" "the tide session won't show at the login screen: there's no"
-    teardown
-done
-
-# A TryExec with a slash is a file, not a name looked up on the PATH.
-setup; ARGS=(); run FAKE_ENTRY_TRYEXEC="$T/no-such-dir/uwsm"
-check "session: a TryExec path that isn't there hides the session" \
-    has "$output" "it's listed only where $T/no-such-dir/uwsm is installed"
-teardown
-setup; ARGS=(); run FAKE_ENTRY_TRYEXEC="$T/usr-bin/uwsm"
-check "session: a TryExec path that's there is fine" test "$status" -eq 0
-teardown
-setup; ARGS=(); rm "$T/usr-bin/uwsm"; run FAKE_ENTRY_TRYEXEC=
-check "session: an entry without TryExec is always listed" test "$status" -eq 0
-teardown
-
-# Hyprland on the user's PATH alone (the mock the rest of the run uses)
-# isn't on the session's.
-setup; ARGS=(); rm "$T/usr-bin/Hyprland"; run
-check "session: no Hyprland ends the run" test "$status" -ne 0
-check "session: no Hyprland says the session won't start" has "$output" "the tide session won't start: Hyprland isn't installed"
-teardown
-setup; ARGS=(); mv "$T/usr-bin/Hyprland" "$T/usr-bin/start-hyprland"; run
-check "session: start-hyprland alone can start it" lacks "$output" "the tide session won't start"
-teardown
-
-# Each problem is named, not just the first.
-setup; ARGS=(--ignore-errors); rm "$T/usr-bin/uwsm" "$T/usr-bin/Hyprland"; run
-check "session: no uwsm and no Hyprland names uwsm" has "$output" "it's listed only where uwsm is installed"
-check "session: and names Hyprland" has "$output" "the tide session won't start: Hyprland isn't installed"
-teardown
-
-# A Quickshell too old for tide's bar and lock (Debian's 0.2.1, where the
-# build failed or a Qt upgrade retired it) ends the run, as the user would
-# otherwise find out only from waybar and a lock that never comes.
-setup; ARGS=(); run FAKE_GREETER_QS_VERSION="quickshell 0.2.1, revision 0000000"
-check "session: an old qs ends the run" test "$status" -ne 0
-check "session: and says what it costs and why" has "$output" \
-    "tide's own bar and lock won't run, so the session falls back to waybar and hyprlock: qs ($T/usr-bin/qs) is Quickshell 0.2.1, and they need 0.3.0 or newer"
-check "session: and is repeated at the end" \
-    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "Quickshell 0.2.1, and they need 0.3.0"
-teardown
-
-setup; ARGS=(--ignore-errors); rm "$T/usr-bin/qs"; run
-check "session: no qs is named" has "$output" "falls back to waybar and hyprlock: there's no Quickshell (qs) on"
-check "session: and with --ignore-errors is a warning" test "$status" -eq 0
-teardown
-
-setup; ARGS=(); run FAKE_GREETER_QS_VERSION="Quickshell 0.3.1 (revision 1a4716c, distributed by test)"
-check "session: a new enough qs says nothing" lacks "$output" "tide's own bar and lock won't run"
-teardown
-
-setup; ARGS=(--ignore-errors); run FAKE_GREETER_QS_VERSION="something else"
-check "session: an unreadable version is named" has "$output" "couldn't read qs's version from 'something else'"
-teardown
-
-# Each awk program setup runs has to parse under whichever awk a distro
-# ships as awk: mawk on Debian and Ubuntu, gawk on Fedora and Arch. A name
-# one of them reserves, as gawk does func, breaks only that one. Each is
-# checked here, when it's installed, without running anything: the first
-# BEGIN and END exit before the program's own.
-awk_programs=$(grep -o "^[A-Z_]*_AWK='" "$SCRIPT" | sed "s/='\$//")
-check "awk: setup's awk programs are found" test -n "$awk_programs"
-awk_parses() {
-    test -n "$2" && "$1" "BEGIN { exit } END { exit } $2" /dev/null
-}
-for awk_name in mawk gawk; do
-    command -v "$awk_name" >/dev/null || continue
-    for awk_program in $awk_programs; do
-        awk_text=$(awk -v name="$awk_program" '
-            !on && index($0, name "=\047") == 1 { on = 1; $0 = substr($0, length(name) + 3) }
-            on && index($0, "\047") { print substr($0, 1, index($0, "\047") - 1); exit }
-            on { print }' "$SCRIPT")
-        check "awk: $awk_program parses under $awk_name" awk_parses "$awk_name" "$awk_text"
-    done
-done
-
-setup; ARGS=(--bogus); run
-check "an unknown option fails" test "$status" -eq 1
-teardown
-
-# --- blueman's applet ---
-
-# blueman's entry as blueman 2.4 installs it, naming no desktop to skip.
-blueman_entry() {
-    mkdir -p "$T/xdg/autostart"
-    printf '%s\n' "[Desktop Entry]" "Name=Blueman Applet" "Comment=Blueman Bluetooth Manager" \
-        "Icon=blueman" "Exec=blueman-applet" "Terminal=false" "Type=Application" "Categories=" "$@" \
-        > "$T/xdg/autostart/blueman.desktop"
-}
-copy_at() { echo "$T/home/.config/autostart/blueman.desktop"; }
-mark="# Written by setup-tide from blueman's own entry, which it rewrites."
-
-# A copy in the user's autostart directory hides the package's entry, and
-# skips the desktops nm-applet's entry skips.
-setup; blueman_entry; ARGS=(); run; copy=$(copy_at)
-check "blueman: a copy hides the package's entry" test -f "$copy"
-check "blueman: it's marked as setup's" test "$(head -n 1 "$copy")" = "$mark"
-check "blueman: it skips Plasma and the others with Bluetooth of their own" \
-    test "$(grep -c '^NotShowIn=KDE;GNOME;Budgie;COSMIC;$' "$copy")" -eq 1
-check "blueman: and keeps the rest of the entry" \
-    test "$(sed -e 1d -e '/^NotShowIn=/d' "$copy")" = "$(cat "$T/xdg/autostart/blueman.desktop")"
-check "blueman: says so" has "$output" "Keeping blueman's applet out of KDE Plasma, GNOME, Budgie and COSMIC, which have Bluetooth of their own, with $copy"
-run
-check "blueman: a rerun says nothing more" lacks "$output" "Keeping blueman's applet"
-teardown
-# Without sudo too: it's the user's own file.
-setup; blueman_entry; ARGS=(--no-sudo); run; copy=$(copy_at)
-check "blueman: --no-sudo still writes the copy" test -f "$copy"
-teardown
-
-# Desktops the package's entry skips already stay skipped.
-setup; blueman_entry "NotShowIn=XFCE"; ARGS=(); run; copy=$(copy_at)
-check "blueman: adds to the desktops the entry skips" \
-    test "$(grep '^NotShowIn=' "$copy")" = "NotShowIn=XFCE;KDE;GNOME;Budgie;COSMIC;"
-teardown
-
-# The key goes in the [Desktop Entry] group, not a later one.
-setup; blueman_entry "" "[Desktop Action Manager]" "Name=Manager" "Exec=blueman-manager"; ARGS=(); run; copy=$(copy_at)
-check "blueman: NotShowIn is in the [Desktop Entry] group" \
-    test "$(awk '/^\[/ { g = $0 } /^NotShowIn=/ { print g }' "$copy")" = "[Desktop Entry]"
-teardown
-
-# An entry that already limits itself needs no copy.
-setup; blueman_entry "OnlyShowIn=XFCE;"; ARGS=(); run; copy=$(copy_at)
-check "blueman: an entry with OnlyShowIn gets no copy" test ! -e "$copy"
-teardown
-
-# One the user wrote is theirs.
-setup; blueman_entry; copy=$(copy_at); mkdir -p "${copy%/*}"; echo "[Desktop Entry]" > "$copy"; ARGS=(); run
-check "blueman: leaves the user's own copy" test "$(cat "$copy")" = "[Desktop Entry]"
-teardown
-
-# Once blueman is gone, so is setup's copy.
-setup; blueman_entry; ARGS=(); run; copy=$(copy_at)
-rm "$T/xdg/autostart/blueman.desktop"
-run
-check "blueman: removes setup's copy once blueman is gone" test ! -e "$copy"
-teardown
-
-# Without blueman there's nothing to copy.
-setup; ARGS=(); run; copy=$(copy_at)
-check "blueman: none installed, no copy" test ! -e "$copy"
 teardown
 
 # --- Launcher entries for the app scripts ---
@@ -1048,7 +239,7 @@ teardown
 
 # --no-fetch is about the tide checkout, and setup always passes it, so
 # the icons are still fetched.
-setup; app_script gmail 'chrome --app="https://mail.google.com"'; ARGS=(--no-fetch); mkdir -p "$T/src/tide/.git"; run
+setup; app_script gmail 'chrome --app="https://mail.google.com"'; ARGS=(--no-fetch); checkout; run
 check "launcher: --no-fetch still fetches the site icon" has "$calls" "curl"
 check "launcher: --no-fetch uses it" has "$(entry gmail)" "Icon=$T/home/.local/share/icons/scripts/gmail.png"
 teardown
@@ -1103,404 +294,15 @@ teardown
 bad=$(grep -v '^#' "$SCRIPT_DIR/launcher-scripts" | awk -F'|' 'NF != 4 || $2 == "" || $3 == "" || $4 == "" { print NR": "$0 }')
 check "launcher: every line of launcher-scripts has SCRIPT|NAME|ICON|MAC ($bad)" test -z "$bad"
 
-# --- Browser tabs in tide's switcher ---
-
-tabs_manifest() { cat "$T/home/.config/$1/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"; }
-tabs_host() { mkdir -p "$T/usr-bin"; printf '#!/bin/sh\n' > "$T/usr-bin/tide-tabs"; chmod +x "$T/usr-bin/tide-tabs"; }
-
-# Chrome and Brave each get the manifest, naming the host and the store's ID.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/home/.config/BraveSoftware/Brave-Browser"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: exits 0" test "$status" -eq 0
-for b in google-chrome BraveSoftware/Brave-Browser; do
-    check "tabs: $b's manifest names the host" has "$(tabs_manifest "$b")" '"name": "io.github.mikelward.tide.tabs"'
-    check "tabs: $b's manifest runs tide-tabs" has "$(tabs_manifest "$b")" "\"path\": \"$T/usr-bin/tide-tabs\""
-    check "tabs: $b's manifest allows the store's tide for Chrome" has "$(tabs_manifest "$b")" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
-    check "tabs: $b's manifest is stdio" has "$(tabs_manifest "$b")" '"type": "stdio"'
-done
-check "tabs: the manifest is JSON" sh -c "python3 -m json.tool '$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json' >/dev/null"
-check "tabs: says where tide for Chrome comes from" has "$output" "clone mikelward/tideco to $T/no-tideco"
-teardown
-
-# A browser that isn't here gets no manifest, and none at all says so.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: no Brave, no Brave manifest" test ! -e "$T/home/.config/BraveSoftware"
-teardown
-setup; tabs_host; ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: no browser, nothing written" test ! -e "$T/home/.config/google-chrome"
-check "tabs: no browser, says so only with --verbose" lacks "$output" "No Chrome or Brave here"
-teardown
-
-# Brave found by its command alone, before it has ever run.
-setup; tabs_host; printf '#!/bin/sh\n' > "$T/bin/brave-browser"; chmod +x "$T/bin/brave-browser"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: Brave's command is enough" has "$(tabs_manifest BraveSoftware/Brave-Browser)" "tide-tabs"
-teardown
-
-# An unpacked checkout's ID comes from its real path, as Chromium makes it.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/real/tileco"
-echo '{"manifest_version": 3}' > "$T/real/tileco/manifest.json"; ln -s "$T/real/tileco" "$T/tileco"
-want=$(printf '%s' "$(cd "$T/real/tileco" && pwd -P)" | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: allows the checkout's ID, from its real path" has "$(tabs_manifest google-chrome)" "\"chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/\", \"chrome-extension://$want/\""
-check "tabs: with a checkout, no hint to clone one" lacks "$output" "clone mikelward/tideco"
-teardown
-
-# A checkout from when the repo was tileco is still used, keeping its ID, as
-# is $TILECO_DIR.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/home/src/tileco"
-echo '{"manifest_version": 3}' > "$T/home/src/tileco/manifest.json"
-want=$(printf '%s' "$(cd "$T/home/src/tileco" && pwd -P)" | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs"
-check "tabs: an old ~/src/tileco checkout's ID is allowed" has "$(tabs_manifest google-chrome)" "\"chrome-extension://$want/\""
-check "tabs: with the old checkout, no hint to clone one" lacks "$output" "clone mikelward/tideco"
-teardown
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TILECO_DIR="$T/old-name"
-check "tabs: the old \$TILECO_DIR still names the checkout" has "$output" "clone mikelward/tideco to $T/old-name"
-teardown
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs"
-check "tabs: with no checkout, the hint names ~/src/tideco" has "$output" "clone mikelward/tideco to $T/home/src/tideco"
-teardown
-
-# The formula, against an ID Chromium 153 gave an unpacked extension at
-# /tmp/e2e-tabs/ext.
-setup
-check "tabs: a path's ID matches Chromium's" test "$(printf '%s' /tmp/e2e-tabs/ext | sha256sum | cut -c1-32 | tr 0-9a-f a-p)" = lejlbiikollecbfbhibpdlifhncdlamd
-teardown
-
-# A manifest key fixes the ID, whatever the path.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
-key=$(printf 'tide-test-key' | base64)
-printf '{\n  "key": "%s",\n  "manifest_version": 3\n}\n' "$key" > "$T/tileco/manifest.json"
-want=$(printf 'tide-test-key' | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: a manifest key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
-teardown
-
-# The key is found however the manifest is laid out.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
-key=$(printf 'tide-test-key' | base64)
-printf '{"manifest_version":3,"key":"%s"}' "$key" > "$T/tileco/manifest.json"
-want=$(printf 'tide-test-key' | sha256sum | cut -c1-32 | tr 0-9a-f a-p)
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: a compact manifest's key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
-printf '{\n\t"key"\n  :\n "%s" ,\n "manifest_version": 3 }\n' "$key" > "$T/tileco/manifest.json"
-run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: an oddly spaced manifest's key gives the ID" has "$(tabs_manifest google-chrome)" "chrome-extension://$want/"
-teardown
-
-# A manifest that isn't JSON, or a key that isn't base64, is said so, and
-# allows only the store's ID rather than guessing the path's.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome" "$T/tileco"
-echo '{"key": ' > "$T/tileco/manifest.json"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: a broken manifest still exits 0" test "$status" -eq 0
-check "tabs: a broken manifest is named" has "$output" "couldn't work out the extension ID of the tide for Chrome at $T/tileco"
-check "tabs: a broken manifest allows only the store's ID" has "$(tabs_manifest google-chrome)" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
-echo '{"key": "not base64!"}' > "$T/tileco/manifest.json"
-run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/tileco"
-check "tabs: a bad key is named" has "$output" "isn't base64"
-check "tabs: a bad key allows only the store's ID" has "$(tabs_manifest google-chrome)" '"allowed_origins": ["chrome-extension://ajcfbfgjfglgofbepnkiimmmnaidfedl/"]'
-check "tabs: leaves no temporary files" test -z "$(find "$T/home/.config/google-chrome/NativeMessagingHosts" -name '.*')"
-teardown
-
-# Without the host installed (--no-install, say), no manifest, and a warning.
-setup; mkdir -p "$T/home/.config/google-chrome"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: no host, still exits 0" test "$status" -eq 0
-check "tabs: no host, no manifest" test ! -e "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
-check "tabs: no host, says so" has "$output" "isn't installed, so tide's switcher won't list browser tabs"
-teardown
-
-# A rerun replaces the manifest whole.
-setup; tabs_host; mkdir -p "$T/home/.config/google-chrome/NativeMessagingHosts"
-echo stale > "$T/home/.config/google-chrome/NativeMessagingHosts/io.github.mikelward.tide.tabs.json"
-ARGS=(); run SETUP_TABS_HOST="$T/usr-bin/tide-tabs" TIDECO_DIR="$T/no-tideco"
-check "tabs: a rerun replaces an old manifest" lacks "$(tabs_manifest google-chrome)" "stale"
-check "tabs: and leaves no temporary file" test -z "$(ls -A "$T/home/.config/google-chrome/NativeMessagingHosts" | grep -v '^io.github.mikelward.tide.tabs.json$')"
-teardown
-
-
-# What a run prints. The package managers, the builds, make and systemctl
-# go to the run's log, and the run says what step it's on and what changed.
-log() { cat "$T/home/.local/state/setup/setup.log" 2>/dev/null; }
-
-setup; ARGS=(); run
-check "quiet: a package step says what it installed" has "$output" "Installing tide's apt packages
-Installed: hyprland hypridle hyprlock uwsm "
-check "quiet: and Quickshell's" has "$output" "Installing Quickshell
-Installed: quickshell qml6-module-qtquick-effects"
-check "quiet: apt's own lines aren't shown" lacks "$output" "Setting up"
-check "quiet: they're in the log" has "$(log)" "+ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y hyprland hypridle"
-check "quiet: what apt said, too" has "$(log)" "Setting up hyprland (1.0-1) ..."
-check "quiet: make's lines aren't shown" lacks "$output" "install -m 644"
-check "quiet: they're in the log" has "$(log)" "+ make -C $T/src/tide install GO=go
-install -m 644"
-check "quiet: nor systemctl's" lacks "$output" "Created symlink"
-check "quiet: they're in the log" has "$(log)" "+ systemctl --user enable tide.service
-Created symlink"
-check "quiet: nor git's" lacks "$output" "Cloning into"
-# A rerun with everything installed says only which step it's on.
-run
-check "quiet: a rerun shows only its steps" test "$output" = "Installing tide's apt packages
-Nothing new to install
-Installing Quickshell
-Nothing new to install
-Installing fcitx5, for accents in tide
-Nothing new to install"
-check "quiet: a rerun starts the log afresh" test "$(log | grep -c '^+ make -C .* install GO=go$')" -eq 1
-teardown
-
-setup; ARGS=(); run SETUP_OS=redhat
-check "quiet: dnf's step has a header" has "$output" "Installing tide's dnf packages"
-check "quiet: and says what it installed" has "$output" "
-Installed: hyprland hypridle "
-check "quiet: dnf's own lines aren't shown" lacks "$output" "  Installing"
-teardown
-
-setup; ARGS=(); run SETUP_OS=arch FAKE_MISSING=swww FAKE_INSTALLED=swww
-check "quiet: pacman's step says what it installed" has "$output" "Installing tide's pacman packages
-Installed: hyprland hypridle "
-check "quiet: pacman's own lines aren't shown" lacks "$output" "installing hyprland..."
-check "Arch: an AUR-installed package isn't a failure" lacks "$output" "Failed:"
-teardown
-
-# A failed install shows the end of what the package manager said, and
-# where the rest is; the step names what didn't install.
-setup; ARGS=(); run FAKE_APT_REFUSES=satty
-check "quiet: a failed install isn't fatal" test "$status" -eq 0
-check "quiet: a failed install shows what apt said, and where the log is" has "$output" "'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y satty -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold' exited with status 100; the end of what it said (all of it is in $T/home/.local/state/setup/setup.log):
-    Reading package lists...
-    E: Package 'satty' has no installation candidate"
-check "quiet: the step names it" has "$output" "
-Failed: satty"
-check "quiet: and the rest still installed" has "$output" "Installed: hyprland "
-teardown
-
-# apt's output goes to the log, so it mustn't ask anything there: debconf
-# runs noninteractive, apt gets no input, and a package whose config file
-# changed here keeps the version here. A sudo rule that won't set the
-# variable still installs.
-setup; ARGS=(); run
-check "quiet: apt keeps a changed config file, as dpkg's default" has "$calls" "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
-check "quiet: apt asks nothing" has "$(cat "$T/apt-asks")" "apt-get install DEBIAN_FRONTEND=noninteractive stdin="
-check "quiet: apt always asks nothing" lacks "$(cat "$T/apt-asks")" "DEBIAN_FRONTEND=unset"
-teardown
-
-setup; ARGS=(); run FAKE_SUDO_NO_SETENV=1
-check "quiet: apt installs where sudo won't set its frontend" has "$output" "Installed: hyprland "
-check "quiet: without it, and without input" has "$(cat "$T/apt-asks")" "apt-get install DEBIAN_FRONTEND=unset stdin="
-check "quiet: and without a warning" lacks "$output" "Warning:"
-teardown
-
-# An install that keeps a config file you'd changed, writing the package's
-# version beside it, says so, to merge by hand.
-setup; ARGS=(); run FAKE_KEPT_CONFIG=frob.conf
-check "a kept config file is a warning" \
-    has "$output" "Warning: kept your $T/etc/frob.conf; the package's new version is $T/etc/frob.conf.dpkg-dist, to merge by hand"
-teardown
-setup; ARGS=(); run
-check "with none kept, there's no such warning" lacks "$output" "to merge by hand"
-teardown
-
-# With a terminal, and apt-utils to read the packages' questions, debconf's
-# questions about what apt installs are asked there, in its plain text
-# frontend, by a hook apt runs before it installs; without a terminal, or
-# where sudo won't set DEBIAN_FRONTEND, nothing is asked.
-setup; ARGS=(); : > "$T/tty"
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/apt-extracttemplates"; chmod +x "$T/bin/apt-extracttemplates"
-run APT_TTY="$T/tty"
-check "with a terminal, apt asks debconf's questions on it" \
-    has "$calls" "apt-get install -y hyprland"
-check "through a hook it runs before it installs" \
-    has "$calls" "-o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$T/tty >$T/tty 2>&1 || true"
-check "and apt itself still asks nothing" lacks "$(cat "$T/apt-asks")" "DEBIAN_FRONTEND=unset"
-: > "$CALLS"
-run
-check "without a terminal, there's no hook" lacks "$calls" "Pre-Install-Pkgs"
-: > "$CALLS"
-run APT_TTY="$T/tty" FAKE_SUDO_NO_SETENV=1
-check "where sudo won't set DEBIAN_FRONTEND, there's no hook" lacks "$calls" "Pre-Install-Pkgs"
-teardown
-
-# Where the log can't be made, what the commands say is shown instead, and
-# the run carries on: under dash, a failed redirection of :, a special
-# builtin, would end it.
-setup; ARGS=(); mkdir -p "$T/home/.local/state/setup/setup.log"; run
-check "quiet: a log that can't be written isn't fatal" test "$status" -eq 0
-check "quiet: it says so" has "$output" "couldn't make $T/home/.local/state/setup/setup.log to keep the installers' output in, so it's shown instead"
-check "quiet: and shows what apt said" has "$output" "Setting up hyprland (1.0-1) ..."
-check "quiet: and still says what changed" has "$output" "Installed: hyprland "
-check "quiet: and the run finishes" has "$output" "tide installed."
-teardown
-
-setup; ARGS=(); : > "$T/state-is-a-file"; run XDG_STATE_HOME="$T/state-is-a-file"
-check "quiet: a log whose directory can't be made isn't fatal either" test "$status" -eq 0
-check "quiet: it says so too" has "$output" "couldn't make $T/state-is-a-file/setup/setup.log to keep the installers' output in, so it's shown instead"
-teardown
-
-# tide.service is the tide session's shell: a failure to enable it shows
-# what systemctl said and ends the run by name, unless --ignore-errors,
-# which warns and carries on.
-setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide.service
-check "units: a failed enable of tide.service ends the run" test "$status" -ne 0
-check "units: it shows what systemctl said" has "$output" "'systemctl --user enable tide.service' exited with status 1; the end of what it said (all of it is in $T/home/.local/state/setup/setup.log):
-    Failed to enable unit: Unit tide.service does not exist"
-check "units: and names what's lost" has "$output" "Error: couldn't enable tide.service, so the tide session won't start its shell"
-check "units: and stops there" lacks "$calls" "systemctl --user enable tide-clipboard.service"
-teardown
-
-setup; ARGS=(--ignore-errors); run FAKE_USER_ENABLE_FAILS=tide.service
-check "units: --ignore-errors carries on past it" test "$status" -eq 0
-check "units: it still shows what systemctl said" has "$output" "    Failed to enable unit: Unit tide.service does not exist"
-check "units: and warns" has "$output" "Warning: couldn't enable tide.service, so the tide session won't start its shell"
-check "units: and enables the rest" has "$calls" "systemctl --user enable tide-clipboard.service"
-teardown
-
-setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-clipboard.service
-check "units: a failed enable of tide-clipboard.service isn't fatal" test "$status" -eq 0
-check "units: it shows what systemctl said" has "$output" "'systemctl --user enable tide-clipboard.service' exited with status 1; the end of what it said"
-check "units: and warns" has "$output" "Warning: couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history"
-teardown
-
-# The greeter's copy of your look (tide SPEC.md §11): a folder that's
-# yours, under one readable by all, made once.
-setup; ARGS=(); run
-check "look: makes the folder for your look, yours and readable by all" \
-    has "$calls" "sudo install -d -m 755 -o $(id -un) -g $(id -gn) $T/var/lib/tide/look/$(id -un)"
-check "look: under one readable by all" has "$calls" "sudo install -d -m 755 $T/var/lib/tide/look"
-check "look: and it's there" test -d "$T/var/lib/tide/look/$(id -un)"
-: > "$CALLS"
-run
-check "look: a folder that's there already is left be" lacks "$calls" "$T/var/lib/tide/look"
-teardown
-
-setup; ARGS=(); run FAKE_INSTALL_FAILS="$T/var/lib/tide/look/$(id -un)"
-check "look: a folder that can't be made isn't fatal" test "$status" -eq 0
-check "look: and says what the greeter shows instead, and how to make it" \
-    has "$output" "couldn't make $T/var/lib/tide/look/$(id -un), so the greeter shows its own look, not your wallpaper"
-teardown
-
-setup; ARGS=(--no-sudo); run
-check "look: --no-sudo makes no folder" lacks "$calls" "tide/look"
-teardown
-
-setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-kde.service
-check "units: a failed enable of tide-kde.service isn't fatal" test "$status" -eq 0
-check "units: and warns that Meta+Space opens KRunner" has "$output" "Warning: couldn't enable tide-kde.service, so Meta+Space on Plasma opens KRunner, not tide's launcher"
-teardown
-
-# Every warning and error is repeated at the end, where it's seen: a
-# warning in the middle scrolls away among thousands of lines.
-setup; ARGS=(); mkdir "$T/tmp"; run TMPDIR="$T/tmp" SETUP_OS=redhat FAKE_MISSING=fuzzel
-check "recap: the run ends by repeating its warnings" \
-    has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
-  Warning: could not install: fuzzel; install them manually"
-check "recap: a warning still shows where it happened too" \
-    test "$(printf '%s\n' "$output" | grep -c 'Warning: could not install: fuzzel')" -eq 2
-check "recap: a run that went on still exits 0" test "$status" -eq 0
-check "recap: leaves no file behind" test -z "$(ls -A "$T/tmp")"
-teardown
-
-setup; ARGS=(); run
-check "recap: a clean run repeats nothing" lacks "$output" "from this run, again"
-teardown
-
-setup; ARGS=(); run GO="$T/no-such-go"
-check "recap: an error is repeated" \
-    has "$(printf '%s\n' "$output" | sed -n '/from this run, again:/,$p')" "  Error: tide needs Go 1.22 or newer"
-check "recap: and the run says it stopped early" has "$output" "setup-tide stopped early, with exit status 1"
-check "recap: and keeps its exit status" test "$status" -eq 1
-teardown
-
-# Run from setup, which made the file: add to it and leave the repeat to
-# setup, at the very end.
-setup; ARGS=(); : > "$T/problems"; run SETUP_OS=redhat FAKE_MISSING=fuzzel SETUP_PROBLEMS="$T/problems"
-check "recap: a helper adds to setup's file" \
-    has "$(cat "$T/problems")" "Warning: could not install: fuzzel; install them manually"
-check "recap: and doesn't repeat it itself" lacks "$output" "from this run, again"
-check "recap: nor removes setup's file" test -f "$T/problems"
-teardown
-
-
 # --github, or setup's mirror in $GITHUB_PREFIX, stands in for GitHub in
-# every clone: a url.insteadOf rule, so submodules follow it too, given in
-# the environment so a token stays out of ps.
-# The rules the test's own environment gives git aren't these tests'.
+# the tide clone too.
 unset GIT_CONFIG_COUNT
 rule_for() { printf 'git config: url.%s.insteadOf=https://github.com/' "$1"; }
-setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX=https://ghe.example.com
-check "mirror: setup's prefix rewrites the Quickshell clone" has "$calls" "quickshell-build/quickshell
-$(rule_for https://ghe.example.com/)"
-check "mirror: and tide's" has "$calls" "git clone --quiet https://example.com/tide.git $T/src/tide
-$(rule_for https://ghe.example.com/)"
-check "mirror: the URL itself stays GitHub's, for the rule to rewrite" \
-    has "$calls" "https://github.com/quickshell-mirror/quickshell.git"
-check "mirror: no prefix on the command line" lacks "$calls" "-c url."
-check "mirror: the run says where it clones from" has "$output" "Cloning from ghe.example.com in place of github.com"
-teardown
-
-# A mirror without a repository answers that it has no such branch, so the
-# run names the repository and the mirror instead.
-setup; ARGS=(); run FAKE_MISSING=quickshell FAKE_CLONE_FAILS=quickshell-mirror/quickshell GITHUB_PREFIX=https://ghe.example.com
-check "mirror: a repository it lacks is named" \
-    has "$output" "ghe.example.com couldn't give git quickshell-mirror/quickshell.git, which stands in for GitHub; it may not mirror that repo or tag yet"
-teardown
-
 # A checkout cloned through the mirror names GitHub as its origin, so a
 # rerun's pull goes through the mirror too.
-setup; mkdir -p "$T/src/tide/.git"; ARGS=(--github https://ghe.example.com); run
+setup; checkout; ARGS=(--github https://ghe.example.com); run
 check "mirror: a rerun pulls tide through the mirror" has "$calls" "git -C $T/src/tide pull --quiet --ff-only
 $(rule_for https://ghe.example.com/)"
-teardown
-
-# A rule the environment already gives git stays, and this one goes after it.
-setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX=https://ghe.example.com \
-    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.interactive GIT_CONFIG_VALUE_0=false
-check "mirror: keeps the environment's own git config" has "$calls" "quickshell-build/quickshell
-git config: credential.interactive=false
-$(rule_for https://ghe.example.com/)"
-teardown
-
-setup; ARGS=(--github ghe.example.com); run FAKE_MISSING=quickshell
-check "mirror: --github takes a bare host as SSH" has "$calls" "$(rule_for ghe.example.com:)"
-teardown
-
-setup; ARGS=(--github=git@ghe.example.com:); run FAKE_MISSING=quickshell
-check "mirror: --github=PREFIX works too" has "$calls" "$(rule_for git@ghe.example.com:)"
-teardown
-
-setup; ARGS=(--github); run
-check "mirror: --github needs a value" test "$status" -eq 1
-check "mirror: and says so" has "$output" "--github needs a host or prefix"
-teardown
-
-for prefix in "" git@github.com: https://github.com/; do
-    setup; ARGS=(); run FAKE_MISSING=quickshell GITHUB_PREFIX="$prefix"
-    check "mirror: '$prefix' is GitHub itself, so nothing is rewritten" lacks "$calls" ".insteadOf=https://github.com/"
-    teardown
-done
-
-# Real git follows the rule as git_github gives it, into a submodule too,
-# as Hyprland's udis86 is.
-setup
-g config --global protocol.file.allow always
-g init -q "$T/mirror/owner/sub" && g -C "$T/mirror/owner/sub" commit -q --allow-empty -m sub
-g init -q "$T/mirror/owner/top"
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.file://$T/mirror/.insteadOf" GIT_CONFIG_VALUE_0=https://github.com/ \
-    g -C "$T/mirror/owner/top" submodule add -q https://github.com/owner/sub sub
-g -C "$T/mirror/owner/top" commit -q -m top
-eval "$(sed -n '/^git_github() {$/,/^}$/p' "$SCRIPT")"
-GITHUB_BASE="file://$T/mirror/"
-clone_status=0
-clone_output=$(export HOME="$G_HOME" XDG_CONFIG_HOME="$G_HOME/.config" GIT_CONFIG_GLOBAL="$G_HOME/.gitconfig" GIT_CONFIG_NOSYSTEM=1
-    git_github clone -q --recurse-submodules https://github.com/owner/top "$T/clone" 2>&1) || clone_status=$?
-test "$clone_status" -eq 0 || printf '%s\n' "$clone_output"
-check "mirror: real git clones through the rule" test "$clone_status" -eq 0
-check "mirror: and its submodule too" test -e "$T/clone/sub/.git"
 teardown
 
 finish
