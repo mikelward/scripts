@@ -2197,9 +2197,10 @@ purge_obsolete_packages() {
     esac
     # tide runs on Hyprland, uwsm and (until its own shell lands) the
     # waybar/swaync/fuzzel stack, with swww or swaybg for the wallpaper, so
-    # the purge keeps those unless --no-tide is given.
+    # the purge keeps those unless --no-tide is given, and wlroots' portal,
+    # which tide's tidewm session (setup-tide --tidewm) shares screens with.
     if test "$TIDE" = yes; then
-        tide_pkgs=" hyprland hypridle hyprlock swww swaybg xdg-desktop-portal-hyprland uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
+        tide_pkgs=" hyprland hypridle hyprlock swww swaybg xdg-desktop-portal-hyprland xdg-desktop-portal-wlr uwsm waybar fuzzel swaync sway-notification-center SwayNotificationCenter "
         kept=""
         for pkg in $obsolete; do
             case "$tide_pkgs" in

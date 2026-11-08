@@ -27,6 +27,7 @@ check "--tidewm succeeds" test "$status" -eq 0
 check "--tidewm installs tidewm's build dependencies, wlroots 0.20 among them" \
     has "$calls" "apt-get install -y build-essential pkgconf git libwlroots-0.20-dev libwayland-dev"
 check "and PCRE2, for its window rules, and Xwayland, for X11 apps" has "$calls" "libjson-c-dev libpcre2-dev xwayland"
+check "and wlroots' portal, for sharing a screen or window" has "$calls" "xwayland xdg-desktop-portal-wlr"
 check "the pin is a release tag, as tidewm numbers them" test "${tag#v0.}" != "$tag"
 check "--tidewm clones the pinned tag" has "$calls" "$clone $T/src/tidewm-build/tidewm"
 check "and checks the tag names the pinned commit" has "$calls" "git -C $T/src/tidewm-build/tidewm rev-parse HEAD"
@@ -104,6 +105,7 @@ teardown
 # Arch packages wlroots 0.20.
 setup; ARGS=(--tidewm); run SETUP_OS=arch
 check "on Arch, tidewm's dependencies come from pacman" has "$calls" "pacman -S --needed --noconfirm base-devel git wlroots0.20"
+check "on Arch, wlroots' portal is installed, for screen sharing" has "$calls" "xorg-xwayland xdg-desktop-portal-wlr"
 check "on Arch, tidewm is built" has "$calls" "make -C $T/src/tidewm-build/tidewm install PREFIX="
 teardown
 

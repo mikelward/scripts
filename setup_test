@@ -1657,6 +1657,15 @@ test_purge_obsolete_keeps_tide_stack() {
     assert_calls_lack "uwsm"
 }
 
+# tide's tidewm session shares screens through wlroots' portal, which
+# setup-tide --tidewm installs, so the purge keeps it too.
+test_purge_obsolete_keeps_tidewm_portal() {
+    PURGE_TIDE=yes run_purge_obsolete debian "sway xdg-desktop-portal-wlr"
+    assert_status 0 &&
+    assert_calls_contain "apt-get purge -y" &&
+    assert_calls_lack "xdg-desktop-portal-wlr"
+}
+
 # --- TypeScript compiler ---
 
 # setup-kde builds Krohnkite from source without fetching from the npm
@@ -5217,6 +5226,7 @@ run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland
 run_test "--tidewm is forwarded to setup-tide" test_tidewm_is_forwarded
 run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
 run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack
+run_test "--tide keeps the tidewm session's portal in the purge" test_purge_obsolete_keeps_tidewm_portal
 run_test "tsc installs from the distro alongside node" \
     test_typescript_installed_from_distro
 run_test "sudo warning includes a useful stderr reason" \
