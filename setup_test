@@ -235,9 +235,15 @@ exit 0
 MOCK
     done
     for cmd in kwriteconfig6 xdg-mime; do
+        # xdg-mime is the one on a Plasma without qtpaths, which complains
+        # even when it works.
+        _complaint=
+        test "$cmd" = xdg-mime \
+            && _complaint='echo "/usr/bin/xdg-mime: line 885: qtpaths: command not found" >&2'
         cat > "$terminal_tmpdir/$cmd" <<MOCK
 #!/bin/sh
 printf '%s\n' "$cmd \$*" >> "$terminal_calls"
+$_complaint
 test "$terminal_mode" = fail && exit 1
 exit 0
 MOCK
@@ -2557,6 +2563,7 @@ test_kde_terminal_set_on_fedora() {
     run_terminal_helper redhat
     assert_status 0 &&
     assert_calls_contain "xdg-mime default kitty.desktop x-scheme-handler/terminal" &&
+    assert_output_lacks "qtpaths" &&
     assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalApplication kitty" &&
     assert_calls_contain "kwriteconfig6 --file kdeglobals --group General --key TerminalService kitty.desktop"
 }

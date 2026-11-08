@@ -3477,8 +3477,10 @@ set_default_terminal() {
                 info "Setting kitty as default terminal"
                 # Set via xdg for Wayland/X11
                 mkdir -p "$HOME/.config"
+                # Logged: on Plasma, xdg-mime runs qtpaths, which Fedora
+                # may not have, and says so even when it succeeds.
                 if command -v xdg-mime >/dev/null 2>&1; then
-                    xdg-mime default kitty.desktop x-scheme-handler/terminal \
+                    run_logged xdg-mime default kitty.desktop x-scheme-handler/terminal \
                         || warn "could not register kitty as the terminal scheme handler"
                 fi
                 set_kde_default_terminal
