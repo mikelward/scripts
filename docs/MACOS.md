@@ -105,9 +105,17 @@ it's pulled on every run.
 
 `--no-sudo` and `--no-root` change little on macOS. Homebrew never wants sudo
 and installing Amethyst needs write access to an Applications directory rather
-than privilege. The one exception is Karabiner: its cask is backed by a `.pkg`,
+than privilege. The exceptions are Karabiner, whose cask is backed by a `.pkg`,
 so Homebrew hands it to the system installer, which asks for an administrator
-password.
+password; the hostname on the lock screen; and keeping a desktop Mac awake
+(below). Under `--no-sudo` the last two are listed as optional steps at the end.
+
+On a Mac with no battery, such as a Mac mini, `setup-macos` stops it sleeping
+while plugged in and has it start up again after a power cut (`sudo pmset -c
+sleep 0 autorestart 1`). The displays still sleep on macOS's timer. Asleep, a
+Mac can't be reached from elsewhere, and it misses a keyboard and mouse that
+come back while it sleeps, as they do when a monitor's KVM switches back to it.
+A laptop keeps macOS's settings.
 
 The default is to try anyway. If you have admin rights you'll get the usual
 password prompt; if you don't, the install fails, the run warns and carries on,
@@ -628,6 +636,12 @@ open -a Amethyst
 
 See [focus follows mouse](#what-doesnt-carry-over) above for why it can't be
 made to work.
+
+**The keyboard doesn't wake the Mac after a KVM switch.** The Mac went to
+sleep while the KVM had its keyboard and mouse, and it doesn't wake for
+devices that come back while it sleeps. `setup-macos` keeps a Mac without a
+battery awake while plugged in. Check with `pmset -g | grep ' sleep'` (it
+should be 0), or run `sudo pmset -c sleep 0`.
 
 **Numbered desktops switch to the wrong one.** The Spaces order drifted.
 `setup-macos` pins it, but verify "Automatically rearrange Spaces based on

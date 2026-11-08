@@ -30,6 +30,8 @@
 # - Application launch shortcuts via Automator Quick Actions (browser, terminal,
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
+# - On a Mac with no battery, no sleep while plugged in (the displays still
+#   sleep), and starting up again after a power cut
 # - Screenshots saved to ~/Pictures/Screenshots, tide's folder, without the
 #   floating thumbnail that holds each back from it for a few seconds
 #
@@ -80,10 +82,10 @@
 #
 # setup forwards --no-install, --no-sudo, --ignore-errors and --verbose here.
 # --no-install skips installing tide (or Amethyst) and Karabiner-Elements and
-# configures whatever is already there. --no-sudo skips the two steps here that
-# need administrator rights: Karabiner's install -- its cask is a .pkg and
-# Homebrew hands those to the system installer -- and the hostname on the lock
-# screen. --ignore-errors keeps going past
+# configures whatever is already there. --no-sudo skips the three steps here
+# that need administrator rights: Karabiner's install -- its cask is a .pkg and
+# Homebrew hands those to the system installer -- the hostname on the lock
+# screen, and keeping a Mac without a battery awake. --ignore-errors keeps going past
 # failures instead of aborting on the first one. --yes skips the preflight
 # pause. --wm picks the tiling window manager: tide (or timo, its old name),
 # the default, so a plain setup sets it up, or amethyst. setup doesn't forward
@@ -132,7 +134,8 @@ ASSUME_YES=no
 # Whether privileged commands may run at all. Karabiner's install needs this:
 # its cask is a .pkg and Homebrew hands those to the system installer, which
 # prompts for an administrator password. So does the lock screen's hostname,
-# which lives in a system-wide file. --no-sudo skips both.
+# which lives in a system-wide file, and so does keeping a Mac without a
+# battery awake (pmset). --no-sudo skips all three.
 SUDO=yes
 
 # Homebrew's ask mode is on by default, so the cask installs below stop to
@@ -546,7 +549,8 @@ Options:
   --no-install     Don't install Hammerspoon, tide (or, with --wm amethyst,
                    Amethyst), Karabiner-Elements or LinearMouse; configure
                    whatever is already there
-  --no-sudo        Skip what needs administrator rights (Karabiner's installer)
+  --no-sudo        Skip what needs administrator rights: Karabiner's installer,
+                   the lock screen's hostname, and keeping a desktop awake
   --ignore-errors  Keep going past failures instead of aborting on the first
   --yes            Don't pause before starting
   --wm WM          The tiling window manager: tide (the default) or amethyst
@@ -2199,6 +2203,33 @@ configure_lock_screen() {
     try sudo defaults write "$LOGINWINDOW_PLIST" LoginwindowText "$_host"
 }
 
+# --- Keep a desktop Mac awake ---
+
+# A Mac with no battery stays awake while plugged in, with its displays still
+# sleeping on macOS's timer, and starts up again after a power cut. Asleep,
+# it can't be reached from elsewhere, and it misses a keyboard and mouse that
+# come back while it sleeps, as they do when a monitor's KVM switches back to
+# it. A laptop keeps macOS's own settings. Both are system-wide, hence sudo.
+configure_power() {
+    if ! _batt=$(pmset -g batt 2>&1); then
+        warn "couldn't tell whether this Mac has a battery, so it sleeps as before: pmset -g batt: $_batt"
+        return 0
+    fi
+    case "$_batt" in
+        *InternalBattery*)
+            detail "Leaving sleep to macOS: this Mac has a battery"
+            return 0
+            ;;
+    esac
+    if test "$SUDO" = no; then
+        info "Skipping keeping this Mac awake: it needs administrator rights and --no-sudo was given"
+        todo_optional "To keep this Mac awake while plugged in, and start it after a power cut: sudo pmset -c sleep 0 autorestart 1"
+        return 0
+    fi
+    info "Keeping this Mac awake while plugged in, and starting it after a power cut"
+    try sudo pmset -c sleep 0 autorestart 1
+}
+
 # Font smoothing at its lightest. Since Mojave, macOS's default thickens text,
 # which on a non-Retina display smears bold into gray; 1 keeps a little of it,
 # and 0 (off) is thinner still. It's per host (-currentHost), as System
@@ -2235,6 +2266,7 @@ else
     configure_fonts
 fi
 configure_lock_screen
+configure_power
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
