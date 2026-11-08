@@ -1840,6 +1840,13 @@ install_wallpapers() {
             _w_version=$(os_release VERSION_ID)
             if test "$(os_release ID)" = fedora && test -n "$_w_version"; then
                 _w_extras="f$_w_version-backgrounds-extras-base"
+                # Not every release has extras (Fedora 44 has none), so
+                # look first. A query that fails tries the install anyway.
+                if _w_found=$(dnf -q repoquery --available "$_w_extras" </dev/null 2>/dev/null) \
+                        && test -z "$_w_found"; then
+                    info "Fedora $_w_version has no extra wallpapers to install"
+                    _w_extras=
+                fi
             fi
             for _w in plasma-workspace-wallpapers gnome-backgrounds $_w_extras; do
                 dnf_install "$_w" || warn "couldn't install the $_w wallpapers"
