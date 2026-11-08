@@ -381,6 +381,7 @@ fail_defaults_write() {
 run_macos() {
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
         PBS="$PBS" \
         APPLICATIONS_DIR="$APPLICATIONS_DIR" \
@@ -411,6 +412,7 @@ run_macos_without() {
     done
     set +e
     output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         ACTIVATE_SETTINGS="$ACTIVATE_SETTINGS" \
         PBS="$PBS" \
         APPLICATIONS_DIR="$APPLICATIONS_DIR" \
@@ -604,7 +606,7 @@ test_unknown_option() {
 test_forwarded_flags_accepted() {
     run_macos --no-install --no-sudo --ignore-errors
     assert_status 0 &&
-    assert_called "defaults write com.apple.finder AppleShowAllFiles -bool true"
+    assert_file_exists "$TEST_TMPDIR/home/.config/tide/macos.json"
 }
 
 # --- prerequisites ---
@@ -685,7 +687,7 @@ printf "%s\\n" "pgrep \$*" >> "$CALLS"
 exit 2
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not tell whether Finder is running" &&
     assert_output_lacks "Finder was not running" &&
@@ -767,7 +769,7 @@ test_says_layout_needs_logout() {
 }
 
 test_disables_text_substitutions() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "NSAutomaticSpellingCorrectionEnabled -bool false" &&
     assert_called "NSAutomaticCapitalizationEnabled -bool false" &&
@@ -1092,7 +1094,7 @@ test_missing_activate_settings_warns_about_logout() {
 # default), the Option+1..9 bindings above point at whichever desktop was used
 # most recently rather than at desktop N.
 test_pins_the_spaces_order() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.apple.dock mru-spaces -bool false" &&
     assert_called "killall Dock"
@@ -1244,7 +1246,7 @@ test_tilemo_logs_out_last_for_what_needs_it() {
     stage_tilemo_machine
     run_macos --wm tide
     assert_status 0 &&
-    assert_says "for the Dvorak layout, the trackpad and mouse gestures, the Desktop & Dock settings, the menu bar setting and the font smoothing to take effect" &&
+    assert_says "for the Dvorak layout and the menu bar setting to take effect" &&
     assert_output_in_order "Turn on LinearMouse" "Log out and back in" &&
     assert_output_in_order "Log out and back in" "And if you like:"
 }
@@ -1887,7 +1889,7 @@ test_missing_pbs_warns_about_logout() {
 # tide's folder, and no floating thumbnail holding each shot back from it
 # (tide copies new shots to the clipboard from there).
 test_configures_screenshots() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.apple.screencapture location -string $TEST_TMPDIR/home/Pictures/Screenshots" &&
     assert_called "defaults write com.apple.screencapture show-thumbnail -bool false" &&
@@ -1898,14 +1900,14 @@ test_configures_screenshots() {
 # Light, so text is sharp rather than smeared on a non-Retina display. Apps
 # read it as they launch, so it waits for the logout.
 test_sets_light_font_smoothing() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults -currentHost write -g AppleFontSmoothing -int 1" &&
     assert_says "the font smoothing to take effect"
 }
 
 test_configures_finder() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.apple.finder AppleShowAllFiles -bool true" &&
     assert_called "defaults write com.apple.finder ShowPathbar -bool true" &&
@@ -1914,7 +1916,7 @@ test_configures_finder() {
 }
 
 test_dialogs_open_expanded_and_save_to_disk() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode -bool true" &&
     assert_called "defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true" &&
@@ -1924,7 +1926,7 @@ test_dialogs_open_expanded_and_save_to_disk() {
 }
 
 test_windows_dont_animate() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false" &&
     assert_called "defaults write NSGlobalDomain NSWindowResizeTime -float 0.001" &&
@@ -1978,7 +1980,7 @@ echo "killall: warning: kill -TERM 1 : Operation not permitted" >&2
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/killall"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not restart Finder" &&
     assert_output_contains "could not restart Dock" &&
@@ -1987,7 +1989,7 @@ MOCK
 }
 
 test_missing_pgrep_warns_about_restarting() {
-    run_macos_without pgrep --ignore-errors
+    run_macos_without pgrep --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "killall/pgrep not found"
 }
@@ -2377,7 +2379,7 @@ test_default_wm_is_tide() {
     assert_output_contains "Configuring tide" &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/home/tidemo" &&
     assert_called "make -C $TEST_TMPDIR/home/tidemo install" &&
-    assert_called "com.apple.WindowManager" &&
+    assert_file_exists "$TEST_TMPDIR/home/.config/tide/macos.json" &&
     assert_not_called "com.amethyst.Amethyst" &&
     assert_file_exists "$TEST_TMPDIR/home/.hammerspoon/init.lua"
 }
@@ -2506,62 +2508,60 @@ test_tilemo_does_not_ask_for_nine_spaces() {
     stage_spaces 1
     run_macos --wm tide
     assert_status 0 &&
-    assert_called "defaults write com.apple.dock mru-spaces -bool false" &&
     assert_says "Remove the Spaces you don't need, since tide uses one per display" &&
     assert_output_lacks "Spaces per display:" &&
     assert_output_lacks "will do nothing there"
 }
 
-test_tilemo_turns_off_stage_manager_and_tiling() {
+# With tide, macOS's own settings are tide's: setup writes its choices to
+# tide's macos.json, and none of them with defaults, so tide's settings page
+# shows them and a change there sticks.
+test_tilemo_gets_macos_settings_in_its_file() {
     run_macos --wm tide
-    assert_status 0 &&
-    assert_called "defaults write com.apple.WindowManager GloballyEnabled -bool false" &&
-    assert_called "defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false" &&
-    assert_called "defaults write com.apple.WindowManager EnableTilingOptionAccelerator -bool false" &&
-    assert_called "defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false" &&
-    assert_output_contains "take effect at the next login"
+    _json="$TEST_TMPDIR/home/.config/tide/macos.json"
+    assert_status 0 || return 1
+    for _setting in '"showHiddenFiles": true' '"folder": "~/Pictures/Screenshots"' '"reorderSpaces": false' \
+        '"hotCorners": false' '"swipes": false' '"stageManager": false' '"tileByDragging": false' \
+        '"tileWithOption": false' '"clickToShowDesktop": false' '"expanded": true' '"saveToICloud": false' \
+        '"autocorrect": false' '"smoothing": "light"'; do
+        assert_file_contains "$_json" "$_setting" || return 1
+    done
+    assert_dir_exists "$TEST_TMPDIR/home/Pictures/Screenshots" &&
+    assert_not_called "com.apple.WindowManager" &&
+    assert_not_called "com.apple.finder" &&
+    assert_not_called "com.apple.screencapture" &&
+    assert_not_called "mru-spaces" &&
+    assert_not_called "wvous" &&
+    assert_not_called "SwipeGesture" &&
+    assert_not_called "NSAutomatic" &&
+    assert_not_called "AppleFontSmoothing" &&
+    assert_not_called "killall Finder" &&
+    assert_not_called "killall Dock"
 }
 
+# A change made in Tide Settings is in macos.local.json, which setup leaves
+# alone, so a later run doesn't undo it.
+test_tilemo_leaves_tides_local_macos_settings_alone() {
+    mkdir -p "$TEST_TMPDIR/home/.config/tide"
+    printf '{"text": {"smoothing": "off"}}\n' > "$TEST_TMPDIR/home/.config/tide/macos.local.json"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_file_contains "$TEST_TMPDIR/home/.config/tide/macos.local.json" '{"text": {"smoothing": "off"}}'
+}
+
+# tide's overview has Mission Control's keys (its gestures are in macos.json).
 test_tilemo_hands_mission_control_to_its_overview() {
     run_macos --wm tide
     assert_status 0 &&
     assert_hotkey 32 false 65535 126 8650752 &&
-    assert_hotkey 33 false 65535 125 8650752 &&
-    assert_called "defaults write com.apple.dock showMissionControlGestureEnabled -bool false" &&
-    assert_called "defaults write com.apple.dock showAppExposeGestureEnabled -bool false" &&
-    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadFourFingerVertSwipeGesture -int 0" &&
-    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerVertSwipeGesture -int 0" &&
-    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseTwoFingerDoubleTapGesture -int 0" &&
-    assert_output_contains "Turning off Mission Control's gestures"
+    assert_hotkey 33 false 65535 125 8650752
 }
 
-# A hot corner set to Mission Control (2) is cleared; one set to anything
-# else is the user's and stays.
-test_tilemo_clears_mission_control_hot_corners() {
-    stage_defaults_read com.apple.dock 2
-    run_macos --wm tide
+# Without tide nothing would apply tide's file, so Amethyst gets none.
+test_amethyst_gets_no_tide_macos_settings() {
+    run_macos --wm amethyst
     assert_status 0 &&
-    assert_called "defaults write com.apple.dock wvous-tl-corner -int 1" &&
-    assert_called "defaults write com.apple.dock wvous-br-modifier -int 0"
-}
-
-test_tilemo_leaves_other_hot_corners_alone() {
-    stage_defaults_read com.apple.dock 5
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_not_called "wvous-tl-corner -int" &&
-    assert_not_called "wvous-br-modifier"
-}
-
-# tide's three-finger swipe steps through its workspaces, so macOS's own
-# swipe between Spaces, with three fingers or four, is off.
-test_tilemo_takes_the_sideways_swipe() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadThreeFingerHorizSwipeGesture -int 0" &&
-    assert_called "defaults write com.apple.AppleMultitouchTrackpad TrackpadFourFingerHorizSwipeGesture -int 0" &&
-    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadThreeFingerHorizSwipeGesture -int 0" &&
-    assert_called "defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad TrackpadFourFingerHorizSwipeGesture -int 0"
+    assert_file_not_exists "$TEST_TMPDIR/home/.config/tide/macos.json"
 }
 
 test_amethyst_leaves_mission_control_alone() {
@@ -3298,8 +3298,6 @@ run_test "--no-sudo leaves the lock screen's hostname as a step" \
     test_no_sudo_leaves_lock_screen_as_a_step
 run_test "without a hostname, the lock screen warns" \
     test_lock_screen_without_hostname_warns
-run_test "tide: takes the sideways swipe from Spaces" \
-    test_tilemo_takes_the_sideways_swipe
 run_test "tide: Caps Lock is Compose" \
     test_tilemo_makes_caps_lock_compose
 run_test "amethyst: Caps Lock stays" \
@@ -3438,14 +3436,14 @@ run_test "tide: moving a Space is off, at its stock binding" \
 run_test "tide: the shortcuts are applied to this session" \
     test_tilemo_still_applies_the_shortcuts
 run_test "tide: no nine-Spaces check" test_tilemo_does_not_ask_for_nine_spaces
-run_test "tide: Stage Manager and Sequoia tiling are turned off" \
-    test_tilemo_turns_off_stage_manager_and_tiling
-run_test "tide: hands Mission Control's keys and gestures to its overview" \
+run_test "tide: gets macOS's settings in its macos.json, not from defaults" \
+    test_tilemo_gets_macos_settings_in_its_file
+run_test "tide: a change made in Tide Settings is left alone" \
+    test_tilemo_leaves_tides_local_macos_settings_alone
+run_test "tide: hands Mission Control's keys to its overview" \
     test_tilemo_hands_mission_control_to_its_overview
-run_test "tide: clears hot corners set to Mission Control" \
-    test_tilemo_clears_mission_control_hot_corners
-run_test "tide: leaves other hot corners alone" \
-    test_tilemo_leaves_other_hot_corners_alone
+run_test "amethyst: no tide macOS settings" \
+    test_amethyst_gets_no_tide_macos_settings
 run_test "Amethyst runs leave Mission Control's gestures alone" \
     test_amethyst_leaves_mission_control_alone
 run_test "tide: keeps the menu bar shown for its bar to cover" \

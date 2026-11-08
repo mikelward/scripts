@@ -202,10 +202,18 @@ needs from here, and the run does that:
   move-a-Space turned off at their stock Ctrl bindings.
 - **Mission Control.** tide for macOS uses one Space per display, so there's no
   nine-Spaces step; extra Spaces can be removed in Mission Control.
-  `mru-spaces` stays off. Stage Manager, Sequoia's edge and Option-drag
-  tiling, and click-wallpaper-to-show-desktop are turned off in
-  `com.apple.WindowManager`, taking effect at the next login. Those keys are
-  unverified on the newest macOS.
+- **macOS's own settings are tide's.** The run writes its choices to tide's
+  `~/.config/tide/macos.json`, and tide applies them as the file changes
+  (Tide Settings › macOS; tide for macOS SPEC.md §15): Finder's hidden files,
+  path bar, extensions and animations; screenshots to
+  `~/Pictures/Screenshots` with no thumbnail; the Spaces order pinned; the
+  hot corners and Mission Control's swipes off for tide's overview; Stage
+  Manager, Sequoia's edge and Option-drag tiling and click-wallpaper-to-show-desktop
+  off; windows that don't animate; expanded dialogs that save to disk;
+  no typing corrections; and light font smoothing. A change made in Tide
+  Settings goes to `macos.local.json`, which the run leaves alone. With
+  `--wm amethyst`, the run writes these with `defaults` itself, as before,
+  less the tide-only ones.
 - **Install.** Hammerspoon from Homebrew (`brew install --cask hammerspoon`;
   no administrator rights, so `--no-sudo` doesn't skip it). tide for macOS is cloned
   to `$TIDEMO_DIR` (default `~/tidemo`) if it isn't there, and

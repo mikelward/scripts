@@ -633,7 +633,9 @@ configure_keyboard() {
     todo_optional "Remove the keyboard layouts you don't want: System Settings > Keyboard, then Edit beside Input Sources, then select one and click -."
 
     # Disable auto-correct, auto-capitalize, smart quotes/dashes. Read by each
-    # app as it launches, so already-running apps keep the old behavior.
+    # app as it launches, so already-running apps keep the old behavior. With
+    # tide, its macOS settings do this (write_tide_macos_settings).
+    test "$WM" = tide && return 0
     try defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
     try defaults write NSGlobalDomain NSAutomaticCapitalizationEnabled -bool false
     try defaults write NSGlobalDomain NSAutomaticQuoteSubstitutionEnabled -bool false
@@ -1003,100 +1005,79 @@ check_spaces_count() {
 }
 
 configure_spaces() {
+    # With tide, its macOS settings pin the Spaces order and turn off what
+    # fights it (write_tide_macos_settings); tide uses one Space per display.
+    if test "$WM" = tide; then
+        todo_optional "Remove the Spaces you don't need, since tide uses one per display: open Mission Control (open -a 'Mission Control' in a terminal), point at a Space along the top, and click its x."
+        return 0
+    fi
+
     info "Pinning the Spaces order"
 
     # "Automatically rearrange Spaces based on most recent use" is on by
     # default, and it reorders the Spaces behind the Option+1..9 bindings
     # above -- so the shortcut that switched to a given desktop a moment ago
     # switches somewhere else now. Numbered shortcuts only mean anything with
-    # a fixed order. tide's spec (section 6.4) keeps it off too.
+    # a fixed order.
     try defaults write com.apple.dock mru-spaces -bool false
-
-    if test "$WM" = tide; then
-        configure_mission_control_for_tide
-    fi
 
     # The Dock owns Mission Control and reads this at launch.
     restart_app Dock "the Spaces order to be pinned"
-
-    if test "$WM" = tide; then
-        configure_window_manager_for_tide
-        return 0
-    fi
 
     # After the restart: the Dock rewrites com.apple.spaces as it goes, so
     # counting before it has settled can read the pre-restart layout.
     check_spaces_count
 }
 
-# The Mission Control side of tide's SPEC.md, section 6.4. tide does its
-# workspaces by minimizing windows on one Space per display, so the nine
-# Spaces the Amethyst setup asks for are dead weight rather than missing --
-# but there is no API to delete a Space any more than to create one, so the
-# run only says so.
-#
-# The rest turns off the macOS features that move windows on their own and
-# would fight a tiler: Stage Manager groups windows itself, Sequoia's tiling
-# snaps a window dragged to an edge -- and, with Option held, on any drag,
-# which collides with tide's Super+drag whenever Super falls back to Option --
-# and clicking the wallpaper sweeps every window aside to show the desktop.
-# The last is false rather than absent: false is "Only in Stage Manager",
-# which with Stage Manager off means never.
-#
-# These four keys are the ones System Settings is reported to write (Stage
-# Manager since macOS 13, click-to-show-desktop since 14, tiling since 15).
-# They're unverified here, and on the newest macOS especially, where Apple
-# has renamed preference keys before; a key it no longer reads is written
-# harmlessly and simply does nothing, so check the switches in Desktop & Dock
-# if a window still snaps.
-#
-# WindowManager reads them at launch, and restarting it from here isn't known
-# to be safe -- it owns every window on screen -- so they take effect at the
-# next login.
-# The other ways into Mission Control and App Exposé, off for the reason
-# configure_shortcuts_tide gives: the trackpad's swipes, the
-# Magic Mouse's double tap, and any hot corner set to either. A corner set to
-# something else is left alone. The gesture keys are the ones System Settings
-# is reported to write *(unverified here, and per macOS release)*; the Dock
-# reads them at its restart, the trackpad and mouse drivers at the next login.
-configure_mission_control_for_tide() {
-    info "Turning off Mission Control's gestures and hot corners (tide has its own overview)"
-    try defaults write com.apple.dock showMissionControlGestureEnabled -bool false
-    try defaults write com.apple.dock showAppExposeGestureEnabled -bool false
-    for _domain in com.apple.AppleMultitouchTrackpad com.apple.driver.AppleBluetoothMultitouch.trackpad; do
-        try defaults write "$_domain" TrackpadThreeFingerVertSwipeGesture -int 0
-        try defaults write "$_domain" TrackpadFourFingerVertSwipeGesture -int 0
-        # And the swipe left and right between Spaces and full-screen apps:
-        # tide's own three-finger swipe steps through its workspaces
-        # instead, so the two can't both act.
-        try defaults write "$_domain" TrackpadThreeFingerHorizSwipeGesture -int 0
-        try defaults write "$_domain" TrackpadFourFingerHorizSwipeGesture -int 0
-    done
-    try defaults write com.apple.driver.AppleBluetoothMultitouch.mouse MouseTwoFingerDoubleTapGesture -int 0
+# --- Hand macOS's settings to tide ---
 
-    # 2 is Mission Control and 3 App Exposé; 1 is no action.
-    for _corner in tl tr bl br; do
-        _action=$(defaults read com.apple.dock "wvous-$_corner-corner" 2>/dev/null) || continue
-        case $_action in
-            2 | 3)
-                try defaults write com.apple.dock "wvous-$_corner-corner" -int 1
-                try defaults write com.apple.dock "wvous-$_corner-modifier" -int 0
-                ;;
-        esac
-    done
-    needs_logout "the trackpad and mouse gestures"
+# tide keeps macOS's own settings that this used to write with `defaults`
+# (its macOS settings page, tidemo SPEC.md §15), and applies them as its
+# files change: Finder, screenshots, the Dock and Mission Control, windows,
+# dialogs, typing and font smoothing. So with tide, this writes setup's
+# choices to tide's shared macos.json, each run, and tide does the rest.
+# A change made in Tide Settings goes to macos.local.json, which this
+# never touches, and wins.
+#
+# What they are, and why:
+# - Finder shows hidden files, the path bar and every extension, and
+#   doesn't animate.
+# - Screenshots go to ~/Pictures/Screenshots, with no floating thumbnail
+#   holding each back (tide copies new shots to the clipboard from there).
+# - The Spaces order is pinned, as tide's SPEC.md §6.4 has it.
+# - Mission Control's swipes and the hot corners are off: tide has its own
+#   overview (§6.9), and its three-finger swipe steps through workspaces.
+# - Stage Manager, Sequoia's tiling and click-to-show-desktop are off: they
+#   move windows behind tide's back.
+# - Windows open and resize at once, dialogs open expanded and save to
+#   disk, and typing isn't corrected.
+# - Font smoothing is light: sharp rather than smeared on a non-Retina
+#   display, with a little more smoothing than off.
+TIDE_MACOS_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/tide/macos.json"
+
+write_tide_macos_settings() {
+    info "Handing macOS's settings to tide (Tide Settings, macOS)"
+    try mkdir -p "${TIDE_MACOS_SETTINGS%/*}"
+    try write_file "$TIDE_MACOS_SETTINGS" <<'JSON'
+{
+  "finder": { "showHiddenFiles": true, "showPathBar": true, "showExtensions": true, "animations": false },
+  "screenshots": { "folder": "~/Pictures/Screenshots", "thumbnail": false },
+  "missionControl": { "reorderSpaces": false, "hotCorners": false, "swipes": false },
+  "windows": {
+    "stageManager": false, "tileByDragging": false, "tileWithOption": false,
+    "clickToShowDesktop": false, "animations": false
+  },
+  "dialogs": { "expanded": true, "saveToICloud": false },
+  "typing": {
+    "autocorrect": false, "capitalize": false, "smartQuotes": false,
+    "smartDashes": false, "doubleSpacePeriod": false
+  },
+  "text": { "smoothing": "light" }
 }
-
-configure_window_manager_for_tide() {
-    todo_optional "Remove the Spaces you don't need, since tide uses one per display: open Mission Control (open -a 'Mission Control' in a terminal), point at a Space along the top, and click its x."
-
-    info "Turning off Stage Manager, edge tiling and click-to-show-desktop (they move windows behind tide's back)"
-    try defaults write com.apple.WindowManager GloballyEnabled -bool false
-    try defaults write com.apple.WindowManager EnableTilingByEdgeDrag -bool false
-    try defaults write com.apple.WindowManager EnableTilingOptionAccelerator -bool false
-    try defaults write com.apple.WindowManager EnableStandardClickToShowDesktop -bool false
-    info "The Stage Manager and tiling settings take effect at the next login"
-    needs_logout "the Desktop & Dock settings"
+JSON
+    # tide saves screenshots here, and macOS falls back to the Desktop for a
+    # folder that isn't there.
+    try mkdir -p "$SCREENSHOT_DIR"
 }
 
 # --- Configure Amethyst tiling window manager ---
@@ -2299,8 +2280,9 @@ configure_app_shortcuts() {
     fi
 }
 
-# --- Configure Finder ---
+# --- Configure Finder, screenshots, windows and fonts (Amethyst) ---
 
+# With tide these are tide's (write_tide_macos_settings).
 configure_finder() {
     info "Configuring Finder"
     try defaults write com.apple.finder AppleShowAllFiles -bool true
@@ -2395,11 +2377,16 @@ fi
 configure_karabiner
 configure_linearmouse
 configure_app_shortcuts
-configure_finder
-configure_screenshots
-configure_windows
+# With tide, tide keeps these; without, this writes them itself.
+if test "$WM" = tide; then
+    write_tide_macos_settings
+else
+    configure_finder
+    configure_screenshots
+    configure_windows
+    configure_fonts
+fi
 configure_lock_screen
-configure_fonts
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then
