@@ -1939,6 +1939,11 @@ install_os_packages() {
                 # release without them keeps the rest.
                 apt_install fuzzel wl-clipboard \
                     || warn "fuzzel or wl-clipboard unavailable via apt; Win+V on KDE says what's missing"
+                # Plasma Keyboard shows accents when a key is held, from
+                # Plasma 6.7; setup-kde makes it KWin's input method. Its own
+                # step: releases before Plasma 6.6 don't package it.
+                apt_install plasma-keyboard \
+                    || info "plasma-keyboard isn't packaged here, so holding a key on KDE doesn't offer accents"
                 install_wallpapers
             fi
             ;;
@@ -2014,6 +2019,8 @@ install_os_packages() {
                     || warn "glib2 unavailable via dnf; setup-kde will fall back to asking for a logout unless python3-dbus is installed"
                 dnf_install fuzzel wl-clipboard \
                     || warn "fuzzel or wl-clipboard unavailable via dnf; Win+V on KDE says what's missing"
+                dnf_install plasma-keyboard \
+                    || info "plasma-keyboard isn't packaged here, so holding a key on KDE doesn't offer accents"
                 install_wallpapers
             fi
             ;;
