@@ -1364,6 +1364,28 @@ check "units: it shows what systemctl said" has "$output" "'systemctl --user ena
 check "units: and warns" has "$output" "Warning: couldn't enable tide-clipboard.service, so Super+C's picker keeps no clipboard history"
 teardown
 
+# The greeter's copy of your look (tide SPEC.md §11): a folder that's
+# yours, under one readable by all, made once.
+setup; ARGS=(); run
+check "look: makes the folder for your look, yours and readable by all" \
+    has "$calls" "sudo install -d -m 755 -o $(id -un) -g $(id -gn) $T/var/lib/tide/look/$(id -un)"
+check "look: under one readable by all" has "$calls" "sudo install -d -m 755 $T/var/lib/tide/look"
+check "look: and it's there" test -d "$T/var/lib/tide/look/$(id -un)"
+: > "$CALLS"
+run
+check "look: a folder that's there already is left be" lacks "$calls" "$T/var/lib/tide/look"
+teardown
+
+setup; ARGS=(); run FAKE_INSTALL_FAILS="$T/var/lib/tide/look/$(id -un)"
+check "look: a folder that can't be made isn't fatal" test "$status" -eq 0
+check "look: and says what the greeter shows instead, and how to make it" \
+    has "$output" "couldn't make $T/var/lib/tide/look/$(id -un), so the greeter shows its own look, not your wallpaper"
+teardown
+
+setup; ARGS=(--no-sudo); run
+check "look: --no-sudo makes no folder" lacks "$calls" "tide/look"
+teardown
+
 setup; ARGS=(); run FAKE_USER_ENABLE_FAILS=tide-kde.service
 check "units: a failed enable of tide-kde.service isn't fatal" test "$status" -eq 0
 check "units: and warns that Meta+Space opens KRunner" has "$output" "Warning: couldn't enable tide-kde.service, so Meta+Space on Plasma opens KRunner, not tide's launcher"
