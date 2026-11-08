@@ -203,6 +203,8 @@ run_kde() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" "$@" 2>&1)"
     status=$?
@@ -217,6 +219,8 @@ run_kde_relative() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         ./setup-kde "$@" 2>&1)"
     status=$?
@@ -905,6 +909,8 @@ test_unmakeable_log_shows_the_output() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/state-is-a-file/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         "$KDE_SCRIPT" --no-install 2>&1)"
     status=$?
@@ -1048,11 +1054,143 @@ test_held_key_accents_use_plasma_keyboard() {
     assert_called "kwriteconfig6 --file kwinrc --group Wayland --key InputMethod $TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop"
 }
 
-# Without Plasma Keyboard, KWin's input method is left as it is.
+# Without Plasma Keyboard, KWin's input method is left as it is, and so are
+# its hold time and accents.
 test_no_plasma_keyboard_leaves_the_input_method() {
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e
     SETUP_PLASMA_KEYBOARD_DESKTOP="$TEST_TMPDIR/missing.desktop" run_kde --no-install
     assert_status 0 &&
-    assert_not_called "--key InputMethod"
+    assert_not_called "--key InputMethod" &&
+    assert_not_called "plasmakeyboardrc" &&
+    assert_file_not_exists "$(pk_accents)"
+}
+
+# --- Plasma Keyboard: tide's hold time and accents ---
+
+# pk_accents: Plasma Keyboard's base.json, of your own.
+pk_accents() { echo "$TEST_TMPDIR/home/.local/share/plasma/keyboard/diacritics/base.json"; }
+
+# tide_accents_table FILE LETTER: a table of tide's at FILE, with accents
+# for LETTER.
+tide_accents_table() {
+    mkdir -p "${1%/*}" &&
+    printf '{"version": 1, "map": {"%s": ["x%s"]}}\n' "$2" "$2" > "$1"
+}
+
+# run_with_plasma_keyboard ARG...: run_kde with Plasma Keyboard installed.
+run_with_plasma_keyboard() {
+    mkdir -p "$TEST_TMPDIR/apps" &&
+    : > "$TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop" &&
+    SETUP_PLASMA_KEYBOARD_DESKTOP="$TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop" run_kde "$@"
+}
+
+# same_file WHAT A B: fails the test unless A and B have the same contents.
+same_file() {
+    if ! cmp -s "$2" "$3"; then
+        echo "  FAIL: $1: $(cat "$3" 2>&1)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# A held key's accents show after 300 ms, tide's hold time.
+test_plasma_keyboard_holds_for_300_ms() {
+    run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file plasmakeyboardrc --group General --key diacriticsHoldThresholdMs 300" &&
+    assert_output_contains "Turned on accents for a held key, after 300 ms (Plasma Keyboard)"
+}
+
+# tide's installed table is copied where there's none, ahead of the
+# checkout's.
+test_plasma_keyboard_gets_tides_installed_accents() {
+    tide_accents_table "$TEST_TMPDIR/usr/share/fcitx5/tide-accents/accents.json" a &&
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e &&
+    SETUP_TIDE_ACCENTS_SYSTEM_TABLES="$TEST_TMPDIR/usr/share/fcitx5/tide-accents/accents.json $TEST_TMPDIR/usr/local/share/fcitx5/tide-accents/accents.json" \
+        run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    same_file "base.json isn't tide's installed table" \
+        "$TEST_TMPDIR/usr/share/fcitx5/tide-accents/accents.json" "$(pk_accents)" &&
+    if test -L "$(pk_accents)"; then
+        echo "  FAIL: base.json is a link, not a copy"
+        TEST_FAILED=1
+    fi &&
+    assert_output_contains "Gave Plasma Keyboard tide's accents, from $TEST_TMPDIR/usr/share/fcitx5/tide-accents/accents.json"
+}
+
+# The second installed place is looked in too.
+test_plasma_keyboard_gets_tides_local_accents() {
+    tide_accents_table "$TEST_TMPDIR/usr/local/share/fcitx5/tide-accents/accents.json" a &&
+    SETUP_TIDE_ACCENTS_SYSTEM_TABLES="$TEST_TMPDIR/usr/share/fcitx5/tide-accents/accents.json $TEST_TMPDIR/usr/local/share/fcitx5/tide-accents/accents.json" \
+        run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    same_file "base.json isn't tide's table under /usr/local" \
+        "$TEST_TMPDIR/usr/local/share/fcitx5/tide-accents/accents.json" "$(pk_accents)"
+}
+
+# Without an installed table, the checkout's is used.
+test_plasma_keyboard_gets_the_checkouts_accents() {
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e &&
+    run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    same_file "base.json isn't the checkout's table" \
+        "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" "$(pk_accents)"
+}
+
+# A copy of ours follows tide's table, and an unchanged one is left
+# quietly.
+test_plasma_keyboard_accents_follow_tides() {
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e &&
+    run_with_plasma_keyboard --no-install &&
+    run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    assert_output_lacks "tide's accents" &&
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" o &&
+    run_with_plasma_keyboard --no-install
+    assert_status 0 &&
+    same_file "base.json wasn't updated" \
+        "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" "$(pk_accents)" &&
+    assert_output_contains "Gave Plasma Keyboard tide's accents"
+}
+
+# A base.json of your own is yours, even once ours has been there.
+test_plasma_keyboard_keeps_your_accents() {
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e &&
+    run_with_plasma_keyboard --no-install &&
+    printf '{"version": 1, "map": {"l": ["ł"]}}\n' > "$(pk_accents)" &&
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" o &&
+    run_with_plasma_keyboard --no-install &&
+    assert_output_lacks "Leaving your Plasma Keyboard accents" &&
+    run_with_plasma_keyboard --no-install --verbose
+    assert_status 0 &&
+    if test "$(cat "$(pk_accents)")" != '{"version": 1, "map": {"l": ["ł"]}}'; then
+        echo "  FAIL: your base.json was replaced: $(cat "$(pk_accents)")"
+        TEST_FAILED=1
+    fi &&
+    assert_output_contains "Leaving your Plasma Keyboard accents, in $(pk_accents), as they are; tide's are in $TEST_TMPDIR/home/src/tide/fcitx5/accents.json"
+}
+
+# One of your own from before any copy of ours is yours too.
+test_plasma_keyboard_keeps_your_earlier_accents() {
+    tide_accents_table "$TEST_TMPDIR/home/src/tide/fcitx5/accents.json" e &&
+    mkdir -p "$(dirname "$(pk_accents)")" &&
+    printf 'mine\n' > "$(pk_accents)" &&
+    run_with_plasma_keyboard --no-install --verbose
+    assert_status 0 &&
+    if test "$(cat "$(pk_accents)")" != mine; then
+        echo "  FAIL: your base.json was replaced"
+        TEST_FAILED=1
+    fi &&
+    assert_output_contains "Leaving your Plasma Keyboard accents"
+}
+
+# Without tide's table, Plasma Keyboard keeps its own accents.
+test_plasma_keyboard_without_tides_accents() {
+    run_with_plasma_keyboard --no-install --verbose
+    assert_status 0 &&
+    assert_file_not_exists "$(pk_accents)" &&
+    assert_output_contains "tide's accents aren't here, so Plasma Keyboard keeps its own" &&
+    assert_output_lacks "Warning"
 }
 
 test_unbinds_emoji_selector_for_next_layout() {
@@ -1258,6 +1396,8 @@ test_declined_live_apply_allocates_no_batch() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         TMPDIR="$TEST_TMPDIR/no-such-dir" \
         "$KDE_SCRIPT" --no-install --no-live-shortcuts 2>&1)"
@@ -1320,6 +1460,8 @@ test_unusable_tmpdir_falls_back_to_logout_advice() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         TMPDIR="$TEST_TMPDIR/no-such-dir" \
         "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
@@ -1345,6 +1487,8 @@ test_uncreatable_journal_dir_skips_live_apply() {
     output="$(HOME="$TEST_TMPDIR/home" \
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         XDG_STATE_HOME="$TEST_TMPDIR/state-is-a-file/state" \
         "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
@@ -1403,6 +1547,8 @@ test_missing_python3_falls_back_to_logout_advice() {
         XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
         XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
         XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
         PYTHON=no-such-python3 \
         "$KDE_SCRIPT" --no-install --live-shortcuts 2>&1)"
@@ -1618,6 +1764,20 @@ run_test "a held key's accents come from Plasma Keyboard, KWin's input method" \
     test_held_key_accents_use_plasma_keyboard
 run_test "without Plasma Keyboard, KWin's input method is left alone" \
     test_no_plasma_keyboard_leaves_the_input_method
+run_test "Plasma Keyboard shows accents after 300 ms" test_plasma_keyboard_holds_for_300_ms
+run_test "Plasma Keyboard gets tide's installed accents" \
+    test_plasma_keyboard_gets_tides_installed_accents
+run_test "Plasma Keyboard gets tide's accents from /usr/local" \
+    test_plasma_keyboard_gets_tides_local_accents
+run_test "Plasma Keyboard gets the tide checkout's accents" \
+    test_plasma_keyboard_gets_the_checkouts_accents
+run_test "Plasma Keyboard's copy of tide's accents follows tide's" \
+    test_plasma_keyboard_accents_follow_tides
+run_test "your own Plasma Keyboard accents are kept" test_plasma_keyboard_keeps_your_accents
+run_test "your Plasma Keyboard accents from before are kept" \
+    test_plasma_keyboard_keeps_your_earlier_accents
+run_test "without tide's accents, Plasma Keyboard keeps its own" \
+    test_plasma_keyboard_without_tides_accents
 run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
     test_unbinds_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \
