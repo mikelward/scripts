@@ -128,33 +128,38 @@ esac
 exit 0
 MOCK
 
-    # git and make, for tide's checkout. A clone creates the target directory,
-    # as the real one does, so the make that follows has something to run in;
-    # git_fails and make_fails stage a failure. make install writes
-    # ~/.hammerspoon/tide as tide's does, or ~/.hammerspoon/tilemo where
-    # make_installs_timo stages a checkout from before the rename.
+    # git, for tide's checkout. A clone creates the target directory with
+    # tide's installer in it, as the real one does; git_fails stages a
+    # failure.
     cat > "$TEST_TMPDIR/bin/git" <<MOCK
 #!/bin/sh
 printf "%s\\n" "git \$*" >> "$CALLS"
 test -f "$TEST_TMPDIR/git_fails" && exit 128
 if test "\$1" = clone; then
-    mkdir -p "\$3"
+    mkdir -p "\$3/install"
+    cp "$TEST_TMPDIR/tide-setup" "\$3/install/tide-setup"
 fi
 exit 0
 MOCK
-    cat > "$TEST_TMPDIR/bin/make" <<MOCK
+
+    # tide's installer records how it was run. It hands setup its
+    # Accessibility step and its logout, as the real one does; installer_warns
+    # stages a warning, which it adds to setup's list, and installer_fails a
+    # failure.
+    cat > "$TEST_TMPDIR/tide-setup" <<MOCK
 #!/bin/sh
-printf "%s\\n" "make \$*" >> "$CALLS"
-test -f "$TEST_TMPDIR/make_fails" && exit 2
-if test "\$3" = install; then
-    if test -f "$TEST_TMPDIR/make_installs_timo"; then
-        mkdir -p "$TEST_TMPDIR/home/.hammerspoon/tilemo"
-    else
-        mkdir -p "$TEST_TMPDIR/home/.hammerspoon/tide"
-    fi
+printf "%s\\n" "run \$0 \$* [SETUP_COMMAND=\${SETUP_COMMAND:-unset}]" >> "$CALLS"
+printf 'Installing tide\\n'
+if test -f "$TEST_TMPDIR/installer_warns"; then
+    printf 'Warning: Amethyst is installed\\n' >&2
+    printf 'Warning: Amethyst is installed\\n' >> "\$SETUP_PROBLEMS"
 fi
+printf 'todo\\tTurn on Accessibility for Hammerspoon. tide runs in it.\\tThen choose Reload Config.\\n' >> "\$SETUP_TODO"
+printf 'logout\\tthe menu bar setting\\n' >> "\$SETUP_TODO"
+test -f "$TEST_TMPDIR/installer_fails" && exit 1
 exit 0
 MOCK
+    chmod +x "$TEST_TMPDIR/tide-setup"
 
     # The absolute-path helpers.
     for cmd in activateSettings pbs; do
@@ -177,7 +182,7 @@ MOCK
     # reached the real hidutil and launchctl would remap the developer's
     # keyboard and load a LaunchAgent while they ran `make test`.
     mkdir -p "$TEST_TMPDIR/sysbin"
-    for cmd in awk cat dirname grep id mkdir mktemp mv rm sed tail tr unzip wc; do
+    for cmd in awk cat cp dirname grep id mkdir mktemp mv rm sed tail tr unzip wc; do
         ln -sf "$(command -v "$cmd")" "$TEST_TMPDIR/sysbin/$cmd"
     done
 
@@ -332,6 +337,12 @@ stage_amethyst_bundle() {
 # Pretend APP is not running, e.g. `stage_not_running Amethyst`.
 stage_not_running() {
     touch "$TEST_TMPDIR/not_running.$1"
+}
+
+# An existing tide checkout at DIR, with its installer.
+stage_checkout() {
+    mkdir -p "$1/install"
+    cp "$TEST_TMPDIR/tide-setup" "$1/install/tide-setup"
 }
 
 # A machine set up for tide: no Amethyst installed or running, no Rectangle
@@ -855,13 +866,13 @@ test_missing_launchctl_is_not_fatal() {
 # --- keyboard shortcuts ---
 
 test_configures_spotlight_on_option_space() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 64"
 }
 
 test_disables_finder_search_hotkey() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write com.apple.symbolichotkeys AppleSymbolicHotKeys -dict-add 65"
 }
@@ -870,7 +881,7 @@ test_disables_finder_search_hotkey() {
 # stock binding with it and leave nothing for System Settings to restore.
 # 1572864 is Cmd+Option, the modifier half of the original Cmd+Option+Space.
 test_disabled_finder_search_keeps_its_parameters() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "1572864"
 }
@@ -879,7 +890,7 @@ test_disabled_finder_search_keeps_its_parameters() {
 # copy back over these, which looks exactly like the writes never happened.
 test_warns_when_settings_app_is_open() {
     stage_settings_app_running
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "System Settings is running and can overwrite these shortcuts"
 }
@@ -899,7 +910,7 @@ printf "%s\\n" "pgrep \$*" >> "$CALLS"
 exit 2
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not tell whether System Settings is running"
 }
@@ -1074,7 +1085,7 @@ test_old_tab_karabiner_rule_is_named_without_tide() {
 }
 
 test_applies_shortcut_settings() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "activateSettings -u"
 }
@@ -1083,7 +1094,7 @@ test_applies_shortcut_settings() {
 # status 127 partway through instead of finishing and saying what was left.
 test_missing_activate_settings_warns_about_logout() {
     ACTIVATE_SETTINGS="$TEST_TMPDIR/bin/no-such-activateSettings"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "log out and back in for the shortcut changes"
 }
@@ -2370,18 +2381,17 @@ test_reports_problems_instead_of_success() {
 
 # --- --wm tide ---
 
-# Without --wm, as a plain setup runs it, it's tide: cloned, installed and
-# loaded by Hammerspoon, with tide's Mission Control writes and none of
-# Amethyst's.
+# Without --wm, as a plain setup runs it, it's tide: cloned and installed
+# by its own installer, with none of Amethyst's bindings.
 test_default_wm_is_tide() {
     run_macos
     assert_status 0 &&
     assert_output_contains "Configuring tide" &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/home/tidemo" &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install" &&
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup" &&
     assert_file_exists "$TEST_TMPDIR/home/.config/tide/macos.json" &&
     assert_not_called "com.amethyst.Amethyst" &&
-    assert_file_exists "$TEST_TMPDIR/home/.hammerspoon/init.lua"
+    assert_not_called "com.apple.symbolichotkeys"
 }
 
 # --wm amethyst keeps the Amethyst-era bindings, Amethyst itself, and none
@@ -2406,7 +2416,7 @@ test_wm_amethyst_keeps_amethyst_bindings() {
 test_wm_equals_syntax() {
     run_macos --wm=tide
     assert_status 0 &&
-    assert_hotkey 64 true 32 49 1048576 &&
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup" &&
     assert_output_contains "Configuring tide"
 }
 
@@ -2415,7 +2425,6 @@ test_wm_equals_syntax() {
 test_wm_timo_is_an_alias_for_tide() {
     run_macos --wm timo
     assert_status 0 &&
-    assert_hotkey 64 true 32 49 1048576 &&
     assert_output_contains "Configuring tide" &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/home/tidemo"
 }
@@ -2454,52 +2463,6 @@ test_help_documents_wm() {
     assert_output_contains "--wm WM" &&
     assert_output_contains "tide (the default)" &&
     assert_output_contains "or amethyst"
-}
-
-# tide registers its keys with RegisterEventHotKey, which fails
-# silently on a key the system holds. Spotlight goes back to Cmd+Space, and
-# Finder search back to its stock binding, enabled, now nothing collides.
-test_tilemo_moves_spotlight_back_to_command_space() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_hotkey 64 true 32 49 1048576 &&
-    assert_hotkey 65 true 32 49 1572864
-}
-
-# Off, at the stock Ctrl+N, so re-enabling one in System Settings gets the
-# macOS default rather than a blank -- and nothing is left on Option+1..9.
-test_tilemo_disables_desktop_switching_at_stock_bindings() {
-    run_macos --wm tide
-    assert_status 0 || return 1
-    set -- \
-        118 49 18 \
-        119 50 19 \
-        120 51 20 \
-        121 52 21 \
-        122 53 23 \
-        123 54 22 \
-        124 55 26 \
-        125 56 28 \
-        126 57 25
-    while test $# -ge 3; do
-        assert_hotkey "$1" false "$2" "$3" 262144 || return 1
-        shift 3
-    done
-    assert_not_called "<integer>524288</integer>"
-}
-
-test_tilemo_disables_move_a_space_at_stock_bindings() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_hotkey 79 false 65535 123 8650752 &&
-    assert_hotkey 81 false 65535 124 8650752 &&
-    assert_not_called "<integer>9175040</integer>"
-}
-
-test_tilemo_still_applies_the_shortcuts() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_called "activateSettings -u"
 }
 
 # tide uses one Space per display, so a machine with fewer than nine has
@@ -2549,14 +2512,6 @@ test_tilemo_leaves_tides_local_macos_settings_alone() {
     assert_file_contains "$TEST_TMPDIR/home/.config/tide/macos.local.json" '{"text": {"smoothing": "off"}}'
 }
 
-# tide's overview has Mission Control's keys (its gestures are in macos.json).
-test_tilemo_hands_mission_control_to_its_overview() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_hotkey 32 false 65535 126 8650752 &&
-    assert_hotkey 33 false 65535 125 8650752
-}
-
 # Without tide nothing would apply tide's file, so Amethyst gets none.
 test_amethyst_gets_no_tide_macos_settings() {
     run_macos --wm amethyst
@@ -2572,131 +2527,10 @@ test_amethyst_leaves_mission_control_alone() {
     assert_not_called "HorizSwipeGesture"
 }
 
-test_tilemo_keeps_the_menu_bar_shown_for_its_bar() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_called "defaults write NSGlobalDomain _HIHideMenuBar -bool false" &&
-    assert_not_called "_HIHideMenuBar -bool true" &&
-    assert_output_contains "The menu bar stays shown, under tide's bar"
-}
-
 test_amethyst_leaves_the_menu_bar_alone() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_not_called "_HIHideMenuBar"
-}
-
-test_tilemo_installs_hammerspoon_when_missing() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_called "brew install --cask hammerspoon"
-}
-
-test_tilemo_stale_hammerspoon_record_names_the_fix() {
-    printf 'hammerspoon 1.1.0\n' > "$TEST_TMPDIR/brew-casks"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_not_called "brew install --cask hammerspoon" &&
-    assert_output_contains "Homebrew lists hammerspoon 1.1.0 as installed but Hammerspoon is missing" &&
-    assert_output_contains "run 'brew uninstall --cask --force hammerspoon'"
-}
-
-test_tilemo_does_not_reinstall_hammerspoon() {
-    add_app Hammerspoon
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_not_called "brew install --cask hammerspoon" &&
-    assert_output_lacks "Hammerspoon is already installed"
-}
-
-test_tilemo_no_install_skips_hammerspoon() {
-    run_macos --wm tide --no-install --ignore-errors
-    assert_status 0 &&
-    assert_not_called "brew install --cask hammerspoon" &&
-    assert_output_contains "Hammerspoon is not installed and --no-install was given"
-}
-
-test_tilemo_missing_brew_warns_about_hammerspoon() {
-    run_macos_without brew --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "Homebrew not found, so Hammerspoon can't be installed" &&
-    assert_output_lacks "macOS configured successfully"
-}
-
-# Hammerspoon's cask is an app, not a .pkg, so --no-sudo has nothing to skip.
-test_tilemo_no_sudo_still_installs_hammerspoon() {
-    run_macos --wm tide --no-sudo
-    assert_status 0 &&
-    assert_called "brew install --cask hammerspoon"
-}
-
-test_tilemo_failed_hammerspoon_install_is_counted() {
-    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
-#!/bin/sh
-printf "%s\\n" "brew \$*" >> "$CALLS"
-exit 1
-MOCK
-    chmod +x "$TEST_TMPDIR/bin/brew"
-    stage_tilemo_machine
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "could not install Hammerspoon; nothing will tile" &&
-    assert_output_lacks "macOS configured successfully"
-}
-
-# tide's bar reads whether Bluetooth is on through blueutil; without it the
-# icon hides, so it's installed with Hammerspoon.
-test_tilemo_installs_blueutil_when_missing() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_called "brew install blueutil"
-}
-
-test_tilemo_does_not_reinstall_blueutil() {
-    printf '#!/bin/sh\nexit 0\n' > "$TEST_TMPDIR/bin/blueutil"
-    chmod +x "$TEST_TMPDIR/bin/blueutil"
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_not_called "brew install blueutil" &&
-    assert_output_lacks "blueutil is already installed"
-}
-
-test_tilemo_no_install_skips_blueutil() {
-    run_macos --wm tide --no-install --ignore-errors
-    assert_status 0 &&
-    assert_not_called "brew install blueutil" &&
-    assert_output_contains "blueutil is not installed and --no-install was given; tide's bar won't show whether Bluetooth is on until it is"
-}
-
-test_tilemo_missing_brew_warns_about_blueutil() {
-    run_macos_without brew --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "Homebrew not found, so blueutil can't be installed"
-}
-
-test_tilemo_failed_blueutil_install_is_counted() {
-    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
-#!/bin/sh
-printf "%s\\n" "brew \$*" >> "$CALLS"
-case "\$*" in
-    "install blueutil") exit 1 ;;
-esac
-exit 0
-MOCK
-    chmod +x "$TEST_TMPDIR/bin/brew"
-    stage_tilemo_machine
-    add_app Hammerspoon
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "could not install blueutil; tide's bar won't show whether Bluetooth is on until it is" &&
-    assert_output_lacks "macOS configured successfully"
-}
-
-# A monitor's speakers have no volume macOS reads; tide's bar asks the
-# monitor over DDC, with m1ddc on Apple silicon and ddcctl on Intel.
-fake_arch() {
-    printf '#!/bin/sh\nif test "$1" = -m; then echo %s; else exec /usr/bin/uname "$@"; fi\n' "$1" > "$TEST_TMPDIR/bin/uname"
-    chmod +x "$TEST_TMPDIR/bin/uname"
 }
 
 # Santa's Lockdown mode needs each new version of a binary approved, which
@@ -2706,7 +2540,6 @@ test_lockdown_installs_apps_and_tools_as_usual() {
     stage_tilemo_machine
     remove_karabiner
     remove_linearmouse
-    fake_arch arm64
     cat > "$TEST_TMPDIR/bin/santactl" <<'MOCK'
 #!/bin/sh
 printf "%s\n" ">>> Daemon Info" "  Mode                      | Lockdown"
@@ -2714,108 +2547,120 @@ MOCK
     chmod +x "$TEST_TMPDIR/bin/santactl"
     run_macos --wm tide --ignore-errors
     assert_status 0 &&
-    assert_called "brew install --cask hammerspoon" &&
     assert_called "brew install --cask karabiner-elements" &&
     assert_called "brew install --cask linearmouse" &&
-    assert_called "brew install blueutil" &&
-    assert_called "brew install m1ddc" &&
     assert_output_lacks "Santa" &&
     assert_output_lacks "from IT"
 }
 
-test_tilemo_installs_m1ddc_on_apple_silicon() {
-    fake_arch arm64
-    run_macos --wm tide
+# Amethyst's setup doesn't run tide's installer.
+test_amethyst_does_not_run_tides_installer() {
+    run_macos --wm amethyst
     assert_status 0 &&
-    assert_called "brew install m1ddc" &&
-    assert_not_called "brew install ddcctl"
+    assert_not_called "/install/tide-setup"
 }
 
-test_tilemo_installs_ddcctl_on_intel() {
-    fake_arch x86_64
-    run_macos --wm tide
+# tide's installer is told what to rerun, and gets the options that apply
+# to it: not --no-sudo or --yes, which mean nothing to it.
+test_tide_installer_gets_the_options_that_apply() {
+    stage_checkout "$TEST_TMPDIR/home/tidemo"
+    run_macos --no-install --ignore-errors --verbose --no-sudo --yes
     assert_status 0 &&
-    assert_called "brew install ddcctl" &&
-    assert_not_called "brew install m1ddc"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup --verbose --no-install --ignore-errors [SETUP_COMMAND=setup-macos]"
 }
 
-test_tilemo_does_not_reinstall_m1ddc() {
-    fake_arch arm64
-    printf '#!/bin/sh\nexit 0\n' > "$TEST_TMPDIR/bin/m1ddc"
-    chmod +x "$TEST_TMPDIR/bin/m1ddc"
-    run_macos --wm tide
+test_tide_installer_gets_no_options_by_default() {
+    run_macos
     assert_status 0 &&
-    assert_not_called "brew install m1ddc" &&
-    assert_output_lacks "m1ddc is already installed"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup  [SETUP_COMMAND=setup-macos]"
 }
 
-test_tilemo_failed_ddc_install_is_counted() {
-    fake_arch arm64
-    cat > "$TEST_TMPDIR/bin/brew" <<MOCK
-#!/bin/sh
-printf "%s\\n" "brew \$*" >> "$CALLS"
-case "\$*" in
-    "install m1ddc") exit 1 ;;
-esac
-exit 0
-MOCK
-    chmod +x "$TEST_TMPDIR/bin/brew"
+# Its steps join this run's list, in order, with its logout in the one
+# log-out step at the end.
+test_tide_installers_steps_join_the_list() {
     stage_tilemo_machine
-    add_app Hammerspoon
-    run_macos --wm tide --ignore-errors
+    run_macos
     assert_status 0 &&
-    assert_output_contains "could not install m1ddc; tide's bar won't show a monitor's speaker volume until it is" &&
+    assert_says "1. Turn on Accessibility for Hammerspoon. tide runs in it. Then choose Reload Config." &&
+    assert_says "for the Dvorak layout and the menu bar setting to take effect"
+}
+
+# Its warnings are counted, so the run doesn't claim success over them.
+test_tide_installers_warnings_are_counted() {
+    stage_tilemo_machine
+    touch "$TEST_TMPDIR/installer_warns"
+    run_macos
+    assert_status 0 &&
+    assert_output_contains "macOS configured with 1 problem(s)" &&
     assert_output_lacks "macOS configured successfully"
 }
 
-# Amethyst's setup has no bar to show it on.
-test_amethyst_does_not_install_blueutil() {
-    run_macos --wm amethyst
+test_failed_tide_installer_stops_the_run() {
+    touch "$TEST_TMPDIR/installer_fails"
+    run_macos
+    assert_status 1 &&
+    assert_output_contains "Error: failed (exit 1): $TEST_TMPDIR/home/tidemo/install/tide-setup" &&
+    assert_output_lacks "Configuring Karabiner-Elements"
+}
+
+test_ignore_errors_goes_on_past_a_failed_tide_installer() {
+    touch "$TEST_TMPDIR/installer_fails"
+    run_macos --ignore-errors
     assert_status 0 &&
-    assert_not_called "brew install blueutil" &&
-    assert_not_called "brew install m1ddc" &&
-    assert_not_called "brew install ddcctl"
+    assert_output_contains "Warning: failed (exit 1): $TEST_TMPDIR/home/tidemo/install/tide-setup --ignore-errors" &&
+    assert_output_contains "Configuring Karabiner-Elements" &&
+    assert_says "Turn on Accessibility for Hammerspoon"
+}
+
+# A checkout from before tide had its own installer is told to update.
+test_checkout_without_an_installer_is_told_to_update() {
+    mkdir -p "$TEST_TMPDIR/home/tidemo"
+    touch "$TEST_TMPDIR/git_fails"
+    run_macos --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "$TEST_TMPDIR/home/tidemo has no install/tide-setup, so it predates tide's own installer; update it (git -C $TEST_TMPDIR/home/tidemo pull)" &&
+    assert_output_lacks "macOS configured successfully"
 }
 
 test_tilemo_clones_and_installs_tide() {
     run_macos --wm tide
     assert_status 0 &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/home/tidemo" &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup"
 }
 
 # An existing checkout is pulled, fast-forward only, so a plain run keeps it
 # current, then installed; it's never cloned over.
 test_tilemo_updates_an_existing_checkout() {
-    mkdir -p "$TEST_TMPDIR/home/tidemo"
+    stage_checkout "$TEST_TMPDIR/home/tidemo"
     run_macos --wm tide
     assert_status 0 &&
     assert_not_called "git clone" &&
     assert_called "git -C $TEST_TMPDIR/home/tidemo pull --ff-only" &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup"
 }
 
 # --no-install brings in no newer tide: the checkout is installed as it
 # stands, unpulled.
 test_tilemo_no_install_doesnt_pull() {
-    mkdir -p "$TEST_TMPDIR/home/tidemo"
+    stage_checkout "$TEST_TMPDIR/home/tidemo"
     run_macos --wm tide --no-install
     assert_status 0 &&
     assert_not_called "git " &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install" &&
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup" &&
     assert_output_contains "without pulling it (--no-install)"
 }
 
 # One a pull can't fast-forward (commits of its own, changes in the way, no
 # network) is installed as it stands, saying why.
 test_tilemo_installs_a_checkout_it_cant_update() {
-    mkdir -p "$TEST_TMPDIR/home/tidemo"
+    stage_checkout "$TEST_TMPDIR/home/tidemo"
     touch "$TEST_TMPDIR/git_fails"
     run_macos --wm tide --ignore-errors
     assert_status 0 &&
     assert_output_contains "Warning: couldn't update $TEST_TMPDIR/home/tidemo: " &&
     assert_output_contains "; installing it as it is" &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install"
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup"
 }
 
 test_tilemo_dir_overrides_the_checkout() {
@@ -2824,41 +2669,44 @@ test_tilemo_dir_overrides_the_checkout() {
     TIDEMO_DIR=
     assert_status 0 &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/src/tilemo" &&
-    assert_called "make -C $TEST_TMPDIR/src/tilemo install"
+    assert_called "run $TEST_TMPDIR/src/tilemo/install/tide-setup"
 }
 
 # Earlier runs cloned into ~/timo. That checkout is used, not cloned beside.
 test_tilemo_uses_a_checkout_from_before_the_rename() {
-    mkdir -p "$TEST_TMPDIR/home/timo"
+    stage_checkout "$TEST_TMPDIR/home/timo"
     stage_tilemo_machine
     run_macos --wm tide
     assert_status 0 &&
     assert_not_called "git clone" &&
     assert_called "git -C $TEST_TMPDIR/home/timo pull --ff-only" &&
-    assert_called "make -C $TEST_TMPDIR/home/timo install" &&
+    assert_called "run $TEST_TMPDIR/home/timo/install/tide-setup" &&
     assert_output_contains "Using the checkout in $TEST_TMPDIR/home/timo, cloned before its repo was renamed tidemo" &&
     assert_output_contains "macOS configured successfully"
 }
 
 test_tilemo_prefers_its_own_checkout_to_the_old_one() {
-    mkdir -p "$TEST_TMPDIR/home/tidemo" "$TEST_TMPDIR/home/tilemo" "$TEST_TMPDIR/home/timo"
+    stage_checkout "$TEST_TMPDIR/home/tidemo"
+    stage_checkout "$TEST_TMPDIR/home/tilemo"
+    stage_checkout "$TEST_TMPDIR/home/timo"
     run_macos --wm tide
     assert_status 0 &&
-    assert_called "make -C $TEST_TMPDIR/home/tidemo install" &&
-    assert_not_called "make -C $TEST_TMPDIR/home/tilemo install" &&
-    assert_not_called "make -C $TEST_TMPDIR/home/timo install" &&
+    assert_called "run $TEST_TMPDIR/home/tidemo/install/tide-setup" &&
+    assert_not_called "run $TEST_TMPDIR/home/tilemo/install/tide-setup" &&
+    assert_not_called "run $TEST_TMPDIR/home/timo/install/tide-setup" &&
     assert_output_lacks "cloned before its repo was renamed"
 }
 
 # A ~/tilemo checkout, from before the repo was renamed tidemo, is used
 # rather than cloned beside, and wins over an older ~/timo.
 test_tilemo_uses_a_tilemo_checkout() {
-    mkdir -p "$TEST_TMPDIR/home/tilemo" "$TEST_TMPDIR/home/timo"
+    stage_checkout "$TEST_TMPDIR/home/tilemo"
+    stage_checkout "$TEST_TMPDIR/home/timo"
     run_macos --wm tide
     assert_status 0 &&
     assert_not_called "git clone" &&
-    assert_called "make -C $TEST_TMPDIR/home/tilemo install" &&
-    assert_not_called "make -C $TEST_TMPDIR/home/timo install" &&
+    assert_called "run $TEST_TMPDIR/home/tilemo/install/tide-setup" &&
+    assert_not_called "run $TEST_TMPDIR/home/timo/install/tide-setup" &&
     assert_output_contains "Using the checkout in $TEST_TMPDIR/home/tilemo, cloned before its repo was renamed tidemo"
 }
 
@@ -2867,7 +2715,7 @@ test_old_tilemo_dir_still_overrides_the_checkout() {
     run_macos --wm tide
     TILEMO_DIR=
     assert_status 0 &&
-    assert_called "make -C $TEST_TMPDIR/src/tilemo install"
+    assert_called "run $TEST_TMPDIR/src/tilemo/install/tide-setup"
 }
 
 test_old_timo_dir_still_overrides_the_checkout() {
@@ -2876,26 +2724,14 @@ test_old_timo_dir_still_overrides_the_checkout() {
     TIMO_DIR=
     assert_status 0 &&
     assert_called "git clone https://github.com/mikelward/tidemo.git $TEST_TMPDIR/src/timo" &&
-    assert_called "make -C $TEST_TMPDIR/src/timo install"
-}
-
-# A checkout from before the rename installs ~/.hammerspoon/timo, which the
-# init.lua written here doesn't load; say to update it rather than finish
-# looking configured.
-test_tilemo_flags_a_checkout_that_installs_no_tide() {
-    mkdir -p "$TEST_TMPDIR/home/timo"
-    touch "$TEST_TMPDIR/make_installs_timo"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "$TEST_TMPDIR/home/timo installed no $TEST_TMPDIR/home/.hammerspoon/tide, so it predates the rename from tilemo; update it (git -C $TEST_TMPDIR/home/timo pull)" &&
-    assert_output_lacks "macOS configured successfully"
+    assert_called "run $TEST_TMPDIR/src/timo/install/tide-setup"
 }
 
 test_tilemo_no_install_skips_the_clone() {
     run_macos --wm tide --no-install --ignore-errors
     assert_status 0 &&
     assert_not_called "git clone" &&
-    assert_not_called "make -C" &&
+    assert_not_called "/install/tide-setup" &&
     assert_output_contains "--no-install was given; clone https://github.com/mikelward/tidemo.git there"
 }
 
@@ -2904,15 +2740,7 @@ test_tilemo_failed_clone_is_counted() {
     run_macos --wm tide --ignore-errors
     assert_status 0 &&
     assert_output_contains "could not clone https://github.com/mikelward/tidemo.git" &&
-    assert_not_called "make -C" &&
-    assert_output_lacks "macOS configured successfully"
-}
-
-test_tilemo_failed_make_install_is_counted() {
-    touch "$TEST_TMPDIR/make_fails"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "could not install tide from $TEST_TMPDIR/home/tidemo" &&
+    assert_not_called "/install/tide-setup" &&
     assert_output_lacks "macOS configured successfully"
 }
 
@@ -2920,86 +2748,7 @@ test_tilemo_missing_git_is_reported() {
     run_macos_without git --wm tide --ignore-errors
     assert_status 0 &&
     assert_output_contains "git not found, so tide can't be cloned" &&
-    assert_not_called "make -C"
-}
-
-test_tilemo_writes_hammerspoon_init() {
-    run_macos --wm tide
-    assert_status 0 &&
-    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tide = require("tide")' &&
-    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tide.start({})'
-}
-
-# Someone's own Hammerspoon config is theirs: say what to add, never
-# overwrite it.
-test_tilemo_leaves_an_existing_init_alone() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' 'hs.alert.show("mine")' > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_file_contains "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'hs.alert.show("mine")' &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'require("tide")' &&
-    assert_output_contains "doesn't load tide, so it was left alone" &&
-    assert_output_contains 'tide = require("tide")'
-}
-
-test_tilemo_accepts_an_init_that_loads_tide() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' "local t = require 'tide'" 't.start({})' \
-        > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --verbose
-    assert_status 0 &&
-    assert_output_contains "Skipping $TEST_TMPDIR/home/.hammerspoon/init.lua: it already loads tide" &&
-    assert_output_lacks "doesn't load tide" &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tide.start({})'
-}
-
-# tide keeps require("timo") working as a shim, so an init.lua from before
-# the rename already loads it.
-test_tilemo_accepts_an_init_that_loads_it_by_its_old_name() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' 'timo = require("timo")' 'timo.start({})' \
-        > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --verbose
-    assert_status 0 &&
-    assert_output_contains "Skipping $TEST_TMPDIR/home/.hammerspoon/init.lua: it already loads tide" &&
-    assert_output_lacks "doesn't load tide" &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tide.start({})'
-}
-
-test_tilemo_accepts_an_init_that_loads_it_as_tilemo() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' 'tilemo = require("tilemo")' 'tilemo.start({})' \
-        > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --verbose
-    assert_status 0 &&
-    assert_output_contains "Skipping $TEST_TMPDIR/home/.hammerspoon/init.lua: it already loads tide" &&
-    assert_file_lacks "$TEST_TMPDIR/home/.hammerspoon/init.lua" 'tide.start({})'
-}
-
-# Commented out, it doesn't load tide, so the run still says what to add.
-test_tilemo_does_not_count_a_commented_out_require() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    printf '%s\n' '-- tide = require("tide")' '  -- tide.start({})' \
-        > "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --ignore-errors --verbose
-    assert_status 0 &&
-    assert_output_lacks "already loads tide" &&
-    assert_output_contains "doesn't load tide, so it was left alone"
-}
-
-# A dangling symlink is someone's file too, not a gap to write into.
-test_tilemo_does_not_replace_a_dangling_init_symlink() {
-    mkdir -p "$TEST_TMPDIR/home/.hammerspoon"
-    ln -s "$TEST_TMPDIR/nowhere/init.lua" "$TEST_TMPDIR/home/.hammerspoon/init.lua"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "could not read $TEST_TMPDIR/home/.hammerspoon/init.lua" || return 1
-    if ! test -L "$TEST_TMPDIR/home/.hammerspoon/init.lua"; then
-        echo "  FAIL: the init.lua symlink was replaced"
-        TEST_FAILED=1
-        return 1
-    fi
+    assert_not_called "/install/tide-setup"
 }
 
 test_tilemo_says_hammerspoon_needs_accessibility() {
@@ -3008,50 +2757,6 @@ test_tilemo_says_hammerspoon_needs_accessibility() {
     assert_says "Turn on Accessibility for Hammerspoon" &&
     assert_says "choose Reload Config" &&
     assert_never_says "Turn on Accessibility for Amethyst"
-}
-
-# Two tilers fight over the same windows. Amethyst is warned about, not
-# uninstalled, and isn't installed or configured under tide.
-test_tilemo_warns_about_an_installed_amethyst() {
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "Amethyst is installed at $APPLICATIONS_DIR/Amethyst.app; quit it and remove it from System Settings > General > Login Items" &&
-    test -d "$APPLICATIONS_DIR/Amethyst.app" &&
-    assert_not_called "com.amethyst.Amethyst"
-}
-
-test_tilemo_warns_about_a_running_amethyst() {
-    remove_amethyst
-    stage_not_running Rectangle
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "Amethyst is running; quit it" &&
-    assert_not_called "brew install --cask amethyst"
-}
-
-test_tilemo_warns_about_rectangle() {
-    stage_tilemo_machine
-    add_app Rectangle
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "Rectangle is installed at $APPLICATIONS_DIR/Rectangle.app" &&
-    assert_output_contains "Ctrl+Option+arrows"
-}
-
-test_tilemo_unknown_tiler_state_is_reported() {
-    remove_amethyst
-    cat > "$TEST_TMPDIR/bin/pgrep" <<MOCK
-#!/bin/sh
-printf "%s\\n" "pgrep \$*" >> "$CALLS"
-case "\$*" in
-    *Amethyst*) exit 3 ;;
-esac
-exit 1
-MOCK
-    chmod +x "$TEST_TMPDIR/bin/pgrep"
-    run_macos --wm tide --ignore-errors
-    assert_status 0 &&
-    assert_output_contains "could not tell whether Amethyst is running (pgrep exited 3)"
 }
 
 test_tilemo_names_the_karabiner_rule() {
@@ -3427,45 +3132,19 @@ run_test "an unknown --wm is a usage error" \
 run_test "--wm without a value is a usage error" \
     test_wm_without_a_value_is_a_usage_error
 run_test "--help documents --wm" test_help_documents_wm
-run_test "tide: Spotlight goes back to Cmd+Space" \
-    test_tilemo_moves_spotlight_back_to_command_space
-run_test "tide: desktop switching is off, at its stock binding" \
-    test_tilemo_disables_desktop_switching_at_stock_bindings
-run_test "tide: moving a Space is off, at its stock binding" \
-    test_tilemo_disables_move_a_space_at_stock_bindings
-run_test "tide: the shortcuts are applied to this session" \
-    test_tilemo_still_applies_the_shortcuts
 run_test "tide: no nine-Spaces check" test_tilemo_does_not_ask_for_nine_spaces
 run_test "tide: gets macOS's settings in its macos.json, not from defaults" \
     test_tilemo_gets_macos_settings_in_its_file
 run_test "tide: a change made in Tide Settings is left alone" \
     test_tilemo_leaves_tides_local_macos_settings_alone
-run_test "tide: hands Mission Control's keys to its overview" \
-    test_tilemo_hands_mission_control_to_its_overview
 run_test "amethyst: no tide macOS settings" \
     test_amethyst_gets_no_tide_macos_settings
 run_test "Amethyst runs leave Mission Control's gestures alone" \
     test_amethyst_leaves_mission_control_alone
-run_test "tide: keeps the menu bar shown for its bar to cover" \
-    test_tilemo_keeps_the_menu_bar_shown_for_its_bar
 run_test "Amethyst runs leave the menu bar alone" \
     test_amethyst_leaves_the_menu_bar_alone
-run_test "tide: installs Hammerspoon when missing" \
-    test_tilemo_installs_hammerspoon_when_missing
-run_test "a stale Hammerspoon record names the fix instead of installing" \
-    test_tilemo_stale_hammerspoon_record_names_the_fix
-run_test "tide: does not reinstall Hammerspoon" \
-    test_tilemo_does_not_reinstall_hammerspoon
-run_test "tide: --no-install skips Hammerspoon" \
-    test_tilemo_no_install_skips_hammerspoon
-run_test "tide: missing brew is reported" \
-    test_tilemo_missing_brew_warns_about_hammerspoon
-run_test "tide: --no-sudo still installs Hammerspoon" \
-    test_tilemo_no_sudo_still_installs_hammerspoon
 run_test "tide: a tilemo.json Karabiner rule is still named" \
     test_tilemo_names_the_karabiner_rule_from_before_tides_rename
-run_test "tide: a failed Hammerspoon install is counted" \
-    test_tilemo_failed_hammerspoon_install_is_counted
 run_test "tide: clones and installs tide" test_tilemo_clones_and_installs_tide
 run_test "tide: an existing checkout is pulled, then installed" \
     test_tilemo_updates_an_existing_checkout
@@ -3483,40 +3162,14 @@ run_test "tide: the old \$TILEMO_DIR still overrides the checkout" \
     test_old_tilemo_dir_still_overrides_the_checkout
 run_test "tide: the old \$TIMO_DIR still overrides the checkout" \
     test_old_timo_dir_still_overrides_the_checkout
-run_test "tide: a checkout that installs no tide is flagged" \
-    test_tilemo_flags_a_checkout_that_installs_no_tide
 run_test "tide: \$TIDEMO_DIR overrides the checkout" \
     test_tilemo_dir_overrides_the_checkout
 run_test "tide: --no-install skips the clone" \
     test_tilemo_no_install_skips_the_clone
 run_test "tide: a failed clone is counted" test_tilemo_failed_clone_is_counted
-run_test "tide: a failed make install is counted" \
-    test_tilemo_failed_make_install_is_counted
 run_test "tide: missing git is reported" test_tilemo_missing_git_is_reported
-run_test "tide: writes a Hammerspoon init.lua" \
-    test_tilemo_writes_hammerspoon_init
-run_test "tide: an existing init.lua is left alone" \
-    test_tilemo_leaves_an_existing_init_alone
-run_test "tide: an init.lua that loads tide is accepted" \
-    test_tilemo_accepts_an_init_that_loads_tide
-run_test "tide: an init.lua that loads it as tilemo is accepted" \
-    test_tilemo_accepts_an_init_that_loads_it_as_tilemo
-run_test "tide: an init.lua that loads it as timo is accepted" \
-    test_tilemo_accepts_an_init_that_loads_it_by_its_old_name
-run_test "tide: a commented-out require doesn't count as loading tide" \
-    test_tilemo_does_not_count_a_commented_out_require
-run_test "tide: a dangling init.lua symlink is not replaced" \
-    test_tilemo_does_not_replace_a_dangling_init_symlink
 run_test "tide: says Hammerspoon needs Accessibility access" \
     test_tilemo_says_hammerspoon_needs_accessibility
-run_test "tide: an installed Amethyst is warned about, not removed" \
-    test_tilemo_warns_about_an_installed_amethyst
-run_test "tide: a running Amethyst is warned about" \
-    test_tilemo_warns_about_a_running_amethyst
-run_test "tide: an installed Rectangle is warned about" \
-    test_tilemo_warns_about_rectangle
-run_test "tide: an unknown tiler state is reported" \
-    test_tilemo_unknown_tiler_state_is_reported
 run_test "tide: names the tide Karabiner rule" \
     test_tilemo_names_the_karabiner_rule
 run_test "tide: the run doesn't explain Alt+Tab" \
@@ -3532,16 +3185,14 @@ run_test "Amethyst runs don't mention the tide rule" \
 run_test "tide: the preflight names tide's manual steps" test_tilemo_preflight
 run_test "tide: a configured machine reports success" \
     test_tilemo_reports_success_on_a_clean_run
-run_test "tide: blueutil is installed when missing" test_tilemo_installs_blueutil_when_missing
-run_test "tide: blueutil already there isn't reinstalled" test_tilemo_does_not_reinstall_blueutil
-run_test "tide: --no-install skips blueutil, saying what's lost" test_tilemo_no_install_skips_blueutil
-run_test "tide: no Homebrew warns about blueutil" test_tilemo_missing_brew_warns_about_blueutil
-run_test "tide: a failed blueutil install is counted" test_tilemo_failed_blueutil_install_is_counted
-run_test "tide: m1ddc is installed on Apple silicon" test_tilemo_installs_m1ddc_on_apple_silicon
-run_test "tide: ddcctl is installed on Intel" test_tilemo_installs_ddcctl_on_intel
-run_test "tide: m1ddc isn't reinstalled" test_tilemo_does_not_reinstall_m1ddc
-run_test "tide: a failed DDC tool install is counted" test_tilemo_failed_ddc_install_is_counted
-run_test "amethyst: blueutil and the DDC tools aren't installed" test_amethyst_does_not_install_blueutil
+run_test "amethyst: tide's installer isn't run" test_amethyst_does_not_run_tides_installer
+run_test "tide: the installer gets the options that apply" test_tide_installer_gets_the_options_that_apply
+run_test "tide: the installer gets no options by default" test_tide_installer_gets_no_options_by_default
+run_test "tide: the installer's steps join the list" test_tide_installers_steps_join_the_list
+run_test "tide: the installer's warnings are counted" test_tide_installers_warnings_are_counted
+run_test "tide: a failed installer stops the run" test_failed_tide_installer_stops_the_run
+run_test "tide: --ignore-errors goes on past a failed installer" test_ignore_errors_goes_on_past_a_failed_tide_installer
+run_test "tide: a checkout without an installer is told to update" test_checkout_without_an_installer_is_told_to_update
 run_test "Lockdown: tide's apps and tools install as usual" \
     test_lockdown_installs_apps_and_tools_as_usual
 
