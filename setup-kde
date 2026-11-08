@@ -8,8 +8,8 @@
 # - Application launch shortcuts (browser, terminal, music, chat, calendar),
 #   Win+V's clipboard menu, which pastes (clipboard-menu), and Win+Shift+V's
 #   snippets and Bitwarden menu, which types (fill-menu), and Win+Space's
-#   tide launcher, or KRunner without it (tide-launcher); Plasma's Emoji
-#   Selector moves from Win+. to Win+;
+#   tide launcher, or KRunner without it (tide-launcher), and Win+;'s
+#   emoji and characters menu, which pastes (chars-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
@@ -1001,6 +1001,9 @@ configure_app_shortcuts() {
     # Snippets and Bitwarden logins, typed where you were, as tide's
     # picker's Fill tab on Super+Shift+V.
     add_app_shortcut "fill-menu" "Meta+Shift+V"
+    # Emoji and symbols by name, pasted where you were, as tide's picker's
+    # Characters tab on Super+;.
+    add_app_shortcut "chars-menu" "Meta+;"
     # tide's launcher, as on tide (tide's SPEC.md §8.5), or KRunner where
     # it isn't running. Kickoff keeps the tap of Meta.
     add_app_shortcut "tide-launcher" "Meta+Space"
@@ -1039,9 +1042,9 @@ configure_keybindings() {
     # and cost the app-window cycling that key does. If an earlier run of this
     # script already cleared yours, System Settings > Shortcuts restores it.
     # Plasma's Emoji Selector holds Meta+. as a [services] launch shortcut,
-    # not a [kwin] action, so it needs the launch-shortcut form. It moves to
-    # Meta+;, the emoji and characters key on tide and tide for macOS too.
-    set_app_shortcut org.kde.plasma.emojier.desktop "Meta+;" "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
+    # not a [kwin] action, so it needs the launch-shortcut form. Meta+; is
+    # chars-menu, which pastes; the Selector only copies.
+    set_app_shortcut org.kde.plasma.emojier.desktop none "Emoji Selector"  # Meta+. -> Krohnkite Next Layout
     # Klipper's popup, in plasmashell, holds Meta+V. clipboard-menu opens
     # it itself in an X11 session, where its fuzzel menu can't run.
     unbind_shortcut_in plasmashell show-on-mouse-pos              # Meta+V -> clipboard-menu

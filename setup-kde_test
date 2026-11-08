@@ -810,7 +810,7 @@ MOCK
 test_a_second_run_says_nothing() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu tide-launcher; do
+            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -832,7 +832,7 @@ test_a_second_run_says_nothing() {
 test_quiet_run_shows_only_its_steps() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu tide-launcher; do
+            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -1036,12 +1036,12 @@ CONF
 
 # Meta+. is Plasma's Emoji Selector by default, and it holds it as a
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
-# Krohnkite's Next Layout needs the launch-shortcut form. It moves to Meta+;,
-# the emoji key on tide and tide for macOS too.
-test_moves_emoji_selector_for_next_layout() {
+# Krohnkite's Next Layout needs the launch-shortcut form. Meta+; is
+# chars-menu, which pastes where the Selector only copies.
+test_unbinds_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch Meta+;,none,Emoji Selector" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none,none,Emoji Selector" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteNextLayout Meta+."
 }
 
@@ -1433,6 +1433,7 @@ test_launch_shortcut_keys() {
     assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C," &&
     assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V," &&
     assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V," &&
+    assert_called "--group shortcut-chars-menu.desktop --key _launch Meta+;," &&
     assert_called "--group shortcut-tide-launcher.desktop --key _launch Meta+Space,"
 }
 
@@ -1596,8 +1597,8 @@ run_test "leaves Alt+\` app-window cycling alone" \
     test_does_not_unbind_walk_through_current_application
 run_test "Krohnkite sweep survives the config being rewritten mid-sweep" \
     test_krohnkite_sweep_survives_config_rewrite
-run_test "moves the Emoji Selector to Meta+; so Meta+. reaches Krohnkite" \
-    test_moves_emoji_selector_for_next_layout
+run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
+    test_unbinds_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \
     test_strips_stale_app_shortcut_groups
 run_test "stale-group sweep preserves the config's mode" \

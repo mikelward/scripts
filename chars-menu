@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# chars-menu: KDE Plasma's Win+;. Lists emoji and symbols by name in
+# fuzzel, and pastes the one chosen into the window you were in, as tide's
+# picker does on its Characters tab.
+#
+#   chars-menu
+#
+# The list is tide's shell/chars/chars.tsv (CHARACTER, NAME and GROUP,
+# tab-separated), from tide's install: ~/.config/quickshell/tide, then
+# /usr/local/share/tide/shell and /usr/share/tide/shell. The character goes
+# on the clipboard with wl-copy, then tide-kwin-paste presses Ctrl+V, as
+# clipboard-menu does: an emoji can be several code points, which a paste
+# keeps together. Without tide-kwin-paste it's only copied, and a
+# notification says so.
+#
+# It needs Plasma's Wayland session: fuzzel and KWin's fake-input are
+# Wayland's. Esc does nothing. Any failure is a notification, and exits 1.
+
+prog=chars-menu
+
+fail() {
+    echo "$prog: $1" >&2
+    notify-send -a "Characters" -u critical "Characters menu failed" "$1" ||
+        echo "$prog: notify-send failed too" >&2
+    exit 1
+}
+
+test -n "${WAYLAND_DISPLAY:-}" || fail "it needs Plasma's Wayland session, where fuzzel runs and KWin can paste"
+for tool in fuzzel wl-copy; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$tool isn't installed; setup installs it"
+done
+
+list=
+for dir in "${XDG_CONFIG_HOME:-$HOME/.config}/quickshell/tide" /usr/local/share/tide/shell /usr/share/tide/shell; do
+    if test -r "$dir/chars/chars.tsv"; then
+        list=$dir/chars/chars.tsv
+        break
+    fi
+done
+test -n "$list" || fail "tide's character list isn't installed; setup-tide installs it"
+
+# Each character, two spaces, then its name; # lines are the file's notes.
+# fuzzel's --index prints the chosen line's number; Esc prints nothing and
+# exits nonzero.
+chosen=$(awk -F '\t' '!/^#/ && $1 != "" { printf "%s  %s\n", $1, $2 }' "$list" |
+    fuzzel --dmenu --index --prompt "Characters: ") || exit 0
+case "$chosen" in
+    '' | *[!0-9]*) fail "fuzzel answered '$chosen', not a line number" ;;
+esac
+char=$(awk -F '\t' -v n="$chosen" '!/^#/ && $1 != "" { if (i++ == n) { print $1; exit } }' "$list")
+test -n "$char" || fail "fuzzel chose line $chosen, which it wasn't given"
+
+# wl-copy's stderr goes to a file, not $(...): once it owns the clipboard
+# it forks, and the child keeps stderr open until the next copy.
+if ! errs=$(mktemp "${XDG_RUNTIME_DIR:-/tmp}/chars-menu.XXXXXX"); then
+    fail "couldn't make a temporary file"
+fi
+trap 'rm -f "$errs"' EXIT
+if ! printf '%s' "$char" | wl-copy 2>"$errs"; then
+    fail "couldn't put $char on the clipboard: wl-copy: $(cat "$errs")"
+fi
+
+if ! command -v tide-kwin-paste >/dev/null 2>&1; then
+    notify-send -a "Characters" -t 3000 "Copied, not pasted" \
+        "tide-kwin-paste isn't installed: setup installs it with tide. Press Ctrl+V." ||
+        echo "$prog: tide-kwin-paste isn't installed, so it's copied, not pasted" >&2
+    exit 0
+fi
+if ! err=$(tide-kwin-paste 2>&1); then
+    echo "$prog: $err" >&2
+    notify-send -a "Characters" -t 5000 "Copied, not pasted" "$err. Press Ctrl+V." ||
+        echo "$prog: notify-send failed too" >&2
+    exit 1
+fi
