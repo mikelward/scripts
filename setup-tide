@@ -212,11 +212,14 @@ QUICKSHELL_BUILD_DEPS="build-essential cmake ninja-build pkg-config git
 
 # tidewm (github.com/mikelward/tidewm), tide's fork of dwl, which
 # build_tidewm builds with --tidewm, for tide's tidewm session, an option
-# beside Hyprland's. A commit, not a tag: the fork has cut no release yet,
-# and a commit can't be moved. Its own prefix, like Quickshell's, with
+# beside Hyprland's. A release tag, numbered as tidewm's README says
+# (v0.MINOR.<commits on main>). Its own prefix, like Quickshell's, with
 # tidewm linked onto PATH, where the session entry's TryExec finds it.
 # Overridable for tests.
 TIDEWM_REPO=https://github.com/mikelward/tidewm.git
+TIDEWM_TAG=v0.0.1448
+# The commit that tag named when it was pinned. A tag can be moved, so the
+# clone must check out exactly this before its Makefile is run.
 TIDEWM_COMMIT=f925896ffbc1b3d44f8117116cc23f51ceeefe0a
 TIDEWM_PREFIX="${TIDEWM_PREFIX:-/opt/tidewm}"
 TIDEWM_SRC="${TIDEWM_SRC:-$HOME/src/tidewm-build}"
@@ -1857,15 +1860,14 @@ tidewm_build_deps() {
     esac
 }
 
-# build_tidewm builds TIDEWM_COMMIT into its own directory under
+# build_tidewm builds TIDEWM_TAG into its own directory under
 # $TIDEWM_PREFIX, as this user, then hands it to root and links tidewm onto
 # PATH, as build_quickshell does Quickshell. The directory is named for the
-# commit and a checksum of the build's inputs, so a new pin builds afresh
-# and a rerun with none changed only relinks.
+# tag and a checksum of the build's inputs, so a new pin builds afresh and
+# a rerun with none changed only relinks.
 build_tidewm() {
     deps=$(tidewm_build_deps) || return 1
-    tw_short=$(printf '%.12s' "$TIDEWM_COMMIT")
-    info "Building tidewm $tw_short from source"
+    info "Building tidewm $TIDEWM_TAG from source"
     pkg_begin "$(pkg_manager)" "Installing tidewm's build dependencies"
     deps_status=0
     # shellcheck disable=SC2086  # word-split the package list
@@ -1876,12 +1878,12 @@ build_tidewm() {
         warn "could not install tidewm's build dependencies:$(printf ' %s' $not_installed)"
         return 1
     fi
-    tw_record=$(printf '%s\n' "$TIDEWM_REPO $TIDEWM_COMMIT" "make XWAYLAND=$TIDEWM_XWAYLAND XLIBS=$TIDEWM_XLIBS")
+    tw_record=$(printf '%s\n' "$TIDEWM_REPO $TIDEWM_TAG $TIDEWM_COMMIT" "make XWAYLAND=$TIDEWM_XWAYLAND XLIBS=$TIDEWM_XLIBS")
     tw_sum=$(printf '%s\n' "$tw_record" | cksum | cut -d' ' -f1)
-    tw_dir="$TIDEWM_PREFIX/$tw_short-$tw_sum"
+    tw_dir="$TIDEWM_PREFIX/$TIDEWM_TAG-$tw_sum"
     tw_marker="$tw_dir/setup-tide-build"
     if test -f "$tw_marker"; then
-        detail "tidewm $tw_short is already built in $tw_dir"
+        detail "tidewm $TIDEWM_TAG is already built in $tw_dir"
     else
         src="$TIDEWM_SRC/tidewm"
         # A stale clone or partial install left in place would be built into
@@ -1894,17 +1896,18 @@ build_tidewm() {
         mkdir -p "$TIDEWM_SRC" || return 1
         make_build_dir "$tw_dir" || return 1
         start_build_log tidewm || return 1
-        build_logged tidewm git_github clone --quiet "$TIDEWM_REPO" "$src" \
-            && build_logged tidewm git -C "$src" -c advice.detachedHead=false checkout --quiet "$TIDEWM_COMMIT" || return 1
+        # The tag's own clone, so `tidewm -v`, which is `git describe --tags`,
+        # names it.
+        build_logged tidewm git_github clone -c advice.detachedHead=false --quiet --depth 1 --branch "$TIDEWM_TAG" "$TIDEWM_REPO" "$src" || return 1
         commit=$(git -C "$src" rev-parse HEAD) || return 1
         if test "$commit" != "$TIDEWM_COMMIT"; then
-            warn "tidewm's checkout is commit $commit, not the pinned $TIDEWM_COMMIT; not building it"
+            warn "tidewm's $TIDEWM_TAG tag is commit $commit, not the pinned $TIDEWM_COMMIT; not building it"
             rm -rf "$src" || warn "couldn't remove the rejected clone in $src"
             return 1
         fi
         build_logged tidewm make -C "$src" XWAYLAND="$TIDEWM_XWAYLAND" XLIBS="$TIDEWM_XLIBS" \
             && build_logged tidewm make -C "$src" install PREFIX="$tw_dir" || return 1
-        info "Built tidewm $tw_short; the build's output is in $build_log"
+        info "Built tidewm $TIDEWM_TAG; the build's output is in $build_log"
         printf '%s\n' "$tw_record" > "$tw_marker" || {
             warn "couldn't write $tw_marker"
             return 1
