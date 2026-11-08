@@ -431,6 +431,17 @@ MOCK
     # or \$FAKE_TIDEWM_COMMIT, as setup is called.
     sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4, $5 }' > "$T/pins"
     echo "tidewm ${FAKE_TIDEWM_COMMIT:-$(sed -n 's/^TIDEWM_COMMIT=//p' "$SCRIPT")}" >> "$T/pins"
+    echo "schnelle-umlaute $(sed -n 's/^SCHNELLE_UMLAUTE_COMMIT=//p' "$SCRIPT")" >> "$T/pins"
+    # localectl status names the X11 layout \$FAKE_X11_LAYOUT and variant
+    # \$FAKE_X11_VARIANT, each line left out when it's empty, or fails with
+    # \$FAKE_LOCALECTL_FAILS.
+    cat > "$T/bin/localectl" <<MOCK
+#!/bin/sh
+test -z "\$FAKE_LOCALECTL_FAILS" || exit 1
+echo "   System Locale: LANG=en_US.UTF-8"
+test -z "\$FAKE_X11_LAYOUT" || echo "       X11 Layout: \$FAKE_X11_LAYOUT"
+test -z "\$FAKE_X11_VARIANT" || echo "      X11 Variant: \$FAKE_X11_VARIANT"
+MOCK
     # systemctl answers show from the display manager in $T/dm (none while
     # it's empty or missing), and from greetd's unit: installed once
     # $T/greetd-installed exists, keeping getty off the VTs in
@@ -857,6 +868,16 @@ check() {
         echo "  output: $output"
         echo "  calls: $calls"
     fi
+}
+# fake_fcitx5: fcitx5 installed, answering --version with
+# \$FAKE_FCITX5_VERSION, or 5.1.12, or failing with \$FAKE_FCITX5_FAILS.
+fake_fcitx5() {
+    cat > "$T/bin/fcitx5" <<'MOCK'
+#!/bin/sh
+test -z "$FAKE_FCITX5_FAILS" || { echo "fcitx5: cannot open display" >&2; exit 1; }
+echo "${FAKE_FCITX5_VERSION:-5.1.12}"
+MOCK
+    chmod +x "$T/bin/fcitx5"
 }
 # The directory this run's pins install into.
 inst() { printf '%s\n' "$T"/opt/hyprland/v0.57.1-*; }

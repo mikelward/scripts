@@ -1248,6 +1248,8 @@ run
 check "quiet: a rerun shows only its steps" test "$output" = "Installing tide's apt packages
 Nothing new to install
 Installing Quickshell
+Nothing new to install
+Installing fcitx5, for accents in tide
 Nothing new to install"
 check "quiet: a rerun starts the log afresh" test "$(log | grep -c '^+ make -C .* install GO=go$')" -eq 1
 teardown
