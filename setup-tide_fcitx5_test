@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests for setup-tide: fcitx5 and Schnelle Umlaute, for accents in tide
+# Tests for setup-tide: fcitx5 and tide's accents
 #
 # The harness, its fixtures and mocks are in setup-tide_testlib.
 
@@ -8,51 +8,59 @@
 
 set -e
 
-su_src() { echo "$T/home/src/schnelle-umlaute-build/schnelle-umlaute"; }
-su_stamp() { echo "$T/home/.local/state/setup/schnelle-umlaute-build"; }
+ta_build() { echo "$T/src/tide/build/fcitx5"; }
+ta_stamp() { echo "$T/home/.local/state/setup/tide-accents-build"; }
 fx_dir() { echo "$T/home/.config/fcitx5"; }
 fx_autostart() { echo "$T/home/.config/autostart/org.fcitx.Fcitx5.desktop"; }
+# profile LAYOUT IM: the profile setup-tide writes.
+profile() {
+    printf '%s\n' "[Groups/0]
+Name=Default
+Default Layout=$1
+DefaultIM=$2
 
-# Debian: fcitx5 and its modules, then the pinned add-on, built and
-# installed as root, and fcitx5 set up for the session's layout.
+[Groups/0/Items/0]
+Name=keyboard-$1
+Layout=
+
+[Groups/0/Items/1]
+Name=$2
+Layout=
+
+[GroupOrder]
+0=Default"
+}
+
+# Debian: fcitx5 and its modules, then tide's add-on, built from the tide
+# checkout and installed as root, and fcitx5 set up for the session's
+# layout.
 setup; fake_fcitx5; ARGS=(); run FAKE_X11_LAYOUT=us FAKE_X11_VARIANT=dvorak
 check "fcitx5: exits 0" test "$status" -eq 0
 check "fcitx5: Debian installs fcitx5 and its GTK and Qt modules" \
     has "$calls" "apt-get install -y fcitx5 fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt6 fcitx5-config-qt"
 check "fcitx5: they're a package step of their own" has "$output" "Installing fcitx5, for accents in tide"
-check "fcitx5: Debian installs Schnelle Umlaute's build dependencies" \
-    has "$calls" "apt-get install -y libfcitx5core-dev fcitx5-modules-dev libfcitx5-qt6-dev qt6-base-dev"
-check "fcitx5: and the QML modules its editor loads" has "$calls" "qml6-module-qtqml-workerscript"
-check "fcitx5: clones the pinned tag" \
-    has "$calls" "git clone -c advice.detachedHead=false --quiet --depth 1 --branch v1.10.1 https://github.com/Maik-0000FF/schnelle-umlaute.git $(su_src)"
-check "fcitx5: checks what it cloned" has "$calls" "git -C $(su_src) rev-parse HEAD"
-check "fcitx5: configures the add-on for a release build" \
-    has "$calls" "cmake -S $(su_src)/addon -B $(su_src)/addon/build -DCMAKE_BUILD_TYPE=Release"
-check "fcitx5: builds it as this user" has "$calls" "
-cmake --build $(su_src)/addon/build"
-check "fcitx5: installs it as root" has "$calls" "sudo cmake --install $(su_src)/addon/build"
-check "fcitx5: says so" has "$output" "Built and installed Schnelle Umlaute v1.10.1; the build's output is in $T/home/.local/state/setup-tide/schnelle-umlaute-build.log"
-check "fcitx5: the build's output stays in its log" lacks "$output" "CMake Warning"
-check "fcitx5: the stamp records the release" has "$(cat "$(su_stamp)")" "v1.10.1 0030eacfc5bbac2af6a280bbb23decdbf12ce612"
-check "fcitx5: and the fcitx5 it was built for" has "$(cat "$(su_stamp)")" "fcitx5 5.1.12"
+check "fcitx5: Debian installs what tide's accents need to build" \
+    has "$calls" "apt-get install -y libfcitx5core-dev fcitx5-modules-dev cmake extra-cmake-modules g++ pkg-config"
+check "fcitx5: and no Qt" lacks "$calls" "qt6-base-dev"
+check "fcitx5: clones nothing of its own" lacks "$calls" "schnelle-umlaute"
+check "fcitx5: builds tide's accents from the tide checkout" has "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: once tide is fetched and installed" \
+    test "$(printf '%s\n' "$calls" | grep -n "^make -C $T/src/tide install " | cut -d: -f1)" \
+        -lt "$(printf '%s\n' "$calls" | grep -n "^make -C $T/src/tide fcitx5$" | cut -d: -f1)"
+check "fcitx5: as this user" lacks "$calls" "sudo make -C $T/src/tide fcitx5"
+check "fcitx5: installs it as root" has "$calls" "sudo cmake --install $(ta_build)"
+check "fcitx5: after building it" \
+    test "$(printf '%s\n' "$calls" | grep -n "^make -C $T/src/tide fcitx5$" | cut -d: -f1)" \
+        -lt "$(printf '%s\n' "$calls" | grep -n "^sudo cmake --install $(ta_build)$" | cut -d: -f1)"
+check "fcitx5: says so" has "$output" "Built and installed tide's accents; the build's output is in $T/home/.local/state/setup-tide/tide-accents-build.log"
+check "fcitx5: the build's output stays in its log" has "$(cat "$T/home/.local/state/setup-tide/tide-accents-build.log")" "+ make -C $T/src/tide fcitx5"
+check "fcitx5: the stamp records the tide commit" has "$(cat "$(ta_stamp)")" "tide 7e57000000000000000000000000000000000000"
+check "fcitx5: and the fcitx5 it was built for" has "$(cat "$(ta_stamp)")" "fcitx5 5.1.12"
 check "fcitx5: enables tide's fcitx5 unit" has "$calls" "systemctl --user enable tide-fcitx5.service"
-check "fcitx5: makes Schnelle Umlaute the input method, over the session's layout" \
-    test "$(cat "$(fx_dir)/profile")" = "[Groups/0]
-Name=Default
-Default Layout=us-dvorak
-DefaultIM=schnelle-umlaute
-
-[Groups/0/Items/0]
-Name=keyboard-us-dvorak
-Layout=
-
-[Groups/0/Items/1]
-Name=schnelle-umlaute
-Layout=
-
-[GroupOrder]
-0=Default"
-check "fcitx5: says which layout" has "$output" "over the us-dvorak keyboard layout, in $(fx_dir)/profile"
+check "fcitx5: makes tide's accents the input method, over the session's layout" \
+    test "$(cat "$(fx_dir)/profile")" = "$(profile us-dvorak tide-accents)"
+check "fcitx5: by its name" grep -qx 'DefaultIM=tide-accents' "$(fx_dir)/profile"
+check "fcitx5: says which layout" has "$output" "Made tide's accents fcitx5's input method, over the us-dvorak keyboard layout, in $(fx_dir)/profile"
 check "fcitx5: takes no keys of its own" grep -qx '\[Hotkey/TriggerKeys\]' "$(fx_dir)/config"
 check "fcitx5: nor Ctrl+Alt+P, its preedit toggle" grep -qx '\[Hotkey/TogglePreedit\]' "$(fx_dir)/config"
 check "fcitx5: no hotkey is set" \
@@ -69,24 +77,20 @@ Type=Application
 Name=Fcitx 5
 Hidden=true"
 check "fcitx5: says why" has "$output" "Keeping fcitx5 out of KDE Plasma, which has an input method of its own, with $(fx_autostart)"
-check "fcitx5: and hides Schnelle Umlaute's overlay, which its install autostarts" \
+check "fcitx5: and hides the overlay an old Schnelle Umlaute install autostarts" \
     test "$(cat "$T/home/.config/autostart/schnelle-umlaute-overlay.desktop")" = "[Desktop Entry]
 Type=Application
 Name=Schnelle Umlaute Overlay
 Hidden=true"
-# Real git, given the clone's own options, checks out the tag quietly.
-g init -q "$T/git/schnelle-umlaute" && g -C "$T/git/schnelle-umlaute" commit -q --allow-empty -m su
-replay_clone schnelle-umlaute v1.10.1
-check "fcitx5: the clone's options work with real git" test "$clone_status" -eq 0
-check "fcitx5: the clone is quiet" test -z "$clone_output"
 
-# A rerun with the same release and fcitx5 builds nothing and leaves the
+# A rerun with the same tide and fcitx5 builds nothing and leaves the
 # config as it is, the user's now.
 printf 'edited\n' > "$(fx_dir)/profile"
 printf 'edited\n' > "$(fx_dir)/config"
 : > "$CALLS"
 run FAKE_X11_LAYOUT=de
-check "fcitx5: a rerun doesn't rebuild" lacks "$calls" "schnelle-umlaute"
+check "fcitx5: a rerun doesn't rebuild" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: or install" lacks "$calls" "cmake --install"
 check "fcitx5: or install its build dependencies" lacks "$calls" "libfcitx5core-dev"
 check "fcitx5: a rerun leaves the profile" test "$(cat "$(fx_dir)/profile")" = edited
 check "fcitx5: and the config" test "$(cat "$(fx_dir)/config")" = edited
@@ -96,61 +100,77 @@ check "fcitx5: or of the autostart entry" lacks "$output" "Keeping fcitx5 out"
 # A new fcitx5 rebuilds it.
 : > "$CALLS"
 run FAKE_FCITX5_VERSION=5.1.13
-check "fcitx5: a new fcitx5 rebuilds Schnelle Umlaute" has "$calls" "sudo cmake --install $(su_src)/addon/build"
-check "fcitx5: the stamp records the new fcitx5" has "$(cat "$(su_stamp)")" "fcitx5 5.1.13"
+check "fcitx5: a new fcitx5 rebuilds tide's accents" has "$calls" "sudo cmake --install $(ta_build)"
+check "fcitx5: the stamp records the new fcitx5" has "$(cat "$(ta_stamp)")" "fcitx5 5.1.13"
+
+# So does a new tide commit.
+: > "$CALLS"
+run FAKE_FCITX5_VERSION=5.1.13 FAKE_TIDE_COMMIT=1111111111111111111111111111111111111111
+check "fcitx5: a new tide commit rebuilds tide's accents" has "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: and installs them" has "$calls" "sudo cmake --install $(ta_build)"
+check "fcitx5: the stamp records the new commit" has "$(cat "$(ta_stamp)")" "tide 1111111111111111111111111111111111111111"
 teardown
 
 # --verbose says what's already so.
 setup; fake_fcitx5; ARGS=(); run
 ARGS=(--verbose); run
-check "fcitx5: --verbose says it's built already" has "$output" "Schnelle Umlaute v1.10.1 is already built for this fcitx5"
+check "fcitx5: --verbose says it's built already" has "$output" "tide's accents are already built from this tide, for this fcitx5"
 check "fcitx5: and that the profile is left" has "$output" "Leaving your fcitx5 input methods, in $T/home/.config/fcitx5/profile, as they are"
 check "fcitx5: and the config" has "$output" "Leaving your fcitx5 settings, in $T/home/.config/fcitx5/config, as they are"
 teardown
 
-# A moved tag is refused, and costs only the accents.
-setup; fake_fcitx5; ARGS=(); run FAKE_MOVED_PIN=schnelle-umlaute
-check "fcitx5: a moved tag isn't fatal" test "$status" -eq 0
-check "fcitx5: a moved tag is named" \
-    has "$output" "Schnelle Umlaute's v1.10.1 tag is commit 0000000000000000000000000000000000000000, not the pinned 0030eacfc5bbac2af6a280bbb23decdbf12ce612; not building it"
-check "fcitx5: and isn't built" lacks "$calls" "cmake -S $(su_src)"
-check "fcitx5: or kept" test ! -e "$(su_src)"
-check "fcitx5: says what's lost" has "$output" "Schnelle Umlaute wasn't built, so a held letter types no accents in tide; rerun setup-tide to retry"
-check "fcitx5: writes no stamp" test ! -e "$(su_stamp)"
-check "fcitx5: the rest of the run goes on" has "$calls" "make -C $T/src/tide install"
-teardown
-
-# A failed build warns, writes no stamp, and the next run tries again.
-setup; fake_fcitx5; ARGS=(); run FAKE_CMAKE_FAILS=addon
+# A failed build warns, installs nothing, writes no stamp, and the next
+# run tries again.
+setup; fake_fcitx5; ARGS=(); run FAKE_MAKE_TARGET_FAILS=fcitx5
 check "fcitx5: a failed build isn't fatal" test "$status" -eq 0
-check "fcitx5: it's named" has "$output" "Warning: building Schnelle Umlaute failed: 'cmake' exited with status 1"
+check "fcitx5: it's named" has "$output" "Warning: building tide's accents failed: 'make' exited with status 2"
+check "fcitx5: with what it said" has "$output" "Could not find a package configuration file provided by Fcitx5Core"
+check "fcitx5: says what's lost" has "$output" "tide's accents weren't built, so a held letter offers no accents in tide; rerun setup-tide to retry"
 check "fcitx5: nothing is installed" lacks "$calls" "sudo cmake --install"
-check "fcitx5: no stamp" test ! -e "$(su_stamp)"
+check "fcitx5: no stamp" test ! -e "$(ta_stamp)"
 check "fcitx5: the config is still written" test -f "$(fx_dir)/profile"
+check "fcitx5: the rest of the run goes on" has "$calls" "systemctl --user enable tide-fcitx5.service"
 : > "$CALLS"
 run
-check "fcitx5: the next run builds again" has "$calls" "sudo cmake --install $(su_src)/addon/build"
+check "fcitx5: the next run builds again" has "$calls" "sudo cmake --install $(ta_build)"
+teardown
+
+# A failed install warns and writes no stamp.
+setup; fake_fcitx5; ARGS=(); run FAKE_CMAKE_INSTALL_FAILS=1
+check "fcitx5: a failed install isn't fatal" test "$status" -eq 0
+check "fcitx5: it's named" has "$output" "couldn't install tide's accents into fcitx5's directories"
+check "fcitx5: says what's lost, when it isn't installed" has "$output" "tide's accents weren't built, so a held letter offers no accents in tide"
+check "fcitx5: no stamp, when it isn't installed" test ! -e "$(ta_stamp)"
+teardown
+
+# A tide checkout from before the add-on can't build it.
+setup; fake_fcitx5; ARGS=(); run FAKE_TIDE_NO_ACCENTS=1
+check "fcitx5: an old tide isn't fatal" test "$status" -eq 0
+check "fcitx5: it's named" has "$output" "the tide checkout in $T/src/tide has no accents add-on (fcitx5/); update it"
+check "fcitx5: nothing is built" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: or its build dependencies installed" lacks "$calls" "libfcitx5core-dev"
+check "fcitx5: no stamp, for an old tide" test ! -e "$(ta_stamp)"
 teardown
 
 # fcitx5 that can't say its version isn't built for.
 setup; fake_fcitx5; ARGS=(); run FAKE_FCITX5_FAILS=1
 check "fcitx5: an fcitx5 that can't say its version isn't fatal" test "$status" -eq 0
-check "fcitx5: it's named" has "$output" "couldn't ask fcitx5 which version it is, which Schnelle Umlaute has to be built for: fcitx5: cannot open display"
-check "fcitx5: nothing is built" lacks "$calls" "schnelle-umlaute.git"
+check "fcitx5: it's named" has "$output" "couldn't ask fcitx5 which version it is, which tide's accents have to be built for: fcitx5: cannot open display"
+check "fcitx5: nothing is built" lacks "$calls" "make -C $T/src/tide fcitx5"
 teardown
 
 # Fedora and Arch name the packages their own way.
 setup; fake_fcitx5; ARGS=(); run SETUP_OS=redhat
 check "fcitx5: Fedora installs fcitx5 and its modules" has "$calls" "dnf install -y fcitx5 fcitx5-gtk fcitx5-qt6 fcitx5-configtool"
-check "fcitx5: and Schnelle Umlaute's build dependencies" \
-    has "$calls" "dnf install -y fcitx5-devel fcitx5-qt-devel qt6-qtbase-devel qt6-qtdeclarative-devel layer-shell-qt-devel cmake extra-cmake-modules gcc-c++ gettext"
-check "fcitx5: and builds it" has "$calls" "sudo cmake --install $(su_src)/addon/build"
+check "fcitx5: and what tide's accents need to build" \
+    has "$calls" "dnf install -y fcitx5-devel cmake extra-cmake-modules gcc-c++"
+check "fcitx5: and builds them" has "$calls" "sudo cmake --install $(ta_build)"
 teardown
 setup; fake_fcitx5; ARGS=(); run SETUP_OS=arch
 check "fcitx5: Arch installs fcitx5 and its modules" has "$calls" "pacman -S --needed --noconfirm fcitx5 fcitx5-gtk fcitx5-qt fcitx5-configtool"
-check "fcitx5: and Schnelle Umlaute's build dependencies" \
-    has "$calls" "pacman -S --needed --noconfirm cmake extra-cmake-modules gcc pkgconf qt6-declarative layer-shell-qt"
-check "fcitx5: and builds it" has "$calls" "sudo cmake --install $(su_src)/addon/build"
+check "fcitx5: and what tide's accents need to build" \
+    has "$calls" "pacman -S --needed --noconfirm cmake extra-cmake-modules gcc pkgconf"
+check "fcitx5: and builds them" has "$calls" "sudo cmake --install $(ta_build)"
 teardown
 
 # A missing module costs only what it does.
@@ -163,14 +183,16 @@ teardown
 # Missing build dependencies leave it unbuilt.
 setup; fake_fcitx5; ARGS=(); run FAKE_MISSING=libfcitx5core-dev
 check "fcitx5: missing build dependencies aren't fatal" test "$status" -eq 0
-check "fcitx5: they're named" has "$output" "could not install Schnelle Umlaute's build dependencies: libfcitx5core-dev"
-check "fcitx5: and nothing's cloned" lacks "$calls" "schnelle-umlaute.git"
+check "fcitx5: they're named" has "$output" "could not install what tide's accents need to build: libfcitx5core-dev"
+check "fcitx5: and nothing's built" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: no stamp, without its dependencies" test ! -e "$(ta_stamp)"
 teardown
 
 # Without fcitx5 there's nothing to build or set up.
 setup; ARGS=(); run
 check "fcitx5: without fcitx5, it's still asked for" has "$calls" "apt-get install -y fcitx5 "
-check "fcitx5: without fcitx5, nothing's built" lacks "$calls" "schnelle-umlaute.git"
+check "fcitx5: without fcitx5, nothing's built" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: without fcitx5, no build dependencies" lacks "$calls" "libfcitx5core-dev"
 check "fcitx5: without fcitx5, no profile" test ! -e "$(fx_dir)/profile"
 check "fcitx5: without fcitx5, no config" test ! -e "$(fx_dir)/config"
 check "fcitx5: without fcitx5, no autostart entry" test ! -e "$(fx_autostart)"
@@ -180,14 +202,65 @@ teardown
 # --no-install leaves the packages and the build, but sets fcitx5 up.
 setup; fake_fcitx5; ARGS=(--no-install); run
 check "fcitx5: --no-install installs no fcitx5" lacks "$calls" "install -y fcitx5"
-check "fcitx5: --no-install builds nothing" lacks "$calls" "schnelle-umlaute.git"
+check "fcitx5: --no-install builds nothing" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: --no-install installs nothing into fcitx5" lacks "$calls" "cmake --install"
 check "fcitx5: --no-install still writes the profile" test -f "$(fx_dir)/profile"
 check "fcitx5: and the config" test -f "$(fx_dir)/config"
 check "fcitx5: and hides the autostart entry" test -f "$(fx_autostart)"
 teardown
 setup; fake_fcitx5; ARGS=(--no-sudo); run
-check "fcitx5: --no-sudo builds nothing" lacks "$calls" "schnelle-umlaute.git"
+check "fcitx5: --no-sudo builds nothing" lacks "$calls" "make -C $T/src/tide fcitx5"
+check "fcitx5: --no-sudo installs nothing into fcitx5" lacks "$calls" "cmake --install"
 check "fcitx5: --no-sudo still writes the profile" test -f "$(fx_dir)/profile"
+teardown
+
+# Until tide's accents are installed, fcitx5's input methods aren't touched:
+# a profile naming one fcitx5 doesn't have would offer no accents.
+setup; fake_fcitx5; ARGS=(--no-install); run SETUP_TIDE_ACCENTS_IM_CONFS="$T/missing.conf"
+check "fcitx5: without tide's accents installed, no profile is written" test ! -e "$(fx_dir)/profile"
+check "fcitx5: and the config still is" test -f "$(fx_dir)/config"
+check "fcitx5: and none is said to be" lacks "$output" "Made tide's accents"
+teardown
+setup; fake_fcitx5; mkdir -p "$(fx_dir)"; profile gb schnelle-umlaute > "$(fx_dir)/profile"
+ARGS=(--no-install); run SETUP_TIDE_ACCENTS_IM_CONFS="$T/missing.conf"
+check "fcitx5: nor is an old Schnelle Umlaute profile moved over" \
+    test "$(cat "$(fx_dir)/profile")" = "$(profile gb schnelle-umlaute)"
+teardown
+
+# The profile an older setup-tide wrote for Schnelle Umlaute is moved over
+# to tide's accents, keeping its layout, though the session's is another.
+setup; fake_fcitx5; mkdir -p "$(fx_dir)"; profile gb schnelle-umlaute > "$(fx_dir)/profile"
+ARGS=(--no-install); run FAKE_X11_LAYOUT=de
+check "fcitx5: the old profile is replaced" test "$(cat "$(fx_dir)/profile")" = "$(profile gb tide-accents)"
+check "fcitx5: and that's said" has "$output" "Switched fcitx5 from Schnelle Umlaute to tide's own accents, in $(fx_dir)/profile"
+check "fcitx5: not as a new profile" lacks "$output" "Made tide's accents"
+: > "$CALLS"
+run FAKE_X11_LAYOUT=de
+check "fcitx5: the moved profile is then left" lacks "$output" "Switched fcitx5"
+teardown
+
+# As it is once fcitx5 has saved it, with its comments.
+setup; fake_fcitx5; mkdir -p "$(fx_dir)"
+profile us-dvorak schnelle-umlaute | awk '/^Name=/ { print "# Name" } /^Layout=/ { print "# Layout" } { print }' > "$(fx_dir)/profile"
+printf '\n' >> "$(fx_dir)/profile"
+ARGS=(--no-install); run
+check "fcitx5: the old profile, saved by fcitx5, is replaced" test "$(cat "$(fx_dir)/profile")" = "$(profile us-dvorak tide-accents)"
+teardown
+
+# A profile of the user's own, Schnelle Umlaute's or not, is theirs.
+setup; fake_fcitx5; mkdir -p "$(fx_dir)"
+{ profile us schnelle-umlaute; printf '\n[Groups/0/Items/2]\nName=pinyin\nLayout=\n'; } > "$(fx_dir)/profile"
+cp "$(fx_dir)/profile" "$T/expected"
+ARGS=(--no-install --verbose); run
+check "fcitx5: a user's own Schnelle Umlaute profile is kept" cmp -s "$T/expected" "$(fx_dir)/profile"
+check "fcitx5: and that's said under --verbose" has "$output" "Leaving your fcitx5 input methods, in $(fx_dir)/profile, as they are"
+check "fcitx5: not switched" lacks "$output" "Switched fcitx5"
+teardown
+setup; fake_fcitx5; mkdir -p "$(fx_dir)"
+profile us keyboard-us > "$(fx_dir)/profile"
+cp "$(fx_dir)/profile" "$T/expected"
+ARGS=(--no-install); run
+check "fcitx5: a user's own profile is kept" cmp -s "$T/expected" "$(fx_dir)/profile"
 teardown
 
 # The layout: the first of several, with its variant; us where there's none.

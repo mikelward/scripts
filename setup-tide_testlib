@@ -22,13 +22,16 @@ setup() {
     T="$(mktemp -d)"
     CALLS="$T/calls"
     # What the installs would create.
-    mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin"
+    mkdir -p "$T/bin" "$T/home" "$T/logind" "$T/usr-local-bin" "$T/fcitx5-im"
+    # tide-accents, as installed, unless a test points SETUP_TIDE_ACCENTS_IM_CONFS
+    # elsewhere.
+    : > "$T/fcitx5-im/tide-accents.conf"
     # make install-session installs the session entry, with TryExec
     # \$FAKE_ENTRY_TRYEXEC (or none, when that's empty), or uwsm; with
     # \$FAKE_NO_ENTRY it installs none. make install PREFIX=DIR, as
     # tidewm's, installs DIR/bin/tidewm. \$FAKE_MAKE_FAILS makes a make in
-    # the directory it names fail. It says what it installs, as the real one
-    # does.
+    # the directory it names fail, and \$FAKE_MAKE_TARGET_FAILS a make of
+    # the target it names. It says what it installs, as the real one does.
     cat > "$T/bin/make" <<MOCK
 #!/bin/sh
 printf "%s\\n" "make \$*" >> "$CALLS"
@@ -36,6 +39,12 @@ echo "install -m 644 tide.service $T/home/.config/systemd/user"
 if test -n "\$FAKE_MAKE_FAILS" && test "\$1" = -C && test "\$2" = "\$FAKE_MAKE_FAILS"; then
     exit 2
 fi
+case " \$* " in
+    *" \${FAKE_MAKE_TARGET_FAILS:-no such target} "*)
+        echo "CMake Error: Could not find a package configuration file provided by Fcitx5Core"
+        exit 2
+        ;;
+esac
 for arg; do
     case "\$arg" in
         PREFIX=*)
@@ -291,10 +300,15 @@ done
 MOCK
     # cmake configuring into a prefix creates the commands the build would
     # install there, and logs which hyprwayland-scanner it would run.
-    # Configuring anything named in \$FAKE_CMAKE_FAILS fails.
+    # Configuring anything named in \$FAKE_CMAKE_FAILS fails, and with
+    # \$FAKE_CMAKE_INSTALL_FAILS so does any --install.
     cat > "$T/bin/cmake" <<MOCK
 #!/bin/sh
 printf "%s\\n" "cmake \$*" >> "$CALLS"
+if test "\$1" = --install && test -n "\$FAKE_CMAKE_INSTALL_FAILS"; then
+    echo "CMake Error: cannot copy file: Permission denied" >&2
+    exit 1
+fi
 for arg; do
     case "\$arg" in
         -DCMAKE_INSTALL_PREFIX=*)
@@ -398,6 +412,10 @@ if test "\$1" = clone; then
         cmake) : > "\$last/CMakeLists.txt" ;;
         meson) : > "\$last/meson.build" ;;
     esac
+    # tide's checkout has its accents add-on, unless \$FAKE_TIDE_NO_ACCENTS.
+    case "\$last" in
+        */tide) test -n "\$FAKE_TIDE_NO_ACCENTS" || { mkdir -p "\$last/fcitx5" && : > "\$last/fcitx5/CMakeLists.txt"; } ;;
+    esac
     # wayland-protocols generates its headers with a strict scanner.
     case "\$last" in
         */wayland-protocols) test "\$kind" != meson || printf "%s\\n" "command: [scanner, '--strict', 'enum-header']" > "\$last/meson.build" ;;
@@ -413,8 +431,9 @@ case " \$* " in
     *" pull "*) printf "Updating 1111111..2222222\\nFast-forward\\n" ;;
 esac
 # rev-parse names the commit a Hyprland pin's checkout was pinned at, or
-# another for the one named in \$FAKE_MOVED_PIN; Quickshell's is its pinned
-# commit, or \$FAKE_QS_COMMIT.
+# another for the one named in \$FAKE_MOVED_PIN; tide's is
+# \$FAKE_TIDE_COMMIT, or a fixed one; Quickshell's is its pinned commit, or
+# \$FAKE_QS_COMMIT.
 if test "\$3" = rev-parse; then
     name=\${2##*/}
     pinned=\$(awk -v name="\$name" '\$1 == name { print \$2 }' "$T/pins")
@@ -422,6 +441,8 @@ if test "\$3" = rev-parse; then
         echo 0000000000000000000000000000000000000000
     elif test -n "\$pinned"; then
         echo "\$pinned"
+    elif test "\$name" = tide; then
+        echo "\${FAKE_TIDE_COMMIT:-7e57000000000000000000000000000000000000}"
     else
         echo "\${FAKE_QS_COMMIT:-1a4716cde794a59928d9d9fc15f2afc7a95de360}"
     fi
@@ -431,7 +452,6 @@ MOCK
     # or \$FAKE_TIDEWM_COMMIT, as setup is called.
     sed -n '/^HYPRLAND_PINS="/,/^"/p' "$SCRIPT" | awk 'NF == 5 { print $1, $4, $5 }' > "$T/pins"
     echo "tidewm ${FAKE_TIDEWM_COMMIT:-$(sed -n 's/^TIDEWM_COMMIT=//p' "$SCRIPT")}" >> "$T/pins"
-    echo "schnelle-umlaute $(sed -n 's/^SCHNELLE_UMLAUTE_COMMIT=//p' "$SCRIPT")" >> "$T/pins"
     # localectl status names the X11 layout \$FAKE_X11_LAYOUT and variant
     # \$FAKE_X11_VARIANT, each line left out when it's empty, or fails with
     # \$FAKE_LOCALECTL_FAILS.
@@ -837,6 +857,7 @@ run() {
         SETUP_DBUS_SERVICE_DIRS="$T/no-dbus" SETUP_USER_UNIT_DIRS="$T/no-units" \
         SETUP_GDM_DEFAULTS="$T/no-gdm" SETUP_DCONF_DIR="$T/dconf" SETUP_DCONF_SHARE_PROFILE="$T/no-profile" \
         TIDE_DIR="$T/src/tide" TIDE_REPO="https://example.com/tide.git" \
+        SETUP_TIDE_ACCENTS_IM_CONFS="$T/fcitx5-im/tide-accents.conf" \
         HYPRLAND_PREFIX="$T/opt/hyprland" HYPRLAND_SRC="$T/src/hyprland-build" HYPRLAND_BIN_DIR="$T/usr-local-bin" \
         QUICKSHELL_PREFIX="$T/opt/quickshell" QUICKSHELL_SRC="$T/src/quickshell-build" QUICKSHELL_BIN_DIR="$T/usr-local-bin" \
         TIDEWM_PREFIX="$T/opt/tidewm" TIDEWM_SRC="$T/src/tidewm-build" TIDEWM_BIN_DIR="$T/usr-local-bin" \
