@@ -11,7 +11,9 @@
 #   tide launcher, or KRunner without it (tide-launcher), and Win+;'s
 #   emoji and characters menu, which pastes (chars-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
-# - Accents on a held key, through Plasma Keyboard where it's installed
+# - Accents on a held key, through Plasma Keyboard where it's installed,
+#   after a 300 ms hold, from tide's accent table where tide has one (see
+#   install_plasma_keyboard_accents)
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
 # The KDE config files this writes are only what the *next* login loads, so
@@ -743,6 +745,80 @@ configure_input_method() {
         return 0
     fi
     kde_write --file kwinrc --group Wayland --key InputMethod "$PLASMA_KEYBOARD_DESKTOP"
+    # tide's hold time (tide SPEC.md §8.6), not Plasma Keyboard's 600 ms.
+    kde_write --file plasmakeyboardrc --group General --key diacriticsHoldThresholdMs 300
+    install_plasma_keyboard_accents
+}
+
+# tide's accent table, accents.json, is in Plasma Keyboard's format (tide
+# SPEC.md §8.6), so KDE offers the same accents as tide. The first of these
+# that's there is used: tide-accents' installed copy (setup-tide installs
+# it), then the tide checkout setup-tide uses. Overridable for tests.
+TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-/usr/share/fcitx5/tide-accents/accents.json /usr/local/share/fcitx5/tide-accents/accents.json}"
+TIDE_ACCENTS_CHECKOUT_TABLE="${TIDE_DIR:-$HOME/src/tide}/fcitx5/accents.json"
+# Plasma Keyboard reads your own base.json in place of its own. The stamp
+# holds the checksum of the copy made last, so a copy of ours is updated and
+# a file of yours is left alone.
+PLASMA_KEYBOARD_ACCENTS="${XDG_DATA_HOME:-$HOME/.local/share}/plasma/keyboard/diacritics/base.json"
+PLASMA_KEYBOARD_ACCENTS_STAMP="${XDG_STATE_HOME:-$HOME/.local/state}/setup/plasma-keyboard-accents.cksum"
+
+# install_plasma_keyboard_accents copies tide's accent table to Plasma
+# Keyboard's base.json, where there's none or it's the copy made last.
+# Plasma Keyboard looks letters up in lower case, so it never reads the
+# table's capitals.
+install_plasma_keyboard_accents() {
+    _pa_source=
+    # shellcheck disable=SC2086  # the list is meant to split
+    for _pa_table in $TIDE_ACCENTS_SYSTEM_TABLES "$TIDE_ACCENTS_CHECKOUT_TABLE"; do
+        if test -f "$_pa_table"; then
+            _pa_source=$_pa_table
+            break
+        fi
+    done
+    if test -z "$_pa_source"; then
+        detail "tide's accents aren't here, so Plasma Keyboard keeps its own"
+        return 0
+    fi
+    _pa_target=$PLASMA_KEYBOARD_ACCENTS
+    if test -f "$_pa_target" && cmp -s "$_pa_source" "$_pa_target"; then
+        detail "Plasma Keyboard has tide's accents already"
+        note_plasma_keyboard_accents
+        return 0
+    fi
+    if test -e "$_pa_target" || test -L "$_pa_target"; then
+        if ! _pa_sum=$(cksum < "$_pa_target") \
+                || test "$_pa_sum" != "$(cat "$PLASMA_KEYBOARD_ACCENTS_STAMP" 2>/dev/null)"; then
+            detail "Leaving your Plasma Keyboard accents, in $_pa_target, as they are; tide's are in $_pa_source"
+            return 0
+        fi
+    fi
+    if ! mkdir -p "${_pa_target%/*}" \
+            || ! _pa_tmp=$(mktemp "${_pa_target%/*}/.${_pa_target##*/}.XXXXXX"); then
+        warn "couldn't copy tide's accents to $_pa_target, so Plasma Keyboard keeps its own"
+        return 0
+    fi
+    if ! cp "$_pa_source" "$_pa_tmp" || ! chmod 644 "$_pa_tmp" || ! mv -f "$_pa_tmp" "$_pa_target"; then
+        rm -f "$_pa_tmp"
+        warn "couldn't copy tide's accents to $_pa_target, so Plasma Keyboard keeps its own"
+        return 0
+    fi
+    info "Gave Plasma Keyboard tide's accents, from $_pa_source"
+    note_plasma_keyboard_accents
+}
+
+# note_plasma_keyboard_accents records the checksum of Plasma Keyboard's
+# base.json, a copy of tide's, so the next run knows it for its own.
+note_plasma_keyboard_accents() {
+    if _pa_sum=$(cksum < "$PLASMA_KEYBOARD_ACCENTS") \
+            && test "$_pa_sum" = "$(cat "$PLASMA_KEYBOARD_ACCENTS_STAMP" 2>/dev/null)"; then
+        return 0
+    fi
+    if test -z "$_pa_sum" \
+            || ! mkdir -p "${PLASMA_KEYBOARD_ACCENTS_STAMP%/*}" \
+            || ! printf '%s\n' "$_pa_sum" > "$PLASMA_KEYBOARD_ACCENTS_STAMP"; then
+        warn "couldn't write $PLASMA_KEYBOARD_ACCENTS_STAMP, so the next run takes $PLASMA_KEYBOARD_ACCENTS for yours and won't update it"
+    fi
+    return 0
 }
 
 # --- Turn off DrKonqi ---
@@ -1263,7 +1339,7 @@ kde_step "Turned on focus follows mouse (mouse precedence)" configure_focus_foll
 kde_step "Turned on dimming inactive windows" configure_dim_inactive
 kde_step "Set 9 virtual desktops" configure_desktops
 kde_step "Set the keyboard layout: US Dvorak, Caps Lock as Compose" configure_keyboard_layout
-kde_step "Turned on accents for a held key (Plasma Keyboard)" configure_input_method
+kde_step "Turned on accents for a held key, after 300 ms (Plasma Keyboard)" configure_input_method
 disable_drkonqi
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin
