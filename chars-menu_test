@@ -1,0 +1,122 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for chars-menu, KDE's Win+;: it lists tide's chars.tsv in fuzzel,
+# copies the one chosen with wl-copy and pastes it with tide-kwin-paste.
+# Runs the real script against fakes that log their calls. KWin's paste
+# can only be checked on Plasma.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN" "$TEST_TMPDIR/config/quickshell/tide/chars"
+  : > "$CALLS"
+  for t in awk cat printf mktemp rm; do
+    ln -s "$(command -v "$t")" "$BIN/$t"
+  done
+  printf '# notes\n# more notes\n😀\tgrinning face\tSmileys\n👍🏽\tthumbs up: medium skin tone\tPeople\né\tlatin small letter e with acute\tLatin\n' \
+    > "$TEST_TMPDIR/config/quickshell/tide/chars/chars.tsv"
+  # fuzzel answers $FUZZEL_ANSWER; empty is Esc.
+  fake fuzzel 'cat > "$TEST_TMPDIR/shown"
+echo "fuzzel $*" >> "$CALLS"
+test -n "$FUZZEL_ANSWER" || exit 2
+echo "$FUZZEL_ANSWER"'
+  fake wl-copy 'cat > "$TEST_TMPDIR/copied"; echo "wl-copy" >> "$CALLS"'
+  fake tide-kwin-paste 'echo "tide-kwin-paste $*" >> "$CALLS"
+test -z "$PASTE_FAILS" || { echo "tide-kwin-paste: no org_kde_kwin_fake_input" >&2; exit 1; }'
+  fake notify-send 'echo "notify-send $*" >> "$CALLS"'
+  export TEST_TMPDIR CALLS
+  unset FUZZEL_ANSWER PASTE_FAILS SESSION_DISPLAY
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run() {
+  set +e
+  OUTPUT=$(env PATH="$BIN" HOME="$TEST_TMPDIR/home" XDG_CONFIG_HOME="$TEST_TMPDIR/config" \
+    XDG_RUNTIME_DIR="$TEST_TMPDIR" WAYLAND_DISPLAY="${SESSION_DISPLAY-wayland-0}" "$SCRIPT_DIR/chars-menu" 2>&1)
+  STATUS=$?
+  set -e
+}
+
+check() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "${@:2}"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    echo "ok $TESTS_RUN $1"
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "not ok $TESTS_RUN $1"
+    echo "  output: $OUTPUT"
+    echo "  calls: $(cat "$CALLS")"
+  fi
+}
+
+called() { grep -qF -- "$1" "$CALLS"; }
+not_called() { ! grep -qF -- "$1" "$CALLS"; }
+
+setup
+export FUZZEL_ANSWER=1
+run
+check "choosing a character exits 0" test "$STATUS" -eq 0
+check "fuzzel shows each character and its name, not the file's notes" \
+  test "$(cat "$TEST_TMPDIR/shown")" = "$(printf '😀  grinning face\n👍🏽  thumbs up: medium skin tone\né  latin small letter e with acute')"
+check "and answers with the line's number" called "fuzzel --dmenu --index"
+check "the whole emoji, every code point, goes on the clipboard" test "$(cat "$TEST_TMPDIR/copied")" = "👍🏽"
+check "then it's pasted with Ctrl+V" called "tide-kwin-paste "
+teardown
+
+setup
+run
+check "Esc exits 0" test "$STATUS" -eq 0
+check "and copies nothing" not_called "wl-copy"
+teardown
+
+setup
+export FUZZEL_ANSWER=0 PASTE_FAILS=1
+run
+check "a paste that fails exits 1" test "$STATUS" -eq 1
+check "saying it's copied, and why it isn't pasted" called "Copied, not pasted tide-kwin-paste: no org_kde_kwin_fake_input. Press Ctrl+V."
+check "with the character still copied" test "$(cat "$TEST_TMPDIR/copied")" = "😀"
+teardown
+
+setup
+rm "$BIN/tide-kwin-paste"
+export FUZZEL_ANSWER=2
+run
+check "without tide-kwin-paste it's copied, and exits 0" test "$STATUS" -eq 0
+check "saying how to paste it" called "Copied, not pasted tide-kwin-paste isn't installed"
+teardown
+
+setup
+rm "$TEST_TMPDIR/config/quickshell/tide/chars/chars.tsv"
+export FUZZEL_ANSWER=0
+run
+check "without tide's list it says setup-tide installs it" called "tide's character list isn't installed; setup-tide installs it"
+check "and opens no menu" not_called "fuzzel"
+teardown
+
+setup
+export SESSION_DISPLAY=
+run
+check "outside Wayland it says it needs Plasma's Wayland session" called "it needs Plasma's Wayland session"
+teardown
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
