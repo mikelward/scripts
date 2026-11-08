@@ -11,6 +11,7 @@
 #   tide launcher, or KRunner without it (tide-launcher), and Win+;'s
 #   emoji and characters menu, which pastes (chars-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
+# - Accents on a held key, through Plasma Keyboard where it's installed
 # - DrKonqi's crash handling off, for every session (see disable_drkonqi)
 #
 # The KDE config files this writes are only what the *next* login loads, so
@@ -730,6 +731,20 @@ configure_keyboard_layout() {
     kde_write --file kxkbrc --group Layout --key ResetOldOptions true
 }
 
+# --- Accents on a held key ---
+
+# Plasma Keyboard, from Plasma 6.7, offers a held key's accents, once it's
+# KWin's input method; the on-screen keyboard it also is shows only on touch.
+# `setup` installs it where the distro packages it. Overridable for tests.
+PLASMA_KEYBOARD_DESKTOP="${SETUP_PLASMA_KEYBOARD_DESKTOP:-/usr/share/applications/org.kde.plasma.keyboard.desktop}"
+configure_input_method() {
+    if ! test -f "$PLASMA_KEYBOARD_DESKTOP"; then
+        detail "Plasma Keyboard isn't installed, so holding a key doesn't offer accents"
+        return 0
+    fi
+    kde_write --file kwinrc --group Wayland --key InputMethod "$PLASMA_KEYBOARD_DESKTOP"
+}
+
 # --- Turn off DrKonqi ---
 
 # DrKonqi's launcher is socket-activated for every crash systemd-coredump
@@ -1248,6 +1263,7 @@ kde_step "Turned on focus follows mouse (mouse precedence)" configure_focus_foll
 kde_step "Turned on dimming inactive windows" configure_dim_inactive
 kde_step "Set 9 virtual desktops" configure_desktops
 kde_step "Set the keyboard layout: US Dvorak, Caps Lock as Compose" configure_keyboard_layout
+kde_step "Turned on accents for a held key (Plasma Keyboard)" configure_input_method
 disable_drkonqi
 # Reload so Krohnkite registers its default shortcuts in kglobalshortcutsrc
 reload_kwin

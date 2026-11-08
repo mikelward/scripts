@@ -2275,6 +2275,17 @@ test_fuzzel_installed_for_kde() {
     assert_calls_contain "dnf install -y --setopt=best=False fuzzel wl-clipboard"
 }
 
+# Plasma Keyboard, for accents on a held key, in a step of its own: Debian
+# 13 and Ubuntu 24.04 don't package it.
+test_plasma_keyboard_installed_for_kde() {
+    run_linux_packages debian 1
+    assert_status 0 &&
+    assert_calls_contain "--install-recommends plasma-keyboard" &&
+    run_linux_packages redhat 1 &&
+    assert_status 0 &&
+    assert_calls_contain "dnf install -y --setopt=best=False plasma-keyboard"
+}
+
 # The distro's wallpapers come with the desktop, one package per step so a
 # release without one keeps the rest: Ubuntu's own only on Ubuntu, and
 # Fedora's extras for its release.
@@ -5306,6 +5317,8 @@ run_test "lf is not attempted via dnf" \
     test_file_managers_not_in_dnf_transaction
 run_test "fuzzel and wl-clipboard are installed for KDE's Win+V, in their own step" \
     test_fuzzel_installed_for_kde
+run_test "Plasma Keyboard is installed with KDE" \
+    test_plasma_keyboard_installed_for_kde
 run_test "the distro's wallpapers are installed with the desktop, each in its own step" \
     test_wallpapers_installed_with_the_desktop
 run_test "--purge-obsolete prunes homepkg's retired tools" \

@@ -1038,6 +1038,23 @@ CONF
 # [services] launch shortcut rather than a [kwin] action -- so freeing it for
 # Krohnkite's Next Layout needs the launch-shortcut form. Meta+; is
 # chars-menu, which pastes where the Selector only copies.
+# Holding a key offers its accents once Plasma Keyboard is KWin's input
+# method, which needs its desktop entry's path.
+test_held_key_accents_use_plasma_keyboard() {
+    mkdir -p "$TEST_TMPDIR/apps" &&
+    : > "$TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop" &&
+    SETUP_PLASMA_KEYBOARD_DESKTOP="$TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop" run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Wayland --key InputMethod $TEST_TMPDIR/apps/org.kde.plasma.keyboard.desktop"
+}
+
+# Without Plasma Keyboard, KWin's input method is left as it is.
+test_no_plasma_keyboard_leaves_the_input_method() {
+    SETUP_PLASMA_KEYBOARD_DESKTOP="$TEST_TMPDIR/missing.desktop" run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "--key InputMethod"
+}
+
 test_unbinds_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&
@@ -1597,6 +1614,10 @@ run_test "leaves Alt+\` app-window cycling alone" \
     test_does_not_unbind_walk_through_current_application
 run_test "Krohnkite sweep survives the config being rewritten mid-sweep" \
     test_krohnkite_sweep_survives_config_rewrite
+run_test "a held key's accents come from Plasma Keyboard, KWin's input method" \
+    test_held_key_accents_use_plasma_keyboard
+run_test "without Plasma Keyboard, KWin's input method is left alone" \
+    test_no_plasma_keyboard_leaves_the_input_method
 run_test "unbinds the Emoji Selector so Meta+. reaches Krohnkite" \
     test_unbinds_emoji_selector_for_next_layout
 run_test "strips stale app-shortcut groups, keeps the rest" \
