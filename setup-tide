@@ -36,10 +36,11 @@
 #   left installed, just no longer the input method. It hides fcitx5's
 #   autostart entry, which would start it in Plasma too, and Schnelle
 #   Umlaute's overlay's (see hide_fcitx5_autostart);
-# - with --tidewm, builds tidewm, tide's fork of dwl, from a pinned commit
-#   into /opt/tidewm and links it onto PATH, so the tide (tidewm) session,
-#   an option beside Hyprland's, shows at the login screen (see
-#   build_tidewm). Only where the distro packages wlroots 0.20, which it
+# - with --tidewm, builds tidewm, tide's fork of dwl, from a pinned release
+#   tag, checked against its commit, into /opt/tidewm and links it onto
+#   PATH, and installs wlroots' portal for screen sharing, so the tide
+#   (tidewm) session, an option beside Hyprland's, shows at the login
+#   screen (see build_tidewm). Only where the distro packages wlroots 0.20, which it
 #   builds against: Debian testing and Arch;
 # - clones or updates the tide repo, runs its `make install` (the
 #   layout, the focus guard, the user units, the portal config) and, with
