@@ -519,7 +519,10 @@ case "${HARNESS_PM_MODE:-ok} \$*" in
         echo "E: Failed to fetch the upgrades" >&2
         exit 100
         ;;
-    # unlisted: dnf can't install the extra wallpapers.
+    # no-extras: the release has no extra wallpapers; unlisted: dnf lists
+    # them but can't install them.
+    "no-extras -q repoquery "*) exit 0 ;;
+    *" -q repoquery "*) echo "\$4-1.0-1.noarch"; exit 0 ;;
     "unlisted install "*backgrounds-extras*)
         echo "Failed to resolve the transaction:" >&2
         echo "No match for argument: f44-backgrounds-extras-base" >&2
@@ -2323,6 +2326,23 @@ test_wallpapers_installed_with_the_desktop() {
     assert_calls_contain "best=False f44-backgrounds-extras-base " &&
     run_linux_packages debian &&
     assert_calls_lack "wallpapers"
+    _wp_status=$?
+    rm -rf "$_wp_dir"
+    return "$_wp_status"
+}
+
+# A Fedora release with no extra wallpapers skips them, rather than warning
+# about a package that doesn't exist.
+test_fedora_without_extra_wallpapers_skips_them() {
+    _wp_dir=$(mktemp -d)
+    printf 'ID=fedora\nVERSION_ID=44\n' > "$_wp_dir/fedora"
+    HARNESS_PM_MODE=no-extras HARNESS_OS_RELEASE="$_wp_dir/fedora" run_linux_packages redhat 1
+    assert_status 0 &&
+    assert_calls_contain "best=False gnome-backgrounds " &&
+    assert_calls_lack "install -y --setopt=best=False f44-backgrounds-extras-base" &&
+    assert_output_contains "Fedora 44 has no extra wallpapers to install" &&
+    assert_output_lacks "couldn't install" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
     _wp_status=$?
     rm -rf "$_wp_dir"
     return "$_wp_status"
@@ -5355,6 +5375,8 @@ run_test "Plasma Keyboard is installed with KDE" \
     test_plasma_keyboard_installed_for_kde
 run_test "the distro's wallpapers are installed with the desktop, each in its own step" \
     test_wallpapers_installed_with_the_desktop
+run_test "a Fedora release with no extra wallpapers skips them" \
+    test_fedora_without_extra_wallpapers_skips_them
 run_test "a failed install says why once" \
     test_failed_install_says_why_once
 run_test "--purge-obsolete prunes homepkg's retired tools" \
