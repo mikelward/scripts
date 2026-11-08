@@ -429,7 +429,13 @@ sudo_or_warn() {
     else
         _sudo_status=$?
     fi
-    test -z "${_sudo_out:-}" || cat "$_sudo_stderr" >>"$_sudo_out"
+    if test -n "${_sudo_out:-}"; then
+        # sudo_logged shows the end of the log, which has this, so saying
+        # its last line as well would say it twice.
+        cat "$_sudo_stderr" >>"$_sudo_out"
+        rm -f "$_sudo_stderr"
+        return "$_sudo_status"
+    fi
     _sudo_detail=$(awk 'NF { line = $0 } END { print line }' "$_sudo_stderr")
     rm -f "$_sudo_stderr"
 
