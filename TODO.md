@@ -103,10 +103,10 @@ The rest of the Crostini mode in mikelward/tideco's SPEC.md A.5, after
   is shared through `GIT_SSH_COMMAND`, unless you set your own. Reversible.
 - **setup-tide builds tidewm only with `--tidewm`** (2026-11-05), since
   tide's tidewm session is an option beside Hyprland's, not the default,
-  and the build costs a run's time on every machine. It pins a commit, not
-  a tag: tidewm has cut no release, and a tag ruleset could make a tag
-  permanent. Only Debian testing and Arch, which package the wlroots 0.20
-  it builds against; Ubuntu 26.04 (0.19) and Fedora say so and carry on.
+  and the build costs a run's time on every machine. It pins a release
+  tag and checks the commit it named, as the other pins do. Only Debian
+  testing and Arch, which package the wlroots 0.20 it builds against;
+  Ubuntu 26.04 (0.19) and Fedora say so and carry on.
   The alternatives are building it by default, or building wlroots too.
   Reversible.
 - **KDE's Win+V pastes with Ctrl+V into every window** (2026-11-04),
