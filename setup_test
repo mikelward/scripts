@@ -760,8 +760,27 @@ MOCK
         chmod +x "$fm_home/.local/bin/lf"
     fi
 
+    # The PATH without any lf of this machine's own, which would make the
+    # test's "none" run find one already installed: a directory with one is
+    # stood in for by links to everything else in it, so the shell and its
+    # tools, which may share /usr/bin with lf, are still found.
+    fm_n=0
+    fm_path=$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r fm_dir; do
+        if test -x "$fm_dir/lf"; then
+            fm_n=$((fm_n + 1))
+            fm_mirror="$fm_tmpdir/path$fm_n"
+            mkdir -p "$fm_mirror"
+            for fm_tool in "$fm_dir"/*; do
+                test "${fm_tool##*/}" = lf || ln -s "$fm_tool" "$fm_mirror/"
+            done
+            printf '%s:' "$fm_mirror"
+        else
+            printf '%s:' "$fm_dir"
+        fi
+    done)
+
     set +e
-    output="$(sh -c "set -e
+    output="$(PATH="${fm_path%:}" sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
 $(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
