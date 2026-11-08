@@ -28,6 +28,7 @@ TESTS = \
 	setup-macos_test \
 	kdeshortcut_test \
 	dvorak_test \
+	lightspeed-reset_test \
 	confinst_test \
 	screenshot_test \
 	clipboard-menu_test \

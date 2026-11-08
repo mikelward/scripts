@@ -24,6 +24,8 @@
 # Linux machine with no battery whose screens hang off an AMD card, setup
 # also keeps that card from powering itself down while they're off, which
 # can leave the screen dark or hang the machine (see keep_display_gpu_awake).
+# On Linux it also resets a Logitech Lightspeed receiver that a KVM switch
+# hands back without its mouse (see install_lightspeed_reset).
 #
 # The heavyweight extras (helix, jj, nushell) install from Homebrew bottles
 # when brew is available (or on macOS), and otherwise from each project's
@@ -3677,6 +3679,50 @@ RULE
     fi
 }
 
+# A KVM switch that hands back a Logitech Lightspeed receiver (046d:c543, a
+# PRO 2 mouse's) can leave it up with its mouse never reported, so there's
+# no mouse until it's re-plugged (2026-11-08). A udev rule runs
+# lightspeed-reset, from this repo, for each one added; it resets a receiver
+# still without its mouse a few seconds later, as a re-plug would. udev runs
+# it as root, so it's a root-owned copy, not the checkout's, and through
+# systemd-run, since udev kills a RUN that waits. It needs this repo, so it
+# runs after the clone. A machine without the receiver never runs it.
+# SETUP_UDEV_RULES and SETUP_LIBEXEC are for the tests.
+install_lightspeed_reset() {
+    case "$OS" in
+        debian|redhat) ;;
+        *) return 0 ;;
+    esac
+    # The container has no USB of its own.
+    test "${CROSTINI:-0}" -eq 1 && return 0
+    lightspeed_rule="${SETUP_UDEV_RULES:-/etc/udev/rules.d}/80-lightspeed-reset.rules"
+    lightspeed_script="${SETUP_LIBEXEC:-/usr/local/libexec}/lightspeed-reset"
+    lightspeed_mark="# Written by setup (github.com/mikelward/scripts)"
+    if test -e "$lightspeed_rule" && ! grep -qF "$lightspeed_mark" "$lightspeed_rule"; then
+        warn "leaving $lightspeed_rule alone because setup didn't write it, so a Lightspeed receiver may still need a re-plug after a KVM switch"
+        return 0
+    fi
+    if ! systemd_run=$(command -v systemd-run); then
+        warn "no systemd-run, so a Lightspeed receiver may still need a re-plug after a KVM switch"
+        return 0
+    fi
+    if ! cmp -s "$SCRIPTS_DIR/lightspeed-reset" "$lightspeed_script"; then
+        if ! sudo_or_warn install -D -m 755 "$SCRIPTS_DIR/lightspeed-reset" "$lightspeed_script"; then
+            warn "could not install $lightspeed_script, so a Lightspeed receiver may still need a re-plug after a KVM switch"
+            return 0
+        fi
+    fi
+    if ! sudo_or_warn tee "$lightspeed_rule" >/dev/null <<RULE
+$lightspeed_mark: resets a Logitech
+# Lightspeed receiver that comes back without its mouse. See
+# install_lightspeed_reset there.
+ACTION=="add", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="046d", ATTR{idProduct}=="c543", RUN+="$systemd_run --no-block --collect --quiet $lightspeed_script \$devpath"
+RULE
+    then
+        warn "could not write $lightspeed_rule, so a Lightspeed receiver may still need a re-plug after a KVM switch"
+    fi
+}
+
 # --- Main ---
 
 detect_os
@@ -3729,6 +3775,10 @@ clone_or_pull "$SCRIPTS_REPO" "$SCRIPTS_DIR" yes
 clone_or_pull "$CONF_REPO" "$CONF_DIR" yes
 
 run_confinst
+
+# Configuration, not an install, like keep_display_gpu_awake; after the
+# clone, which has the script it installs.
+install_lightspeed_reset
 
 # Before the installs below, which leave what the env has as it is.
 if test "$INSTALL" = yes; then

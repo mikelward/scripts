@@ -5030,6 +5030,157 @@ test_display_gpu_not_keyed_on_the_gui() {
     assert_source_not_contains '^ \+keep_display_gpu_awake$'
 }
 
+# --- Lightspeed receiver reset ---
+
+# Run install_lightspeed_reset against a fake udev rules directory and
+# libexec, with a PATH of just the tools it uses.
+#   $1  how sudo goes (default ok): ok | denied
+#   $2  the OS (default debian)
+#   $3  what's already there (default none): none | setup (an earlier run's
+#       rule and script) | other (somebody else's rule at the same path)
+#   $4  whether systemd-run is on the PATH (default yes): yes | no
+#   $5  CROSTINI (default 0)
+# Leaves $calls set to the privileged commands asked for, $ls_rule_body to
+# the rule file (empty when none), $ls_script_body to the installed script
+# (empty when none), and $ls_systemd_run to the systemd-run it should name.
+run_install_lightspeed_reset() {
+    ls_sudo="${1:-ok}"
+    ls_os="${2:-debian}"
+    ls_seed="${3:-none}"
+    ls_has_run="${4:-yes}"
+    ls_crostini="${5:-0}"
+    ls_tmpdir="$(mktemp -d)"
+    ls_rules="$ls_tmpdir/rules"
+    ls_libexec="$ls_tmpdir/libexec"
+    ls_bin="$ls_tmpdir/bin"
+    mkdir -p "$ls_rules" "$ls_bin"
+    for ls_tool in sh grep cmp tee cat mkdir rm mktemp sed awk tr chmod cp dirname; do
+        ln -s "$(command -v "$ls_tool")" "$ls_bin/$ls_tool"
+    done
+    # GNU install, which setup runs it as: macOS's -D is something else.
+    cat > "$ls_bin/install" <<'MOCK'
+#!/bin/sh
+test "$1" = -D && test "$2" = -m || { echo "install: unexpected $*" >&2; exit 2; }
+mkdir -p "$(dirname "$5")" && cp "$4" "$5" && chmod "$3" "$5"
+MOCK
+    chmod +x "$ls_bin/install"
+    ls_systemd_run="$ls_bin/systemd-run"
+    if test "$ls_has_run" = yes; then
+        printf '#!/bin/sh\nexit 0\n' > "$ls_systemd_run"
+        chmod +x "$ls_systemd_run"
+    fi
+    case "$ls_seed" in
+        setup)
+            printf '%s\n' "# Written by setup (github.com/mikelward/scripts): an earlier run's rule" \
+                > "$ls_rules/80-lightspeed-reset.rules"
+            mkdir -p "$ls_libexec"
+            cp "$SCRIPT_DIR/lightspeed-reset" "$ls_libexec/lightspeed-reset"
+            ;;
+        other)
+            printf '%s\n' "# somebody's own rule" > "$ls_rules/80-lightspeed-reset.rules"
+            ;;
+    esac
+    if test "$ls_sudo" = denied; then
+        ls_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$LS_CALLS"; warn "sudo ${1##*/}: permission denied"; return 1; }'
+    else
+        ls_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$LS_CALLS"; "$@"; }'
+    fi
+
+    set +e
+    output="$(PATH="$ls_bin" LS_CALLS="$ls_tmpdir/calls" SETUP_UDEV_RULES="$ls_rules" \
+        SETUP_LIBEXEC="$ls_libexec" "$ls_bin/sh" -c "set -e
+OS=$ls_os
+CROSTINI=$ls_crostini
+SCRIPTS_DIR='$SCRIPT_DIR'
+$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_lightspeed_reset")
+$ls_stub
+install_lightspeed_reset
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls=""
+    if test -f "$ls_tmpdir/calls"; then
+        calls="$(cat "$ls_tmpdir/calls")"
+    fi
+    ls_rule_body=""
+    if test -f "$ls_rules/80-lightspeed-reset.rules"; then
+        ls_rule_body="$(cat "$ls_rules/80-lightspeed-reset.rules")"
+    fi
+    ls_script_body=""
+    if test -f "$ls_libexec/lightspeed-reset"; then
+        ls_script_body="$(cat "$ls_libexec/lightspeed-reset")"
+    fi
+    rm -rf "$ls_tmpdir"
+}
+
+# The rule runs the installed copy, through systemd-run, for the receiver.
+assert_lightspeed_rule_written() {
+    ls_want="ACTION==\"add\", SUBSYSTEM==\"usb\", ENV{DEVTYPE}==\"usb_device\", ATTR{idVendor}==\"046d\", ATTR{idProduct}==\"c543\", RUN+=\"$ls_systemd_run --no-block --collect --quiet $ls_libexec/lightspeed-reset \$devpath\""
+    case "$ls_rule_body" in
+        *"$ls_want"*) ;;
+        *)
+            echo "  FAIL: the udev rule doesn't run lightspeed-reset for the receiver"
+            echo "  rule file: $ls_rule_body"
+            TEST_FAILED=1
+            return 1
+            ;;
+    esac
+}
+
+test_lightspeed_reset_installed() {
+    run_install_lightspeed_reset
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_lightspeed_rule_written &&
+    assert_eq "$ls_script_body" "$(cat "$SCRIPT_DIR/lightspeed-reset")"
+}
+
+# An earlier run's script is the same, so it isn't installed again; its rule
+# is rewritten with the current one.
+test_lightspeed_reset_current_copy_kept() {
+    run_install_lightspeed_reset ok debian setup
+    assert_status 0 &&
+    assert_calls_lack "install" &&
+    assert_lightspeed_rule_written
+}
+
+test_lightspeed_reset_foreign_rule_left_alone() {
+    run_install_lightspeed_reset ok debian other
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$ls_rule_body" "# somebody's own rule" &&
+    assert_output_contains "setup didn't write it"
+}
+
+test_lightspeed_reset_needs_systemd_run() {
+    run_install_lightspeed_reset ok debian none no
+    assert_status 0 &&
+    assert_output_contains "no systemd-run" &&
+    assert_eq "$calls" "" &&
+    assert_eq "$ls_rule_body" ""
+}
+
+# Without the script, a rule would run nothing, so none is written.
+test_lightspeed_reset_sudo_denial_is_not_fatal() {
+    run_install_lightspeed_reset denied
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "could not install" &&
+    assert_calls_lack "tee" &&
+    assert_eq "$ls_rule_body" ""
+}
+
+test_lightspeed_reset_linux_only() {
+    run_install_lightspeed_reset ok macos
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$ls_rule_body" "" || { echo "  (macOS)"; return 1; }
+    run_install_lightspeed_reset ok debian none yes 1
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$ls_rule_body" "" || { echo "  (Crostini)"; return 1; }
+}
+
 # --- zsh-autosuggestions without root ---
 
 # Run install_zsh_autosuggestions_home against a local tagged repo standing in
@@ -5545,6 +5696,18 @@ run_test "the display card is only held powered on Linux" \
     test_display_gpu_linux_only
 run_test "the display card is held powered whether or not this run has a GUI" \
     test_display_gpu_not_keyed_on_the_gui
+run_test "the Lightspeed reset script and its udev rule are installed" \
+    test_lightspeed_reset_installed
+run_test "an up-to-date Lightspeed reset script isn't installed again" \
+    test_lightspeed_reset_current_copy_kept
+run_test "a Lightspeed rule setup didn't write is left alone" \
+    test_lightspeed_reset_foreign_rule_left_alone
+run_test "the Lightspeed reset needs systemd-run" \
+    test_lightspeed_reset_needs_systemd_run
+run_test "a refused sudo for the Lightspeed reset warns and carries on" \
+    test_lightspeed_reset_sudo_denial_is_not_fatal
+run_test "the Lightspeed reset is only installed on Linux, outside Crostini" \
+    test_lightspeed_reset_linux_only
 run_test "the zsh-autosuggestions pin names a tag and a full commit" \
     test_zsh_autosuggestions_pin_is_complete
 run_test "--no-root clones zsh-autosuggestions at the pinned commit" \
