@@ -3598,10 +3598,18 @@ KEYBOARD
                 fi
                 # Applying the console copy depends on the persistent config
                 # write above. Skip it if that sudo command was denied.
+                # --save keeps the keymap for every boot. It loads it now only
+                # when run from a text console: from a desktop's terminal or
+                # ssh, where setup usually runs, setupcon says "not on the
+                # console" and leaves the consoles as they were until the
+                # next boot. --force --keyboard-only then loads it into every
+                # console now, as the boot does.
                 if ! command -v setupcon >/dev/null 2>&1; then
                     warn "no setupcon, so the text console keeps its old layout; install console-setup"
                 elif ! sudo_or_warn setupcon --save; then
                     warn "could not apply the keyboard config to virtual consoles"
+                elif ! sudo_or_warn setupcon --force --keyboard-only; then
+                    warn "could not load Dvorak into the text consoles now; they get it at the next boot"
                 fi
             else
                 warn "skipping the rest of the system keyboard configuration"

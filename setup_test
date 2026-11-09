@@ -1433,6 +1433,8 @@ test_debian_keyboard_saves_the_console_keymap() {
     run_debian_keyboard setupcon
     assert_status 0 &&
     assert_output_contains "SUDO setupcon --save" &&
+    # Off a text console, --save only saves; this loads it into them now.
+    assert_output_contains "SUDO setupcon --force --keyboard-only" &&
     assert_output_lacks "console-setup" &&
     assert_output_lacks "old layout"
 }
