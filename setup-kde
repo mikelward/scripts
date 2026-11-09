@@ -961,22 +961,25 @@ unbind_shortcut_in() {
     record_live_shortcut "$group" "$action" none "$action"
 }
 
-# Clear a launch shortcut held by a KDE-shipped .desktop component. These live
-# under the nested [services][NAME.desktop] group and take the same
-# "shortcut,default,name" triple as a [kwin] action -- see add_app_shortcut.
-# Writing a bare "none" would be a one-field value, which kglobalaccel skips,
-# leaving the component free to register its .desktop default instead.
 # A launch shortcut in [services], as Plasma's own apps keep theirs:
-# set_app_shortcut COMPONENT KEYS NAME.
+# set_app_shortcut COMPONENT KEYS NAME. "none" clears one a KDE-shipped
+# .desktop component holds.
 set_app_shortcut() {
     set_service_shortcut "$1" _launch "$2" "$3"
 }
 
 # Another of such a component's actions, as Spectacle's region shot:
 # set_service_shortcut COMPONENT ACTION KEYS NAME.
+#
+# A [services] entry is the keys alone, tab-separated, as KDE writes its
+# own: kglobalaccel reads it as key sequences, not as a [kwin] action's
+# "keys,default,name". The triple, which this script wrote before, reads as
+# one three-key sequence -- "Meta+T,none,terminal" is Meta+T, nothing, then
+# Qt's Terminal key -- which no press matches. The live apply bound the
+# right key in memory, so the shortcut worked until the next login.
 set_service_shortcut() {
     kde_write --file kglobalshortcutsrc --group services --group "$1" \
-        --key "$2" "$(printf '%s' "$3" | tr ' ' '\t'),none,$4"
+        --key "$2" "$(printf '%s' "$3" | tr ' ' '\t')"
     record_live_shortcut "$1" "$2" "$3" "$4"
 }
 
@@ -1063,19 +1066,10 @@ EOF
 
     # Nested group [services][foo.desktop] is what kglobalaccel reads for
     # desktop-file launch shortcuts; a top-level [foo.desktop] group is
-    # silently ignored.
-    #
-    # The value needs all three comma-separated fields, exactly like a [kwin]
-    # action: kglobalaccel loads BOTH kinds through Component::loadSettings
-    # (KServiceActionComponent derives from Component), which reads each entry
-    # with readEntry(QStringList) and skips anything that isn't 3 fields. A
-    # bare "Meta+T" is one field, so the entry is dropped, the shortcut never
-    # grabs, and the keypress falls through to the focused window -- the same
-    # failure the X-KDE-GlobalAccel-CommandShortcut flag above fixes, and the
-    # same 3-field rule that Meta+\, needs in configure_keybindings.
+    # silently ignored. The value is the keys alone: see set_service_shortcut.
     kde_write --file kglobalshortcutsrc \
         --group services --group "$desktop_file" \
-        --key _launch "$shortcut,none,$name"
+        --key _launch "$(printf '%s' "$shortcut" | tr ' ' '\t')"
     # The component's display name in System Settings, written the way KDE
     # writes it for its own service shortcuts.
     kde_write --file kglobalshortcutsrc \
