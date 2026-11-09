@@ -2916,7 +2916,8 @@ test_a_kept_config_file_is_a_warning() {
     assert_output_lacks "Warning:"
 }
 
-# confinst says a line a link, which the run counts instead. It can fail to
+# confinst says a line a link, which the run counts instead, and one for
+# each link it moved aside or removed as dangling. It can fail to
 # make one and still exit 0, so what else it says is a warning, and the
 # count leaves the failed link out.
 test_confinst_is_counted_and_its_errors_shown() {
@@ -2925,6 +2926,7 @@ test_confinst_is_counted_and_its_errors_shown() {
 #!/bin/sh
 echo "Linking /home/user/.zshrc to /home/user/conf/zshrc" >&2
 echo "Moving /home/user/.bashrc to /home/user/.bashrc.20261105" >&2
+echo "Removing /home/user/.config/hypr/hypridle.conf, a link to /home/user/conf/config/hypr/hypridle.conf, which is gone" >&2
 echo "Linking /home/user/.bashrc to /home/user/conf/bashrc" >&2
 echo "Linking /home/user/.vimrc to /home/user/conf/vimrc" >&2
 echo "Error creating /home/user/.vimrc, skipping /home/user/conf/vimrc" >&2
@@ -2943,6 +2945,7 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
     assert_status 0 &&
     assert_output_is "Linking the conf repo's files
 Moved /home/user/.bashrc to /home/user/.bashrc.20261105
+Removed /home/user/.config/hypr/hypridle.conf, a link to /home/user/conf/config/hypr/hypridle.conf, which is gone
 Warning: confinst: Error creating /home/user/.vimrc, skipping /home/user/conf/vimrc
 Linked 2 files
 BOOTSTRAP_CONTINUED"

@@ -1001,6 +1001,7 @@ run_confinst() {
     _rc_summary=$(tail -n "+$_log_start" "$SETUP_LOG" | awk '
         /^Linking / { linked++; next }
         /^Moving / { print "info Moved " substr($0, 8); next }
+        /^Removing / { print "info Removed " substr($0, 10); next }
         /^Error creating / { failed++ }
         NF { print "warn confinst: " $0 }
         END {

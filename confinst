@@ -153,6 +153,35 @@ link_points_to()
 	test "$link" -ef "$file"
 }
 
+# prune_links <sourcedir> <destdir>
+# removes the links in <destdir> to files under <sourcedir> that are gone, as
+# when the conf repo drops a file another repo now provides: left behind, the
+# link stands where that repo's installer would put its copy, and a program
+# reading it finds nothing.
+prune_links()
+{
+	local sourcedir
+	local destdir
+	local link
+	local target
+
+	sourcedir="$1"
+	destdir="$2"
+
+	for link in "$destdir"/* "$destdir"/.*
+	do
+		test -L "$link" || continue
+		test -e "$link" && continue
+		target=$(readlink "$link") || continue
+		case "$target" in
+			"$sourcedir"/*)
+				info "Removing $link, a link to $target, which is gone"
+				remove "$link"
+				;;
+		esac
+	done
+}
+
 # make_links <sourcedir> <destdir> <prefix> [<overwrite>]
 # make symlinks recursively in <destdir> pointing to files in <sourcedir>
 # <prefix> will be prepended to the basename of each symlink in destdir
@@ -179,6 +208,7 @@ make_links()
 	esac
 
 	verbose "Making links from $sourcedir to $destdir"
+	prune_links "$sourcedir" "$destdir"
 
 	for file in "$sourcedir"/*
 	do

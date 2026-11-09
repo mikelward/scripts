@@ -166,6 +166,35 @@ test_dangling_link_is_replaced() {
     assert_links_to "$homedir/.bashrc" "$homedir/conf/bashrc"
 }
 
+# A file conf dropped, as when another repo now provides it: its link is
+# removed, so that repo's installer can put its copy there, and said so.
+test_link_to_a_dropped_file_is_removed() {
+    mkdir -p "$homedir/.vim"
+    ln -s "$homedir/conf/vim/dropped.vim" "$homedir/.vim/dropped.vim"
+    ln -s "$homedir/conf/dropped" "$homedir/.dropped"
+    run_confinst
+    assert_status 0 &&
+    test ! -L "$homedir/.vim/dropped.vim" &&
+    test ! -L "$homedir/.dropped" &&
+    assert_output_contains "Removing $homedir/.dropped, a link to $homedir/conf/dropped, which is gone"
+}
+
+# A dangling link that isn't conf's is someone else's to deal with.
+test_other_dangling_links_are_left_alone() {
+    ln -s "$homedir/elsewhere/gone" "$homedir/.other"
+    run_confinst
+    assert_status 0 &&
+    assert_links_to "$homedir/.other" "$homedir/elsewhere/gone" &&
+    assert_output_lacks "Removing $homedir/.other"
+}
+
+test_simulate_removes_nothing() {
+    ln -s "$homedir/conf/dropped" "$homedir/.dropped"
+    run_confinst --simulate
+    assert_status 0 &&
+    assert_links_to "$homedir/.dropped" "$homedir/conf/dropped"
+}
+
 test_existing_file_is_backed_up() {
     printf 'mine\n' > "$homedir/.bashrc"
     run_confinst
@@ -211,6 +240,9 @@ run_test "an already-correct link is left alone" test_correct_link_is_left_alone
 run_test "a link to the wrong file is replaced" test_stale_link_is_replaced
 run_test "BSD readlink produces no errors" test_no_readlink_errors_on_bsd
 run_test "a dangling link is replaced" test_dangling_link_is_replaced
+run_test "a link to a file conf dropped is removed" test_link_to_a_dropped_file_is_removed
+run_test "a dangling link that isn't conf's is left alone" test_other_dangling_links_are_left_alone
+run_test "--simulate removes no link" test_simulate_removes_nothing
 run_test "an existing file is backed up" test_existing_file_is_backed_up
 run_test "--simulate changes nothing" test_simulate_changes_nothing
 run_test "--prefix sets the link prefix" test_custom_prefix
