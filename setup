@@ -293,8 +293,8 @@ Options:
   --no-tide        Install KDE Plasma alone, without tide
   --no-build-hyprland
                    Use the distro's Hyprland for tide, even if it's too old
-  --tidewm         Also build tidewm for tide's tidewm session, an option
-                   beside Hyprland's (Debian testing and Arch)
+  --no-tidewm      Don't build tidewm for tide's tidewm session, which is
+                   built beside Hyprland's by default
   --dm DM          The login screen from the next boot: tide (greetd with
                    tide's greeter), sddm, gdm, or keep the one there is (the
                    default). SDDM and GDM are installed if they aren't
@@ -645,8 +645,9 @@ while test $# -gt 0; do
         --no-build-hyprland)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"
             ;;
-        --tidewm)
-            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --tidewm"
+        # tidewm is built by default; --tidewm is still taken.
+        --tidewm | --no-tidewm)
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS $1"
             ;;
         --greeter)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --greeter"
