@@ -70,11 +70,15 @@ MOCK
     done
 
     # sudo records itself and runs the rest, so the command it was given is
-    # recorded too. hostname answers host1, or fails where hostname_fails is
-    # staged.
+    # recorded too; sudo -v (asking for the password) succeeds, or fails
+    # where sudo_refuses is staged. hostname answers host1, or fails where
+    # hostname_fails is staged.
     cat > "$TEST_TMPDIR/bin/sudo" <<MOCK
 #!/bin/sh
 printf "%s\\n" "sudo \$*" >> "$CALLS"
+case "\$1" in
+    -v) test -f "$TEST_TMPDIR/sudo_refuses" && exit 1; exit 0 ;;
+esac
 exec "\$@"
 MOCK
     cat > "$TEST_TMPDIR/bin/hostname" <<MOCK
@@ -1967,6 +1971,33 @@ test_lock_screen_shows_hostname() {
     assert_called "sudo defaults write /Library/Preferences/com.apple.loginwindow LoginwindowText host1"
 }
 
+# Asked once, before the first step, not when the lock screen is set at the
+# end of a long run.
+test_password_is_asked_for_at_the_start() {
+    run_macos
+    assert_status 0 &&
+    assert_called "sudo -v" &&
+    first=$(head -n 1 "$CALLS") &&
+    if test "$first" != "sudo -v"; then
+        printf "%s\n" "  FAIL: the first call was '$first', not sudo -v"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_no_sudo_asks_for_no_password() {
+    run_macos --no-sudo --ignore-errors
+    assert_not_called "sudo -v"
+}
+
+test_refused_password_leaves_the_sudo_steps_as_steps() {
+    touch "$TEST_TMPDIR/sudo_refuses"
+    run_macos --ignore-errors
+    assert_not_called "LoginwindowText host1" &&
+    assert_not_called "sudo pmset" &&
+    assert_output_contains "Skipping the hostname on the lock screen: it needs administrator rights and sudo didn't take a password"
+}
+
 test_no_sudo_leaves_lock_screen_as_a_step() {
     run_macos --no-sudo --ignore-errors
     assert_not_called "LoginwindowText" &&
@@ -3022,6 +3053,12 @@ run_test "windows don't animate" \
     test_windows_dont_animate
 run_test "the lock screen shows the hostname" \
     test_lock_screen_shows_hostname
+run_test "the password is asked for at the start" \
+    test_password_is_asked_for_at_the_start
+run_test "--no-sudo asks for no password" \
+    test_no_sudo_asks_for_no_password
+run_test "a refused password leaves the sudo steps as steps" \
+    test_refused_password_leaves_the_sudo_steps_as_steps
 run_test "--no-sudo leaves the lock screen's hostname as a step" \
     test_no_sudo_leaves_lock_screen_as_a_step
 run_test "without a hostname, the lock screen warns" \

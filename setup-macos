@@ -135,8 +135,11 @@ ASSUME_YES=no
 # its cask is a .pkg and Homebrew hands those to the system installer, which
 # prompts for an administrator password. So does the lock screen's hostname,
 # which lives in a system-wide file, and so does keeping a Mac without a
-# battery awake (pmset). --no-sudo skips all three.
+# battery awake (pmset). --no-sudo skips all three; otherwise the password is
+# asked for once, at the start (ask_for_password).
 SUDO=yes
+# Why SUDO is no, for the steps that say they're skipped.
+NO_SUDO_WHY="--no-sudo was given"
 
 # Homebrew's ask mode is on by default, so the cask installs below stop to
 # confirm a plan the caller already asked for. setup exports this too; set it
@@ -538,6 +541,41 @@ preflight() {
     fi
 }
 
+# Asks for the administrator password now, while you're watching, rather
+# than when the lock screen's hostname is set at the end of a long run, and
+# keeps it fresh so nothing asks again: sudo forgets it after five minutes,
+# and the installs can take longer. Karabiner's installer, which Homebrew
+# runs through sudo, uses it too. Without the password (no terminal to ask
+# on, or it's refused) the steps that need it are left as steps, as with
+# --no-sudo.
+SUDO_KEEPER=
+ask_for_password() {
+    test "$SUDO" = yes || return 0
+    info "Some steps need administrator rights; asking for your password now."
+    if ! sudo -v; then
+        warn "sudo didn't take a password, so the steps that need administrator rights are left as steps"
+        SUDO=no
+        NO_SUDO_WHY="sudo didn't take a password"
+        return 0
+    fi
+    # Its output goes nowhere: a caller reading ours would otherwise wait
+    # for it to end.
+    (
+        while sleep 60; do
+            kill -0 "$$" 2>/dev/null || exit 0
+            sudo -n -v 2>/dev/null || exit 0
+        done
+    ) >/dev/null 2>&1 &
+    SUDO_KEEPER=$!
+}
+
+# shellcheck disable=SC2317  # run from the EXIT trap
+stop_sudo_keeper() {
+    if test -n "$SUDO_KEEPER"; then
+        kill "$SUDO_KEEPER" 2>/dev/null || true
+    fi
+}
+
 usage() {
     cat <<'USAGE'
 Usage: setup-macos [--no-install] [--no-sudo] [--ignore-errors] [--yes]
@@ -634,7 +672,13 @@ esac
 
 # From here on, the run ends by repeating its warnings and errors.
 start_problem_recap
-trap 'recap_problems "$?"' EXIT
+# shellcheck disable=SC2317  # run from the EXIT trap
+on_exit() {
+    _exit_status=$?
+    stop_sudo_keeper
+    recap_problems "$_exit_status"
+}
+trap on_exit EXIT
 
 # Abort on the first error by default. --ignore-errors leaves set -e off so
 # the script pushes through failing steps.
@@ -1621,7 +1665,7 @@ install_karabiner() {
     # to the system installer and an administrator prompt appears -- exactly
     # what --no-sudo exists to avoid.
     if test "$SUDO" = no; then
-        warn "Karabiner-Elements' installer needs administrator rights and --no-sudo was given; skipping it, so $KARABINER_MISSING_EFFECT"
+        warn "Karabiner-Elements' installer needs administrator rights and $NO_SUDO_WHY; skipping it, so $KARABINER_MISSING_EFFECT"
         return 0
     fi
     if ! is_command brew; then
@@ -2195,7 +2239,7 @@ configure_lock_screen() {
         return 0
     fi
     if test "$SUDO" = no; then
-        info "Skipping the hostname on the lock screen: it needs administrator rights and --no-sudo was given"
+        info "Skipping the hostname on the lock screen: it needs administrator rights and $NO_SUDO_WHY"
         todo_optional "To show this Mac's name on the lock screen: sudo defaults write $LOGINWINDOW_PLIST LoginwindowText $_host"
         return 0
     fi
@@ -2222,7 +2266,7 @@ configure_power() {
             ;;
     esac
     if test "$SUDO" = no; then
-        info "Skipping keeping this Mac awake: it needs administrator rights and --no-sudo was given"
+        info "Skipping keeping this Mac awake: it needs administrator rights and $NO_SUDO_WHY"
         todo_optional "To keep this Mac awake while plugged in, and start it after a power cut: sudo pmset -c sleep 0 autorestart 1"
         return 0
     fi
@@ -2244,6 +2288,7 @@ configure_fonts() {
 # --- Main ---
 
 preflight
+ask_for_password
 configure_keyboard
 configure_modifier_keys
 configure_shortcuts
