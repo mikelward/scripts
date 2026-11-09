@@ -131,7 +131,7 @@ sudo_or_warn apt-get update" 2>&1)"
 # The quiet-install helpers, which most of what a harness runs calls, and
 # one log for every harness that doesn't check its own, so none writes to
 # the real ~/.local/state.
-QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_was_busy apt_busy apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages os_release install_wallpapers"
+QUIET_FUNCTIONS="santa_lockdown cli_tools_blocked apt_was_busy apt_busy apt_frontend_allowed apt_can_ask apt_ask_hook start_setup_log log_mark log_failure run_logged brew_logged sudo_logged pkg_versions pkg_begin pkg_note upgrade_failed pkg_upgrade apt_upgradable brew_upgrade npm_install_typescript apt_install dnf_install brew_install pkg_end pkg_kept_configs install_os_packages os_release install_wallpapers"
 SETUP_LOG=$(mktemp)
 export SETUP_LOG
 trap 'rm -f "$SETUP_LOG"' EXIT
@@ -560,9 +560,38 @@ MOCK
         printf '#!/bin/sh\n' > "$linux_tmpdir/tsc"
         chmod +x "$linux_tmpdir/tsc"
     fi
+    # apt has 2.0-1 of each installed package, newer than its 1.0-1, but for
+    # HARNESS_APT_NEWER's, installed at 9.9-1, newer than apt's.
+    cat > "$linux_tmpdir/apt-cache" <<MOCK
+#!/bin/sh
+test "${HARNESS_APT_CACHE_FAILS:-no}" = no || { echo "E: apt-cache failed" >&2; exit 100; }
+shift
+for _name; do
+    _installed="(none)"
+    for _i in ${HARNESS_INSTALLED:-}; do test "\$_i" = "\$_name" && _installed=1.0-1; done
+    for _i in ${HARNESS_APT_NEWER:-}; do test "\$_i" = "\$_name" && _installed=9.9-1; done
+    printf '%s:\n  Installed: %s\n  Candidate: 2.0-1\n' "\$_name" "\$_installed"
+done
+MOCK
+    # dpkg --compare-versions, for hosts without dpkg (macOS, Fedora): the
+    # versions above are N.N-N, compared field by field as numbers.
+    cat > "$linux_tmpdir/dpkg" <<'MOCK'
+#!/bin/sh
+test "$1" = --compare-versions || exit 2
+awk -v a="$2" -v op="$3" -v b="$4" 'BEGIN {
+    n = split(a, x, /[.:-]/); m = split(b, y, /[.:-]/); c = 0
+    for (i = 1; i <= (n > m ? n : m) && c == 0; i++) {
+        if (x[i] + 0 > y[i] + 0) c = 1; else if (x[i] + 0 < y[i] + 0) c = -1
+    }
+    if (op == "gt") exit !(c > 0)
+    if (op == "lt") exit !(c < 0)
+    if (op == "eq") exit !(c == 0)
+    exit 2
+}'
+MOCK
     write_mock_sudo "$linux_tmpdir" "$linux_calls"
     chmod +x "$linux_tmpdir/$linux_pm" "$linux_tmpdir/sudo" "$linux_tmpdir/dpkg-query" \
-        "$linux_tmpdir/rpm" "$linux_tmpdir/npm"
+        "$linux_tmpdir/rpm" "$linux_tmpdir/npm" "$linux_tmpdir/apt-cache" "$linux_tmpdir/dpkg"
     linux_stamp="$linux_tmpdir/state/setup/last-upgrade"
     stage_stamp "$linux_stamp" "${HARNESS_STAMP:-none}"
 
@@ -1769,12 +1798,19 @@ run_linux_desktop() {
     if test "${DESKTOP_TIDE_BUSY:-no}" = yes; then
         printf '#!/bin/sh\necho setup-tide >> "$SETUP_APT_RETRY"\nexit 1\n' > "$desktop_tmpdir/setup-tide"
     fi
+    # DESKTOP_TIDE_HELP is what tide's installer says --help, when given.
+    if test -n "${DESKTOP_TIDE_HELP:-}"; then
+        mkdir -p "$desktop_tmpdir/src/tide/install"
+        printf '#!/bin/sh\necho "%s"\n' "$DESKTOP_TIDE_HELP" > "$desktop_tmpdir/src/tide/install/tide-setup"
+        chmod +x "$desktop_tmpdir/src/tide/install/tide-setup"
+    fi
 
     set +e
     output="$(sh -c "set -e
 $(grep '^TIDE=' "$SETUP")
 ${1:+TIDE=$1}
 TIDE_SETUP_FLAGS='${2-}'
+UPGRADE='${DESKTOP_UPGRADE:-no}'
 DESKTOP_SETUP_FLAGS=--ignore-errors
 KDE_SETUP_FLAGS=
 SCRIPTS_DIR='$desktop_tmpdir'
@@ -1811,6 +1847,26 @@ test_a_failed_setup_tide_still_fails() {
 }
 run_linux_desktop_failing() {
     DESKTOP_TIDE_FAILS=yes run_linux_desktop
+}
+
+# An upgrade run upgrades tide's packages too, where tide's installer takes
+# --upgrade; one from before it would stop at the flag.
+test_an_upgrade_run_upgrades_tides_packages() {
+    DESKTOP_UPGRADE=yes DESKTOP_TIDE_HELP="  --upgrade        Also upgrade" run_linux_desktop
+    assert_status 0 &&
+    assert_calls_contain "--no-fetch --ignore-errors --upgrade"
+}
+
+test_an_old_tide_installer_gets_no_upgrade_flag() {
+    DESKTOP_UPGRADE=yes DESKTOP_TIDE_HELP="  --no-build-hyprland" run_linux_desktop
+    assert_status 0 &&
+    assert_calls_lack "--upgrade"
+}
+
+test_a_run_without_upgrades_leaves_tides_packages() {
+    DESKTOP_TIDE_HELP="  --upgrade        Also upgrade" run_linux_desktop
+    assert_status 0 &&
+    assert_calls_lack "--upgrade"
 }
 
 # A plain run sets up KDE and then tide, pulling tide first, and leaves the
@@ -3429,6 +3485,26 @@ test_stale_stamp_upgrades_apt_and_records_it() {
     assert_calls_lack "vim-tiny" &&
     assert_calls_contain "apt-get install -y --no-upgrade --install-recommends adb atool" &&
     assert_eq "$stamp" fresh
+}
+
+# One installed newer than apt's, as a company's own git, isn't upgraded:
+# apt would downgrade it, and -y refuses that, failing the lot.
+test_apt_upgrade_never_downgrades() {
+    HARNESS_UPGRADE=yes HARNESS_INSTALLED="git curl" HARNESS_APT_NEWER="git" run_linux_packages debian
+    assert_status 0 &&
+    assert_calls_contain "apt-get install -y --only-upgrade --install-recommends curl -o" &&
+    assert_calls_lack "--only-upgrade --install-recommends git"
+}
+
+# apt-cache failing is a failed upgrade, retried next run, not a week of
+# no upgrades recorded as done.
+test_failed_apt_cache_on_an_upgrade_run_drops_the_stamp() {
+    HARNESS_UPGRADE=auto HARNESS_STAMP=stale HARNESS_INSTALLED="git" HARNESS_APT_CACHE_FAILS=yes \
+        run_linux_packages debian
+    assert_status 0 &&
+    assert_output_contains "could not upgrade git (apt-cache couldn't say which have upgrades)" &&
+    assert_calls_lack "--only-upgrade" &&
+    assert_eq "$stamp" missing
 }
 
 test_failed_apt_upgrade_drops_the_stamp() {
@@ -6024,6 +6100,8 @@ run_test "an in-week run doesn't upgrade apt packages" \
     test_in_week_run_does_not_upgrade_apt
 run_test "a stale stamp upgrades setup's installed apt packages and records it" \
     test_stale_stamp_upgrades_apt_and_records_it
+run_test "a failed apt-cache on an upgrade run drops the stamp" test_failed_apt_cache_on_an_upgrade_run_drops_the_stamp
+run_test "an apt upgrade never downgrades a newer package" test_apt_upgrade_never_downgrades
 run_test "a failed apt upgrade drops the stamp, so the next run retries" \
     test_failed_apt_upgrade_drops_the_stamp
 run_test "a failed apt-get update on an upgrade run drops the stamp" \
@@ -6076,6 +6154,9 @@ run_test "a hung ssh-agent is given up on" \
     test_a_hung_ssh_agent_is_given_up_on
 run_test "a busy setup-tide waits for its second try" \
     test_a_busy_setup_tide_waits_for_its_second_try
+run_test "an upgrade run upgrades tide's packages" test_an_upgrade_run_upgrades_tides_packages
+run_test "an old tide installer gets no --upgrade" test_an_old_tide_installer_gets_no_upgrade_flag
+run_test "a run without upgrades leaves tide's packages" test_a_run_without_upgrades_leaves_tides_packages
 run_test "a setup-tide that failed otherwise still fails setup" \
     test_a_failed_setup_tide_still_fails
 run_test "a busy apt is tried again at the end" \

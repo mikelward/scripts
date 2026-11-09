@@ -1101,9 +1101,16 @@ run_setup_tide() {
     if test "$GITHUB_MIRROR" = yes; then
         tide_github=$GITHUB_PREFIX
     fi
+    # An upgrade run upgrades tide's packages too, where tide's installer
+    # can: one from before --upgrade would stop at it.
+    tide_upgrade=
+    if test "$UPGRADE" = yes \
+        && "$SRC_DIR/tide/install/tide-setup" --help 2>/dev/null | grep -q -e '--upgrade'; then
+        tide_upgrade=--upgrade
+    fi
     # shellcheck disable=SC2086  # expands to zero or more flags
     TIDE_DIR="$SRC_DIR/tide" GITHUB_PREFIX="$tide_github" \
-        "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS
+        "$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS $tide_upgrade
 }
 
 # --- apt, when another program is using it ---
@@ -1620,7 +1627,10 @@ record_upgrade() {
 # that MANAGER (apt or dnf) has installed. The installs themselves leave
 # installed packages as they are: apt-get install --no-upgrade, and dnf
 # install with best off, which is Fedora's default and dnf5's way anyway.
-# Under --no-sudo there's nothing it could run.
+# Under --no-sudo there's nothing it could run. With apt, only those it has
+# newer: one installed newer than apt's, as a company's own git, it would
+# downgrade, and -y refuses that, failing the lot. dnf upgrade never
+# downgrades.
 pkg_upgrade() {
     test "$UPGRADE" = yes && test "$SUDO" != no || return 0
     _pu_manager=$1
@@ -1628,6 +1638,14 @@ pkg_upgrade() {
     _pu_names=$(pkg_versions "$_pu_manager" | NAMES="$*" awk '
         BEGIN { n = split(ENVIRON["NAMES"], a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
         want[$1] && !seen[$1]++ { printf "%s%s", sep, $1; sep = " " }')
+    if test "$_pu_manager" = apt && test -n "$_pu_names"; then
+        _pu_installed=$_pu_names
+        # shellcheck disable=SC2086  # $_pu_installed is a space-separated list of names
+        _pu_names=$(apt_upgradable $_pu_installed) || {
+            upgrade_failed "$_pu_installed (apt-cache couldn't say which have upgrades)"
+            return 0
+        }
+    fi
     test -n "$_pu_names" || return 0
     case "$_pu_manager" in
         apt) set -- apt-get install -y --only-upgrade --install-recommends ;;
@@ -1635,6 +1653,22 @@ pkg_upgrade() {
     esac
     # shellcheck disable=SC2086  # $_pu_names is a space-separated list of names
     sudo_logged "$@" $_pu_names || upgrade_failed "$_pu_names"
+}
+
+# apt_upgradable NAME...: those of NAME whose apt candidate is newer than
+# the version installed, space-separated, failing when apt-cache does.
+# apt-cache is asked in the C locale, whose labels this parses.
+apt_upgradable() {
+    _au_policy=$(LC_ALL=C apt-cache policy "$@") || return 1
+    printf '%s\n' "$_au_policy" | awk '
+        /^[^ ].*:$/ { pkg = substr($0, 1, length($0) - 1); installed = "" }
+        /^  Installed:/ { installed = $2 }
+        /^  Candidate:/ { print pkg, installed, $2 }' \
+        | while read -r _au_pkg _au_installed _au_candidate; do
+            test "$_au_installed" != "(none)" && test "$_au_candidate" != "(none)" || continue
+            dpkg --compare-versions "$_au_candidate" gt "$_au_installed" 2>/dev/null \
+                && printf '%s ' "$_au_pkg"
+        done | sed 's/ $//'
 }
 
 # brew_upgrade: on an upgrade run, refreshes Homebrew's index and upgrades
