@@ -104,6 +104,16 @@ check('function keys count up from F1', [META | SHIFT | 0x01000032],
       kdeshortcut.parse_shortcut('Meta+Shift+F3'))
 check('several modifiers OR together', [CTRL | ALT | 0x01000007],
       kdeshortcut.parse_shortcut('Ctrl+Alt+Delete'))
+# Qt writes Page Up and Page Down as PgUp and PgDown, which is how
+# setup-kde gives them.
+check('Meta+PgUp parses',
+      [META | 0x01000016], kdeshortcut.parse_shortcut('Meta+PgUp'))
+check('Meta+Shift+PgDown parses',
+      [META | SHIFT | 0x01000017], kdeshortcut.parse_shortcut('Meta+Shift+PgDown'))
+check('Meta+Ins parses',
+      [META | 0x01000006], kdeshortcut.parse_shortcut('Meta+Ins'))
+check('Meta+= and Meta+- parse',
+      [META | 0x3D, META | 0x2D], kdeshortcut.parse_shortcuts('Meta+= Meta+-'))
 check('Super is an alias for Meta', kdeshortcut.parse_shortcut('Meta+T'),
       kdeshortcut.parse_shortcut('Super+T'))
 check('a trailing + is the plus key, not an empty token', [META | 0x2B],
