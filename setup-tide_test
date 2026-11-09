@@ -50,8 +50,10 @@ teardown
 # The installer's warnings are repeated once, at the end, with this one's.
 setup; checkout; ARGS=(--no-fetch); run FAKE_TIDE_SETUP_WARNS="a tide warning"
 check "repeats the installer's warnings at the end" \
-    has "$(printf '%s\n' "$output" | tail -n 2)" "setup-tide: the warnings and errors from this run, again:
+    has "$(printf '%s\n' "$output" | tail -n 3)" "setup-tide: the warnings and errors from this run, again:
   Warning: a tide warning"
+check "then says, last, that it finished with a warning" \
+    test "$(printf '%s\n' "$output" | tail -n 1)" = "setup-tide finished, with 1 warning; see above"
 teardown
 
 # A failed install still gets the extras, and fails the run.

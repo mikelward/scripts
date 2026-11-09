@@ -116,7 +116,8 @@ MOCK
 
     set +e
     output="$(SUDO_MODE="$sudo_mode" SUDO="$sudo_setting" PATH="$sudo_tmpdir:$PATH" \
-        sh -c "$sudo_functions
+        sh -c "$(extract_functions "setup_color paint")
+$sudo_functions
 sudo_or_warn apt-get update" 2>&1)"
     status=$?
     set -e
@@ -209,7 +210,7 @@ MOCK
 
     set +e
     output="$(PATH="$brew_tmpdir" \
-        sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS install_homebrew")
+        sh -c "$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS install_homebrew")
 install_homebrew" 2>&1)"
     status=$?
     set -e
@@ -255,7 +256,7 @@ MOCK
         sh -c "set -e
 OS=$terminal_os
 sudo_or_warn() { \"\$@\"; }
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS set_kde_default_terminal set_default_terminal")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS set_kde_default_terminal set_default_terminal")
 set_default_terminal
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -358,7 +359,7 @@ UPGRADE_FAILED=no
 UPGRADE_STAMP='$macos_stamp'
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac resolve_upgrade record_upgrade install_packages")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac resolve_upgrade record_upgrade install_packages")
 resolve_upgrade
 install_packages
 record_upgrade
@@ -384,7 +385,7 @@ EXTRAS_BACKEND=brew
 install_homebrew() { echo INSTALL_HOMEBREW; }
 install_extras_brew() { echo EXTRAS_FROM_BREW; }
 install_extras_release() { echo EXTRAS_FROM_RELEASE; }
-$(extract_functions "info detail warn note_problem santa_lockdown cli_tools_blocked install_extras")
+$(extract_functions "setup_color paint info detail warn note_problem santa_lockdown cli_tools_blocked install_extras")
 install_extras
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -451,7 +452,7 @@ OS=macos
 NPM=$2
 ROOT=$3
 SCRIPTS_DIR='$node_tmpdir/scripts'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac install_node_home")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac install_node_home")
 install_node_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -580,7 +581,7 @@ UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
 UPGRADE_STAMP='$linux_stamp'
 SETUP_APT_RETRY=${HARNESS_RETRY:+$linux_tmpdir/apt-retry}
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn resolve_upgrade record_upgrade install_packages retry_busy_apt")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn resolve_upgrade record_upgrade install_packages retry_busy_apt")
 resolve_upgrade
 install_packages
 test -z \"\$SETUP_APT_RETRY\" || retry_busy_apt
@@ -641,7 +642,7 @@ run_pkg_summary() {
     printf '%s\n' "$3" > "$summary_tmpdir/after"
     set +e
     output="$(sh -c "set -e
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS")
 pkg_versions() { cat '$summary_tmpdir/versions'; }
 sudo_logged() {
     cp '$summary_tmpdir/after' '$summary_tmpdir/versions'
@@ -731,7 +732,7 @@ MOCK
 OS=$purge_os
 TIDE=${PURGE_TIDE:-no}
 SUDO=yes
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn obsolete_pkg_installed purge_obsolete_packages")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS sudo_or_warn obsolete_pkg_installed purge_obsolete_packages")
 purge_obsolete_packages
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -783,7 +784,7 @@ MOCK
     output="$(PATH="${fm_path%:}" sh -c "set -e
 HOME='$fm_home'
 SCRIPTS_DIR='$fm_scripts'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS lf_missing install_file_managers")
 install_file_managers
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -811,7 +812,7 @@ MOCK
     output="$(sh -c "set -e
 HOME='$prune_tmpdir/home'
 SCRIPTS_DIR='$prune_scripts'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS prune_retired_tools")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS prune_retired_tools")
 prune_retired_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -830,7 +831,7 @@ run_missing_homepkg_warnings() {
 
     set +e
     output="$(sh -c "SCRIPTS_DIR='$missing_scripts_dir'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_home_tools install_shell_tools install_extras_release")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS install_home_tools install_shell_tools install_extras_release")
 install_home_tools
 install_shell_tools
 install_extras_release" 2>&1)"
@@ -892,7 +893,7 @@ run_helix_runtime_helper() {
 HOME='$helix_home'
 XDG_CONFIG_HOME='$helix_config'
 SRC_DIR='$helix_home/src'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS link_helix_runtime clear_managed_helix_runtime")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS link_helix_runtime clear_managed_helix_runtime")
 $helix_call
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -963,7 +964,7 @@ MOCK
 HOME='$extras_home'
 XDG_CONFIG_HOME='$extras_home/.config'
 SRC_DIR='$extras_home/src'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools clear_managed_helix_runtime install_extras_brew")
 install_extras_brew
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1025,7 +1026,7 @@ SRC_DIR='$release_home/src'
 SCRIPTS_DIR='$release_home/scripts'
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools link_helix_runtime install_extras_release")
 install_extras_release
 echo BOOTSTRAP_CONTINUED
 echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
@@ -1104,7 +1105,7 @@ MOCK
 OS=debian
 HOME='$services_home'
 XDG_CONFIG_HOME='$services_home/.config'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS systemd_user_available shpool_service_exists start_services")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS systemd_user_available shpool_service_exists start_services")
 start_services
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1171,7 +1172,7 @@ SRC_DIR='$ht_home/src'
 SCRIPTS_DIR='$ht_home/scripts'
 MINIMAL_ENABLED=0
 NPM=yes
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS system_jj set_extras_tools install_home_tools clear_managed_helix_runtime")
 install_home_tools
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1228,7 +1229,7 @@ run_check_go() {
         chmod +x "$go_tmpdir/go"
     fi
     set +e
-    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS go_at_least check_go")
+    output="$(GO="$go_tmpdir/go" MIN_GO=1.21 sh -c "$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS go_at_least check_go")
 check_go" 2>&1)"
     status=$?
     set -e
@@ -1309,7 +1310,7 @@ clone_or_pull() {
 }
 check_go() { test '$2' = ok; }
 make() { echo \"make \$*\"; return ${3:-0}; }
-$(extract_functions "info detail warn note_problem redact_url_credentials install_vcs")
+$(extract_functions "setup_color paint info detail warn note_problem redact_url_credentials install_vcs")
 install_vcs
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -1385,7 +1386,7 @@ test_crostini_not_detected_elsewhere() {
 
 test_crostini_skips_the_keyboard() {
     set +e
-    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS configure_keyboard")
+    output="$(CROSTINI=1 OS=debian sh -c "$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS $QUIET_FUNCTIONS configure_keyboard")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
@@ -1459,7 +1460,7 @@ test_problems_recapped_at_exit() {
     recap_tmpdir="$(mktemp -d)"
     set +e
     output="$(TMPDIR="$recap_tmpdir" sh -c "PROBLEMS_OWNER=no
-$(extract_functions "warn error note_problem start_problem_recap recap_problems")
+$(extract_functions "setup_color paint problem_line count_of warn error note_problem start_problem_recap recap_problems")
 start_problem_recap
 trap 'recap_problems \"\$?\"' EXIT
 warn first
@@ -1467,7 +1468,7 @@ sh -c \"\$1\" helper
 error second
 echo LAST_STEP
 exit 3" sh "PROBLEMS_OWNER=no
-$(extract_functions "warn note_problem start_problem_recap recap_problems")
+$(extract_functions "setup_color paint problem_line count_of warn note_problem start_problem_recap recap_problems")
 start_problem_recap
 trap 'recap_problems \"\$?\"' EXIT
 warn from-helper" 2>&1)"
@@ -1482,8 +1483,64 @@ setup: the warnings and errors from this run, again:
   Warning: first
   Warning: from-helper
   Error: second
-setup stopped early, with exit status 3" &&
+setup FAILED: it stopped early, with exit status 3 (1 error, 2 warnings)" &&
     assert_eq "$leftover" ""
+}
+
+# recap_run SCRIPT: runs SCRIPT, sh with the recap's functions and its EXIT
+# trap, setting output and status.
+recap_run() {
+    recap_tmpdir="$(mktemp -d)"
+    set +e
+    output="$(TMPDIR="$recap_tmpdir" sh -c "PROBLEMS_OWNER=no
+$(extract_functions "setup_color paint problem_line count_of warn error note_problem start_problem_recap recap_problems")
+start_problem_recap
+trap 'recap_problems \"\$?\"' EXIT
+$1" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$recap_tmpdir"
+}
+
+# The run ends saying, last, whether it worked.
+test_recap_says_a_clean_run_finished() {
+    recap_run "echo done"
+    assert_status 0 &&
+    assert_eq "$(printf '%s\n' "$output" | tail -n 1)" "setup finished with no warnings or errors"
+}
+
+test_recap_says_a_run_with_warnings_finished() {
+    recap_run "warn one; warn two"
+    assert_status 0 &&
+    assert_eq "$(printf '%s\n' "$output" | tail -n 1)" "setup finished, with 2 warnings; see above"
+}
+
+# setup's error() goes on, but the run it was in failed.
+test_recap_fails_a_run_with_an_error() {
+    recap_run "error broken; warn one"
+    assert_status 1 &&
+    assert_eq "$(printf '%s\n' "$output" | tail -n 1)" "setup FAILED: 1 error, 1 warning; see above"
+}
+
+# Errors red, warnings yellow and the verdict colored, on a terminal or
+# with SETUP_COLOR=always; NO_COLOR and SETUP_COLOR=never turn it off.
+test_recap_colors_with_setup_color_always() {
+    SETUP_COLOR=always recap_run "warn one; error two"
+    assert_output_contains "$(printf '\033[1;33mWarning:\033[0m one')" &&
+    assert_output_contains "$(printf '\033[1;31mError:\033[0m two')" &&
+    assert_eq "$(printf '%s\n' "$output" | tail -n 1)" "$(printf '\033[1;31msetup FAILED: 1 error, 1 warning; see above\033[0m')"
+}
+
+test_recap_green_when_clean_and_colored() {
+    SETUP_COLOR=always recap_run "echo done"
+    assert_eq "$(printf '%s\n' "$output" | tail -n 1)" "$(printf '\033[1;32msetup finished with no warnings or errors\033[0m')"
+}
+
+test_recap_plain_off_a_terminal() {
+    recap_run "warn one"
+    case "$output" in
+        *"$(printf '\033[')"*) return 1 ;;
+    esac
 }
 
 # --- usage and help ---
@@ -1560,7 +1617,7 @@ TIDE_REPO=https://example.com/mikelward/tide.git
 GITHUB_MIRROR='${DESKTOP_MIRROR:-no}'
 GITHUB_PREFIX='${DESKTOP_PREFIX:-git@github.com:}'
 clone_or_pull() { echo \"clone_or_pull \$*\" >> '$desktop_calls'; }
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS configure_linux_desktop run_setup_tide")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS configure_linux_desktop run_setup_tide")
 configure_linux_desktop
 echo DESKTOP_CONTINUED" 2>&1)"
     status=$?
@@ -1857,7 +1914,7 @@ HOME='$uv_home'
 unset XDG_BIN_HOME XDG_CONFIG_HOME
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools install_uv")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools install_uv")
 install_uv
 echo BOOTSTRAP_CONTINUED
 echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
@@ -2829,7 +2886,7 @@ run_kept_config() {
     mkdir -p "$kept_tmpdir/etc/frob"
     set +e
     output="$(SETUP_ETC="$kept_tmpdir/etc" sh -c "set -e
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS")
+$(extract_functions "setup_color paint info warn note_problem $QUIET_FUNCTIONS")
 pkg_versions() { echo 'frob 1.0'; }
 sudo_logged() { test -z '$2' || : > '$kept_tmpdir/etc/frob/$2'; }
 brew_logged() { test -z '$2' || : > '$kept_tmpdir/etc/frob/$2'; }
@@ -2877,7 +2934,7 @@ MOCK
     set +e
     output="$(XDG_STATE_HOME="$confinst_tmpdir/state" SETUP_LOG="" sh -c "set -e
 SCRIPTS_DIR='$confinst_tmpdir'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS run_confinst")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS run_confinst")
 run_confinst
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -2900,7 +2957,7 @@ test_unwritable_brew_log_is_not_fatal() {
     chmod +x "$log_tmpdir/brew"
     set +e
     output="$(PATH="$log_tmpdir:$PATH" XDG_STATE_HOME="$log_tmpdir" SETUP_LOG="" sh -c "set -e
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS")
 brew_logged install zoxide
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -3062,7 +3119,7 @@ ROOT=yes
 UPGRADE=yes
 UPGRADE_FAILED=no
 SCRIPTS_DIR='$dl_tmpdir/scripts'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac local_bin_blocked remove_blocked_shell_tools system_jj set_extras_tools link_helix_runtime install_extras_release missing_shell_tools install_shell_tools lf_missing install_file_managers install_node_home install_home_tools upgrade_home_env install_uv install_fnm")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac local_bin_blocked remove_blocked_shell_tools system_jj set_extras_tools link_helix_runtime install_extras_release missing_shell_tools install_shell_tools lf_missing install_file_managers install_node_home install_home_tools upgrade_home_env install_uv install_fnm")
 install_extras_release
 install_shell_tools
 install_file_managers
@@ -3303,7 +3360,7 @@ MOCK
 SCRIPTS_DIR='$he_tmpdir/scripts'
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
-$(extract_functions "info warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools upgrade_home_env")
+$(extract_functions "setup_color paint info warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools upgrade_home_env")
 upgrade_home_env
 echo BOOTSTRAP_CONTINUED
 echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
@@ -3360,7 +3417,7 @@ MOCK
     output="$(HOME="$stu_home" PATH=/usr/bin:/bin bash -c "SCRIPTS_DIR='$stu_tmpdir/scripts'
 UPGRADE=${HARNESS_UPGRADE:-no}
 UPGRADE_FAILED=no
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools upgrade_failed install_shell_tools")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS local_bin_blocked remove_blocked_shell_tools missing_shell_tools upgrade_failed install_shell_tools")
 install_shell_tools
 echo UPGRADE_FAILED=\$UPGRADE_FAILED" 2>&1)"
     status=$?
@@ -3591,7 +3648,7 @@ run_local_bin_check() {
     set +e
     output="$(HOME="$lb_home" LOCAL_BIN_PROBE="$lb_tmpdir/$1" PATH="$lb_tmpdir/bin:/usr/bin:/bin" bash -c "SCRIPTS_DIR='$lb_tmpdir/scripts'
 OS=macos
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS santa_lockdown cli_tools_blocked local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS santa_lockdown cli_tools_blocked local_bin_blocked remove_blocked_shell_tools missing_shell_tools install_shell_tools")
 install_shell_tools
 install_shell_tools
 echo \"blocked=\$LOCAL_BIN_BLOCKED\"" 2>&1)"
@@ -3718,7 +3775,7 @@ GITHUB_HOST=ghe.corp.example.com
 SCRIPTS_DIR='$offer_tmpdir/scripts'
 CONF_DIR='$offer_tmpdir/conf'
 ROOT_DIR='$offer_tmpdir/src/root'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS offer_ssh_remotes")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS offer_ssh_remotes")
 offer_ssh_remotes
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -3778,7 +3835,7 @@ SSH=yes
 GITHUB_MIRROR=yes
 GITHUB_HOST=ghe.corp.example.com
 GITHUB_PREFIX_SSH=no
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS generate_ssh_key")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -3866,7 +3923,7 @@ test_a_hung_ssh_agent_is_given_up_on() {
     output="$(PATH="$agent_tmpdir/bin:$PATH" HOME="$agent_tmpdir" \
         sh -c "set -e
 SSH=auto
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS with_time_limit ssh_agent_has_key ssh_key_file_exists generate_ssh_key")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS with_time_limit ssh_agent_has_key ssh_key_file_exists generate_ssh_key")
 generate_ssh_key
 echo BOOTSTRAP_CONTINUED" </dev/null 2>&1)"
     status=$?
@@ -3922,7 +3979,7 @@ SCRIPTS_DIR='$suf_tmpdir/scripts'
 CONF_DIR='$suf_tmpdir/conf'
 SRC_DIR='$suf_tmpdir/src'
 SCRIPTS_REPO='${HARNESS_REPO:-git@github.com:mikelward/scripts.git}'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
 ssh_up_front
 echo \"GIT_SSH_COMMAND=\$GIT_SSH_COMMAND\"
 share=\${SSH_SHARE_DIR:-}
@@ -4022,7 +4079,7 @@ MOCK
     output="$(PATH="$suo_tmpdir/bin:$PATH" sh -c "set -e
 OS=$1
 SUDO=$2
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS $UP_FRONT_FUNCTIONS")
 sudo_up_front
 refresh=\${SUDO_REFRESH_PID:-}
 end_up_front
@@ -4097,7 +4154,7 @@ MOCK
     output="$(PATH="$cop_tmpdir/bin:$PATH" MOCK_ORIGIN="$cop_origin" \
         sh -c "set -e
 GITHUB_MIRROR=$cop_mirror
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS redact_url_credentials canonical_remote clone_or_pull")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS redact_url_credentials canonical_remote clone_or_pull")
 clone_or_pull '$cop_repo' '$cop_tmpdir/scripts' $cop_from_prefix
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -4464,7 +4521,7 @@ run_clone_or_pull() {
     set +e
     output="$(HOME="$co_tmpdir" GIT_CONFIG_NOSYSTEM=1 sh -c "set -e
 GITHUB_MIRROR=no
-$(extract_functions "info detail warn note_problem redact_url_credentials canonical_remote default_branch pull_checkout clone_or_pull")
+$(extract_functions "setup_color paint info detail warn note_problem redact_url_credentials canonical_remote default_branch pull_checkout clone_or_pull")
 clone_or_pull '$1' '$co_tmpdir/repo' yes
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -4840,7 +4897,7 @@ SPEC
     output="$(GPU_CALLS="$gpu_tmpdir/calls" SETUP_SYSFS="$gpu_sys" SETUP_UDEV_RULES="$gpu_rules" \
         sh -c "set -e
 OS=$gpu_os
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS has_system_battery display_gpu_rule_is_ours remove_display_gpu_rule keep_display_gpu_awake")
 $gpu_stub
 keep_display_gpu_awake
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -5092,7 +5149,7 @@ MOCK
 OS=$ls_os
 CROSTINI=$ls_crostini
 SCRIPTS_DIR='$SCRIPT_DIR'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_lightspeed_reset")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS install_lightspeed_reset")
 $ls_stub
 install_lightspeed_reset
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -5248,7 +5305,7 @@ OS=$zas_os
 $zas_consts
 ZSH_AUTOSUGGESTIONS_REPO='file://$zas_tmp/repo'
 ZSH_AUTOSUGGESTIONS_COMMIT='$zas_pinned'
-$(extract_functions "info detail warn note_problem $QUIET_FUNCTIONS install_zsh_autosuggestions_home")
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS install_zsh_autosuggestions_home")
 install_zsh_autosuggestions_home
 echo BOOTSTRAP_CONTINUED" 2>&1)"
     status=$?
@@ -5343,6 +5400,12 @@ run_test "github_prefix_host reduces both prefix shapes to a host" \
     test_github_prefix_host
 run_test "warnings and errors are repeated as setup exits" \
     test_problems_recapped_at_exit
+run_test "a clean run says, last, that it finished" test_recap_says_a_clean_run_finished
+run_test "a run with warnings says it finished with them" test_recap_says_a_run_with_warnings_finished
+run_test "a run with an error fails, saying so" test_recap_fails_a_run_with_an_error
+run_test "SETUP_COLOR=always colors the labels and the verdict" test_recap_colors_with_setup_color_always
+run_test "a clean colored run ends green" test_recap_green_when_clean_and_colored
+run_test "off a terminal there's no color" test_recap_plain_off_a_terminal
 run_test "setup-tide clones from the mirror too" test_tide_gets_the_mirror
 run_test "setup-tide gets no prefix for GitHub itself" \
     test_tide_gets_no_prefix_for_github

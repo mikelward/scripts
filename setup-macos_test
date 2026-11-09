@@ -1187,7 +1187,8 @@ test_steps_left_come_last() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_output_in_order "macOS configured successfully" "Still to do by hand" &&
-    _after=$(printf '%s\n' "$output" | sed -n '/^Still to do by hand/,$p' | sed '1d' | grep -v '^$' | grep -v '^ ' | grep -v '^And if you like:$')
+    # Only the run's verdict follows the list.
+    _after=$(printf '%s\n' "$output" | sed -n '/^Still to do by hand/,$p' | sed '1d' | grep -v '^$' | grep -v '^ ' | grep -v '^And if you like:$' | grep -v '^setup-macos finished')
     if test -n "$_after"; then
         printf "%s\n" "  FAIL: not the list's, after it: $_after"
         TEST_FAILED=1
