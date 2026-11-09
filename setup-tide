@@ -62,19 +62,78 @@ start_problem_recap() {
     PROBLEMS_OWNER=yes
 }
 
+# Errors are red and warnings yellow on a terminal, and the run ends saying
+# whether it worked: green, yellow with warnings, or red. NO_COLOR turns
+# color off (no-color.org); SETUP_COLOR=always or never overrides both.
+setup_color() {
+    case "${SETUP_COLOR:-auto}" in
+        always) return 0 ;;
+        never) return 1 ;;
+    esac
+    test -z "${NO_COLOR:-}" && test -t 2 && test "${TERM:-dumb}" != dumb
+}
+
+# paint SGR TEXT prints TEXT in color SGR (1;31 red, 1;33 yellow, 1;32
+# green) when color is on, and plain otherwise.
+paint() {
+    if setup_color; then
+        printf '\033[%sm%s\033[0m' "$1" "$2"
+    else
+        printf '%s' "$2"
+    fi
+}
+
+# problem_line LINE prints a warning or error line with its label colored.
+# shellcheck disable=SC2317  # run from the EXIT trap
+problem_line() {
+    case "$1" in
+        Error:*) printf '%s%s\n' "$(paint '1;31' Error:)" "${1#Error:}" ;;
+        Warning:*) printf '%s%s\n' "$(paint '1;33' Warning:)" "${1#Warning:}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+# count_of N WORD prints "1 WORD" or "N WORDs".
+# shellcheck disable=SC2317  # run from the EXIT trap
+count_of() {
+    if test "$1" -eq 1; then
+        printf '1 %s' "$2"
+    else
+        printf '%s %ss' "$1" "$2"
+    fi
+}
+
 # recap_problems STATUS, from the EXIT trap: repeats every warning and error,
-# says if the run stopped early, and keeps STATUS as the exit status.
+# then says, last, whether the run worked. A run that recorded an error
+# fails, with exit status 1, even if it carried on past it; otherwise
+# STATUS stays the exit status.
 # shellcheck disable=SC2317  # run from the EXIT trap
 recap_problems() {
     test "$PROBLEMS_OWNER" = yes || return "$1"
+    _rp_errors=0
+    _rp_warnings=0
     if test -s "$SETUP_PROBLEMS"; then
         printf '\n%s: the warnings and errors from this run, again:\n' "setup-tide" >&2
-        sed 's/^/  /' "$SETUP_PROBLEMS" >&2
-    fi
-    if test "$1" -ne 0; then
-        printf '%s stopped early, with exit status %s\n' "setup-tide" "$1" >&2
+        while IFS= read -r _rp_line; do
+            case "$_rp_line" in
+                Error:*) _rp_errors=$((_rp_errors + 1)) ;;
+                Warning:*) _rp_warnings=$((_rp_warnings + 1)) ;;
+            esac
+            printf '  %s\n' "$(problem_line "$_rp_line")"
+        done <"$SETUP_PROBLEMS" >&2
     fi
     rm -f "$SETUP_PROBLEMS"
+    _rp_counts="$(count_of "$_rp_errors" error), $(count_of "$_rp_warnings" warning)"
+    if test "$1" -ne 0; then
+        printf '%s\n' "$(paint '1;31' "setup-tide FAILED: it stopped early, with exit status $1 ($_rp_counts)")" >&2
+    elif test "$_rp_errors" -gt 0; then
+        printf '%s\n' "$(paint '1;31' "setup-tide FAILED: $_rp_counts; see above")" >&2
+        exit 1
+    elif test "$_rp_warnings" -gt 0; then
+        printf '%s\n' "$(paint '1;33' "setup-tide finished, with $(count_of "$_rp_warnings" warning); see above")" >&2
+    else
+        printf '%s\n' "$(paint '1;32' "setup-tide finished with no warnings or errors")" >&2
+    fi
     return "$1"
 }
 
@@ -89,12 +148,12 @@ detail() {
 }
 
 warn() {
-    printf "Warning: %s\n" "$*" >&2
+    printf '%s %s\n' "$(paint '1;33' Warning:)" "$*" >&2
     note_problem "Warning: $*"
 }
 
 error() {
-    printf "Error: %s\n" "$*" >&2
+    printf '%s %s\n' "$(paint '1;31' Error:)" "$*" >&2
     note_problem "Error: $*"
     exit 1
 }

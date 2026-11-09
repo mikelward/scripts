@@ -826,7 +826,7 @@ test_a_second_run_says_nothing() {
     : > "$CALLS" &&
     run_kde &&
     assert_status 0 &&
-    assert_output_is "" &&
+    assert_output_is "setup-kde finished with no warnings or errors" &&
     assert_not_called "kwriteconfig6" &&
     assert_not_called "kpackagetool6"
 }
@@ -853,7 +853,8 @@ Masking DrKonqi's crash handler
 Set the keybindings
 Set the application shortcuts
 Shortcuts are live; no logout needed
-Changed $(grep -c '^kwriteconfig6 ' "$CALLS") KDE settings" &&
+Changed $(grep -c '^kwriteconfig6 ' "$CALLS") KDE settings
+setup-kde finished with no warnings or errors" &&
     assert_log_contains "+ $TEST_TMPDIR/isolated/homepkg --backend codeberg install krohnkite
 Downloading krohnkite-0.9.9.3_beta.kwinscript" &&
     assert_log_contains "Successfully upgraded" &&
