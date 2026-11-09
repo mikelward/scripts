@@ -17,7 +17,7 @@ make_stubs() {
 
     # dvorak itself needs these; everything else stays absent so the console,
     # X11, GNOME, KDE and IBus layers all skip.
-    for tool in cat dirname readlink; do
+    for tool in cat mktemp rm; do
         path="$(command -v "$tool")"
         ln -s "$path" "$stubdir/$tool"
     done
@@ -43,8 +43,28 @@ case "$1" in
 esac
 EOF
 
-    chmod +x "$stubdir/pgrep" "$stubdir/fcitx5-remote"
+    # loadkeys finds a system "dvorak" keymap only if STUB_SYSTEM_KEYMAP=yes;
+    # a file it's given is kept in $STUB_LOADED for the test to read.
+    cat > "$stubdir/loadkeys" <<'EOF'
+#!/bin/sh
+case "$1" in
+    dvorak) test "${STUB_SYSTEM_KEYMAP:-no}" = yes ;;
+    *)
+        cat "$1" > "$STUB_LOADED" || exit 1
+        if test "${STUB_LOADKEYS_STATUS:-0}" -ne 0; then
+            echo "Couldn't get a file descriptor referring to the console" >&2
+        fi
+        exit "${STUB_LOADKEYS_STATUS:-0}"
+        ;;
+esac
+EOF
+
+    chmod +x "$stubdir/pgrep" "$stubdir/fcitx5-remote" "$stubdir/loadkeys"
     : > "$stubdir/calls"
+    mkdir "$stubdir/tmp" "$stubdir/alone"
+    # A copy with nothing beside it, as when the script is copied on its own.
+    cat "$DVORAK" > "$stubdir/alone/dvorak"
+    chmod +x "$stubdir/alone/dvorak"
 }
 
 cleanup_stubs() {
@@ -62,11 +82,15 @@ run_dvorak() {
         STUB_SET_STATUS="${STUB_SET_STATUS:-0}" \
         STUB_CURRENT_IM="${STUB_CURRENT_IM:-}" \
         STUB_READBACK_STATUS="${STUB_READBACK_STATUS:-0}" \
-        TERM=xterm \
+        STUB_SYSTEM_KEYMAP="${STUB_SYSTEM_KEYMAP:-no}" \
+        STUB_LOADKEYS_STATUS="${STUB_LOADKEYS_STATUS:-0}" \
+        STUB_LOADED="$stubdir/loaded" \
+        TMPDIR="$stubdir/tmp" \
+        TERM="${STUB_TERM:-xterm}" \
         DISPLAY='' \
         XDG_CURRENT_DESKTOP='' \
         IBUS_ADDRESS='' \
-        "$DVORAK" "$@" 2>&1
+        "$stubdir/alone/dvorak" "$@" 2>&1
     )"
     status=$?
     set -e
@@ -126,6 +150,9 @@ run_test() {
     STUB_SET_STATUS=0
     STUB_CURRENT_IM=
     STUB_READBACK_STATUS=0
+    STUB_SYSTEM_KEYMAP=no
+    STUB_LOADKEYS_STATUS=0
+    STUB_TERM=xterm
     make_stubs
     if "$func" && test -z "$TEST_FAILED"; then
         echo "ok $TESTS_RUN $name"
@@ -197,6 +224,49 @@ test_empty_readback_is_reported() {
     assert_output_contains "reading the active method back failed"
 }
 
+# --- console tests ---
+
+assert_temp_removed() {
+    if test -n "$(ls -A "$stubdir/tmp")"; then
+        echo "  FAIL: temporary keymap left behind: $(ls -A "$stubdir/tmp")"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_console_uses_system_keymap() {
+    STUB_TERM=linux
+    STUB_SYSTEM_KEYMAP=yes
+    run_dvorak
+    assert_status 0 &&
+    assert_output_contains "loadkeys dvorak"
+}
+
+test_console_without_system_keymap_loads_built_in() {
+    STUB_TERM=linux
+    run_dvorak
+    assert_status 0 &&
+    assert_output_contains "built-in keymap" &&
+    assert_temp_removed || return 1
+    # Home row a s d f -> a o e u.
+    for line in "keycode  30 = +a" "keycode  31 = +o" "keycode  32 = +e" "keycode  33 = +u"; do
+        if ! grep -qx "$line" "$stubdir/loaded"; then
+            echo "  FAIL: loaded keymap lacks '$line'"
+            TEST_FAILED=1
+            return 1
+        fi
+    done
+}
+
+test_console_loadkeys_failure_is_reported() {
+    STUB_TERM=linux
+    STUB_LOADKEYS_STATUS=1
+    run_dvorak
+    assert_status 1 &&
+    assert_output_contains "loadkeys failed: Couldn't get a file descriptor" &&
+    assert_temp_removed
+}
+
 # --- cli tests ---
 
 test_help_lists_fcitx() {
@@ -219,6 +289,9 @@ run_test "failing fcitx5 switch is reported" test_fcitx_switch_command_failing_i
 run_test "fcitx5 switch that does not take is reported" test_fcitx_silent_no_op_is_reported
 run_test "fcitx5 without -n reports the missing confirmation" test_unsupported_readback_is_reported
 run_test "empty readback reports the missing confirmation" test_empty_readback_is_reported
+run_test "console uses the system keymap" test_console_uses_system_keymap
+run_test "console without a system keymap loads the built-in one" test_console_without_system_keymap_loads_built_in
+run_test "console loadkeys failure is reported" test_console_loadkeys_failure_is_reported
 run_test "help lists fcitx5" test_help_lists_fcitx
 run_test "unexpected argument exits 2" test_unexpected_argument_exits_two
 

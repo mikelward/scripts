@@ -12,9 +12,9 @@
 # CAP_SYS_TTY_CONFIG, not full root, so no sudo and no dpkg-reconfigure. It does
 # need a keymap to load, though: `loadkeys dvorak` finds the system keymap when
 # the kbd keymap data is installed, but many minimal systems ship no
-# /usr/share/keymaps at all. For those, this script bundles a self-contained
-# dvorak.kmap alongside it and loads that instead, so the console works with
-# neither root nor the keymap package.
+# /usr/share/keymaps at all. For those, this script carries its own keymap
+# inline (console_kmap) and loads that instead, so the console works with
+# neither root nor the keymap package, and the script works copied on its own.
 #
 # Input methods are only touched if they are already running; this script never
 # starts one.
@@ -24,14 +24,6 @@ set -u
 progname=${0##*/}
 applied=0
 
-# Directory holding this script, resolving symlinks, so we can find the bundled
-# dvorak.kmap next to it even when invoked via a symlink on PATH.
-self=${BASH_SOURCE[0]}
-if command -v readlink >/dev/null 2>&1; then
-    self=$(readlink -f "$self" 2>/dev/null || printf '%s' "$self")
-fi
-selfdir=$(cd "$(dirname "$self")" 2>/dev/null && pwd)
-
 have() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -40,14 +32,81 @@ note() {
     printf '%s: %s\n' "$progname" "$*" >&2
 }
 
+# US Dvorak for the Linux text console, self-contained: it defines the whole
+# character block inline (no `include` of a base map), so it needs nothing from
+# /usr/share/keymaps. Every letter, number and symbol key is defined rather
+# than inherited, so the result is US Dvorak whatever layout was active before
+# (a map of only the changed keys would make a hybrid on, say, a German base).
+# Esc/Tab/Enter/Space/Backspace, modifiers, function keys and the keypad are
+# the same in every Latin console map, so they're inherited. Letters use the
+# `+` prefix so CapsLock treats them as letters and Shift/Ctrl entries are
+# generated; symbol keys list plain then Shift.
+console_kmap() {
+    cat <<'EOF'
+# number row (pinned to US so a non-US base can't leak through)
+keycode   2 = one           exclam
+keycode   3 = two           at
+keycode   4 = three         numbersign
+keycode   5 = four          dollar
+keycode   6 = five          percent
+keycode   7 = six           asciicircum
+keycode   8 = seven         ampersand
+keycode   9 = eight         asterisk
+keycode  10 = nine          parenleft
+keycode  11 = zero          parenright
+keycode  12 = bracketleft   braceleft
+keycode  13 = bracketright  braceright
+keycode  41 = grave         asciitilde
+keycode  43 = backslash     bar
+
+# top letter row: q w e r t y u i o p [ ]  ->  ' , . p y f g c r l / =
+keycode  16 = apostrophe    quotedbl
+keycode  17 = comma         less
+keycode  18 = period        greater
+keycode  19 = +p
+keycode  20 = +y
+keycode  21 = +f
+keycode  22 = +g
+keycode  23 = +c
+keycode  24 = +r
+keycode  25 = +l
+keycode  26 = slash         question
+keycode  27 = equal         plus
+
+# home row: a s d f g h j k l ; '  ->  a o e u i d h t n s -
+keycode  30 = +a
+keycode  31 = +o
+keycode  32 = +e
+keycode  33 = +u
+keycode  34 = +i
+keycode  35 = +d
+keycode  36 = +h
+keycode  37 = +t
+keycode  38 = +n
+keycode  39 = +s
+keycode  40 = minus         underscore
+
+# bottom row: z x c v b n m , . /  ->  ; q j k x b m w v z
+keycode  44 = semicolon     colon
+keycode  45 = +q
+keycode  46 = +j
+keycode  47 = +k
+keycode  48 = +x
+keycode  49 = +b
+keycode  50 = +m
+keycode  51 = +w
+keycode  52 = +v
+keycode  53 = +z
+EOF
+}
+
 # Linux text console. Works without root on your own VT (loadkeys only needs to
 # own the tty or have CAP_SYS_TTY_CONFIG). Gated on TERM=linux so we don't poke
 # the console keymap from an X terminal.
 #
 # First try the system keymap named "dvorak"; if that's not installed (many
-# minimal systems ship no /usr/share/keymaps at all), fall back to the
-# self-contained dvorak.kmap bundled next to this script, which carries the
-# whole layout inline and so needs no keymap package.
+# minimal systems ship no /usr/share/keymaps at all), load console_kmap through
+# a temporary file.
 maybe_console() {
     test "${TERM:-}" = linux || return 1
     have loadkeys || return 1
@@ -55,12 +114,22 @@ maybe_console() {
         note "Linux console set to Dvorak (loadkeys dvorak)"
         return 0
     fi
-    if test -f "$selfdir/dvorak.kmap" \
-        && loadkeys "$selfdir/dvorak.kmap" >/dev/null 2>&1; then
-        note "Linux console set to Dvorak (bundled dvorak.kmap)"
+    if ! kmap=$(mktemp "${TMPDIR:-/tmp}/dvorak.XXXXXX"); then
+        note "loadkeys: no system dvorak keymap, and can't make a temporary file for the built-in one"
+        return 1
+    fi
+    if ! console_kmap > "$kmap"; then
+        note "loadkeys: can't write the built-in keymap to $kmap"
+        rm -f "$kmap"
+        return 1
+    fi
+    if err=$(loadkeys "$kmap" 2>&1 >/dev/null); then
+        rm -f "$kmap"
+        note "Linux console set to Dvorak (built-in keymap)"
         return 0
     fi
-    note "loadkeys failed (are you on your own VT? is the loadkeys binary present?)"
+    rm -f "$kmap"
+    note "loadkeys failed${err:+: $err} (are you on your own VT?)"
     return 1
 }
 
@@ -172,7 +241,7 @@ Usage: $progname
 
 Switch the keyboard layout to US Dvorak using every method that applies to the
 current environment:
-  - Linux text console  : loadkeys dvorak, or the bundled dvorak.kmap if the
+  - Linux text console  : loadkeys dvorak, or a built-in keymap if the
                           system keymaps aren't installed (no root on your VT)
   - X11                 : setxkbmap -layout us -variant dvorak
   - GNOME session       : gsettings input-sources -> us+dvorak
@@ -198,7 +267,7 @@ maybe_fcitx   && applied=1
 
 if test "$applied" -eq 0; then
     note "could not set Dvorak by any method here"
-    note "on a Linux console try: loadkeys dvorak (or loadkeys $selfdir/dvorak.kmap)"
+    note "on a Linux console try: loadkeys dvorak"
     note "under X11 try:          setxkbmap -layout us -variant dvorak"
     exit 1
 fi
