@@ -1027,10 +1027,10 @@ test_tides_session_keys() {
     assert_status 0 &&
     assert_called "$(printf -- '--group ksmserver --key Log Out Meta+Shift+E\tCtrl+Alt+Del,none,Show Logout Prompt')" &&
     assert_called "$(printf -- '--group KDE Keyboard Layout Switcher --key Switch to Next Keyboard Layout Meta+Alt+Space\tMeta+Alt+K,')" &&
-    assert_called "--group services --group org.kde.spectacle.desktop --key CurrentMonitorScreenShot Print,none," &&
-    assert_called "--group services --group org.kde.spectacle.desktop --key ActiveWindowScreenShot Alt+Print,none," &&
-    assert_called "$(printf -- '--group services --group org.kde.spectacle.desktop --key RectangularRegionScreenShot Shift+Print\tMeta+Print,none,')" &&
-    assert_called "--group services --group org.kde.spectacle.desktop --key _launch none,none," &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key CurrentMonitorScreenShot Print" &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key ActiveWindowScreenShot Alt+Print" &&
+    assert_called "$(printf -- '--group services --group org.kde.spectacle.desktop --key RectangularRegionScreenShot Shift+Print\tMeta+Print')" &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key _launch none" &&
     assert_batch_contains 'org.kde.spectacle.desktop\tRectangularRegionScreenShot\tShift+Print Meta+Print' &&
     assert_batch_contains 'ksmserver\tLog Out\tMeta+Shift+E Ctrl+Alt+Del'
 }
@@ -1276,7 +1276,7 @@ test_plasma_keyboard_without_tides_accents() {
 test_unbinds_emoji_selector_for_next_layout() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none,none,Emoji Selector" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group org.kde.plasma.emojier.desktop --key _launch none" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteNextLayout Meta+."
 }
 
@@ -1667,25 +1667,25 @@ test_unreachable_daemon_warns_and_continues() {
 test_launch_shortcut_keys() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "--group shortcut-browser1.desktop --key _launch Meta+G," &&
-    assert_called "--group shortcut-browser2.desktop --key _launch Meta+F," &&
-    assert_called "--group shortcut-browser3.desktop --key _launch Meta+Shift+G," &&
-    assert_called "--group shortcut-home.desktop --key _launch Meta+H," &&
-    assert_called "--group shortcut-irc.desktop --key _launch Meta+I," &&
-    assert_called "--group shortcut-google-meet.desktop --key _launch Meta+M," &&
-    assert_called "--group shortcut-notepad.desktop --key _launch Meta+N," &&
-    assert_called "--group shortcut-remote-desktop.desktop --key _launch Meta+R," &&
-    assert_called "--group shortcut-bluetooth-connect.desktop --key _launch Meta+B," &&
-    assert_called "--group shortcut-pulseprofile.py.desktop --key _launch Meta+Shift+B," &&
-    assert_called "--group shortcut-terminal.desktop --key _launch Meta+T," &&
-    assert_called "--group shortcut-terminal_on_workstation.desktop --key _launch Meta+W," &&
-    assert_called "--group shortcut-music.desktop --key _launch Meta+Y," &&
-    assert_called "--group shortcut-google-chat.desktop --key _launch Meta+C," &&
-    assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C," &&
-    assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V," &&
-    assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V," &&
-    assert_called "--group shortcut-chars-menu.desktop --key _launch Meta+;," &&
-    assert_called "--group shortcut-tide-launcher.desktop --key _launch Meta+Space,"
+    assert_called "--group shortcut-browser1.desktop --key _launch Meta+G" &&
+    assert_called "--group shortcut-browser2.desktop --key _launch Meta+F" &&
+    assert_called "--group shortcut-browser3.desktop --key _launch Meta+Shift+G" &&
+    assert_called "--group shortcut-home.desktop --key _launch Meta+H" &&
+    assert_called "--group shortcut-irc.desktop --key _launch Meta+I" &&
+    assert_called "--group shortcut-google-meet.desktop --key _launch Meta+M" &&
+    assert_called "--group shortcut-notepad.desktop --key _launch Meta+N" &&
+    assert_called "--group shortcut-remote-desktop.desktop --key _launch Meta+R" &&
+    assert_called "--group shortcut-bluetooth-connect.desktop --key _launch Meta+B" &&
+    assert_called "--group shortcut-pulseprofile.py.desktop --key _launch Meta+Shift+B" &&
+    assert_called "--group shortcut-terminal.desktop --key _launch Meta+T" &&
+    assert_called "--group shortcut-terminal_on_workstation.desktop --key _launch Meta+W" &&
+    assert_called "--group shortcut-music.desktop --key _launch Meta+Y" &&
+    assert_called "--group shortcut-google-chat.desktop --key _launch Meta+C" &&
+    assert_called "--group shortcut-google-calendar.desktop --key _launch Meta+Shift+C" &&
+    assert_called "--group shortcut-clipboard-menu.desktop --key _launch Meta+V" &&
+    assert_called "--group shortcut-fill-menu.desktop --key _launch Meta+Shift+V" &&
+    assert_called "--group shortcut-chars-menu.desktop --key _launch Meta+;" &&
+    assert_called "--group shortcut-tide-launcher.desktop --key _launch Meta+Space"
 }
 
 # Win+V is the clipboard menu, which pastes; Plasma's own popup, which only
@@ -1699,11 +1699,10 @@ test_meta_v_is_the_clipboard_menu() {
 # A launcher that exists on PATH gets a .desktop file and a [services] _launch
 # shortcut pointing at its resolved path.
 #
-# The _launch value must carry all three comma-separated fields. kglobalaccel
-# loads service shortcuts through the same Component::loadSettings as [kwin]
-# actions, and that skips any entry which isn't 3 fields -- so a bare "Meta+G"
-# is silently dropped and the shortcut never grabs. This assertion previously
-# pinned the one-field form, which is how that regression survived.
+# The _launch value is the keys alone. kglobalaccel reads a [services] entry
+# as key sequences, so the [kwin]-style "Meta+G,none,browser1" read as a
+# three-key sequence no press matches: the shortcut worked after setup, from
+# the live apply, and was gone at the next login.
 test_app_shortcut_created_for_present_launcher() {
     add_launcher browser1
     run_kde --no-install
@@ -1717,10 +1716,9 @@ test_app_shortcut_created_for_present_launcher() {
     # and a .desktop without it stays invisible to that scan -- which is what
     # would force a logout for launch shortcuts specifically.
     grep -q "X-KDE-Shortcuts=Meta+G" "$desktop" &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G,none,browser1" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _launch Meta+G" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group services --group shortcut-browser1.desktop --key _k_friendly_name browser1" &&
-    # No one-field value may survive: that is the shape kglobalaccel drops.
-    assert_not_called "--key _launch Meta+G$"
+    assert_not_called "--key _launch Meta+G,"
 }
 
 # A launcher on neither PATH nor beside the script is skipped with a warning;
