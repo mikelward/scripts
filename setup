@@ -3574,6 +3574,16 @@ configure_keyboard() {
     case "$OS" in
         debian)
             info "Configuring keyboard: Dvorak layout, Caps Lock as Compose"
+            # What the consoles have now, before this run sets them: Dvorak
+            # here after an earlier run set it means it was lost at boot.
+            console_was=$(console_keymap)
+            # And whether an earlier run had saved Dvorak for the boot, read
+            # before this run saves it, so a first run isn't taken for a loss.
+            saved_was=
+            if test -f "${SETUP_CONSOLE_SETUP_DIR:-/etc/console-setup}/cached_setup_keyboard.sh" \
+                && grep -q '^XKBVARIANT="dvorak"' "${SETUP_KEYBOARD_FILE:-/etc/default/keyboard}" 2>/dev/null; then
+                saved_was=dvorak
+            fi
             if sudo_or_warn tee /etc/default/keyboard >/dev/null <<'KEYBOARD'
 XKBMODEL="pc105"
 XKBLAYOUT="us"
@@ -3610,6 +3620,9 @@ KEYBOARD
                     warn "could not apply the keyboard config to virtual consoles"
                 elif ! sudo_or_warn setupcon --force --keyboard-only; then
                     warn "could not load Dvorak into the text consoles now; they get it at the next boot"
+                else
+                    update_boot_keymap
+                    check_console_keymap "$console_was" "$saved_was"
                 fi
             else
                 warn "skipping the rest of the system keyboard configuration"
@@ -3638,6 +3651,93 @@ KEYBOARD
     if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-${WAYLAND_DISPLAY:-}}"; then
         setxkbmap -layout us -variant dvorak -option "" -option compose:caps \
             || warn "setxkbmap failed; keyboard layout not applied to this session"
+    fi
+}
+
+# console_keymap: what the text consoles type for the key right of Tab:
+# dvorak (an apostrophe), qwerty (a q), or unknown when it can't be read.
+# dumpkeys needs a console, which only root can open from ssh or a desktop.
+console_keymap() {
+    # --no-sudo means no sudo at all, a read included.
+    test "${SUDO:-}" != no || { echo unknown; return; }
+    command -v dumpkeys >/dev/null 2>&1 || { echo unknown; return; }
+    _keys=$(sudo -n dumpkeys 2>/dev/null) || { echo unknown; return; }
+    case "$(printf '%s\n' "$_keys" | awk '$1 == "keycode" && $2 == 16 { print $4; exit }')" in
+        apostrophe) echo dvorak ;;
+        +q | q) echo qwerty ;;
+        *) echo unknown ;;
+    esac
+}
+
+# The boot image's copy of the console keymap, which it loads before the
+# disk is unlocked. Debian's console-setup then skips loading the saved one,
+# taking the boot image's as already loaded, so a boot image made before
+# Dvorak was set leaves every boot's consoles on the old layout. Rebuilt
+# when the saved keymap is newer than it and it holds a keymap at all.
+update_boot_keymap() {
+    command -v update-initramfs >/dev/null 2>&1 || return 0
+    _initrd=${SETUP_BOOT_DIR:-/boot}/initrd.img-$(uname -r)
+    test -f "$_initrd" || return 0
+    _kmap=$(ls -t "${SETUP_CONSOLE_SETUP_DIR:-/etc/console-setup}"/cached_*.kmap.gz 2>/dev/null | head -n 1)
+    test -n "$_kmap" || return 0
+    test "$_kmap" -nt "$_initrd" || return 0
+    # Skipped only when the image could be read and holds no keymap: one
+    # only root can read, or a lister that fails, is rebuilt all the same.
+    if command -v lsinitramfs >/dev/null 2>&1; then
+        if _list=$(lsinitramfs "$_initrd" 2>/dev/null) \
+            || { test "${SUDO:-}" != no && _list=$(sudo -n lsinitramfs "$_initrd" 2>/dev/null); }; then
+            printf '%s\n' "$_list" | grep -q -e console-setup -e keymap || return 0
+        fi
+    fi
+    info "Updating the boot image, so the consoles, and a disk passphrase prompt if you have one, start in Dvorak"
+    # Every kernel's image: the running one's was inspected, but the next
+    # boot may well use a newer kernel's, which -u alone would rebuild
+    # instead, and theirs hold the same old keymap.
+    sudo_or_warn update-initramfs -u -k all \
+        || warn "could not update the boot image, so the consoles may start each boot in the old layout"
+}
+
+# check_console_keymap BEFORE SAVED: says when the consoles aren't Dvorak
+# after setting them, or were QWERTY (BEFORE) at the start of this run though
+# an earlier run had saved Dvorak for the boot (SAVED), which means a boot
+# loaded another layout over it. Either way it
+# says what loads keymaps at boot, so the cause is in the output.
+check_console_keymap() {
+    _now=$(console_keymap)
+    if test "$_now" = qwerty; then
+        warn "the text consoles still type QWERTY after setting Dvorak"
+    elif test "$1" = qwerty && test "$2" = dvorak && test "$_now" = dvorak; then
+        warn "the text consoles had lost Dvorak since boot; setup put it back, but the next boot may lose it again"
+    else
+        return 0
+    fi
+    explain_console_keymap
+}
+
+# What loads a console keymap at boot, for check_console_keymap's warning.
+explain_console_keymap() {
+    _initrd=${SETUP_BOOT_DIR:-/boot}/initrd.img-$(uname -r)
+    _kmap=$(ls -t "${SETUP_CONSOLE_SETUP_DIR:-/etc/console-setup}"/cached_*.kmap.gz 2>/dev/null | head -n 1)
+    if test -f "$_initrd" && test -n "$_kmap"; then
+        if test "$_kmap" -nt "$_initrd"; then
+            info "  The boot image ($_initrd) is older than the saved keymap ($_kmap)."
+        else
+            info "  The boot image ($_initrd) is newer than the saved keymap ($_kmap)."
+        fi
+    fi
+    if test -e /etc/vconsole.conf; then
+        info "  /etc/vconsole.conf: $(grep -E '^(KEYMAP|XKBLAYOUT|XKBVARIANT)=' /etc/vconsole.conf | tr '\n' ' ')"
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        for _unit in keyboard-setup console-setup systemd-vconsole-setup; do
+            info "  $_unit: $(systemctl show -p ActiveState --value "$_unit.service" 2>/dev/null)"
+        done
+    fi
+    if command -v journalctl >/dev/null 2>&1; then
+        info "  This boot's keymap messages:"
+        journalctl -b --no-pager -o short-monotonic 2>/dev/null \
+            | grep -iE 'keymap|loadkeys|vconsole|keyboard-setup|console-setup|setupcon' \
+            | tail -n 10 | sed 's/^/    /'
     fi
 }
 

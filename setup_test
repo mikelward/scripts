@@ -1398,15 +1398,49 @@ configure_keyboard" 2>&1)"
 
 # run_debian_keyboard [setupcon|none]: configure_keyboard on Debian, with sudo
 # recording what it's asked and setupcon on PATH or not.
+# KB_KEYS, when set, is what dumpkeys says the consoles type for the key
+# right of Tab (apostrophe for Dvorak, +q for QWERTY), before and after
+# setup sets them: "+q apostrophe" is QWERTY before, Dvorak after.
+# KB_BOOT and KB_CONSOLE_SETUP stand in for /boot and /etc/console-setup.
 run_debian_keyboard() {
     kb_bin=$(mktemp -d)
-    for tool in sh cat; do ln -s "$(command -v "$tool")" "$kb_bin/$tool"; done
+    for tool in sh cat awk grep sed tr ls head uname rm; do
+        ln -s "$(command -v "$tool")" "$kb_bin/$tool"
+    done
     if test "$1" = setupcon; then
         printf '#!/bin/sh\n' > "$kb_bin/setupcon"
         chmod +x "$kb_bin/setupcon"
     fi
+    if test -n "${KB_KEYS:-}"; then
+        # One answer a call: the first is from before setup sets the keymap.
+        printf '%s\n' $KB_KEYS > "$kb_bin/keys"
+        cat > "$kb_bin/dumpkeys" <<MOCK
+#!/bin/sh
+key=\$(head -n 1 "$kb_bin/keys")
+if test "\$(cat "$kb_bin/keys" | awk 'END { print NR }')" -gt 1; then
+    awk 'NR > 1' "$kb_bin/keys" > "$kb_bin/keys.next" && cat "$kb_bin/keys.next" > "$kb_bin/keys"
+fi
+echo "keycode  15 = Tab"
+echo "keycode  16 = \$key"
+MOCK
+        printf '#!/bin/sh\ntest "$1" = -n && shift\nexec "$@"\n' > "$kb_bin/sudo"
+        printf '#!/bin/sh\necho active\n' > "$kb_bin/systemctl"
+        chmod +x "$kb_bin/dumpkeys" "$kb_bin/sudo" "$kb_bin/systemctl"
+    fi
+    if test -n "${KB_BOOT:-}"; then
+        if test -n "${KB_UNREADABLE:-}"; then
+            printf '#!/bin/sh\necho "cpio: Permission denied" >&2\nexit 1\n' > "$kb_bin/lsinitramfs"
+        else
+            printf '#!/bin/sh\necho console-setup/keymap\n' > "$kb_bin/lsinitramfs"
+        fi
+        printf '#!/bin/sh\n' > "$kb_bin/update-initramfs"
+        chmod +x "$kb_bin/lsinitramfs" "$kb_bin/update-initramfs"
+    fi
     set +e
-    output="$(PATH="$kb_bin" INSTALL="${KB_INSTALL:-yes}" CROSTINI=0 OS=debian DISPLAY='' WAYLAND_DISPLAY='' sh -c "$(extract_functions "setup_color paint info detail warn note_problem configure_keyboard")
+    output="$(PATH="$kb_bin" SUDO="${KB_SUDO:-yes}" INSTALL="${KB_INSTALL:-yes}" CROSTINI=0 OS=debian DISPLAY='' WAYLAND_DISPLAY='' \
+        SETUP_BOOT_DIR="${KB_BOOT:-/nonexistent}" SETUP_CONSOLE_SETUP_DIR="${KB_CONSOLE_SETUP:-/nonexistent}" \
+        SETUP_KEYBOARD_FILE="${KB_KEYBOARD_FILE:-/nonexistent}" \
+        sh -c "$(extract_functions "setup_color paint info detail warn note_problem configure_keyboard console_keymap update_boot_keymap check_console_keymap explain_console_keymap")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
@@ -1437,6 +1471,97 @@ test_debian_keyboard_saves_the_console_keymap() {
     assert_output_contains "SUDO setupcon --force --keyboard-only" &&
     assert_output_lacks "console-setup" &&
     assert_output_lacks "old layout"
+}
+
+# --no-sudo runs no sudo, not even to read what the consoles type.
+test_debian_keyboard_no_sudo_reads_nothing_as_root() {
+    KB_SUDO=no KB_KEYS="+q +q" run_debian_keyboard setupcon
+    assert_status 0 &&
+    assert_output_lacks "still type QWERTY"
+}
+
+# Dvorak after setting it says nothing more.
+test_debian_keyboard_quiet_when_the_consoles_type_dvorak() {
+    KB_KEYS="apostrophe apostrophe" run_debian_keyboard setupcon
+    assert_status 0 &&
+    assert_output_lacks "QWERTY" &&
+    assert_output_lacks "lost Dvorak"
+}
+
+# Still QWERTY after setting it is a warning, with what loads keymaps at
+# boot, so the cause is in the output rather than a round of questions.
+test_debian_keyboard_warns_when_the_consoles_stay_qwerty() {
+    KB_KEYS="+q +q" run_debian_keyboard setupcon
+    assert_status 0 &&
+    assert_output_contains "the text consoles still type QWERTY after setting Dvorak" &&
+    assert_output_contains "keyboard-setup: active"
+}
+
+# QWERTY at the start of a run, after an earlier run saved Dvorak, means a
+# boot loaded another layout: said, though this run puts Dvorak back.
+test_debian_keyboard_says_when_a_boot_lost_dvorak() {
+    kb_saved=$(mktemp -d)
+    : > "$kb_saved/cached_setup_keyboard.sh"
+    echo 'XKBVARIANT="dvorak"' > "$kb_saved/keyboard"
+    KB_KEYS="+q apostrophe" KB_CONSOLE_SETUP="$kb_saved" KB_KEYBOARD_FILE="$kb_saved/keyboard" \
+        run_debian_keyboard setupcon
+    rm -rf "$kb_saved"
+    assert_status 0 &&
+    assert_output_contains "the text consoles had lost Dvorak since boot"
+}
+
+# A first run, from QWERTY, isn't a loss, though a keymap was saved before
+# for another layout.
+test_debian_keyboard_first_run_is_not_a_loss() {
+    kb_saved=$(mktemp -d)
+    : > "$kb_saved/cached_setup_keyboard.sh"
+    echo 'XKBVARIANT=""' > "$kb_saved/keyboard"
+    KB_KEYS="+q apostrophe" KB_CONSOLE_SETUP="$kb_saved" KB_KEYBOARD_FILE="$kb_saved/keyboard" \
+        run_debian_keyboard setupcon
+    rm -rf "$kb_saved"
+    assert_status 0 &&
+    assert_output_lacks "lost Dvorak"
+}
+
+# A boot image the lister can't read, as one only root can, is rebuilt:
+# not being able to look isn't finding no keymap.
+test_debian_keyboard_rebuilds_an_unreadable_boot_image() {
+    kb_boot=$(mktemp -d)
+    kb_saved=$(mktemp -d)
+    : > "$kb_boot/initrd.img-$(uname -r)"
+    touch -t 200101010000 "$kb_boot/initrd.img-$(uname -r)"
+    : > "$kb_saved/cached_UTF-8_del.kmap.gz"
+    KB_BOOT="$kb_boot" KB_CONSOLE_SETUP="$kb_saved" KB_UNREADABLE=yes run_debian_keyboard setupcon
+    rm -rf "$kb_boot" "$kb_saved"
+    assert_status 0 &&
+    assert_output_contains "SUDO update-initramfs -u -k all"
+}
+
+# A boot image holding a keymap older than the saved one is rebuilt, since
+# console-setup takes the boot image's as already loaded.
+test_debian_keyboard_updates_a_stale_boot_image() {
+    kb_boot=$(mktemp -d)
+    kb_saved=$(mktemp -d)
+    : > "$kb_boot/initrd.img-$(uname -r)"
+    touch -t 200101010000 "$kb_boot/initrd.img-$(uname -r)"
+    : > "$kb_saved/cached_UTF-8_del.kmap.gz"
+    KB_BOOT="$kb_boot" KB_CONSOLE_SETUP="$kb_saved" run_debian_keyboard setupcon
+    rm -rf "$kb_boot" "$kb_saved"
+    assert_status 0 &&
+    assert_output_contains "SUDO update-initramfs -u -k all"
+}
+
+# One newer than the saved keymap is left alone: a rebuild takes a while.
+test_debian_keyboard_leaves_a_current_boot_image() {
+    kb_boot=$(mktemp -d)
+    kb_saved=$(mktemp -d)
+    : > "$kb_saved/cached_UTF-8_del.kmap.gz"
+    touch -t 200101010000 "$kb_saved/cached_UTF-8_del.kmap.gz"
+    : > "$kb_boot/initrd.img-$(uname -r)"
+    KB_BOOT="$kb_boot" KB_CONSOLE_SETUP="$kb_saved" run_debian_keyboard setupcon
+    rm -rf "$kb_boot" "$kb_saved"
+    assert_status 0 &&
+    assert_output_lacks "update-initramfs"
 }
 
 test_crostini_skips_the_display_card() {
@@ -5844,6 +5969,22 @@ run_test "Debian setup --no-install doesn't install console-setup" \
     test_debian_keyboard_no_install_installs_nothing
 run_test "Debian setup saves the console keymap with setupcon" \
     test_debian_keyboard_saves_the_console_keymap
+run_test "Debian setup with --no-sudo reads nothing as root" \
+    test_debian_keyboard_no_sudo_reads_nothing_as_root
+run_test "Debian setup is quiet when the consoles type Dvorak" \
+    test_debian_keyboard_quiet_when_the_consoles_type_dvorak
+run_test "Debian setup warns, and says why, when the consoles stay QWERTY" \
+    test_debian_keyboard_warns_when_the_consoles_stay_qwerty
+run_test "Debian setup says when a boot lost the consoles' Dvorak" \
+    test_debian_keyboard_says_when_a_boot_lost_dvorak
+run_test "Debian setup doesn't take a first run for a lost keymap" \
+    test_debian_keyboard_first_run_is_not_a_loss
+run_test "Debian setup rebuilds a boot image it can't read" \
+    test_debian_keyboard_rebuilds_an_unreadable_boot_image
+run_test "Debian setup rebuilds a boot image with an older keymap" \
+    test_debian_keyboard_updates_a_stale_boot_image
+run_test "Debian setup leaves a boot image newer than the keymap" \
+    test_debian_keyboard_leaves_a_current_boot_image
 run_test "Crostini skips holding a display card powered" \
     test_crostini_skips_the_display_card
 run_test "Crostini's minimal profile says how to grow the disk" \
