@@ -1942,14 +1942,17 @@ test_no_build_hyprland_is_forwarded() {
     assert_source_contains '"$SCRIPTS_DIR/setup-tide" --no-fetch $DESKTOP_SETUP_FLAGS $TIDE_SETUP_FLAGS'
 }
 
-# setup takes --tidewm and hands it to setup-tide.
+# setup takes --no-tidewm, and still --tidewm, now the default, and hands
+# them to setup-tide.
 test_tidewm_is_forwarded() {
-    run_setup --tidewm --help
+    run_setup --no-tidewm --help
     assert_status 0 &&
-    assert_output_contains "--tidewm" &&
-    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --tidewm"' &&
-    run_linux_desktop "" " --tidewm" &&
-    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --tidewm"
+    assert_output_contains "--no-tidewm      Don't build tidewm" &&
+    run_setup --tidewm --help &&
+    assert_status 0 &&
+    assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS $1"' &&
+    run_linux_desktop "" " --no-tidewm" &&
+    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --no-tidewm"
 }
 
 # setup takes --no-greeter and hands it to setup-tide.
@@ -5754,7 +5757,7 @@ run_test "--no-tide skips tide" test_no_tide_skips_tide
 run_test "--greeter is forwarded to setup-tide" test_greeter_is_forwarded
 run_test "--dm is checked and passed to setup-tide" test_dm_is_forwarded
 run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
-run_test "--tidewm is forwarded to setup-tide" test_tidewm_is_forwarded
+run_test "--no-tidewm and --tidewm are forwarded to setup-tide" test_tidewm_is_forwarded
 run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
 run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack
 run_test "--tide keeps the tidewm session's portal in the purge" test_purge_obsolete_keeps_tidewm_portal
