@@ -1396,6 +1396,47 @@ configure_keyboard" 2>&1)"
     assert_output_lacks "SUDO"
 }
 
+# run_debian_keyboard [setupcon|none]: configure_keyboard on Debian, with sudo
+# recording what it's asked and setupcon on PATH or not.
+run_debian_keyboard() {
+    kb_bin=$(mktemp -d)
+    for tool in sh cat; do ln -s "$(command -v "$tool")" "$kb_bin/$tool"; done
+    if test "$1" = setupcon; then
+        printf '#!/bin/sh\n' > "$kb_bin/setupcon"
+        chmod +x "$kb_bin/setupcon"
+    fi
+    set +e
+    output="$(PATH="$kb_bin" INSTALL="${KB_INSTALL:-yes}" CROSTINI=0 OS=debian DISPLAY='' WAYLAND_DISPLAY='' sh -c "$(extract_functions "setup_color paint info detail warn note_problem configure_keyboard")
+sudo_or_warn() { echo SUDO \"\$*\"; }
+configure_keyboard" 2>&1)"
+    status=$?
+    set -e
+    rm -rf "$kb_bin"
+}
+
+test_debian_keyboard_installs_console_setup_when_missing() {
+    run_debian_keyboard none
+    assert_status 0 &&
+    assert_output_contains "SUDO env DEBIAN_FRONTEND=noninteractive apt-get install -y console-setup" &&
+    # The stub install puts no setupcon on PATH, so the console can't be set.
+    assert_output_contains "the text console keeps its old layout"
+}
+
+test_debian_keyboard_no_install_installs_nothing() {
+    KB_INSTALL=no run_debian_keyboard none
+    assert_status 0 &&
+    assert_output_lacks "apt-get install" &&
+    assert_output_contains "the text console keeps its old layout"
+}
+
+test_debian_keyboard_saves_the_console_keymap() {
+    run_debian_keyboard setupcon
+    assert_status 0 &&
+    assert_output_contains "SUDO setupcon --save" &&
+    assert_output_lacks "console-setup" &&
+    assert_output_lacks "old layout"
+}
+
 test_crostini_skips_the_display_card() {
     export CROSTINI=1
     run_keep_display_gpu_awake "0000:61:00.0/amdgpu/0x030000/auto"
@@ -5795,6 +5836,12 @@ run_test "Crostini isn't detected elsewhere" \
     test_crostini_not_detected_elsewhere
 run_test "Crostini skips the keyboard configuration" \
     test_crostini_skips_the_keyboard
+run_test "Debian setup installs console-setup when it's missing" \
+    test_debian_keyboard_installs_console_setup_when_missing
+run_test "Debian setup --no-install doesn't install console-setup" \
+    test_debian_keyboard_no_install_installs_nothing
+run_test "Debian setup saves the console keymap with setupcon" \
+    test_debian_keyboard_saves_the_console_keymap
 run_test "Crostini skips holding a display card powered" \
     test_crostini_skips_the_display_card
 run_test "Crostini's minimal profile says how to grow the disk" \
