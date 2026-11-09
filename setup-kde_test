@@ -719,10 +719,10 @@ test_configures_focus_follows_mouse() {
     assert_called "kwriteconfig6 --file kwinrc --group Windows --key FocusPolicy FocusFollowsMouse"
 }
 
-test_configures_nine_desktops() {
+test_configures_ten_desktops() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kwinrc --group Desktops --key Number 9"
+    assert_called "kwriteconfig6 --file kwinrc --group Desktops --key Number 10"
 }
 
 # kglobalaccel reads each [kwin] entry with readEntry(QStringList) and drops
@@ -814,7 +814,9 @@ MOCK
 test_a_second_run_says_nothing() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher; do
+            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher \
+            browser3 home irc google-meet notepad remote-desktop bluetooth-connect \
+            pulseprofile.py; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -836,7 +838,9 @@ test_a_second_run_says_nothing() {
 test_quiet_run_shows_only_its_steps() {
     add_release_mocks
     for launcher in browser1 browser2 terminal terminal_on_workstation music \
-            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher; do
+            google-chat google-calendar clipboard-menu fill-menu chars-menu tide-launcher \
+            browser3 home irc google-meet notepad remote-desktop bluetooth-connect \
+            pulseprofile.py; do
         add_launcher "$launcher"
     done
     : > "$TEST_TMPDIR/isolated/kdeshortcut.py"
@@ -847,7 +851,7 @@ Turned on the Krohnkite plugin
 Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle
 Turned on focus follows mouse (mouse precedence)
 Turned on dimming inactive windows
-Set 9 virtual desktops
+Set 10 virtual desktops
 Set the keyboard layout: US Dvorak, Caps Lock as Compose
 Masking DrKonqi's crash handler
 Set the keybindings
@@ -940,20 +944,95 @@ test_verbose_shows_the_output() {
     assert_log_contains "Created symlink"
 }
 
-# Meta+Left/Right step one desktop and Meta+Shift+Left/Right carry the window
-# along, which means taking the keys back from KWin's Quick Tile and
-# move-to-screen defaults -- otherwise the actions fight over them.
-test_meta_arrows_switch_adjacent_desktop() {
+# Meta+PgUp/PgDn go to the previous or next desktop, and Shift takes the
+# window, as on tide. KWin's Maximize and Minimize held them.
+test_meta_page_keys_go_to_adjacent_desktop() {
     run_kde --no-install
     assert_status 0 &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch One Desktop to the Left Meta+Left,none,Switch One Desktop to the Left" &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch One Desktop to the Right Meta+Right,none,Switch One Desktop to the Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch to Previous Desktop Meta+PgUp,none,Switch to Previous Desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch to Next Desktop Meta+PgDown,none,Switch to Next Desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window to Previous Desktop Meta+Shift+PgUp,none,Window to Previous Desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window to Next Desktop Meta+Shift+PgDown,none,Window to Next Desktop" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Maximize Meta+Up,none,Window Maximize" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Minimize Meta+Z,none,Window Minimize" &&
+    assert_batch_contains 'kwin\tSwitch to Next Desktop\tMeta+PgDown'
+}
+
+# Meta+0 is the tenth desktop, as tide's Super+0, which takes it from KWin's
+# zoom and the task manager.
+test_meta_zero_is_the_tenth_desktop() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch to Desktop 10 Meta+0,none,Switch to Desktop 10" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window to Desktop 10 Meta+),none,Window to Desktop 10" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key view_actual_size none,none,view_actual_size" &&
+    assert_called "--group plasmashell --key activate task manager entry 10 none,none,"
+}
+
+# Meta+Left/Right focus the window there and Meta+Shift+Left/Right move it,
+# as on tide, which means taking the keys back from KWin's Quick Tile and
+# move-to-screen defaults. Desktop switching, which an earlier run put
+# there, goes back to KWin's Meta+Ctrl keys.
+test_meta_arrows_focus_and_move_windows() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFocusLeft Meta+Left,none,Krohnkite: Focus Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFocusRight Meta+Right,none,Krohnkite: Focus Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteShiftLeft Meta+Shift+Left,none,Krohnkite: Move Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteShiftRight Meta+Shift+Right,none,Krohnkite: Move Right" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Switch One Desktop to the Left Meta+Ctrl+Left,none,Switch One Desktop to the Left" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Desktop to the Right Meta+Ctrl+Shift+Right,none,Window One Desktop to the Right" &&
+    assert_not_called "Switch One Desktop to the Left Meta+Left," &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Quick Tile Left none,none,Window Quick Tile Left" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Quick Tile Right none,none,Window Quick Tile Right" &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Desktop to the Left Meta+Shift+Left,none,Window One Desktop to the Left" &&
-    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Desktop to the Right Meta+Shift+Right,none,Window One Desktop to the Right" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Screen to the Left none,none,Window One Screen to the Left" &&
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Screen to the Right none,none,Window One Screen to the Right"
+}
+
+# The rest of tide's window keys: j/k through the stack, Shift to move,
+# float, the master count, fullscreen, attention.
+test_tides_window_keys() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFocusNext Meta+J,none,Krohnkite: Focus Next" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFocusPrev Meta+K,none,Krohnkite: Focus Previous" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteShiftDown Meta+Shift+J,none,Krohnkite: Move Down/Next" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteShiftUp Meta+Shift+K,none,Krohnkite: Move Up/Prev" &&
+    assert_called "$(printf 'kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteToggleFloat Meta+Shift+F\tMeta+Ins,none,Krohnkite: Toggle Float')" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteIncrease Meta+=,none,Krohnkite: Increase" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteDecrease Meta+-,none,Krohnkite: Decrease" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key view_zoom_in none,none,view_zoom_in" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Fullscreen Meta+Shift+Up,none,Window Fullscreen" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Quick Tile Top none,none,Window Quick Tile Top" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window One Screen Up none,none,Window One Screen Up"
+}
+
+# Krohnkite gives its actions keys of its own the first time it loads, so
+# those not set here are unbound even before they are in the file: its
+# Rotate would otherwise take Meta+R from remote-desktop and its Focus Down
+# Meta+J from Focus Next.
+test_unbinds_krohnkites_own_defaults() {
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteRotate none,none,KrohnkiteRotate" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFocusDown none,none,KrohnkiteFocusDown" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteFloatAll none,none,KrohnkiteFloatAll" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key KrohnkiteTileLayout none,none,KrohnkiteTileLayout"
+}
+
+# Log out, the next layout and screenshots, on tide's keys.
+test_tides_session_keys() {
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "$(printf -- '--group ksmserver --key Log Out Meta+Shift+E\tCtrl+Alt+Del,none,Show Logout Prompt')" &&
+    assert_called "$(printf -- '--group KDE Keyboard Layout Switcher --key Switch to Next Keyboard Layout Meta+Alt+Space\tMeta+Alt+K,')" &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key CurrentMonitorScreenShot Print,none," &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key ActiveWindowScreenShot Alt+Print,none," &&
+    assert_called "$(printf -- '--group services --group org.kde.spectacle.desktop --key RectangularRegionScreenShot Shift+Print\tMeta+Print,none,')" &&
+    assert_called "--group services --group org.kde.spectacle.desktop --key _launch none,none," &&
+    assert_batch_contains 'org.kde.spectacle.desktop\tRectangularRegionScreenShot\tShift+Print Meta+Print' &&
+    assert_batch_contains 'ksmserver\tLog Out\tMeta+Shift+E Ctrl+Alt+Del'
 }
 
 test_comma_and_backslash_shortcuts_are_escaped() {
@@ -1584,12 +1663,20 @@ test_unreachable_daemon_warns_and_continues() {
 
 # The launcher key map, pinned per launcher. Only browser1's key was asserted
 # before, so browser2 sat on the wrong key (Meta+H) unnoticed; the keys are
-# meant to match setup-macos row for row (see docs/MACOS.md).
+# meant to match tide's, as conf's tidewm config gives them.
 test_launch_shortcut_keys() {
     run_kde --no-install
     assert_status 0 &&
     assert_called "--group shortcut-browser1.desktop --key _launch Meta+G," &&
     assert_called "--group shortcut-browser2.desktop --key _launch Meta+F," &&
+    assert_called "--group shortcut-browser3.desktop --key _launch Meta+Shift+G," &&
+    assert_called "--group shortcut-home.desktop --key _launch Meta+H," &&
+    assert_called "--group shortcut-irc.desktop --key _launch Meta+I," &&
+    assert_called "--group shortcut-google-meet.desktop --key _launch Meta+M," &&
+    assert_called "--group shortcut-notepad.desktop --key _launch Meta+N," &&
+    assert_called "--group shortcut-remote-desktop.desktop --key _launch Meta+R," &&
+    assert_called "--group shortcut-bluetooth-connect.desktop --key _launch Meta+B," &&
+    assert_called "--group shortcut-pulseprofile.py.desktop --key _launch Meta+Shift+B," &&
     assert_called "--group shortcut-terminal.desktop --key _launch Meta+T," &&
     assert_called "--group shortcut-terminal_on_workstation.desktop --key _launch Meta+W," &&
     assert_called "--group shortcut-music.desktop --key _launch Meta+Y," &&
@@ -1739,9 +1826,15 @@ run_test "missing git errors clearly once the fallback is reached" \
     test_missing_git_fallback_errors_clearly
 run_test "enables and configures Krohnkite" test_enables_and_configures_krohnkite
 run_test "configures focus follows mouse" test_configures_focus_follows_mouse
-run_test "configures nine desktops" test_configures_nine_desktops
-run_test "Meta+[Shift+]Left/Right switch or move to the adjacent desktop" \
-    test_meta_arrows_switch_adjacent_desktop
+run_test "configures ten desktops" test_configures_ten_desktops
+run_test "Meta+[Shift+]PgUp/PgDn go or move to the adjacent desktop" \
+    test_meta_page_keys_go_to_adjacent_desktop
+run_test "Meta+0 is the tenth desktop" test_meta_zero_is_the_tenth_desktop
+run_test "Meta+[Shift+]Left/Right focus or move windows" \
+    test_meta_arrows_focus_and_move_windows
+run_test "tide's window keys" test_tides_window_keys
+run_test "Krohnkite's own default keys are unbound" test_unbinds_krohnkites_own_defaults
+run_test "tide's session and screenshot keys" test_tides_session_keys
 run_test "configures the session keyboard layout in kxkbrc" \
     test_configures_keyboard_layout
 run_test "a quiet run shows only its steps" test_quiet_run_shows_only_its_steps

@@ -763,7 +763,8 @@ reload_diminactive_effect() {
 # --- Configure virtual desktops ---
 
 configure_desktops() {
-    kde_write --file kwinrc --group Desktops --key Number 9
+    # Ten, as tide's Super+1 to 9 and 0.
+    kde_write --file kwinrc --group Desktops --key Number 10
     kde_write --file kwinrc --group Desktops --key Rows 1
 }
 
@@ -930,12 +931,19 @@ record_live_shortcut() {
 # Several shortcuts for one action go space-separated ("Meta+\` Meta+O"):
 # kglobalshortcutsrc tab-separates them, and KConfig writes the tab as \t.
 set_shortcut() {
-    action="$1"
-    shortcut="$2"
-    label="${3:-$action}"
-    kde_write --file kglobalshortcutsrc --group kwin \
+    set_shortcut_in kwin "$@"
+}
+
+# set_shortcut_in COMPONENT ACTION KEYS [LABEL], for a component other than
+# KWin's own, as ksmserver's Log Out.
+set_shortcut_in() {
+    group="$1"
+    action="$2"
+    shortcut="$3"
+    label="${4:-$action}"
+    kde_write --file kglobalshortcutsrc --group "$group" \
         --key "$action" "$(printf '%s' "$shortcut" | tr ' ' '\t'),none,$label"
-    record_live_shortcut kwin "$action" "$shortcut" "$label"
+    record_live_shortcut "$group" "$action" "$shortcut" "$label"
 }
 
 unbind_shortcut() {
@@ -961,9 +969,15 @@ unbind_shortcut_in() {
 # A launch shortcut in [services], as Plasma's own apps keep theirs:
 # set_app_shortcut COMPONENT KEYS NAME.
 set_app_shortcut() {
-    kde_write --file kglobalshortcutsrc \
-        --group services --group "$1" --key _launch "$2,none,$3"
-    record_live_shortcut "$1" _launch "$2" "$3"
+    set_service_shortcut "$1" _launch "$2" "$3"
+}
+
+# Another of such a component's actions, as Spectacle's region shot:
+# set_service_shortcut COMPONENT ACTION KEYS NAME.
+set_service_shortcut() {
+    kde_write --file kglobalshortcutsrc --group services --group "$1" \
+        --key "$2" "$(printf '%s' "$3" | tr ' ' '\t'),none,$4"
+    record_live_shortcut "$1" "$2" "$3" "$4"
 }
 
 # Collect the action IDs first, then unbind them -- never write from inside
@@ -1136,11 +1150,21 @@ configure_app_shortcuts() {
 
     remove_stale_app_shortcut_groups
 
+    # The apps conf's tidewm config gives tide. Meta+E stays Dolphin, the
+    # file manager, as tide's files key.
     add_app_shortcut "browser1" "Meta+G"
     add_app_shortcut "browser2" "Meta+F"
+    add_app_shortcut "browser3" "Meta+Shift+G"
     add_app_shortcut "terminal" "Meta+T"
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
+    add_app_shortcut "home" "Meta+H"
+    add_app_shortcut "irc" "Meta+I"
+    add_app_shortcut "google-meet" "Meta+M"
+    add_app_shortcut "notepad" "Meta+N"
+    add_app_shortcut "remote-desktop" "Meta+R"
+    add_app_shortcut "bluetooth-connect" "Meta+B"
+    add_app_shortcut "pulseprofile.py" "Meta+Shift+B"
     # Chat and Calendar, as on tide and tide for macOS.
     add_app_shortcut "google-chat" "Meta+C"
     add_app_shortcut "google-calendar" "Meta+Shift+C"
@@ -1161,31 +1185,71 @@ configure_app_shortcuts() {
 
 configure_keybindings() {
 
-    # Switch to desktop 1..N. KDE records the shifted variant as the
-    # character produced (Meta+! rather than Meta+Shift+1); writing it
-    # as "Meta+Shift+1" leaves the binding inactive.
-    shifted=('!' '@' '#' '$' '%' '^' '&' '*' '(')
+    # The keys follow tide's (tide's tidewm/tide.conf and SPEC.md §6.6), so
+    # one set of hands works in both. What KDE has no action for is left
+    # out: the go-to-workspace prompt (Meta+Return stays Krohnkite's Set
+    # master), home (Meta+Home, Meta+Tab, Meta+End), restore (Meta+Down),
+    # keep awake, presenter mode and resize mode. Alt+Tab stays KDE's window
+    # switcher, which takes you to the last window as tide's swap does.
+
+    # Desktops: Meta+1..9 and 0 go there, and Shift takes the window. KDE
+    # records the shifted variant as the character produced (Meta+! rather
+    # than Meta+Shift+1); writing it as "Meta+Shift+1" leaves the binding
+    # inactive.
+    shifted=('!' '@' '#' '$' '%' '^' '&' '*' '(' ')')
     for n in $(seq 1 ${#shifted[@]}); do
-        set_shortcut "Switch to Desktop $n" "Meta+$n"
+        set_shortcut "Switch to Desktop $n" "Meta+$((n % 10))"
         set_shortcut "Window to Desktop $n" "Meta+${shifted[n-1]}"
     done
-    set_shortcut "Switch One Desktop to the Left" "Meta+Left"
-    set_shortcut "Switch One Desktop to the Right" "Meta+Right"
-    set_shortcut "Window One Desktop to the Left" "Meta+Shift+Left"
-    set_shortcut "Window One Desktop to the Right" "Meta+Shift+Right"
+    set_shortcut "Switch to Previous Desktop" "Meta+PgUp"
+    set_shortcut "Switch to Next Desktop" "Meta+PgDown"
+    set_shortcut "Window to Previous Desktop" "Meta+Shift+PgUp"
+    set_shortcut "Window to Next Desktop" "Meta+Shift+PgDown"
+    # Meta+[Shift+]Left/Right focus and move windows now, as on tide; an
+    # earlier run put desktop switching there, so give it back KWin's own
+    # keys.
+    set_shortcut "Switch One Desktop to the Left" "Meta+Ctrl+Left"
+    set_shortcut "Switch One Desktop to the Right" "Meta+Ctrl+Right"
+    set_shortcut "Window One Desktop to the Left" "Meta+Ctrl+Shift+Left"
+    set_shortcut "Window One Desktop to the Right" "Meta+Ctrl+Shift+Right"
 
-    # Window management
+    # Windows
     set_shortcut "Window Close" "Meta+Backspace"
+    set_shortcut "Window Maximize" "Meta+Up"
+    set_shortcut "Window Fullscreen" "Meta+Shift+Up"
+    set_shortcut "Window Minimize" "Meta+Z"
+    set_shortcut "Activate Window Demanding Attention" "Meta+A Meta+Ctrl+A"
+
+    # The session
+    set_shortcut_in ksmserver "Log Out" "Meta+Shift+E Ctrl+Alt+Del" "Show Logout Prompt"
+    set_shortcut_in "KDE Keyboard Layout Switcher" "Switch to Next Keyboard Layout" \
+        "Meta+Alt+Space Meta+Alt+K"
+
+    # Screenshots, as tide's: the screen, the window (Alt), or a region
+    # (Shift or Meta).
+    spectacle=org.kde.spectacle.desktop
+    set_service_shortcut "$spectacle" _launch none "Launch Spectacle"
+    set_service_shortcut "$spectacle" FullScreenScreenShot none "Capture Entire Desktop"
+    set_service_shortcut "$spectacle" CurrentMonitorScreenShot Print "Capture Current Monitor"
+    set_service_shortcut "$spectacle" ActiveWindowScreenShot Alt+Print "Capture Active Window"
+    set_service_shortcut "$spectacle" RectangularRegionScreenShot "Shift+Print Meta+Print" \
+        "Capture Rectangular Region"
 
     # Unbind KWin/plasmashell defaults that conflict with shortcuts we set
-    # below or in configure_app_shortcuts.
+    # here or in configure_app_shortcuts.
     unbind_shortcut "Grid View"                                 # Meta+G -> Browser 1
     unbind_shortcut "Overview"                                  # Meta+W -> Terminal on Workstation
     unbind_shortcut "Edit Tiles"                                # Meta+T -> Terminal
-    unbind_shortcut "Window Quick Tile Left"                    # Meta+Left -> Switch One Desktop to the Left
-    unbind_shortcut "Window Quick Tile Right"                   # Meta+Right -> Switch One Desktop to the Right
-    unbind_shortcut "Window One Screen to the Left"             # Meta+Shift+Left -> Window One Desktop to the Left
-    unbind_shortcut "Window One Screen to the Right"            # Meta+Shift+Right -> Window One Desktop to the Right
+    unbind_shortcut "Window Quick Tile Left"                    # Meta+Left -> Krohnkite Focus Left
+    unbind_shortcut "Window Quick Tile Right"                   # Meta+Right -> Krohnkite Focus Right
+    unbind_shortcut "Window Quick Tile Top"                     # Meta+Up -> Window Maximize
+    unbind_shortcut "Window Quick Tile Bottom"                  # Meta+Down, as tide's restore
+    unbind_shortcut "Window One Screen to the Left"             # Meta+Shift+Left -> Krohnkite Move Left
+    unbind_shortcut "Window One Screen to the Right"            # Meta+Shift+Right -> Krohnkite Move Right
+    unbind_shortcut "Window One Screen Up"                      # Meta+Shift+Up -> Window Fullscreen
+    unbind_shortcut "view_zoom_in"                              # Meta+= -> Krohnkite Increase
+    unbind_shortcut "view_zoom_out"                             # Meta+- -> Krohnkite Decrease
+    unbind_shortcut "view_actual_size"                          # Meta+0 -> Switch to Desktop 10
     # "Walk Through Windows of Current Application" used to be unbound here on
     # the grounds that it held Meta+`, which Krohnkite's Monocle layout wants.
     # It doesn't -- KWin's default for it is Alt+`, so the unbind freed nothing
@@ -1199,14 +1263,28 @@ configure_keybindings() {
     # it itself in an X11 session, where its fuzzel menu can't run.
     unbind_shortcut_in plasmashell show-on-mouse-pos              # Meta+V -> clipboard-menu
     n=1
-    while test "$n" -le 9; do
-        # Meta+1..9 -> Switch to Desktop N (plasmashell grabs these by default).
+    while test "$n" -le 10; do
+        # Meta+1..9 and 0 -> Switch to Desktop N (plasmashell grabs these by default).
         unbind_shortcut_in plasmashell "activate task manager entry $n"
         n=$((n + 1))
     done
 
     # Unbind all Krohnkite shortcuts, then set only the ones we want
     unbind_all_krohnkite_shortcuts
+    # Those not in the file yet too, or Krohnkite's defaults take keys set
+    # here when it first loads: Meta+R and Meta+Shift+R rotate, Meta+J and
+    # Meta+K focus down and up, Meta+Shift+F floats every window. From
+    # res/shortcuts.qml, less the ones set below.
+    for action in KrohnkitetoggleDock KrohnkiteFocusDown KrohnkiteFocusUp \
+        KrohnkiteGrowHeight KrohnkiteShrinkHeight KrohnkiteFloatAll \
+        KrohnkiteLayoutChooser KrohnkiteRotate KrohnkiteRotatePart \
+        KrohnkiteRaiseSurfaceCapacity KrohnkiteLowerSurfaceCapacity KrohnkiteMeta \
+        KrohnkiteTileLayout KrohnkiteTreeColumnLayout KrohnkiteSpreadLayout \
+        KrohnkiteStairLayout KrohnkiteFloatingLayout KrohnkiteQuarterLayout \
+        KrohnkiteStackedLayout KrohnkiteBTreeLayout KrohnkiteSpiralLayout \
+        KrohnkiteColumnsLayout KrohnkiteCascadeLayout; do
+        unbind_shortcut "$action"
+    done
 
     # Krohnkite shortcuts. The upstream codeberg fork renamed the
     # kglobalshortcutsrc keys: the action ID is now "Krohnkite" plus the
@@ -1217,9 +1295,22 @@ configure_keybindings() {
     # Settings. Stale "Krohnkite: ..."-keyed entries from older builds are
     # cleared by unbind_all_krohnkite_shortcuts above.
 
-    # Resize
+    # Focus and move: j/k through the stack, the arrows by direction.
+    set_shortcut KrohnkiteFocusNext "Meta+J" "Krohnkite: Focus Next"
+    set_shortcut KrohnkiteFocusPrev "Meta+K" "Krohnkite: Focus Previous"
+    set_shortcut KrohnkiteShiftDown "Meta+Shift+J" "Krohnkite: Move Down/Next"
+    set_shortcut KrohnkiteShiftUp "Meta+Shift+K" "Krohnkite: Move Up/Prev"
+    set_shortcut KrohnkiteFocusLeft "Meta+Left" "Krohnkite: Focus Left"
+    set_shortcut KrohnkiteFocusRight "Meta+Right" "Krohnkite: Focus Right"
+    set_shortcut KrohnkiteShiftLeft "Meta+Shift+Left" "Krohnkite: Move Left"
+    set_shortcut KrohnkiteShiftRight "Meta+Shift+Right" "Krohnkite: Move Right"
+    set_shortcut KrohnkiteToggleFloat "Meta+Shift+F Meta+Ins" "Krohnkite: Toggle Float"
+
+    # Resize, and the number of windows in the master area
     set_shortcut KrohnkitegrowWidth "Meta+\\\\" "Krohnkite: Grow Width"
     set_shortcut KrohnkiteShrinkWidth "Meta+/" "Krohnkite: Shrink Width"
+    set_shortcut KrohnkiteIncrease "Meta+=" "Krohnkite: Increase"
+    set_shortcut KrohnkiteDecrease "Meta+-" "Krohnkite: Decrease"
 
     # Layouts. Meta+, is written "Meta+\," because kglobalaccel reads each
     # entry back with readEntry(QStringList) and drops any entry that doesn't
@@ -1396,7 +1487,7 @@ kde_step "Turned on the Krohnkite plugin" enable_krohnkite
 kde_step "Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle" configure_krohnkite
 kde_step "Turned on focus follows mouse (mouse precedence)" configure_focus_follows_mouse
 kde_step "Turned on dimming inactive windows" configure_dim_inactive
-kde_step "Set 9 virtual desktops" configure_desktops
+kde_step "Set 10 virtual desktops" configure_desktops
 kde_step "Set the keyboard layout: US Dvorak, Caps Lock as Compose" configure_keyboard_layout
 kde_step "Turned on accents for a held key, after 300 ms (Plasma Keyboard)" configure_input_method
 disable_drkonqi
