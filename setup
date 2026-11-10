@@ -3643,19 +3643,23 @@ KEYBOARD
                 fi
                 # Applying the console copy depends on the persistent config
                 # write above. Skip it if that sudo command was denied.
-                # --save keeps the keymap for every boot. It loads it now only
-                # when run from a text console: from a desktop's terminal or
-                # ssh, where setup usually runs, setupcon says "not on the
-                # console" and leaves the consoles as they were until the
-                # next boot. --force --keyboard-only then loads it into every
-                # console now, as the boot does.
+                # --save-only saves the keymap for every boot without
+                # loading it, which from a desktop's terminal or ssh would
+                # only say "not on the console". loadkeys then loads it into
+                # every console now, as the boot does, without setupcon's
+                # kbd_mode, which refuses the desktop's own console.
                 if ! command -v setupcon >/dev/null 2>&1; then
                     warn "no setupcon, so the text console keeps its old layout; install console-setup"
-                elif ! sudo_or_warn setupcon --save; then
+                elif ! sudo_or_warn setupcon --save-only; then
                     warn "could not apply the keyboard config to virtual consoles"
-                elif ! sudo_or_warn setupcon --force --keyboard-only; then
-                    warn "could not load Dvorak into the text consoles now; they get it at the next boot"
                 else
+                    _kmap=$(ls -t "${SETUP_CONSOLE_SETUP_DIR:-/etc/console-setup}"/cached_*.kmap.gz 2>/dev/null | head -n 1)
+                    if test -z "$_kmap"; then
+                        warn "setupcon saved no console keymap, so the text consoles get Dvorak only at the next boot"
+                    elif ! sudo_or_warn loadkeys -q "$_kmap"; then
+                        warn "could not load Dvorak into the text consoles now; they get it at the next boot"
+                    fi
+                    load_saved_keymap_at_boot
                     update_boot_keymap
                     check_console_keymap "$console_was" "$saved_was"
                 fi
@@ -3681,9 +3685,11 @@ KEYBOARD
             return
             ;;
     esac
-    # Apply to current X/Wayland session if running. Don't let a failure
-    # (e.g. Wayland without Xwayland) abort the whole bootstrap under set -e.
-    if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-${WAYLAND_DISPLAY:-}}"; then
+    # Apply to the current X session if running. Not under Wayland: there
+    # setxkbmap reaches only Xwayland's apps, and the compositor sets the
+    # layout (setup-kde for Plasma). Don't let a failure abort the whole
+    # bootstrap under set -e.
+    if command -v setxkbmap >/dev/null 2>&1 && test -n "${DISPLAY:-}" && test -z "${WAYLAND_DISPLAY:-}"; then
         setxkbmap -layout us -variant dvorak -option "" -option compose:caps \
             || warn "setxkbmap failed; keyboard layout not applied to this session"
     fi
@@ -3704,11 +3710,32 @@ console_keymap() {
     esac
 }
 
-# The boot image's copy of the console keymap, which it loads before the
-# disk is unlocked. Debian's console-setup then skips loading the saved one,
-# taking the boot image's as already loaded, so a boot image made before
-# Dvorak was set leaves every boot's consoles on the old layout. Rebuilt
-# when the saved keymap is newer than it and it holds a keymap at all.
+# The boot image's console keymap, loaded before the disk is unlocked,
+# leaves /run/console-setup/keymap_loaded behind, and Debian's boot then
+# skips loading the saved keymap, taking the boot image's as already
+# loaded. A boot image made before Dvorak was set so leaves every boot's
+# consoles on the old layout until it's rebuilt, which some machines'
+# update-initramfs.conf allows only with a kernel update. Removing the
+# marker before keyboard-setup.service runs loads the saved keymap at every
+# boot, whatever the boot image holds.
+load_saved_keymap_at_boot() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    _dropin=${SETUP_SYSTEMD_DIR:-/etc/systemd/system}/keyboard-setup.service.d/setup-saved-keymap.conf
+    _want='# Written by setup: load the saved console keymap, not the boot image'"'"'s.
+[Service]
+ExecStartPre=-/bin/rm -f /run/console-setup/keymap_loaded'
+    test "$(cat "$_dropin" 2>/dev/null)" != "$_want" || return 0
+    if sudo_or_warn mkdir -p "${_dropin%/*}" \
+        && printf '%s\n' "$_want" | sudo_or_warn tee "$_dropin" >/dev/null; then
+        sudo_or_warn systemctl daemon-reload \
+            || warn "systemd will read the console keymap change at the next boot"
+    else
+        warn "could not make the boot load the saved console keymap, so the consoles may start each boot in the old layout"
+    fi
+}
+
+# Rebuilds the boot image when the saved keymap is newer than it and it
+# holds a keymap at all, so a disk passphrase prompt is in Dvorak too.
 update_boot_keymap() {
     command -v update-initramfs >/dev/null 2>&1 || return 0
     _initrd=${SETUP_BOOT_DIR:-/boot}/initrd.img-$(uname -r)
@@ -3724,12 +3751,19 @@ update_boot_keymap() {
             printf '%s\n' "$_list" | grep -q -e console-setup -e keymap || return 0
         fi
     fi
-    info "Updating the boot image, so the consoles, and a disk passphrase prompt if you have one, start in Dvorak"
+    # The machine's owner can allow rebuilds only with a kernel update; a
+    # rebuild here would then print "Not updating initramfs" and do nothing.
+    _conf=${SETUP_INITRAMFS_CONF:-/etc/initramfs-tools/update-initramfs.conf}
+    if grep -qE '^[[:space:]]*update_initramfs="?no"?[[:space:]]*$' "$_conf" 2>/dev/null; then
+        info "The boot image is rebuilt here only with a kernel update ($_conf), so a disk passphrase prompt, if you have one, gets Dvorak after the next one"
+        return 0
+    fi
+    info "Updating the boot image, so a disk passphrase prompt, if you have one, is in Dvorak"
     # Every kernel's image: the running one's was inspected, but the next
     # boot may well use a newer kernel's, which -u alone would rebuild
     # instead, and theirs hold the same old keymap.
     sudo_or_warn update-initramfs -u -k all \
-        || warn "could not update the boot image, so the consoles may start each boot in the old layout"
+        || warn "could not update the boot image, so a disk passphrase prompt stays in the old layout"
 }
 
 # check_console_keymap BEFORE SAVED: says when the consoles aren't Dvorak
@@ -3742,7 +3776,10 @@ check_console_keymap() {
     if test "$_now" = qwerty; then
         warn "the text consoles still type QWERTY after setting Dvorak"
     elif test "$1" = qwerty && test "$2" = dvorak && test "$_now" = dvorak; then
-        warn "the text consoles had lost Dvorak since boot; setup put it back, but the next boot may lose it again"
+        warn "the text consoles had lost Dvorak since boot; setup put it back"
+    elif test "$_now" = dvorak; then
+        info "The text consoles type Dvorak"
+        return 0
     else
         return 0
     fi
@@ -3759,6 +3796,16 @@ explain_console_keymap() {
         else
             info "  The boot image ($_initrd) is newer than the saved keymap ($_kmap)."
         fi
+    fi
+    _dropin=${SETUP_SYSTEMD_DIR:-/etc/systemd/system}/keyboard-setup.service.d/setup-saved-keymap.conf
+    if test -f "$_dropin"; then
+        info "  $_dropin makes the boot load the saved keymap."
+    else
+        info "  Nothing makes the boot load the saved keymap over the boot image's ($_dropin is missing)."
+    fi
+    _conf=${SETUP_INITRAMFS_CONF:-/etc/initramfs-tools/update-initramfs.conf}
+    if test -f "$_conf"; then
+        info "  $_conf: $(grep -E '^[[:space:]]*update_initramfs=' "$_conf" | tr '\n' ' ')"
     fi
     if test -e /etc/vconsole.conf; then
         info "  /etc/vconsole.conf: $(grep -E '^(KEYMAP|XKBLAYOUT|XKBVARIANT)=' /etc/vconsole.conf | tr '\n' ' ')"
