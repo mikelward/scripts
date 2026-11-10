@@ -1430,9 +1430,17 @@ configure_keyboard" 2>&1)"
 # KB_KEYS, when set, is what dumpkeys says the consoles type for the key
 # right of Tab (apostrophe for Dvorak, +q for QWERTY), before and after
 # setup sets them: "+q apostrophe" is QWERTY before, Dvorak after.
-# KB_BOOT and KB_CONSOLE_SETUP stand in for /boot and /etc/console-setup.
+# KB_BOOT and KB_CONSOLE_SETUP stand in for /boot and /etc/console-setup,
+# KB_SYSTEMD for /etc/systemd/system, and KB_INITRAMFS_CONF for
+# update-initramfs.conf. Without KB_CONSOLE_SETUP, setupcon has saved a
+# keymap in a directory of the test's own.
 run_debian_keyboard() {
     kb_bin=$(mktemp -d)
+    kb_own_saved=
+    if test -z "${KB_CONSOLE_SETUP:-}"; then
+        kb_own_saved=$(mktemp -d)
+        : > "$kb_own_saved/cached_UTF-8_del.kmap.gz"
+    fi
     for tool in sh cat awk grep sed tr ls head uname rm; do
         ln -s "$(command -v "$tool")" "$kb_bin/$tool"
     done
@@ -1453,9 +1461,11 @@ echo "keycode  15 = Tab"
 echo "keycode  16 = \$key"
 MOCK
         printf '#!/bin/sh\ntest "$1" = -n && shift\nexec "$@"\n' > "$kb_bin/sudo"
-        printf '#!/bin/sh\necho active\n' > "$kb_bin/systemctl"
-        chmod +x "$kb_bin/dumpkeys" "$kb_bin/sudo" "$kb_bin/systemctl"
+        chmod +x "$kb_bin/dumpkeys" "$kb_bin/sudo"
     fi
+    printf '#!/bin/sh\necho active\n' > "$kb_bin/systemctl"
+    printf '#!/bin/sh\necho "SETXKBMAP $*"\n' > "$kb_bin/setxkbmap"
+    chmod +x "$kb_bin/systemctl" "$kb_bin/setxkbmap"
     if test -n "${KB_BOOT:-}"; then
         if test -n "${KB_UNREADABLE:-}"; then
             printf '#!/bin/sh\necho "cpio: Permission denied" >&2\nexit 1\n' > "$kb_bin/lsinitramfs"
@@ -1466,15 +1476,16 @@ MOCK
         chmod +x "$kb_bin/lsinitramfs" "$kb_bin/update-initramfs"
     fi
     set +e
-    output="$(PATH="$kb_bin" SUDO="${KB_SUDO:-yes}" INSTALL="${KB_INSTALL:-yes}" CROSTINI=0 OS=debian DISPLAY='' WAYLAND_DISPLAY='' \
-        SETUP_BOOT_DIR="${KB_BOOT:-/nonexistent}" SETUP_CONSOLE_SETUP_DIR="${KB_CONSOLE_SETUP:-/nonexistent}" \
+    output="$(PATH="$kb_bin" SUDO="${KB_SUDO:-yes}" INSTALL="${KB_INSTALL:-yes}" CROSTINI=0 OS=debian DISPLAY="${KB_DISPLAY:-}" WAYLAND_DISPLAY="${KB_WAYLAND_DISPLAY:-}" \
+        SETUP_BOOT_DIR="${KB_BOOT:-/nonexistent}" SETUP_CONSOLE_SETUP_DIR="${KB_CONSOLE_SETUP:-$kb_own_saved}" \
         SETUP_KEYBOARD_FILE="${KB_KEYBOARD_FILE:-/nonexistent}" \
-        sh -c "$(extract_functions "setup_color paint info detail warn note_problem configure_keyboard console_keymap update_boot_keymap check_console_keymap explain_console_keymap")
+        SETUP_SYSTEMD_DIR="${KB_SYSTEMD:-/nonexistent}" SETUP_INITRAMFS_CONF="${KB_INITRAMFS_CONF:-/nonexistent}" \
+        sh -c "$(extract_functions "setup_color paint info detail warn note_problem configure_keyboard console_keymap load_saved_keymap_at_boot update_boot_keymap check_console_keymap explain_console_keymap")
 sudo_or_warn() { echo SUDO \"\$*\"; }
 configure_keyboard" 2>&1)"
     status=$?
     set -e
-    rm -rf "$kb_bin"
+    rm -rf "$kb_bin" ${kb_own_saved:+"$kb_own_saved"}
 }
 
 test_debian_keyboard_installs_console_setup_when_missing() {
@@ -1495,11 +1506,38 @@ test_debian_keyboard_no_install_installs_nothing() {
 test_debian_keyboard_saves_the_console_keymap() {
     run_debian_keyboard setupcon
     assert_status 0 &&
-    assert_output_contains "SUDO setupcon --save" &&
-    # Off a text console, --save only saves; this loads it into them now.
-    assert_output_contains "SUDO setupcon --force --keyboard-only" &&
+    assert_output_contains "SUDO setupcon --save-only" &&
+    # Off a text console, setupcon only saves; this loads it into them now.
+    assert_output_contains "SUDO loadkeys -q " &&
+    assert_output_contains "cached_UTF-8_del.kmap.gz" &&
     assert_output_lacks "console-setup" &&
     assert_output_lacks "old layout"
+}
+
+# The boot image's keymap marks itself loaded, and Debian's boot then skips
+# the saved one: a drop-in removes the mark, so the saved keymap loads at
+# every boot, whatever the boot image holds.
+test_debian_keyboard_makes_the_boot_load_the_saved_keymap() {
+    kb_systemd=$(mktemp -d)
+    KB_SYSTEMD="$kb_systemd" run_debian_keyboard setupcon
+    rm -rf "$kb_systemd"
+    assert_status 0 &&
+    assert_output_contains "SUDO mkdir -p $kb_systemd/keyboard-setup.service.d" &&
+    assert_output_contains "SUDO systemctl daemon-reload"
+}
+
+# A drop-in already in place is left as it is.
+test_debian_keyboard_keeps_the_boot_drop_in() {
+    kb_systemd=$(mktemp -d)
+    mkdir "$kb_systemd/keyboard-setup.service.d"
+    printf '%s\n' "# Written by setup: load the saved console keymap, not the boot image's." \
+        "[Service]" "ExecStartPre=-/bin/rm -f /run/console-setup/keymap_loaded" \
+        > "$kb_systemd/keyboard-setup.service.d/setup-saved-keymap.conf"
+    KB_SYSTEMD="$kb_systemd" run_debian_keyboard setupcon
+    rm -rf "$kb_systemd"
+    assert_status 0 &&
+    assert_output_lacks "SUDO mkdir" &&
+    assert_output_lacks "daemon-reload"
 }
 
 # --no-sudo runs no sudo, not even to read what the consoles type.
@@ -1509,10 +1547,11 @@ test_debian_keyboard_no_sudo_reads_nothing_as_root() {
     assert_output_lacks "still type QWERTY"
 }
 
-# Dvorak after setting it says nothing more.
+# Dvorak after setting it is said in one line, and nothing more.
 test_debian_keyboard_quiet_when_the_consoles_type_dvorak() {
     KB_KEYS="apostrophe apostrophe" run_debian_keyboard setupcon
     assert_status 0 &&
+    assert_output_contains "The text consoles type Dvorak" &&
     assert_output_lacks "QWERTY" &&
     assert_output_lacks "lost Dvorak"
 }
@@ -1578,6 +1617,35 @@ test_debian_keyboard_updates_a_stale_boot_image() {
     rm -rf "$kb_boot" "$kb_saved"
     assert_status 0 &&
     assert_output_contains "SUDO update-initramfs -u -k all"
+}
+
+# setxkbmap sets an X session's layout, but under Wayland it reaches only
+# Xwayland's apps, and warns so: the compositor has the layout there.
+test_debian_keyboard_sets_x_but_not_wayland_sessions() {
+    KB_DISPLAY=:0 run_debian_keyboard setupcon
+    assert_output_contains "SETXKBMAP -layout us -variant dvorak" || return 1
+    KB_DISPLAY=:0 KB_WAYLAND_DISPLAY=wayland-0 run_debian_keyboard setupcon
+    assert_status 0 &&
+    assert_output_lacks "SETXKBMAP"
+}
+
+# A machine whose update-initramfs.conf allows rebuilds only with a kernel
+# update gets none, and is told when its boot image will get Dvorak, rather
+# than update-initramfs saying "Not updating initramfs" after "Updating".
+test_debian_keyboard_leaves_a_boot_image_rebuilt_only_with_kernels() {
+    kb_boot=$(mktemp -d)
+    kb_saved=$(mktemp -d)
+    : > "$kb_boot/initrd.img-$(uname -r)"
+    touch -t 200101010000 "$kb_boot/initrd.img-$(uname -r)"
+    : > "$kb_saved/cached_UTF-8_del.kmap.gz"
+    printf '%s\n' '# If set to no disables any update to initramfs beside kernel upgrade' \
+        'update_initramfs=no' > "$kb_boot/update-initramfs.conf"
+    KB_BOOT="$kb_boot" KB_CONSOLE_SETUP="$kb_saved" KB_INITRAMFS_CONF="$kb_boot/update-initramfs.conf" \
+        run_debian_keyboard setupcon
+    rm -rf "$kb_boot" "$kb_saved"
+    assert_status 0 &&
+    assert_output_lacks "update-initramfs -u" &&
+    assert_output_contains "gets Dvorak after the next one"
 }
 
 # One newer than the saved keymap is left alone: a rebuild takes a while.
@@ -6048,9 +6116,15 @@ run_test "Debian setup --no-install doesn't install console-setup" \
     test_debian_keyboard_no_install_installs_nothing
 run_test "Debian setup saves the console keymap with setupcon" \
     test_debian_keyboard_saves_the_console_keymap
+run_test "Debian setup makes the boot load the saved console keymap" \
+    test_debian_keyboard_makes_the_boot_load_the_saved_keymap
+run_test "Debian setup keeps its console keymap drop-in" \
+    test_debian_keyboard_keeps_the_boot_drop_in
+run_test "Debian setup runs setxkbmap under X, not Wayland" \
+    test_debian_keyboard_sets_x_but_not_wayland_sessions
 run_test "Debian setup with --no-sudo reads nothing as root" \
     test_debian_keyboard_no_sudo_reads_nothing_as_root
-run_test "Debian setup is quiet when the consoles type Dvorak" \
+run_test "Debian setup says briefly when the consoles type Dvorak" \
     test_debian_keyboard_quiet_when_the_consoles_type_dvorak
 run_test "Debian setup warns, and says why, when the consoles stay QWERTY" \
     test_debian_keyboard_warns_when_the_consoles_stay_qwerty
@@ -6062,6 +6136,8 @@ run_test "Debian setup rebuilds a boot image it can't read" \
     test_debian_keyboard_rebuilds_an_unreadable_boot_image
 run_test "Debian setup rebuilds a boot image with an older keymap" \
     test_debian_keyboard_updates_a_stale_boot_image
+run_test "Debian setup leaves a boot image rebuilt only with kernels" \
+    test_debian_keyboard_leaves_a_boot_image_rebuilt_only_with_kernels
 run_test "Debian setup leaves a boot image newer than the keymap" \
     test_debian_keyboard_leaves_a_current_boot_image
 run_test "Crostini skips holding a display card powered" \
