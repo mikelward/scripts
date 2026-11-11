@@ -20,15 +20,6 @@ The rest of the Crostini mode in mikelward/tideco's SPEC.md A.5, after
 - Check the detection markers (`/dev/.cros_milestone`,
   `/opt/google/cros-containers`) on a Chromebook, Baguette included.
 
-## Font smoothing on macOS
-
-- [ ] **Live with light smoothing a while, then settle it.** `setup-macos`
-      writes `AppleFontSmoothing` 1. Normal weights look right; bold may be
-      too blurry. If it is, either go to `0` and give kitty a little weight
-      back (`text_composition_strategy` in conf's `kitty.conf`), or keep
-      `1` and give kitty a lighter bold (`bold_font`). macOS has nothing
-      between 0 and 1.
-
 ## Decisions needing review
 
 - **setup asks for sudo and SSH at the start** (2026-11-06), so a run can
