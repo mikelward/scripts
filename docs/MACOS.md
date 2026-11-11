@@ -599,7 +599,8 @@ smoothing to light (`AppleFontSmoothing` 1), which thins text toward sharp; it
 takes effect as each app starts, or for everything at the next login. `0` turns
 it off, for the thinnest text; there's nothing between 0 and 1. To undo it:
 `defaults -currentHost delete -g AppleFontSmoothing`. conf's kitty also draws
-text at Linux's size and without the extra thickening on macOS.
+text at Linux's size on macOS, and thickens it less than kitty's macOS default
+(`text_composition_strategy 1.5 10`, not 1.7 30).
 
 **Dim inactive windows.** No macOS equivalent of KWin's `diminactive` effect.
 tide for macOS dims every window but the focused one itself; with Amethyst there's no
