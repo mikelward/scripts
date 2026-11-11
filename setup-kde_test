@@ -19,6 +19,8 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 
 setup() {
+    # Most tests here are of Krohnkite's setup; the tide ones set this.
+    KDE_WM=krohnkite
     TEST_TMPDIR="$(mktemp -d)"
     CALLS="$TEST_TMPDIR/calls"
     rm -f "$CALLS"
@@ -206,7 +208,7 @@ run_kde() {
         SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
         TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
-        "$KDE_SCRIPT" "$@" 2>&1)"
+        "$KDE_SCRIPT" --wm "$KDE_WM" "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -222,7 +224,7 @@ run_kde_relative() {
         SETUP_TIDE_ACCENTS_SYSTEM_TABLES="${SETUP_TIDE_ACCENTS_SYSTEM_TABLES-$TEST_TMPDIR/no-tide-accents.json}" \
         TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
         PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
-        ./setup-kde "$@" 2>&1)"
+        ./setup-kde --wm "$KDE_WM" "$@" 2>&1)"
     status=$?
     set -e
 }
@@ -318,6 +320,196 @@ assert_file_not_exists() {
         TEST_FAILED=1
         return 1
     fi
+}
+
+# --- tide for KDE (--wm tide, the default) ---
+
+# git clones by making the directory; make and node record their argv, and
+# node also adds a line to the --batch file, as setup.mjs does.
+add_tide_kde_mocks() {
+    KDE_WM=tide
+    cat > "$TEST_TMPDIR/bin/git" <<MOCK
+#!/bin/sh
+printf "%s\\n" "git \$*" >> "$CALLS"
+if test "\$1" = clone; then
+    for arg in "\$@"; do dir="\$arg"; done
+    mkdir -p "\$dir"
+fi
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/make" <<MOCK
+#!/bin/sh
+printf "%s\\n" "make \$*" >> "$CALLS"
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/kpackagetool6" <<MOCK
+#!/bin/sh
+exit 0
+MOCK
+    cat > "$TEST_TMPDIR/bin/node" <<MOCK
+#!/bin/sh
+printf "%s\\n" "node \$*" >> "$CALLS"
+while test \$# -gt 0; do
+    if test "\$1" = --batch; then
+        printf 'kwin\\ttide: focus down\\tMeta+J\\ttide: focus down\\n' >> "\$2"
+    fi
+    shift
+done
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR"/bin/git "$TEST_TMPDIR"/bin/make "$TEST_TMPDIR"/bin/node \
+        "$TEST_TMPDIR"/bin/kpackagetool6
+}
+
+test_tide_is_the_default() {
+    add_tide_kde_mocks
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" \
+        XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
+        XDG_SESSION_TYPE=wayland \
+        SETUP_TIDE_ACCENTS_SYSTEM_TABLES="$TEST_TMPDIR/no-tide-accents.json" \
+        TIDE_DIR="$TEST_TMPDIR/home/src/tide" \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        "$KDE_SCRIPT" 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_called "git clone https://github.com/mikelward/tide-kde.git $TEST_TMPDIR/home/tide-kde" &&
+    assert_not_called "krohnkiteEnabled true"
+}
+
+test_tide_clones_installs_and_sets_up() {
+    add_tide_kde_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "git clone https://github.com/mikelward/tide-kde.git $TEST_TMPDIR/home/tide-kde" &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install" &&
+    assert_called "node $TEST_TMPDIR/home/tide-kde/scripts/setup.mjs --batch " &&
+    assert_output_contains "Installed tide for KDE" &&
+    assert_batch_contains 'kwin\ttide: focus down\tMeta+J'
+}
+
+test_tide_pulls_an_existing_checkout() {
+    add_tide_kde_mocks
+    mkdir -p "$TEST_TMPDIR/home/tide-kde"
+    run_kde
+    assert_status 0 &&
+    assert_called "git -C $TEST_TMPDIR/home/tide-kde pull --ff-only" &&
+    assert_not_called "git clone" &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install"
+}
+
+test_tide_turns_krohnkite_off() {
+    add_tide_kde_mocks
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Plugins --key krohnkiteEnabled false" &&
+    assert_not_called "Number 10" &&
+    assert_not_called "--group Plugins --key diminactiveEnabled"
+}
+
+# An earlier run put KWin's desktop and window actions on the keys tide's
+# take; they go back to Plasma's defaults, so tide's can have them.
+test_tide_gives_back_kwins_keys() {
+    add_tide_kde_mocks
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "$(printf -- '--group kwin --key Switch to Desktop 1 Ctrl+F1\tMeta+F1,none,Switch to Desktop 1')" &&
+    assert_called "--group kwin --key Switch to Desktop 10 none,none,Switch to Desktop 10" &&
+    assert_called "--group kwin --key Window to Desktop 1 none,none,Window to Desktop 1" &&
+    assert_called "--group kwin --key Window Close Alt+F4,none,Window Close" &&
+    assert_called "--group kwin --key Window Maximize none,none,Window Maximize" &&
+    assert_not_called "Meta+PgUp,none" &&
+    assert_not_called "--key KrohnkiteSetMaster Meta+Return"
+}
+
+test_tide_no_install_leaves_a_missing_checkout() {
+    add_tide_kde_mocks
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "git clone" &&
+    assert_not_called "make -C" &&
+    assert_output_contains "--no-install was given"
+}
+
+test_tide_no_install_installs_a_checkout_unpulled() {
+    add_tide_kde_mocks
+    mkdir -p "$TEST_TMPDIR/home/tide-kde"
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "pull --ff-only" &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install"
+}
+
+test_tide_without_node_warns() {
+    add_tide_kde_mocks
+    rm "$TEST_TMPDIR/bin/node"
+    mkdir -p "$TEST_TMPDIR/home/tide-kde"
+    # run_kde's PATH keeps the system's directories, so a node installed
+    # there can't be hidden; the test can only run where there's none.
+    if PATH=/usr/local/bin:/usr/bin:/bin command -v node >/dev/null 2>&1; then
+        echo "  skipped: node is installed in a system directory"
+        return 0
+    fi
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "node not found" &&
+    assert_not_called "make -C"
+}
+
+test_tide_failed_install_warns() {
+    add_tide_kde_mocks
+    cat > "$TEST_TMPDIR/bin/make" <<MOCK
+#!/bin/sh
+printf "%s\\n" "make \$*" >> "$CALLS"
+exit 2
+MOCK
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "couldn't install tide for KDE" &&
+    assert_not_called "node $TEST_TMPDIR"
+}
+
+test_wm_takes_an_equals() {
+    add_tide_kde_mocks
+    KDE_WM=krohnkite
+    set +e
+    output="$(HOME="$TEST_TMPDIR/home" XDG_CONFIG_HOME="$TEST_TMPDIR/home/.config" \
+        XDG_STATE_HOME="$TEST_TMPDIR/home/.local/state" \
+        PATH="$TEST_TMPDIR/bin:/usr/local/bin:/usr/bin:/bin" \
+        "$KDE_SCRIPT" --wm=tide --no-install 2>&1)"
+    status=$?
+    set -e
+    assert_status 0 &&
+    assert_called "krohnkiteEnabled false"
+}
+
+test_wm_refuses_others() {
+    run_kde --wm i3
+    assert_status 1 &&
+    assert_output_contains "--wm takes tide or krohnkite, not i3"
+}
+
+# Back from tide for KDE: it's turned off and its keys let go, or both tile.
+test_krohnkite_turns_tide_off() {
+    mkdir -p "$TEST_TMPDIR/home/.config"
+    cat > "$TEST_TMPDIR/bin/kreadconfig6" <<'MOCK'
+#!/bin/sh
+case "$*" in
+    *"--key tideEnabled"*) echo true ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/kreadconfig6"
+    printf '[kwin]\ntide-focus-next=Meta+J,Meta+J,tide: Focus the next window\nWindow Close=Alt+F4,Alt+F4,Close Window\n' \
+        > "$TEST_TMPDIR/home/.config/kglobalshortcutsrc"
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kwriteconfig6 --file kwinrc --group Plugins --key tideEnabled false" &&
+    assert_called "--group kwin --key tide-focus-next none,none,tide-focus-next" &&
+    assert_not_called "--key Window Close none" &&
+    assert_called "krohnkiteEnabled true"
 }
 
 run_test() {
@@ -1919,6 +2111,18 @@ run_test "launcher beside the script is found without PATH" \
 run_test "sibling fallback survives install's cd (relative \$0)" \
     test_sibling_launcher_fallback_survives_install_cd
 
+run_test "tide for KDE is the default" test_tide_is_the_default
+run_test "tide for KDE is cloned, installed and set up" test_tide_clones_installs_and_sets_up
+run_test "tide for KDE's checkout is pulled" test_tide_pulls_an_existing_checkout
+run_test "tide for KDE turns Krohnkite off" test_tide_turns_krohnkite_off
+run_test "tide for KDE gets KWin's keys back" test_tide_gives_back_kwins_keys
+run_test "--no-install clones nothing" test_tide_no_install_leaves_a_missing_checkout
+run_test "--no-install installs the checkout unpulled" test_tide_no_install_installs_a_checkout_unpulled
+run_test "tide for KDE without node warns" test_tide_without_node_warns
+run_test "a failed tide for KDE install warns" test_tide_failed_install_warns
+run_test "--wm=tide is accepted" test_wm_takes_an_equals
+run_test "--wm refuses what it doesn't know" test_wm_refuses_others
+run_test "Krohnkite turns tide for KDE off" test_krohnkite_turns_tide_off
 echo
 echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
 test "$TESTS_FAILED" -eq 0

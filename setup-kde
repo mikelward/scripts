@@ -2,7 +2,8 @@
 # Configure KDE Plasma 6 desktop environment.
 #
 # Sets up:
-# - Krohnkite tiling window manager
+# - Tiling: tide for KDE (mikelward/tide-kde), tide's layouts, workspaces,
+#   dim and keys as a KWin script, by default, or Krohnkite (--wm krohnkite)
 # - Focus follows mouse (mouse precedence)
 # - Window management and desktop switching keybindings
 # - Application launch shortcuts (browser, terminal, music, chat, calendar),
@@ -45,11 +46,21 @@
 #           (build-from-source fallback when the release can't be fetched)
 #
 # Usage:
-#     setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-#               [--no-live-shortcuts] [-h | --help]
+#     setup-kde [--wm tide | --wm krohnkite] [--no-install] [--no-sudo]
+#               [--ignore-errors] [--no-live-shortcuts] [-h | --help]
 #
-# --no-install skips building/installing Krohnkite and only (re)applies the
-# KDE configuration. --ignore-errors keeps going past failures instead of
+# --wm picks the tiling, as setup-macos's does: tide, the default, clones
+# tide for KDE into ~/tide-kde (TIDE_KDE_DIR), or pulls it there with
+# --ff-only, and runs its own installer, `make install`, then its
+# scripts/setup.mjs, which frees Plasma's keys that tide's take, binds tide's,
+# and sets its dim, focus and layout widget. Its shortcuts join this run's
+# live apply (apply_shortcuts_live). Krohnkite is turned off, and the KWin
+# actions an earlier run put on tide's keys are given back. krohnkite installs
+# and configures Krohnkite, as before.
+#
+# --no-install skips cloning or pulling tide for KDE, or building/installing
+# Krohnkite, and only (re)applies the KDE configuration; an existing
+# ~/tide-kde is installed as it stands. --ignore-errors keeps going past failures instead of
 # aborting on the first one. setup forwards both flags here.
 #
 # --no-sudo is accepted (and forwarded by setup) for consistency with the
@@ -108,6 +119,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Whether to build and install Krohnkite. "no" (via --no-install) skips the
 # install and only (re)applies configuration.
 INSTALL=yes
+
+# Which tiling to set up (--wm): tide, the default, or krohnkite.
+WM=tide
+
+# Where tide for KDE's checkout lives, or will once cloned: a checkout, as
+# setup-macos keeps tidemo's, because tide for KDE installs itself from one
+# (`make install`, which bundles its script with Node).
+TIDE_KDE_DIR="${TIDE_KDE_DIR:-$HOME/tide-kde}"
+TIDE_KDE_REPO="https://github.com/mikelward/tide-kde.git"
+TIDE_KDE_MISSING_EFFECT="nothing will tile and tide's keys will do nothing"
 
 # Whether to keep going past failures. "no" aborts on the first error via
 # set -e; "yes" (via --ignore-errors) leaves it off and pushes through.
@@ -346,13 +367,16 @@ run_logged() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-kde [--no-install] [--no-sudo] [--ignore-errors]
-                 [--no-live-shortcuts] [-v | --verbose] [-h | --help]
+Usage: setup-kde [--wm tide | --wm krohnkite] [--no-install] [--no-sudo]
+                 [--ignore-errors] [--no-live-shortcuts] [-v | --verbose]
+                 [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
 Options:
-  --no-install     Skip building/installing Krohnkite; only (re)apply config
+  --wm WM          Tiling: tide (tide for KDE, the default) or krohnkite
+  --no-install     Skip fetching tide for KDE or Krohnkite; only (re)apply
+                   config
   --no-sudo        Accepted for consistency with setup; nothing here uses sudo
   --ignore-errors  Keep going past failures instead of aborting on the first
   --live-shortcuts Apply the shortcuts to the running session (the default)
@@ -373,6 +397,28 @@ while test $# -gt 0; do
             ;;
         --no-install)
             INSTALL=no
+            ;;
+        --wm|--wm=*)
+            case "$1" in
+                --wm=*) WM=${1#--wm=} ;;
+                *)
+                    if test $# -lt 2; then
+                        warn "--wm needs tide or krohnkite"
+                        usage >&2
+                        exit 1
+                    fi
+                    WM=$2
+                    shift
+                    ;;
+            esac
+            case "$WM" in
+                tide|krohnkite) ;;
+                *)
+                    warn "--wm takes tide or krohnkite, not $WM"
+                    usage >&2
+                    exit 1
+                    ;;
+            esac
             ;;
         --sudo|--no-sudo)
             # setup-kde performs no privileged operations, so --no-sudo is
@@ -462,7 +508,7 @@ trap cleanup EXIT
 # whether the prebuilt release can be fetched, so they're warnings, not hard
 # requirements, checked up front only so a fallback failure isn't a surprise.
 command -v kwriteconfig6 >/dev/null 2>&1 || error "kwriteconfig6 is required (KDE Plasma 6)"
-if test "$INSTALL" = yes; then
+if test "$INSTALL" = yes && test "$WM" = krohnkite; then
     command -v kpackagetool6 >/dev/null 2>&1 || error "kpackagetool6 is required (KDE Plasma 6)"
     command -v git >/dev/null 2>&1 \
         || warn "git not found; if the Krohnkite release can't be fetched, the source-build fallback will fail"
@@ -909,6 +955,104 @@ disable_drkonqi() {
     fi
 }
 
+# --- tide for KDE ---
+
+# Krohnkite tiles too, so it's turned off, and its shortcuts let go of the
+# keys tide's take. Its package stays, for --wm krohnkite to turn back on.
+disable_krohnkite() {
+    kde_write --file kwinrc --group Plugins --key krohnkiteEnabled false
+    unbind_all_krohnkite_shortcuts
+}
+
+# tide for KDE tiles too, so with Krohnkite it's turned off, and its keys let
+# go. Its package stays, for --wm tide to turn back on.
+disable_tide_kde() {
+    # Only once it's been on, so a setup that never had it says nothing.
+    if test "$(kreadconfig6 --file kwinrc --group Plugins --key tideEnabled 2>/dev/null)" = true; then
+        kde_write --file kwinrc --group Plugins --key tideEnabled false
+    fi
+    unbind_kwin_shortcuts_starting tide- "tide for KDE"
+}
+
+# The KWin actions an earlier run of this put on the keys tide's take, given
+# back: the first four desktops their Plasma defaults, the rest nothing.
+release_tide_keys() {
+    n=1
+    while test "$n" -le 10; do
+        if test "$n" -le 4; then
+            set_shortcut "Switch to Desktop $n" "Ctrl+F$n Meta+F$n"
+        else
+            set_shortcut "Switch to Desktop $n" none
+        fi
+        set_shortcut "Window to Desktop $n" none
+        n=$((n + 1))
+    done
+    set_shortcut "Switch to Previous Desktop" none
+    set_shortcut "Switch to Next Desktop" none
+    set_shortcut "Window to Previous Desktop" none
+    set_shortcut "Window to Next Desktop" none
+    set_shortcut "Window Close" "Alt+F4"
+    set_shortcut "Window Maximize" none
+    set_shortcut "Window Fullscreen" none
+    set_shortcut "Window Minimize" none
+}
+
+# Clones tide for KDE, or pulls it with --ff-only, and installs it with its
+# own `make install`. A checkout a pull can't move, as one with commits of
+# its own, is installed as it stands, with a warning.
+install_tide_kde() {
+    if test -d "$TIDE_KDE_DIR"; then
+        if test "$INSTALL" = no; then
+            detail "Installing $TIDE_KDE_DIR as it stands, without pulling it (--no-install)"
+        elif ! is_command git; then
+            warn "git not found, so $TIDE_KDE_DIR isn't updated; installing it as it stands"
+        elif ! run_logged git -C "$TIDE_KDE_DIR" pull --ff-only; then
+            warn "couldn't update $TIDE_KDE_DIR with git pull --ff-only; installing it as it stands"
+        fi
+    else
+        if test "$INSTALL" = no; then
+            warn "$TIDE_KDE_DIR not found and --no-install was given; clone $TIDE_KDE_REPO there and re-run, or $TIDE_KDE_MISSING_EFFECT"
+            return 0
+        fi
+        if ! is_command git; then
+            warn "git not found, so tide for KDE can't be cloned into $TIDE_KDE_DIR; $TIDE_KDE_MISSING_EFFECT until it is"
+            return 0
+        fi
+        info "Cloning tide for KDE into $TIDE_KDE_DIR"
+        # git removes the directory it made when a clone fails, so a failure
+        # leaves nothing for the next run to take for a checkout.
+        if ! run_logged git clone "$TIDE_KDE_REPO" "$TIDE_KDE_DIR"; then
+            warn "could not clone $TIDE_KDE_REPO into $TIDE_KDE_DIR; $TIDE_KDE_MISSING_EFFECT until it is"
+            return 0
+        fi
+    fi
+    for _tk_tool in make node kpackagetool6; do
+        if ! is_command "$_tk_tool"; then
+            warn "$_tk_tool not found, so tide for KDE can't be installed from $TIDE_KDE_DIR; $TIDE_KDE_MISSING_EFFECT"
+            return 0
+        fi
+    done
+    if ! run_logged make -C "$TIDE_KDE_DIR" install; then
+        warn "couldn't install tide for KDE from $TIDE_KDE_DIR; $TIDE_KDE_MISSING_EFFECT"
+        return 0
+    fi
+    info "Installed tide for KDE from $TIDE_KDE_DIR"
+    setup_tide_kde
+}
+
+# tide for KDE's own setup: Plasma's keys freed for tide's, its dim and
+# focus, its layout widget, and the lock screen's wallpaper. Its shortcuts
+# join this run's batch, so apply_shortcuts_live pushes them with the rest.
+setup_tide_kde() {
+    set --
+    test -z "$LIVE_SHORTCUTS" || set -- --batch "$LIVE_SHORTCUTS"
+    if run_logged node "$TIDE_KDE_DIR/scripts/setup.mjs" "$@"; then
+        info "Set up tide for KDE: its keys, dim, focus and layout widget"
+    else
+        warn "tide for KDE's setup failed, so Plasma's keys may still hold tide's; run 'node $TIDE_KDE_DIR/scripts/setup.mjs' to see why"
+    fi
+}
+
 # --- Configure keybindings ---
 
 # Third arg is the human-readable label written into the value's third
@@ -994,15 +1138,21 @@ set_service_shortcut() {
 # "KrohnkiteFooBar=..." ones. Action IDs contain spaces, so the results are
 # iterated a line at a time rather than word-split.
 unbind_all_krohnkite_shortcuts() {
+    unbind_kwin_shortcuts_starting Krohnkite Krohnkite
+}
+
+# unbind_kwin_shortcuts_starting PREFIX NAME: unbinds each [kwin] action in
+# kglobalshortcutsrc whose ID starts with PREFIX; NAME is for the warning.
+unbind_kwin_shortcuts_starting() {
     config_file="${XDG_CONFIG_HOME:-$HOME/.config}/kglobalshortcutsrc"
     test -f "$config_file" || return 0
 
-    krohnkite_actions=$(awk '
+    _uk_actions=$(awk -v prefix="$1" '
         /^\[kwin\]$/ { in_kwin = 1; next }
         /^\[/        { in_kwin = 0; next }
-        in_kwin && /^Krohnkite/ && /=/ { sub(/=.*/, ""); print }
+        in_kwin && index($0, prefix) == 1 && /=/ { sub(/=.*/, ""); print }
     ' "$config_file") || {
-        warn "could not read kglobalshortcutsrc; leaving stale Krohnkite shortcuts bound"
+        warn "could not read kglobalshortcutsrc; leaving stale $2 shortcuts bound"
         return 0
     }
 
@@ -1010,7 +1160,7 @@ unbind_all_krohnkite_shortcuts() {
         test -n "$action" || continue
         unbind_shortcut "$action"
     done <<EOF
-$krohnkite_actions
+$_uk_actions
 EOF
 }
 
@@ -1181,24 +1331,18 @@ configure_keybindings() {
 
     # The keys follow tide's (tide's tidewm/tide.conf and SPEC.md §6.6), so
     # one set of hands works in both. What KDE has no action for is left
-    # out: the go-to-workspace prompt (Meta+Return stays Krohnkite's Set
-    # master), home (Meta+Home, Meta+Tab, Meta+End), restore (Meta+Down),
+    # out, with Krohnkite: the go-to-workspace prompt (Meta+Return stays its
+    # Set master), home (Meta+Home, Meta+Tab, Meta+End), restore (Meta+Down),
     # keep awake, presenter mode and resize mode. Alt+Tab stays KDE's window
     # switcher, which takes you to the last window as tide's swap does.
 
-    # Desktops: Meta+1..9 and 0 go there, and Shift takes the window. KDE
-    # records the shifted variant as the character produced (Meta+! rather
-    # than Meta+Shift+1); writing it as "Meta+Shift+1" leaves the binding
-    # inactive.
-    shifted=('!' '@' '#' '$' '%' '^' '&' '*' '(' ')')
-    for n in $(seq 1 ${#shifted[@]}); do
-        set_shortcut "Switch to Desktop $n" "Meta+$((n % 10))"
-        set_shortcut "Window to Desktop $n" "Meta+${shifted[n-1]}"
-    done
-    set_shortcut "Switch to Previous Desktop" "Meta+PgUp"
-    set_shortcut "Switch to Next Desktop" "Meta+PgDown"
-    set_shortcut "Window to Previous Desktop" "Meta+Shift+PgUp"
-    set_shortcut "Window to Next Desktop" "Meta+Shift+PgDown"
+    # With tide for KDE, its own keys do the desktops and windows below
+    # (setup_tide_kde), and the KWin actions are given them back.
+    if test "$WM" = tide; then
+        release_tide_keys
+    else
+        configure_krohnkite_desktop_keys
+    fi
     # Meta+[Shift+]Left/Right focus and move windows now, as on tide; an
     # earlier run put desktop switching there, so give it back KWin's own
     # keys.
@@ -1207,11 +1351,6 @@ configure_keybindings() {
     set_shortcut "Window One Desktop to the Left" "Meta+Ctrl+Shift+Left"
     set_shortcut "Window One Desktop to the Right" "Meta+Ctrl+Shift+Right"
 
-    # Windows
-    set_shortcut "Window Close" "Meta+Backspace"
-    set_shortcut "Window Maximize" "Meta+Up"
-    set_shortcut "Window Fullscreen" "Meta+Shift+Up"
-    set_shortcut "Window Minimize" "Meta+Z"
     set_shortcut "Activate Window Demanding Attention" "Meta+A Meta+Ctrl+A"
 
     # The session
@@ -1263,6 +1402,36 @@ configure_keybindings() {
         n=$((n + 1))
     done
 
+    if test "$WM" = krohnkite; then
+        configure_krohnkite_keys
+    fi
+}
+
+# Krohnkite's keys, and the KWin actions it leaves to KWin, on tide's keys
+# (tide's tidewm/tide.conf and SPEC.md §6.6), for --wm krohnkite.
+configure_krohnkite_desktop_keys() {
+    # Desktops: Meta+1..9 and 0 go there, and Shift takes the window. KDE
+    # records the shifted variant as the character produced (Meta+! rather
+    # than Meta+Shift+1); writing it as "Meta+Shift+1" leaves the binding
+    # inactive.
+    shifted=('!' '@' '#' '$' '%' '^' '&' '*' '(' ')')
+    for n in $(seq 1 ${#shifted[@]}); do
+        set_shortcut "Switch to Desktop $n" "Meta+$((n % 10))"
+        set_shortcut "Window to Desktop $n" "Meta+${shifted[n-1]}"
+    done
+    set_shortcut "Switch to Previous Desktop" "Meta+PgUp"
+    set_shortcut "Switch to Next Desktop" "Meta+PgDown"
+    set_shortcut "Window to Previous Desktop" "Meta+Shift+PgUp"
+    set_shortcut "Window to Next Desktop" "Meta+Shift+PgDown"
+
+    # Windows
+    set_shortcut "Window Close" "Meta+Backspace"
+    set_shortcut "Window Maximize" "Meta+Up"
+    set_shortcut "Window Fullscreen" "Meta+Shift+Up"
+    set_shortcut "Window Minimize" "Meta+Z"
+}
+
+configure_krohnkite_keys() {
     # Unbind all Krohnkite shortcuts, then set only the ones we want
     unbind_all_krohnkite_shortcuts
     # Those not in the file yet too, or Krohnkite's defaults take keys set
@@ -1472,16 +1641,25 @@ apply_shortcuts_live() {
 
 # --- Main ---
 
-if test "$INSTALL" = yes; then
-    install_krohnkite
+if test "$WM" = krohnkite; then
+    if test "$INSTALL" = yes; then
+        install_krohnkite
+    else
+        info "Skipping Krohnkite installation (--no-install)"
+    fi
+    kde_step "Turned off tide for KDE, for Krohnkite" disable_tide_kde
+    kde_step "Turned on the Krohnkite plugin" enable_krohnkite
+    kde_step "Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle" configure_krohnkite
 else
-    info "Skipping Krohnkite installation (--no-install)"
+    kde_step "Turned off Krohnkite, for tide for KDE" disable_krohnkite
 fi
-kde_step "Turned on the Krohnkite plugin" enable_krohnkite
-kde_step "Set Krohnkite's layouts: Tile, ThreeColumn, Columns, Monocle" configure_krohnkite
 kde_step "Turned on focus follows mouse (mouse precedence)" configure_focus_follows_mouse
-kde_step "Turned on dimming inactive windows" configure_dim_inactive
-kde_step "Set 10 virtual desktops" configure_desktops
+# tide for KDE sets its own dim, and makes and removes desktops as tide's
+# workspaces.
+if test "$WM" = krohnkite; then
+    kde_step "Turned on dimming inactive windows" configure_dim_inactive
+    kde_step "Set 10 virtual desktops" configure_desktops
+fi
 kde_step "Set the keyboard layout: US Dvorak, Caps Lock as Compose" configure_keyboard_layout
 kde_step "Turned on accents for a held key, after 300 ms (Plasma Keyboard)" configure_input_method
 disable_drkonqi
@@ -1500,8 +1678,12 @@ fi
 # to be loaded before its shortcuts can be pushed into the daemon, since
 # kglobalaccel only accepts keys for actions that are registered.
 reload_kwin
-reload_krohnkite
-reload_diminactive_effect
+if test "$WM" = krohnkite; then
+    reload_krohnkite
+    reload_diminactive_effect
+else
+    install_tide_kde
+fi
 apply_shortcuts_live
 
 if is_command setup-kde.local; then
