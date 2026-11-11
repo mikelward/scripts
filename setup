@@ -1069,8 +1069,8 @@ resolve_crostini() {
     fi
 }
 
-# configure_linux_desktop sets up KDE Plasma + Krohnkite and, unless
-# --no-tide, the tide session beside it.
+# configure_linux_desktop sets up KDE Plasma with tide for KDE (setup-kde) and,
+# unless --no-tide, the tide session beside it.
 configure_linux_desktop() {
     info "Configuring KDE desktop environment"
     # shellcheck disable=SC2086  # both expand to zero or more flags
