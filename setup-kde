@@ -799,6 +799,8 @@ configure_dim_inactive() {
 # using stale cached config.
 reload_diminactive_effect() {
     command -v qdbus6 >/dev/null 2>&1 || return 0
+    # No KWin, nothing to reload: Plasma's next login loads the effect.
+    ! kwin_absent || return 0
     qdbus6 org.kde.KWin /Effects org.kde.kwin.Effects.unloadEffect diminactive \
         >/dev/null 2>&1 || true
     qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
@@ -1494,7 +1496,33 @@ configure_krohnkite_keys() {
 
 # --- Reload KWin ---
 
+# Whether KWin is known to be off the session bus. It is when setup runs from a
+# console, over ssh, or in another desktop (tide's own sessions, say): then
+# nothing in this session can reload, and Plasma's next login reads what's
+# written. Asked through gdbus, the live apply's own backend, else qdbus6 or
+# qdbus. With none of them there's no answer, so this says no and callers go
+# on as they would in Plasma.
+kwin_absent() {
+    if command -v gdbus >/dev/null 2>&1; then
+        # No answer at all means no session bus, so no KWin on it either.
+        _ka_owner=$(gdbus call --session --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus \
+            --method org.freedesktop.DBus.NameHasOwner org.kde.KWin 2>/dev/null) || return 0
+        test "$_ka_owner" = "(false,)"
+    elif command -v qdbus6 >/dev/null 2>&1; then
+        if qdbus6 org.kde.KWin >/dev/null 2>&1; then return 1; fi
+    elif command -v qdbus >/dev/null 2>&1; then
+        if qdbus org.kde.KWin >/dev/null 2>&1; then return 1; fi
+    else
+        return 1
+    fi
+}
+
 reload_kwin() {
+    if kwin_absent; then
+        detail "KWin isn't running, so its settings apply at the next Plasma login"
+        return 0
+    fi
     detail "Reloading KWin configuration"
     # || warn: KWin may not be running (e.g. bootstrapping before the first
     # KDE login); a failed reload must not abort the script under set -e.
@@ -1573,6 +1601,14 @@ apply_shortcuts_live() {
     # Nothing recorded means no shortcut was written -- there is nothing to
     # apply, and no failure to report.
     test -s "$LIVE_SHORTCUTS" || return 0
+
+    # Outside Plasma, kglobalaccel (when D-Bus starts one at all) holds no
+    # application's actions, so every launcher shortcut would be reported as
+    # failed. Plasma's next login reads the config that's written.
+    if kwin_absent; then
+        info "Plasma isn't running here, so the shortcuts apply at the next Plasma login"
+        return 0
+    fi
 
     helper="$SCRIPT_DIR/kdeshortcut.py"
     # Run the interpreter explicitly rather than executing the helper

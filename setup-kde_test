@@ -53,6 +53,9 @@ done
 exit 0
 MOCK
 
+    # KWin is on the session bus unless a test says otherwise (mock_kwin).
+    mock_kwin true
+
     chmod +x "$TEST_TMPDIR"/bin/*
 
     # The live apply is on by default, so every run reaches for python3 to run
@@ -60,6 +63,16 @@ MOCK
     # into the session bus of whoever is running them. Tests that care about
     # what it returns re-mock it with mock_python3.
     mock_python3 0
+}
+
+# mock_kwin true|false: whether gdbus says KWin owns its name on the bus.
+mock_kwin() {
+    cat > "$TEST_TMPDIR/bin/gdbus" <<MOCK
+#!/bin/sh
+printf "%s\\n" "gdbus \$*" >> "$CALLS"
+echo "($1,)"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/gdbus"
 }
 
 teardown() {
@@ -1622,6 +1635,34 @@ test_live_apply_is_on_by_default() {
     assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
 }
 
+# Run outside Plasma (a console, ssh, or tide's own session), KWin isn't on the
+# bus: the config is still written, but nothing tries to reload KWin or push
+# shortcuts into a daemon that holds none of Plasma's actions, and the run
+# says once that they apply at the next Plasma login rather than warning.
+test_outside_plasma_writes_config_without_warnings() {
+    mock_kwin false
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "kdeshortcut.py" &&
+    assert_not_called "qdbus6 org.kde.KWin /KWin reconfigure" &&
+    assert_output_contains "the shortcuts apply at the next Plasma login" &&
+    assert_output_lacks "could not reload KWin" &&
+    assert_output_lacks "Warning" &&
+    assert_called "kwriteconfig6 --file kglobalshortcutsrc --group kwin --key Window Close"
+}
+
+# In Plasma with gdbus but no qdbus, KWin is still found, so the shortcuts are
+# still pushed live.
+test_in_plasma_without_qdbus_applies_live() {
+    rm -f "$TEST_TMPDIR/bin/qdbus6" "$TEST_TMPDIR/bin/qdbus"
+    mock_python3 0
+    run_kde --no-install
+    assert_status 0 &&
+    assert_called "kdeshortcut.py --quiet --journal" &&
+    assert_output_contains "Shortcuts are live"
+}
+
 # --live-shortcuts is still accepted, for a caller that wants to state the
 # default rather than rely on it.
 test_live_shortcuts_flag_is_accepted() {
@@ -2074,6 +2115,10 @@ run_test "stale-group sweep needs no python3" \
     test_stale_group_sweep_needs_no_python3
 run_test "the live apply is on by default" \
     test_live_apply_is_on_by_default
+run_test "outside Plasma, the config is written without warnings" \
+    test_outside_plasma_writes_config_without_warnings
+run_test "in Plasma without qdbus, the shortcuts still go live" \
+    test_in_plasma_without_qdbus_applies_live
 run_test "--live-shortcuts is accepted" \
     test_live_shortcuts_flag_is_accepted
 run_test "--no-live-shortcuts skips the running session" \
