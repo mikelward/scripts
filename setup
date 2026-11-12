@@ -26,6 +26,10 @@
 # can leave the screen dark or hang the machine (see keep_display_gpu_awake).
 # On Linux it also resets a Logitech Lightspeed receiver that a KVM switch
 # hands back without its mouse (see install_lightspeed_reset).
+# On Linux, keyd makes Caps Lock held with the arrows Home, End, Page Up
+# and Page Down, and with Alt the document's start and end, as Alt+Home and
+# Alt+End are; a tap is still Compose. It matches a MacBook's Fn and
+# setup-macos's Karabiner rule (see configure_keyd).
 #
 # The heavyweight extras (helix, jj, nushell) install from Homebrew bottles
 # when brew is available (or on macOS), and otherwise from each project's
@@ -1998,6 +2002,10 @@ install_os_packages() {
             # zoxide when it isn't installed.
             apt_install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # keyd, for Caps Lock held with the arrows (configure_keyd). Its
+            # own step: older releases (Debian 12, Ubuntu 24.04) have none.
+            apt_install keyd \
+                || warn "could not install keyd; Caps Lock with the arrows won't be Home, End, Page Up and Page Down"
             # zsh-autosuggestions (inline history ghost text) gets its own
             # best-effort step for the same reason as zoxide: apt aborts the
             # whole transaction on one unknown name, and older releases may not
@@ -2090,6 +2098,10 @@ install_os_packages() {
             # dnf aborts the lot when one name is unknown.
             dnf_install zoxide \
                 || warn "could not install zoxide; z/zi directory jumps will be unavailable"
+            # keyd, for Caps Lock held with the arrows (configure_keyd), in
+            # its own transaction: Fedora's own repositories may not have it.
+            dnf_install keyd \
+                || warn "could not install keyd; Caps Lock with the arrows won't be Home, End, Page Up and Page Down"
             # Its own step, as with zoxide: dnf aborts the lot on one unknown
             # name, and the shell config skips it when it's missing.
             dnf_install zsh-autosuggestions \
@@ -3944,6 +3956,96 @@ RULE
     fi
 }
 
+# Caps Lock held with the arrows is Home, End, Page Up and Page Down, and
+# with Alt the document's start and end, as Alt+Home and Alt+End are: the
+# same keys as a MacBook's Fn, and as conf's Karabiner rule (pc-nav.json)
+# makes them on a Mac. A Caps Lock tap is still Caps Lock, which
+# configure_keyboard's compose:caps makes Compose; keyd sends it as the key
+# comes up, when no other key went down. Either Alt does: right Alt is
+# keyd's altgr layer, which US layouts don't use. keyd reads physical keys, before
+# the layout, so Dvorak doesn't move them. Its package is install_os_packages'
+# to install; without it this only says so. A config setup didn't write is
+# left alone. SETUP_KEYD_DIR is for the tests.
+configure_keyd() {
+    case "$OS" in
+        debian|redhat) ;;
+        *) return 0 ;;
+    esac
+    # The container gets its keys from ChromeOS, not a keyboard of its own.
+    test "${CROSTINI:-0}" -eq 1 && return 0
+    test "${ROOT:-yes}" = no && return 0
+    if ! command -v keyd >/dev/null 2>&1; then
+        warn "no keyd, so Caps Lock with the arrows won't be Home, End, Page Up and Page Down"
+        return 0
+    fi
+    keyd_conf="${SETUP_KEYD_DIR:-/etc/keyd}/default.conf"
+    keyd_mark="# Written by setup (github.com/mikelward/scripts)"
+    if test -e "$keyd_conf" && ! grep -qF "$keyd_mark" "$keyd_conf"; then
+        warn "leaving $keyd_conf alone because setup didn't write it, so Caps Lock with the arrows may not be Home, End, Page Up and Page Down"
+        return 0
+    fi
+    keyd_want=$(cat <<KEYD
+$keyd_mark: Caps Lock held
+# with the arrows is Home, End, Page Up and Page Down. See configure_keyd
+# there.
+[ids]
+*
+
+[main]
+capslock = overload(nav, capslock)
+
+[nav]
+left = home
+right = end
+up = pageup
+down = pagedown
+
+[nav+alt]
+left = C-home
+up = C-home
+right = C-end
+down = C-end
+
+[alt]
+home = C-home
+end = C-end
+
+# Right Alt is keyd's altgr layer, not alt: the same again for it.
+[nav+altgr]
+left = C-home
+up = C-home
+right = C-end
+down = C-end
+
+[altgr]
+home = C-home
+end = C-end
+KEYD
+)
+    info "Making Caps Lock with the arrows Home, End, Page Up and Page Down (keyd)"
+    keyd_changed=no
+    if test "$(cat "$keyd_conf" 2>/dev/null)" != "$keyd_want"; then
+        keyd_changed=yes
+        if ! sudo_or_warn mkdir -p "${keyd_conf%/*}" \
+                || ! printf '%s\n' "$keyd_want" | sudo_or_warn tee "$keyd_conf" >/dev/null; then
+            warn "could not write $keyd_conf, so Caps Lock with the arrows won't be Home, End, Page Up and Page Down"
+            return 0
+        fi
+    fi
+    if ! sudo_or_warn systemctl enable keyd; then
+        warn "could not turn keyd on at boot, so Caps Lock with the arrows will need it started by hand"
+    fi
+    # A running keyd reads a changed config with reload, which keeps its
+    # virtual keyboard: a restart makes a new one, and an X session's live
+    # setxkbmap layout can be lost with the old (keyd's own warning). So a
+    # first start comes before configure_keyboard, which applies that layout.
+    if ! systemctl is-active --quiet keyd 2>/dev/null; then
+        sudo_or_warn systemctl start keyd || warn "could not start keyd; Caps Lock with the arrows waits for the next boot"
+    elif test "$keyd_changed" = yes; then
+        sudo_or_warn keyd reload || warn "could not reload keyd; its new config waits for the next boot"
+    fi
+}
+
 # A KVM switch that hands back a Logitech Lightspeed receiver (046d:c543, a
 # PRO 2 mouse's) can leave it up with its mouse never reported, so there's
 # no mouse until it's re-plugged (2026-11-08). A udev rule runs
@@ -4019,6 +4121,9 @@ generate_ssh_key
 if test "$GUI_ENABLED" -eq 1; then
     set_default_terminal
 fi
+# keyd first: starting it makes a new keyboard, which an X session's live
+# layout, from configure_keyboard, has to come after.
+configure_keyd
 configure_keyboard
 # Not keyed on the GUI: that only says whether this shell has a display, and a
 # run over SSH on the same desktop has none. A headless box whose boot card

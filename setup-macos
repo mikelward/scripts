@@ -16,8 +16,9 @@
 #   tide takes from macOS and keeps the menu bar shown. See configure_tide.
 # - Karabiner-Elements, for the bindings the modifier rotation can't carry:
 #   Ctrl+Tab, Ctrl+Left/Right word movement, Win+Left/Right Space switching,
-#   Win+Shift+Left/Right moving the window a Space (with Amethyst), and Ctrl
-#   as Control in kitty. Its rules are symlinked out of the conf repo too.
+#   Win+Shift+Left/Right moving the window a Space (with Amethyst), Ctrl
+#   as Control in kitty, and Caps Lock or Fn with the arrows as Home, End,
+#   Page Up and Page Down. Its rules are symlinked out of the conf repo too.
 # - Or, with --wm amethyst, the Amethyst tiling window manager instead:
 #   installs it (Homebrew, or a staged bundle offline). Its layouts, modifiers
 #   and margins come from ~/.amethyst.yml, which confinst symlinks out of the
@@ -1605,7 +1606,7 @@ KARABINER_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-alt-tab.
 # ways, so the name tells the two apart.
 KARABINER_TAB="Ctrl+Tab goes to the next tab"
 # What a machine without working Karabiner loses, for the install warnings.
-KARABINER_MISSING_EFFECT="Ctrl+Tab will switch applications rather than tabs, Ctrl+Left/Right will jump to the line ends, Win+Left/Right will move by word rather than switching Spaces, Win+Shift+Left/Right will select by word rather than moving the window a Space, Ctrl in kitty will be Command rather than Control, and Ctrl+U won't clear the password at the lock screen"
+KARABINER_MISSING_EFFECT="Ctrl+Tab will switch applications rather than tabs, Ctrl+Left/Right will jump to the line ends, Win+Left/Right will move by word rather than switching Spaces, Win+Shift+Left/Right will select by word rather than moving the window a Space, Ctrl in kitty will be Command rather than Control, Ctrl+U won't clear the password at the lock screen, and Caps Lock or Fn with the arrows won't be Home, End, Page Up and Page Down"
 # The second rule, alongside it: Ctrl+arrow word movement, Win+arrow Space
 # switching and Win+Shift+arrow moving the window a Space. Checked separately, since a conf checkout older than the rule has
 # the first without the second.
@@ -1625,6 +1626,11 @@ KARABINER_INTERRUPT="Ctrl+Shift+C interrupts in Terminal and iTerm2"
 # The rule that makes Ctrl+U clear the password at the lock screen, as on
 # Linux. Checked separately, for older conf checkouts.
 KARABINER_LOCK_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-lock.json"
+# The rule that makes Caps Lock held, or a MacBook's Fn, with the arrows Home,
+# End, Page Up and Page Down, as setup's keyd does on Linux. Checked
+# separately, for older conf checkouts.
+KARABINER_NAV_RULE="$HOME/.config/karabiner/assets/complex_modifications/pc-nav.json"
+KARABINER_NAV="Caps Lock or Fn with the arrows is Home, End, Page Up and Page Down"
 
 # Where Karabiner is, or empty if it isn't installed. Same is_usable_app test
 # as amethyst_path, and for the same reason: an interrupted install leaves a
@@ -1757,6 +1763,15 @@ configure_karabiner() {
         fi
     else
         warn "$KARABINER_TERMINAL_RULE not found; update the conf repo and run confinst, or Ctrl in kitty stays Command and Ctrl+U, Ctrl+K and the like won't reach the shell"
+        _karabiner_stale=yes
+    fi
+    # Above the arrow rule, which would otherwise take Caps Lock or Fn with
+    # Alt+Left/Right as a word move: enabled after it, as Karabiner puts each
+    # rule enabled at the top.
+    if test -f "$KARABINER_NAV_RULE"; then
+        karabiner_rule "$KARABINER_NAV" "$KARABINER_NAV_RULE"
+    else
+        warn "$KARABINER_NAV_RULE not found; update the conf repo and run confinst, or Caps Lock and Fn with the arrows won't be Home, End, Page Up and Page Down"
         _karabiner_stale=yes
     fi
     # tide's own rule, for its Super key, is tide's installer's to add

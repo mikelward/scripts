@@ -353,6 +353,8 @@ match on all but two rows, which is the muscle memory being preserved.
 | Next tab in app | `Ctrl+Tab` | `Ctrl+Tab` † | Karabiner rule |
 | Move by word | `Ctrl+Left`/`Right` | `Ctrl+Left`/`Right`, `Alt+Left`/`Right` ‡ | Karabiner rule |
 | Shell keys in kitty | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … | `Ctrl+U`, `Ctrl+K`, `Alt+B`, … § | Karabiner rule |
+| Home, End, Page Up, Page Down | `Caps Lock`+arrow (keyd) | `Caps Lock`+arrow, `Fn`+arrow | Karabiner rule |
+| Start / end of the document | `Caps Lock`+`Alt`+arrow, `Alt+Home`/`End` (keyd) | `Caps Lock`+`Alt`+arrow, `Fn`+`Alt`+arrow, `Alt+Home`/`End` | Karabiner rule |
 | Copy / paste in kitty | `Ctrl+C` / `Ctrl+V` | `Ctrl+C` / `Ctrl+V` § | conf's `kitty.conf` |
 
 ‡ These rows come from the conf repo's second Karabiner rule (see

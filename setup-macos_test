@@ -247,6 +247,7 @@ MOCK
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-terminal.json"
     touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-lock.json"
+    touch "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-nav.json"
 
     # On PATH by default, so the ordinary run configures every shortcut. Tests
     # about missing launchers use isolate_script to get away from both these
@@ -1026,6 +1027,29 @@ test_names_lock_karabiner_rule_last() {
     assert_says 'the rule starting "Ctrl+U clears the password at the lock screen"' &&
     assert_output_in_order 'the rule starting "Ctrl is Control and Alt is Meta in kitty"' \
         'the rule starting "Ctrl+U clears the password at the lock screen"'
+}
+
+# Caps Lock or Fn with the arrows as Home, End, Page Up and Page Down is on
+# by default, as keyd makes it on Linux, enabled after the arrow rule so it
+# sits above it.
+test_names_nav_karabiner_rule() {
+    run_macos --wm amethyst
+    assert_status 0 &&
+    assert_says 'the rule starting "Caps Lock or Fn with the arrows is Home, End, Page Up and Page Down"' &&
+    assert_output_in_order 'the rule starting "Ctrl+Left/Right moves by word"' \
+        'the rule starting "Caps Lock or Fn with the arrows'
+}
+
+# A conf checkout from before the navigation rule: say it's missing, and
+# name the rest.
+test_stale_conf_without_nav_rule_warns() {
+    rm -f "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-nav.json"
+    run_macos --wm amethyst --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "pc-nav.json not found" &&
+    assert_never_says 'the rule starting "Caps Lock or Fn' &&
+    assert_says 'the rule starting "Ctrl+U clears the password at the lock screen"' &&
+    assert_says "Bring conf's Karabiner rules up to date"
 }
 
 # A conf checkout from before the lock screen rule: say it's missing, and
@@ -2955,6 +2979,10 @@ run_test "names the lock screen's Ctrl+U rule, last" \
     test_names_lock_karabiner_rule_last
 run_test "a conf checkout without the lock screen rule warns" \
     test_stale_conf_without_lock_rule_warns
+run_test "names the Caps Lock and Fn navigation rule" \
+    test_names_nav_karabiner_rule
+run_test "a conf checkout without the navigation rule warns" \
+    test_stale_conf_without_nav_rule_warns
 run_test "an arrow rule from before Win+Shift+arrow is reported" \
     test_stale_arrow_rule_warns
 run_test "names the Tab Karabiner rule, and Alt+Tab no longer switches applications" \
