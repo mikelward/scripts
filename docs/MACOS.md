@@ -411,9 +411,18 @@ where a Linux hand already reaches for close.
 | Win / Super | Option | launcher, desktop switching, window management |
 | Alt (by space) | Control | free for per-app shortcuts |
 
-This assumes a PC keyboard. `hidutil` applies it to every attached keyboard,
-including a laptop's built-in one whose keys are already in the Mac order this
-rotation is undoing.
+With tide, it's tide's PC keyboard type (`"keyboard": { "type": "pc" }` in
+`~/.config/tide/macos.json`, under Keyboard on Tide Settings' macOS page),
+which `setup-macos` sets: tide applies the rotation at login, after a wake and
+as the file changes, and its Karabiner rule first swaps option and command on
+a Mac keyboard, the built-in one included, so control, option and command sit
+in Ctrl, Win and Alt's places there too. Once tide is installed, an earlier
+run's `com.local.KeyRemapping` login agent is removed; until it is, as with
+`--no-install` and no checkout, `setup-macos` maps the keys itself.
+
+Without tide, `setup-macos` applies it with `hidutil` and a login agent. That
+assumes a PC keyboard: it applies to every attached keyboard, including a
+laptop's built-in one, whose keys then act in the order Ctrl, Alt, Win.
 
 ### The one binding the rotation inverts
 
