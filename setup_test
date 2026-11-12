@@ -359,6 +359,7 @@ UPGRADE_FAILED=no
 UPGRADE_STAMP='$macos_stamp'
 sudo_or_warn() { \"\$@\"; }
 install_homebrew() { return $homebrew_status; }
+install_go_pkg() { echo INSTALL_GO_PKG; }
 $(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS is_intel_mac resolve_upgrade record_upgrade install_packages")
 resolve_upgrade
 install_packages
@@ -3343,7 +3344,223 @@ test_macos_lockdown_installs_casks_not_formulae() {
     assert_calls_contain "brew install --cask iterm2" &&
     assert_eq "$(printf '%s\n' "$calls" | grep '^brew install' | grep -v -- '--cask')" "" &&
     assert_eq "$(printf '%s\n' "$output" | grep -c 'Santa is in Lockdown mode')" 1 &&
-    assert_output_contains "$WARNING_LOCKDOWN"
+    assert_output_contains "$WARNING_LOCKDOWN" &&
+    assert_output_contains "INSTALL_GO_PKG"
+}
+
+# Run install_go_pkg on a Mac whose uname -m is $1, against a go.dev whose
+# release list is GO_JSON (below) and whose download's SHA-256 is $2, with
+# the Go at /usr/local/go already at version $3 (none: no Go there). Leaves
+# $calls the curl, shasum and installer runs, and the output ends with GO's
+# value.
+GO_JSON='[
+ {
+  "version": "go1.27.4",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.27.4.darwin-arm64.tar.gz",
+    "os": "darwin",
+    "arch": "arm64",
+    "sha256": "tarball-sum",
+    "kind": "archive"
+   },
+   {
+    "filename": "go1.27.4.darwin-amd64.pkg",
+    "os": "darwin",
+    "arch": "amd64",
+    "sha256": "amd64-sum",
+    "kind": "installer"
+   },
+   {
+    "filename": "go1.27.4.darwin-arm64.pkg",
+    "os": "darwin",
+    "arch": "arm64",
+    "sha256": "arm64-sum",
+    "kind": "installer"
+   }
+  ]
+ },
+ {
+  "version": "go1.26.9",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.26.9.darwin-arm64.pkg",
+    "sha256": "old-sum",
+    "kind": "installer"
+   }
+  ]
+ }
+]'
+run_go_pkg() {
+    gp_tmpdir="$(mktemp -d)"
+    gp_calls="$gp_tmpdir/calls"
+    gp_bin="$(stub_path "$gp_tmpdir/bin" sh cat grep awk mktemp rm)"
+    printf '%s' "$GO_JSON" > "$gp_tmpdir/list.json"
+    cat > "$gp_bin/curl" <<MOCK
+#!/bin/sh
+printf '%s\\n' "curl \$*" >> "$gp_calls"
+case "\$*" in
+    *'?mode=json'*) test -z "${HARNESS_LIST_FAILS:-}" || { echo "curl: (6) Could not resolve host" >&2; exit 6; }; cat "$gp_tmpdir/list.json" ;;
+    *' -o '*) shift 2; echo pkg > "\$1" ;;
+esac
+MOCK
+    cat > "$gp_bin/shasum" <<MOCK
+#!/bin/sh
+printf '%s\\n' "shasum \$*" >> "$gp_calls"
+echo "$2  \$3"
+MOCK
+    chmod +x "$gp_bin/curl" "$gp_bin/shasum"
+    write_mock_uname "$gp_bin" "$1"
+    if test -n "${HARNESS_PATH_GO:-}"; then
+        printf '#!/bin/sh\necho go%s\n' "$HARNESS_PATH_GO" > "$gp_bin/go"
+        chmod +x "$gp_bin/go"
+    fi
+    if test "$3" != none; then
+        mkdir -p "$gp_tmpdir/usr-local-go/bin"
+        printf '#!/bin/sh\necho go%s\n' "$3" > "$gp_tmpdir/usr-local-go/bin/go"
+        chmod +x "$gp_tmpdir/usr-local-go/bin/go"
+    fi
+    set +e
+    output="$(PATH="$gp_bin" GO_DL=https://go.example/dl GO_PKG_GO="$gp_tmpdir/usr-local-go/bin/go" \
+        sh -c "set -e
+GO=go
+MIN_GO=1.21
+UPGRADE=${HARNESS_UPGRADE:-no}
+UPGRADE_FAILED=no
+UPGRADE_STAMP='$gp_tmpdir/stamp'
+sudo_or_warn() { printf '%s\\n' \"sudo \$*\" >> '$gp_calls'; test -z '${HARNESS_INSTALLER_FAILS:-}'; }
+$(extract_functions "setup_color paint info detail warn note_problem go_at_least go_builds_vcs go_pkg_for fetch_go_pkg upgrade_failed update_go_pkg use_go_pkg install_go_pkg")
+install_go_pkg
+echo BOOTSTRAP_CONTINUED
+echo GO=\$GO
+echo UPGRADE_FAILED=\$UPGRADE_FAILED
+echo PATH=\$PATH
+sh -c 'command -v go' || echo NO_GO_FOR_CHILDREN" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$gp_calls" 2>/dev/null)"
+    rm -rf "$gp_tmpdir"
+}
+
+# Under Lockdown a Mac gets Go from go.dev's signed installer: the newest
+# stable release's .pkg for its architecture, checked against go.dev's
+# SHA-256, and this run builds vcs with it.
+test_lockdown_go_installs_from_go_dev() {
+    run_go_pkg arm64 arm64-sum none
+    assert_status 0 &&
+    assert_calls_contain "curl -fsSL https://go.example/dl/?mode=json" &&
+    assert_calls_contain "curl -fsSL -o " &&
+    assert_calls_contain "https://go.example/dl/go1.27.4.darwin-arm64.pkg" &&
+    assert_calls_contain "sudo installer -pkg " &&
+    assert_calls_contain "go1.27.4.darwin-arm64.pkg -target /" &&
+    assert_output_contains "Installing Go 1.27.4 from go.dev" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# vcs's make runs go from PATH, so a Go installed this run must be there
+# for the processes setup starts, not only in GO.
+test_lockdown_go_is_on_path_for_the_build() {
+    run_go_pkg arm64 arm64-sum 1.27.4
+    assert_status 0 &&
+    assert_output_contains "usr-local-go/bin:" &&
+    assert_output_lacks "NO_GO_FOR_CHILDREN"
+}
+
+test_lockdown_go_on_intel_takes_the_amd64_pkg() {
+    run_go_pkg x86_64 amd64-sum none
+    assert_status 0 &&
+    assert_calls_contain "https://go.example/dl/go1.27.4.darwin-amd64.pkg" &&
+    assert_calls_contain "sudo installer -pkg "
+}
+
+test_lockdown_go_with_a_wrong_checksum_isnt_installed() {
+    run_go_pkg arm64 tampered none
+    assert_status 0 &&
+    assert_calls_lack "sudo installer" &&
+    assert_output_contains "SHA-256 is tampered, not the arm64-sum go.dev lists; not installing it" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+test_lockdown_go_already_current_is_left() {
+    run_go_pkg arm64 arm64-sum 1.27.4
+    assert_status 0 &&
+    assert_calls_lack "-o " &&
+    assert_calls_lack "sudo installer" &&
+    assert_output_contains "GO=" &&
+    assert_output_lacks "GO=go"
+}
+
+# An older Go is replaced on an upgrade run, as Homebrew's packages are,
+# and kept on any other run while it still builds vcs.
+test_lockdown_go_older_is_upgraded() {
+    HARNESS_UPGRADE=yes run_go_pkg arm64 arm64-sum 1.26.9
+    assert_status 0 &&
+    assert_calls_contain "sudo installer -pkg "
+}
+
+test_lockdown_go_older_is_kept_until_an_upgrade_run() {
+    run_go_pkg arm64 arm64-sum 1.26.9
+    assert_status 0 &&
+    assert_calls_lack "-o " &&
+    assert_calls_lack "sudo installer"
+}
+
+# A failed upgrade drops the stamp, so the next run tries again.
+test_lockdown_go_failed_upgrade_is_retried() {
+    HARNESS_UPGRADE=yes HARNESS_INSTALLER_FAILS=yes run_go_pkg arm64 arm64-sum 1.26.9
+    assert_status 0 &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_output_contains "could not upgrade Go from go.dev; the next run tries again" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# A Go on PATH too old to build vcs gives way to go.dev's for this run.
+test_lockdown_go_replaces_an_old_go_on_path() {
+    HARNESS_PATH_GO=1.19.13 run_go_pkg arm64 arm64-sum 1.27.4
+    assert_status 0 &&
+    assert_output_contains "usr-local-go/bin:" &&
+    assert_output_lacks "GO=go"
+}
+
+# A Go installed earlier is used even when go.dev can't be reached.
+test_lockdown_go_installed_is_used_when_go_dev_is_down() {
+    HARNESS_LIST_FAILS=yes run_go_pkg arm64 arm64-sum 1.26.9
+    assert_status 0 &&
+    assert_output_contains "couldn't fetch Go's release list" &&
+    assert_output_contains "usr-local-go/bin:" &&
+    assert_output_lacks "GO=go"
+}
+
+# On an upgrade run, a release list that can't be had is a failed
+# upgrade too, so the next run tries again.
+test_lockdown_go_lookup_failure_on_upgrade_is_retried() {
+    HARNESS_UPGRADE=yes HARNESS_LIST_FAILS=yes run_go_pkg arm64 arm64-sum 1.26.9
+    assert_status 0 &&
+    assert_output_contains "UPGRADE_FAILED=yes" &&
+    assert_output_contains "usr-local-go/bin:"
+}
+
+# Without a Go installed, there's nothing to upgrade, so no stamp to drop.
+test_lockdown_go_lookup_failure_without_go_is_no_failed_upgrade() {
+    HARNESS_UPGRADE=yes HARNESS_LIST_FAILS=yes run_go_pkg arm64 arm64-sum none
+    assert_status 0 &&
+    assert_output_contains "UPGRADE_FAILED=no"
+}
+
+# One that builds vcs is left first.
+test_lockdown_go_leaves_a_good_go_on_path() {
+    HARNESS_PATH_GO=1.25.0 run_go_pkg arm64 arm64-sum 1.27.4
+    assert_status 0 &&
+    assert_output_contains "GO=go" &&
+    assert_output_lacks "usr-local-go/bin:"
+}
+
+test_lockdown_go_too_old_for_vcs_is_replaced() {
+    run_go_pkg arm64 arm64-sum 1.19.13
+    assert_status 0 &&
+    assert_calls_contain "sudo installer -pkg "
 }
 
 # Monitor mode, no Santa, or a santactl that fails installs as before.
@@ -3355,6 +3572,7 @@ test_macos_without_lockdown_installs_from_homebrew() {
         assert_calls_contain "brew install lf" &&
         assert_calls_contain "brew install node" &&
         assert_calls_contain "brew install --cask iterm2" &&
+        assert_output_lacks "INSTALL_GO_PKG" &&
         assert_output_lacks "Santa" || return 1
     done
 }
@@ -6366,6 +6584,34 @@ run_test "Lockdown installs a Mac's casks but no formula, warning once" \
     test_macos_lockdown_installs_casks_not_formulae
 run_test "without Lockdown a Mac installs from Homebrew" \
     test_macos_without_lockdown_installs_from_homebrew
+run_test "Lockdown installs Go from go.dev's signed installer" \
+    test_lockdown_go_installs_from_go_dev
+run_test "a Go installed under Lockdown is on PATH for this run's builds" \
+    test_lockdown_go_is_on_path_for_the_build
+run_test "Lockdown's Go on an Intel Mac is the amd64 installer" \
+    test_lockdown_go_on_intel_takes_the_amd64_pkg
+run_test "a Go installer whose SHA-256 doesn't match isn't installed" \
+    test_lockdown_go_with_a_wrong_checksum_isnt_installed
+run_test "an up-to-date Go from go.dev isn't installed again" \
+    test_lockdown_go_already_current_is_left
+run_test "an older Go from go.dev is upgraded" \
+    test_lockdown_go_older_is_upgraded
+run_test "an older Go from go.dev is kept until an upgrade run" \
+    test_lockdown_go_older_is_kept_until_an_upgrade_run
+run_test "a failed Go upgrade is tried again on the next run" \
+    test_lockdown_go_failed_upgrade_is_retried
+run_test "a Go on PATH too old for vcs gives way to go.dev's" \
+    test_lockdown_go_replaces_an_old_go_on_path
+run_test "an installed Go is used when go.dev can't be reached" \
+    test_lockdown_go_installed_is_used_when_go_dev_is_down
+run_test "go.dev unreachable on an upgrade run is a failed upgrade" \
+    test_lockdown_go_lookup_failure_on_upgrade_is_retried
+run_test "go.dev unreachable with no Go installed upgrades nothing" \
+    test_lockdown_go_lookup_failure_without_go_is_no_failed_upgrade
+run_test "a Go on PATH that builds vcs is kept first" \
+    test_lockdown_go_leaves_a_good_go_on_path
+run_test "a Go too old to build vcs is replaced on any run" \
+    test_lockdown_go_too_old_for_vcs_is_replaced
 run_test "Lockdown's weekly upgrade upgrades only casks and keeps the stamp" \
     test_macos_lockdown_upgrades_only_casks
 run_test "Lockdown still installs Homebrew" test_lockdown_still_installs_homebrew

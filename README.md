@@ -144,7 +144,10 @@ says so once and skips Homebrew's formulae and the tools it downloads (helix,
 jj, nushell, atuin, carapace, lf, node, uv and fnm). Homebrew and its apps
 (kitty, iTerm2, android-platform-tools) still install, the weekly upgrade
 upgrades only the apps, and `setup-macos` (with tide's installer)
-installs Hammerspoon, Karabiner-Elements and the rest as usual.
+installs Hammerspoon, Karabiner-Elements and the rest as usual. Go, which
+vcs needs, comes from go.dev's own installer, signed by Google: the latest
+stable `.pkg` for the Mac's architecture, checked against go.dev's
+SHA-256 and installed to `/usr/local/go`.
 
 The default backend is `mamba`: a rootless [micromamba](https://mamba.readthedocs.io/)
 manages one conda environment, so you get a real solver (full dependency
