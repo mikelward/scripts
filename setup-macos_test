@@ -95,6 +95,9 @@ MOCK
 #!/bin/sh
 printf "%s\\n" "pmset \$*" >> "$CALLS"
 test -f "$TEST_TMPDIR/pmset_fails" && { echo "pmset: no power sources" >&2; exit 1; }
+if test "\$*" = "-g custom" && test -f "$TEST_TMPDIR/ac_sleep_0"; then
+    printf 'Battery Power:\n sleep                1\nAC Power:\n sleep                0\n displaysleep         10\n'
+fi
 if test "\$*" = "-g batt"; then
     echo "Now drawing from 'AC Power'"
     test -f "$TEST_TMPDIR/has_battery" &&
@@ -2071,10 +2074,46 @@ test_lock_screen_without_hostname_warns() {
 
 # Regression: a Mac mini slept once a monitor's KVM switched away, and missed
 # the keyboard and mouse coming back, so only its power button woke it.
+# Without tide, pmset keeps it awake.
 test_desktop_stays_awake_when_plugged_in() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "sudo pmset -c sleep 0 autorestart 1"
+}
+
+# With tide, it's tide's "Stay awake when plugged in", in the file it reads,
+# and pmset only starts it again after a power cut.
+test_desktop_stays_awake_with_tide() {
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_file_contains "$TEST_TMPDIR/home/.config/tide/awake.local.json" '"pluggedIn": true' &&
+    assert_called "sudo pmset -c autorestart 1" &&
+    assert_not_called "sleep 0" &&
+    assert_never_says "pmset sleep 0"
+}
+
+# A file there already is this Mac's choice, made in Tide Settings or by hand.
+test_tide_awake_choice_kept() {
+    mkdir -p "$TEST_TMPDIR/home/.config/tide"
+    printf '{ "pluggedIn": false }\n' > "$TEST_TMPDIR/home/.config/tide/awake.local.json"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_file_contains "$TEST_TMPDIR/home/.config/tide/awake.local.json" '"pluggedIn": false'
+}
+
+# An earlier run's sleep 0 would override tide's switch, so it's named.
+test_earlier_sleep_0_named_with_tide() {
+    touch "$TEST_TMPDIR/ac_sleep_0"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_says "an earlier setup's 'pmset sleep 0' overrides its switch"
+}
+
+test_laptop_leaves_tide_awake_off() {
+    touch "$TEST_TMPDIR/has_battery"
+    run_macos --wm tide
+    assert_status 0 &&
+    test ! -e "$TEST_TMPDIR/home/.config/tide/awake.local.json"
 }
 
 test_laptop_sleeps_as_before() {
@@ -2085,7 +2124,7 @@ test_laptop_sleeps_as_before() {
 }
 
 test_no_sudo_leaves_staying_awake_as_a_step() {
-    run_macos --no-sudo --ignore-errors
+    run_macos --wm amethyst --no-sudo --ignore-errors
     assert_not_called "sudo pmset" &&
     assert_output_contains "sudo pmset -c sleep 0 autorestart 1"
 }
@@ -3128,6 +3167,14 @@ run_test "without a hostname, the lock screen warns" \
     test_lock_screen_without_hostname_warns
 run_test "a Mac without a battery stays awake when plugged in" \
     test_desktop_stays_awake_when_plugged_in
+run_test "tide: a Mac without a battery stays awake through tide's setting" \
+    test_desktop_stays_awake_with_tide
+run_test "tide: an awake setting already there is kept" \
+    test_tide_awake_choice_kept
+run_test "tide: an earlier pmset sleep 0 is named" \
+    test_earlier_sleep_0_named_with_tide
+run_test "tide: a laptop's stay-awake setting is left off" \
+    test_laptop_leaves_tide_awake_off
 run_test "a laptop sleeps as before" \
     test_laptop_sleeps_as_before
 run_test "--no-sudo leaves staying awake as a step" \
