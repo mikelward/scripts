@@ -1825,7 +1825,7 @@ test_mentions_accessibility_permission() {
 # --- application launch shortcuts ---
 
 test_creates_launcher_workflows() {
-    run_macos
+    run_macos --wm amethyst
     services="$TEST_TMPDIR/home/Library/Services"
     assert_status 0 &&
     assert_file_exists "$services/Launch Browser1.workflow/Contents/Info.plist" &&
@@ -1839,7 +1839,7 @@ test_creates_launcher_workflows() {
 # Win+C is Chat and Win+Shift+C Calendar, as on KDE, tide and tide: Option+C
 # and Option+Shift+C once Win sends Option.
 test_chat_and_calendar_keys() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called 'Launch Chat - runWorkflowAsService' &&
     assert_called '"key_equivalent" = "~c";' &&
@@ -1850,7 +1850,7 @@ test_chat_and_calendar_keys() {
 # empty-suffix argument is BSD-only -- so this step aborted the run under any
 # GNU sed, and the name never made it into the plist.
 test_workflow_name_is_substituted() {
-    run_macos
+    run_macos --wm amethyst
     plist="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/Info.plist"
     assert_status 0 &&
     assert_file_contains "$plist" "<string>Launch Browser1</string>" &&
@@ -1861,7 +1861,7 @@ test_workflow_name_is_substituted() {
 # "$HOME/scripts/<launcher>" regardless of where the launcher actually is, so
 # a checkout kept anywhere else got Quick Actions pointing at nothing.
 test_workflow_runs_the_resolved_launcher() {
-    run_macos
+    run_macos --wm amethyst
     wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
     assert_status 0 &&
     assert_file_contains "$wflow" "$TEST_TMPDIR/bin/browser1" &&
@@ -1874,7 +1874,7 @@ test_workflow_runs_the_resolved_launcher() {
 test_sibling_launcher_fallback() {
     isolate_script
     add_sibling_launcher browser1
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
     assert_status 0 &&
     assert_file_contains "$wflow" "$ISOLATED_DIR/browser1"
@@ -1885,7 +1885,7 @@ test_sibling_launcher_fallback() {
 test_missing_launcher_skipped_not_fatal() {
     isolate_script
     add_sibling_launcher browser1
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     services="$TEST_TMPDIR/home/Library/Services"
     assert_status 0 &&
     assert_output_contains "music not found on PATH or beside this script" &&
@@ -1900,7 +1900,7 @@ test_missing_launcher_skipped_not_fatal() {
 test_launcher_path_is_quoted_and_escaped() {
     isolate_script "odd & dir"
     add_sibling_launcher browser1
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     wflow="$TEST_TMPDIR/home/Library/Services/Launch Browser1.workflow/Contents/document.wflow"
     assert_status 0 &&
     assert_file_contains "$wflow" "<string>'$TEST_TMPDIR/odd &amp; dir/browser1'</string>" &&
@@ -1911,14 +1911,14 @@ test_launcher_path_is_quoted_and_escaped() {
 # it now has to take that with it, or the shortcut keeps working and runs the
 # path the launcher used to have.
 test_stale_workflow_removed_when_launcher_disappears() {
-    run_macos
+    run_macos --wm amethyst
     services="$TEST_TMPDIR/home/Library/Services"
     assert_status 0 &&
     assert_file_exists "$services/Launch Music.workflow/Contents/document.wflow" || return 1
 
     isolate_script
     add_sibling_launcher browser1
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "Removing the stale Quick Action for music" &&
     assert_file_not_exists "$services/Launch Music.workflow/Contents/document.wflow" &&
@@ -1927,14 +1927,36 @@ test_stale_workflow_removed_when_launcher_disappears() {
 
 test_no_launchers_at_all_warns_without_writing_the_registry() {
     isolate_script
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "no launcher helpers found" &&
     assert_not_called "defaults write pbs NSServicesStatus"
 }
 
-test_assigns_option_key_equivalents() {
+# With tide its own app keys open apps; the Quick Actions' Option+letter keys
+# only got in the way (Option+F is a word forward in a terminal).
+test_tide_makes_no_launch_quick_actions() {
     run_macos
+    assert_status 0 &&
+    assert_file_not_exists "$TEST_TMPDIR/home/Library/Services/Launch Browser2.workflow/Contents/document.wflow" &&
+    assert_not_called "runWorkflowAsService"
+}
+
+test_tide_removes_an_earlier_runs_quick_actions() {
+    run_macos --wm amethyst
+    services="$TEST_TMPDIR/home/Library/Services"
+    assert_file_exists "$services/Launch Browser2.workflow/Contents/document.wflow" || return 1
+    : > "$CALLS"
+    run_macos
+    assert_status 0 &&
+    assert_file_not_exists "$services/Launch Browser2.workflow/Contents/document.wflow" &&
+    assert_file_not_exists "$services/Launch Calendar.workflow/Contents/document.wflow" &&
+    assert_output_contains "Removing the Launch Browser2 Quick Action" &&
+    assert_called "pbs -flush"
+}
+
+test_assigns_option_key_equivalents() {
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "defaults write pbs NSServicesStatus -dict-add" &&
     assert_called '"key_equivalent" = "~g"' &&
@@ -1948,14 +1970,14 @@ test_assigns_option_key_equivalents() {
 # Services registry is a cache, and until pbs re-reads it the Quick Actions
 # aren't registered and the shortcuts silently do nothing.
 test_flushes_the_services_registry() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "pbs -flush"
 }
 
 test_missing_pbs_warns_about_logout() {
     PBS="$TEST_TMPDIR/bin/no-such-pbs"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "log out and back in for the launch shortcuts to work"
 }
@@ -2464,7 +2486,7 @@ MOCK
 # Announcing the removal and then not checking it left the obsolete Quick
 # Action in place while the run reported success.
 test_failed_stale_workflow_removal_is_reported() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 || return 1
     isolate_script
     add_sibling_launcher browser1
@@ -2475,7 +2497,7 @@ echo "rm: cannot remove" >&2
 exit 1
 MOCK
     chmod +x "$TEST_TMPDIR/bin/rm"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "failed (exit 1): rm -rf" &&
     assert_output_lacks "macOS configured successfully"
@@ -2491,7 +2513,7 @@ test_reports_success_when_nothing_warned() {
 # successfully" over a screenful of warnings.
 test_reports_problems_instead_of_success() {
     isolate_script
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_lacks "macOS configured successfully" &&
     assert_output_contains "problem(s); see the warnings above"
@@ -3160,6 +3182,10 @@ run_test "removes a stale Quick Action when its launcher goes away" \
     test_stale_workflow_removed_when_launcher_disappears
 run_test "no launchers at all leaves the registry alone" \
     test_no_launchers_at_all_warns_without_writing_the_registry
+run_test "tide makes no launch Quick Actions" \
+    test_tide_makes_no_launch_quick_actions
+run_test "tide removes an earlier run's launch Quick Actions" \
+    test_tide_removes_an_earlier_runs_quick_actions
 run_test "assigns the Option+key equivalents" test_assigns_option_key_equivalents
 run_test "flushes the Services registry so the shortcuts work" \
     test_flushes_the_services_registry
