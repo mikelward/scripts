@@ -1894,6 +1894,12 @@ configure_linearmouse() {
     fi
 
     _linearmouse=$(linearmouse_path) || return 0
+    # Opening it while it runs brings up its settings window, so a running
+    # LinearMouse is left alone: it reads its config as the file changes.
+    if app_running LinearMouse; then
+        detail "LinearMouse is running already"
+        return 0
+    fi
     # Started in the background so it reads the config now. It asks for
     # Accessibility the first time, which only a person can grant.
     try open -g "$_linearmouse"

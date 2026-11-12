@@ -1310,6 +1310,7 @@ test_no_karabiner_steps_without_karabiner() {
 # Logging out comes last, once the rest is done, and says what it's for.
 test_tilemo_logs_out_last_for_what_needs_it() {
     stage_tilemo_machine
+    stage_not_running LinearMouse
     run_macos --wm tide
     assert_status 0 &&
     assert_says "for the Dvorak layout and the menu bar setting to take effect" &&
@@ -1580,11 +1581,20 @@ test_keeps_linearmouse_support_config() {
 }
 
 test_starts_linearmouse() {
+    stage_not_running LinearMouse
     run_macos
     assert_status 0 &&
     assert_called "open -g $APPLICATIONS_DIR/LinearMouse.app" &&
     assert_says "Turn on LinearMouse, or a mouse wheel notch scrolls a line or so: allow it Accessibility" &&
     assert_says "click its icon in the menu bar and choose Start at login"
+}
+
+# Opening a running LinearMouse brings up its settings window on every run.
+test_running_linearmouse_left_alone() {
+    run_macos
+    assert_status 0 &&
+    assert_not_called "open -g $APPLICATIONS_DIR/LinearMouse.app" &&
+    assert_never_says "Turn on LinearMouse"
 }
 
 test_missing_brew_warns_about_linearmouse() {
@@ -3064,6 +3074,7 @@ run_test "keeps a LinearMouse config with a scheme" test_keeps_linearmouse_confi
 run_test "writes LinearMouse's Application Support config when it has one" test_uses_linearmouse_support_config
 run_test "keeps LinearMouse's Application Support config" test_keeps_linearmouse_support_config
 run_test "starts LinearMouse and says to grant it Accessibility" test_starts_linearmouse
+run_test "a running LinearMouse isn't opened again" test_running_linearmouse_left_alone
 run_test "missing brew warns about LinearMouse" test_missing_brew_warns_about_linearmouse
 run_test "installs Karabiner-Elements when missing" \
     test_installs_karabiner_when_missing
