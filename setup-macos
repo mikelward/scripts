@@ -758,22 +758,13 @@ configure_keyboard() {
 #   Physical Win  (E3/E7) → Option  (E2/E6)
 #   Physical Alt  (E2/E6) → Control (E0/E4)
 KEY_ROTATION='{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3},{"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2},{"HIDKeyboardModifierMappingSrc":0x7000000E2,"HIDKeyboardModifierMappingDst":0x7000000E0},{"HIDKeyboardModifierMappingSrc":0x7000000E4,"HIDKeyboardModifierMappingDst":0x7000000E7},{"HIDKeyboardModifierMappingSrc":0x7000000E7,"HIDKeyboardModifierMappingDst":0x7000000E6},{"HIDKeyboardModifierMappingSrc":0x7000000E6,"HIDKeyboardModifierMappingDst":0x7000000E4}'
-# With tide, Caps Lock (39) sends F18 (6D) too, which tide takes as
-# Compose, as Linux's Caps Lock is (tide SPEC.md §10). Amethyst has no use
-# for F18, so there Caps Lock stays.
-KEY_CAPS_COMPOSE='{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}'
-if test "$WM" = tide; then
-    KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION,$KEY_CAPS_COMPOSE]}"
-else
-    KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION]}"
-fi
+# Caps Lock as Compose is tide's, a Keyboard switch in its settings
+# (turn_on_tide_caps_compose), so the mapping here is the rotation alone: a
+# Caps Lock entry here would come back at every login, whatever the switch.
+KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION]}"
 
 configure_modifier_keys() {
-    if test "$WM" = tide; then
-        info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control) and Caps Lock to Compose"
-    else
-        info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
-    fi
+    info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
 
     # Applies to the running session immediately; hidutil mappings are lost on
     # reboot, which is what the LaunchAgent below is for.
@@ -2300,6 +2291,22 @@ configure_fonts() {
     needs_logout "the font smoothing"
 }
 
+# --- Caps Lock as Compose ---
+
+# tide's Keyboard switch "Caps Lock is Compose" (tidemo SPEC.md §10), off
+# unless turned on, kept in Hammerspoon's preferences (hs.settings). This
+# turns it on where it isn't set, before tide starts, so turning it off in
+# Tide Settings stays off. Amethyst has no Compose.
+TIDE_CAPS_COMPOSE_KEY="tide.caps_lock_compose"
+
+turn_on_tide_caps_compose() {
+    if defaults read org.hammerspoon.Hammerspoon "$TIDE_CAPS_COMPOSE_KEY" >/dev/null 2>&1; then
+        return 0
+    fi
+    info "Turning on Caps Lock as Compose (Tide Settings, Keyboard)"
+    try defaults write org.hammerspoon.Hammerspoon "$TIDE_CAPS_COMPOSE_KEY" -bool true
+}
+
 # --- Main ---
 
 preflight
@@ -2309,6 +2316,7 @@ configure_modifier_keys
 configure_shortcuts
 configure_spaces
 if test "$WM" = tide; then
+    turn_on_tide_caps_compose
     configure_tide
 else
     configure_amethyst
