@@ -3,7 +3,9 @@
 #
 # Sets up:
 # - Dvorak keyboard layout
-# - Rotate Control, Command and Option (for Linux-like Ctrl shortcuts)
+# - Rotate Control, Command and Option (for Linux-like Ctrl shortcuts): with
+#   tide, its PC keyboard type, which also puts a Mac keyboard's keys in the
+#   same order
 # - Spotlight and Switch to Desktop 1-9 on Option key (physical Win/Super), and
 #   Move left/right a space on Control+Option+arrow, which the conf repo's
 #   Karabiner rule puts under physical Win+Left/Right
@@ -764,7 +766,32 @@ KEY_ROTATION='{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierM
 # Caps Lock entry here would come back at every login, whatever the setting.
 KEY_REMAPPING="{\"UserKeyMapping\":[$KEY_ROTATION]}"
 
+# Whether tide's installer ran and succeeded, so tide can take the keys over.
+TIDE_INSTALLED=no
+
+# With tide, the keys are tide's PC keyboard type (tidemo SPEC.md §7.1), set
+# in the macos.json this writes: tide maps them at login, after a wake and as
+# the file changes, and puts a Mac keyboard's keys in the same order. So once
+# tide is installed, an earlier run's login agent, which would map them again
+# behind tide's back, goes; the mapping it made stays until tide's replaces
+# it. Until tide is installed, as with --no-install and no checkout, this maps
+# them itself, so a restart doesn't leave them unmapped.
+hand_keys_to_tide() {
+    if test "$TIDE_INSTALLED" = yes; then
+        remove_key_remapping_agent
+    else
+        info "tide isn't installed, so this maps the keys itself until it is"
+        remap_modifier_keys
+    fi
+}
+
+# Without tide, the keys are this script's to map.
 configure_modifier_keys() {
+    test "$WM" = tide && return 0
+    remap_modifier_keys
+}
+
+remap_modifier_keys() {
     info "Remapping modifier keys (Ctrl→Cmd, Win→Option, Alt→Control)"
 
     # Applies to the running session immediately; hidutil mappings are lost on
@@ -809,6 +836,20 @@ PLIST
     launchctl bootout "gui/$(id -u)/com.local.KeyRemapping" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "$launch_agent" \
         || warn "could not load $launch_agent; the remapping is live now but won't survive a reboot"
+}
+
+# The login agent an earlier run wrote, unloaded and removed, where it's
+# there.
+remove_key_remapping_agent() {
+    _rk_agent="$HOME/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    test -e "$_rk_agent" || return 0
+    info "Handing the modifier keys to tide's PC keyboard type (Tide Settings, macOS)"
+    if is_command launchctl; then
+        # Not loaded is fine: the file alone is what's left to remove.
+        launchctl bootout "gui/$(id -u)/com.local.KeyRemapping" 2>/dev/null \
+            || detail "com.local.KeyRemapping wasn't loaded"
+    fi
+    try rm -f "$_rk_agent"
 }
 
 # --- Configure keyboard shortcuts ---
@@ -1069,6 +1110,9 @@ configure_spaces() {
 #   disk, and typing isn't corrected.
 # - Font smoothing is light: sharp rather than smeared on a non-Retina
 #   display, with a little more smoothing than off.
+# - The keyboard is a PC one: Ctrl, Win and Alt left of the space bar on
+#   every keyboard, the MacBook's own included, so Ctrl+C copies as on
+#   Linux (tide maps the keys, with Karabiner for a Mac keyboard's order).
 # - Caps Lock is Compose, as on Linux: tide makes Caps Lock send F18, its
 #   Compose key, while this is on.
 TIDE_MACOS_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/tide/macos.json"
@@ -1090,7 +1134,7 @@ write_tide_macos_settings() {
     "autocorrect": false, "capitalize": false, "smartQuotes": false,
     "smartDashes": false, "doubleSpacePeriod": false
   },
-  "keyboard": { "capsLockCompose": true },
+  "keyboard": { "type": "pc", "capsLockCompose": true },
   "text": { "smoothing": "light" }
 }
 JSON
@@ -1544,6 +1588,8 @@ run_tide_installer() {
     fi
     if test "$_ti_status" -ne 0; then
         report_failure "$_ti_status" "$_ti_setup" "$@"
+    else
+        TIDE_INSTALLED=yes
     fi
 }
 
@@ -2381,6 +2427,7 @@ configure_shortcuts
 configure_spaces
 if test "$WM" = tide; then
     configure_tide
+    hand_keys_to_tide
 else
     configure_amethyst
 fi

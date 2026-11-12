@@ -739,7 +739,7 @@ MOCK
 # root.
 test_unwritable_file_is_reported() {
     mkdir -p "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
-    run_macos --ignore-errors
+    run_macos --wm amethyst --ignore-errors
     assert_status 0 &&
     assert_output_contains "failed (exit 1): write_file" &&
     assert_output_lacks "macOS configured successfully"
@@ -815,17 +815,47 @@ test_disables_text_substitutions() {
 
 # --- modifier keys ---
 
-# With tide, Caps Lock as Compose is tide's setting, in the macos.json this
-# writes. The key mapping, live and at login, is the rotation alone, so
-# turning the setting off sticks.
+# With tide, the PC keyboard and Caps Lock as Compose are tide's settings,
+# in the macos.json this writes, and tide maps the keys: no hidutil here, and
+# no login agent to map them again behind tide's back.
 test_tilemo_makes_caps_lock_compose() {
     run_macos --wm tide
     assert_status 0 &&
-    assert_file_contains "$TEST_TMPDIR/home/.config/tide/macos.json" '"keyboard": { "capsLockCompose": true }' &&
-    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
-    assert_not_called '0x700000039' &&
+    assert_file_contains "$TEST_TMPDIR/home/.config/tide/macos.json" '"keyboard": { "type": "pc", "capsLockCompose": true }' &&
+    assert_not_called "hidutil" &&
     assert_not_called "org.hammerspoon.Hammerspoon" &&
-    assert_file_lacks "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" '0x700000039'
+    test ! -e "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+}
+
+# Without tide installed, as with --no-install and no checkout, the keys stay
+# mapped: the earlier login agent isn't removed, and this maps them itself.
+test_tide_missing_keeps_key_remapping() {
+    rm -rf "$TEST_TMPDIR/home/tidemo"
+    mkdir -p "$TEST_TMPDIR/home/Library/LaunchAgents"
+    printf 'old\n' > "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    run_macos --wm tide --no-install --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "tide isn't installed, so this maps the keys itself" &&
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
+    assert_file_contains "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" "/usr/bin/hidutil"
+}
+
+# A failed installer isn't tide installed either.
+test_tide_installer_failing_keeps_key_remapping() {
+    touch "$TEST_TMPDIR/installer_fails"
+    run_macos --wm tide --ignore-errors
+    assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3'
+}
+
+# An earlier run's login agent is unloaded and removed.
+test_tide_removes_key_remapping_agent() {
+    mkdir -p "$TEST_TMPDIR/home/Library/LaunchAgents"
+    printf 'old\n' > "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_called "launchctl bootout gui/" &&
+    test ! -e "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" &&
+    assert_output_contains "Handing the modifier keys to tide's PC keyboard type"
 }
 
 test_amethyst_keeps_caps_lock() {
@@ -838,7 +868,7 @@ test_amethyst_keeps_caps_lock() {
 # The three-key rotation: Ctrl→Cmd, Win→Option, Alt→Control, on both sides of
 # the keyboard. E0/E4 are the Controls, E2/E6 the Options, E3/E7 the Commands.
 test_remaps_modifier_keys() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
     assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E3,"HIDKeyboardModifierMappingDst":0x7000000E2' &&
@@ -849,7 +879,7 @@ test_remaps_modifier_keys() {
 }
 
 test_writes_launch_agent() {
-    run_macos
+    run_macos --wm amethyst
     agent="$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
     assert_status 0 &&
     assert_file_exists "$agent" &&
@@ -860,7 +890,7 @@ test_writes_launch_agent() {
 # The live remap and the one the LaunchAgent reapplies at login have to be the
 # same mapping. They used to be two hand-maintained copies of the same JSON.
 test_launch_agent_matches_live_remap() {
-    run_macos
+    run_macos --wm amethyst
     agent="$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist"
     assert_status 0 &&
     assert_file_contains "$agent" '{"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3}' &&
@@ -870,7 +900,7 @@ test_launch_agent_matches_live_remap() {
 # Loading it now is what turns a malformed plist into an error the user sees
 # while setup is running, rather than a machine that boots without a Ctrl key.
 test_loads_launch_agent() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "launchctl bootstrap gui/"
 }
@@ -878,13 +908,13 @@ test_loads_launch_agent() {
 # bootstrap refuses a label that's already loaded, so a re-run has to unload
 # the previous copy first.
 test_unloads_previous_launch_agent() {
-    run_macos
+    run_macos --wm amethyst
     assert_status 0 &&
     assert_called "launchctl bootout gui/"
 }
 
 test_missing_launchctl_is_not_fatal() {
-    run_macos_without launchctl
+    run_macos_without launchctl --wm amethyst
     assert_status 0 &&
     assert_output_contains "launchctl not found"
 }
@@ -3183,6 +3213,12 @@ run_test "without a battery reading, it warns and sleeps as before" \
     test_unknown_battery_warns_and_sleeps_as_before
 run_test "tide: Caps Lock is Compose" \
     test_tilemo_makes_caps_lock_compose
+run_test "tide: an earlier key remapping agent is removed" \
+    test_tide_removes_key_remapping_agent
+run_test "tide: without tide installed, the keys stay mapped" \
+    test_tide_missing_keeps_key_remapping
+run_test "tide: a failed tide installer leaves the keys mapped" \
+    test_tide_installer_failing_keeps_key_remapping
 run_test "amethyst: Caps Lock stays" \
     test_amethyst_keeps_caps_lock
 run_test "--no-sudo skips the Karabiner install" \
