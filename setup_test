@@ -5556,6 +5556,199 @@ test_lightspeed_reset_linux_only() {
     assert_eq "$ls_rule_body" "" || { echo "  (Crostini)"; return 1; }
 }
 
+# --- keyd: Caps Lock with the arrows ---
+
+# Run configure_keyd against a fake /etc/keyd, with a PATH of just the tools
+# it uses.
+#   $1  how sudo goes (default ok): ok | denied
+#   $2  the OS (default debian)
+#   $3  what's already there (default none): none | current (this run's
+#       config) | old (an earlier run's) | other (somebody else's)
+#   $4  whether keyd is installed (default yes): yes | no
+#   $5  CROSTINI (default 0)
+#   $6  ROOT (default yes)
+#   $7  whether keyd is running already (default no): yes | no
+# Leaves $calls set to the privileged commands asked for, and $kd_body to
+# the config (empty when none).
+run_configure_keyd() {
+    kd_sudo="${1:-ok}"
+    kd_os="${2:-debian}"
+    kd_seed="${3:-none}"
+    kd_has="${4:-yes}"
+    kd_crostini="${5:-0}"
+    kd_root="${6:-yes}"
+    kd_active="${7:-no}"
+    kd_tmpdir="$(mktemp -d)"
+    kd_dir="$kd_tmpdir/etc/keyd"
+    kd_bin="$kd_tmpdir/bin"
+    mkdir -p "$kd_bin"
+    for kd_tool in sh grep tee cat mkdir rm mktemp sed tr printf; do
+        kd_path=$(command -v "$kd_tool") && case "$kd_path" in /*) ln -s "$kd_path" "$kd_bin/$kd_tool" ;; esac
+    done
+    # systemctl answers is-active as asked; the rest only say they ran,
+    # and sudo_or_warn's stub logs those.
+    if test "$kd_active" = yes; then
+        printf '#!/bin/sh\nexit 0\n' > "$kd_bin/systemctl"
+    else
+        printf '#!/bin/sh\ntest "$1" = is-active && exit 3\nexit 0\n' > "$kd_bin/systemctl"
+    fi
+    chmod +x "$kd_bin/systemctl"
+    if test "$kd_has" = yes; then
+        printf '#!/bin/sh\nexit 0\n' > "$kd_bin/keyd"
+        chmod +x "$kd_bin/keyd"
+    fi
+    case "$kd_seed" in
+        current|old)
+            mkdir -p "$kd_dir"
+            printf '%s\n' "# Written by setup (github.com/mikelward/scripts): an earlier run's" \
+                > "$kd_dir/default.conf"
+            ;;
+        other)
+            mkdir -p "$kd_dir"
+            printf '%s\n' "# somebody's own keyd config" > "$kd_dir/default.conf"
+            ;;
+    esac
+    if test "$kd_sudo" = denied; then
+        kd_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$KD_CALLS"; warn "sudo ${1##*/}: permission denied"; return 1; }'
+    else
+        kd_stub='sudo_or_warn() { printf "%s\n" "$*" >> "$KD_CALLS"; "$@"; }'
+    fi
+    kd_script="set -e
+OS=$kd_os
+CROSTINI=$kd_crostini
+ROOT=$kd_root
+$(extract_functions "setup_color paint info detail warn note_problem $QUIET_FUNCTIONS configure_keyd")
+$kd_stub"
+    # current: what a run writes, so the run after it finds it unchanged.
+    if test "$kd_seed" = current; then
+        PATH="$kd_bin" KD_CALLS="$kd_tmpdir/seed-calls" SETUP_KEYD_DIR="$kd_dir" \
+            "$kd_bin/sh" -c "$kd_script
+configure_keyd" >/dev/null 2>&1
+    fi
+
+    set +e
+    output="$(PATH="$kd_bin" KD_CALLS="$kd_tmpdir/calls" SETUP_KEYD_DIR="$kd_dir" \
+        "$kd_bin/sh" -c "$kd_script
+configure_keyd
+echo BOOTSTRAP_CONTINUED" 2>&1)"
+    status=$?
+    set -e
+    calls=""
+    if test -f "$kd_tmpdir/calls"; then
+        calls="$(cat "$kd_tmpdir/calls")"
+    fi
+    kd_body=""
+    if test -f "$kd_dir/default.conf"; then
+        kd_body="$(cat "$kd_dir/default.conf")"
+    fi
+    rm -rf "$kd_tmpdir"
+}
+
+# The layer: held Caps Lock, a tap still Caps Lock (compose:caps makes it
+# Compose), the arrows, Alt's document ends, and Alt+Home/End.
+assert_keyd_config_written() {
+    for kd_line in "capslock = overload(nav, capslock)" \
+            "[nav]" "left = home" "right = end" "up = pageup" "down = pagedown" \
+            "[nav+alt]" "left = C-home" "up = C-home" "right = C-end" "down = C-end" \
+            "[alt]" "home = C-home" "end = C-end" \
+            "[nav+altgr]" "[altgr]"; do
+        if ! printf '%s\n' "$kd_body" | grep -qxF "$kd_line"; then
+            echo "  FAIL: the keyd config lacks '$kd_line'"
+            echo "  config: $kd_body"
+            TEST_FAILED=1
+            return 1
+        fi
+    done
+}
+
+# Right Alt is keyd's altgr layer, so it gets the same as left Alt.
+assert_keyd_altgr_matches_alt() {
+    kd_alt=$(printf '%s\n' "$kd_body" | sed -n '/^\[nav+alt\]$/,/^$/p;/^\[alt\]$/,/^$/p' | grep -v '^\[')
+    kd_altgr=$(printf '%s\n' "$kd_body" | sed -n '/^\[nav+altgr\]$/,/^$/p;/^\[altgr\]$/,/^$/p' | grep -v '^\[' | grep -v '^#')
+    assert_eq "$kd_altgr" "$kd_alt"
+}
+
+test_keyd_configured() {
+    run_configure_keyd
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_keyd_config_written &&
+    assert_keyd_altgr_matches_alt &&
+    assert_calls_contain "systemctl enable keyd" &&
+    assert_calls_contain "systemctl start keyd" &&
+    assert_calls_lack "restart"
+}
+
+# A running keyd reads an earlier run's config brought up to date with a
+# reload, never a restart, which would make a new keyboard and lose an X
+# session's live layout.
+test_keyd_old_config_replaced() {
+    run_configure_keyd ok debian old yes 0 yes yes
+    assert_status 0 &&
+    assert_keyd_config_written &&
+    assert_calls_contain "keyd reload" &&
+    assert_calls_lack "restart" &&
+    assert_calls_lack "systemctl start"
+}
+
+# Unchanged and running: nothing written, nothing reloaded.
+test_keyd_current_config_kept() {
+    run_configure_keyd ok debian current yes 0 yes yes
+    assert_status 0 &&
+    assert_keyd_config_written &&
+    assert_calls_lack "tee" &&
+    assert_calls_lack "reload" &&
+    assert_calls_lack "systemctl start"
+}
+
+test_keyd_foreign_config_left_alone() {
+    run_configure_keyd ok debian other
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$kd_body" "# somebody's own keyd config" &&
+    assert_output_contains "setup didn't write it"
+}
+
+test_keyd_missing_says_so() {
+    run_configure_keyd ok debian none no
+    assert_status 0 &&
+    assert_eq "$calls" "" &&
+    assert_eq "$kd_body" "" &&
+    assert_output_contains "no keyd"
+}
+
+# Without the config, keyd would map nothing, so it isn't turned on.
+test_keyd_sudo_denial_is_not_fatal() {
+    run_configure_keyd denied
+    assert_status 0 &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    assert_output_contains "could not write" &&
+    assert_calls_lack "systemctl" &&
+    assert_eq "$kd_body" ""
+}
+
+test_keyd_linux_only() {
+    run_configure_keyd ok macos
+    assert_status 0 && assert_eq "$calls" "" || { echo "  (macOS)"; return 1; }
+    run_configure_keyd ok debian none yes 1
+    assert_status 0 && assert_eq "$calls" "" || { echo "  (Crostini)"; return 1; }
+    run_configure_keyd ok redhat none yes 0 no
+    assert_status 0 && assert_eq "$calls" "" || { echo "  (--no-root)"; return 1; }
+    run_configure_keyd ok redhat
+    assert_status 0 && assert_keyd_config_written || { echo "  (Fedora)"; return 1; }
+}
+
+# keyd is its own best-effort install, as zoxide is: older releases lack
+# it, and apt and dnf reject a whole transaction on one unknown name. The
+# run configures it before the keyboard layout, whose live X layout a first
+# start of keyd would otherwise lose.
+test_keyd_installed_on_its_own() {
+    assert_source_contains "apt_install keyd" &&
+    assert_source_contains "dnf_install keyd" &&
+    test "$(grep -c '^ *keyd \\$' "$SETUP")" -eq 0 &&
+    assert_eq "$(sed -n '/^configure_keyd$/{n;p;}' "$SETUP")" "configure_keyboard"
+}
+
 # --- zsh-autosuggestions without root ---
 
 # Run install_zsh_autosuggestions_home against a local tagged repo standing in
@@ -6089,6 +6282,22 @@ run_test "a refused sudo for the Lightspeed reset warns and carries on" \
     test_lightspeed_reset_sudo_denial_is_not_fatal
 run_test "the Lightspeed reset is only installed on Linux, outside Crostini" \
     test_lightspeed_reset_linux_only
+run_test "keyd makes Caps Lock with the arrows Home, End, Page Up and Page Down" \
+    test_keyd_configured
+run_test "an earlier run's keyd config is brought up to date" \
+    test_keyd_old_config_replaced
+run_test "an unchanged keyd config isn't written again" \
+    test_keyd_current_config_kept
+run_test "a keyd config setup didn't write is left alone" \
+    test_keyd_foreign_config_left_alone
+run_test "without keyd, setup says so" \
+    test_keyd_missing_says_so
+run_test "a refused sudo for keyd warns and carries on" \
+    test_keyd_sudo_denial_is_not_fatal
+run_test "keyd is configured only on Linux, outside Crostini, with root" \
+    test_keyd_linux_only
+run_test "keyd is installed on its own and configured before the layout" \
+    test_keyd_installed_on_its_own
 run_test "the zsh-autosuggestions pin names a tag and a full commit" \
     test_zsh_autosuggestions_pin_is_complete
 run_test "--no-root clones zsh-autosuggestions at the pinned commit" \
