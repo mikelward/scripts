@@ -1870,6 +1870,134 @@ check_go() {
     fi
 }
 
+# Under Santa's Lockdown mode Homebrew's go formula is skipped (see
+# cli_tools_blocked), so a Mac gets Go from go.dev's own installer instead:
+# the .pkg is signed by Google, which Santa allows, as it does Homebrew's
+# casks. The latest stable release for this Mac's architecture, from
+# go.dev's release list, checked against the list's SHA-256 and installed
+# to /usr/local/go by macOS's installer, which also puts its bin on PATH
+# (/etc/paths.d/go) for new shells. An installed Go that builds vcs is
+# replaced only on an upgrade run, as Homebrew's packages are. Overridable
+# for tests.
+GO_DL="${GO_DL:-https://go.dev/dl}"
+GO_PKG_GO="${GO_PKG_GO:-/usr/local/go/bin/go}"
+
+# go_pkg_for JSON ARCH prints the first (newest stable) darwin-ARCH .pkg in
+# go.dev's ?mode=json release list, and its SHA-256, on one line.
+go_pkg_for() {
+    printf '%s\n' "$1" | awk -v want="darwin-$2.pkg" '
+        /"filename"/ {
+            f = $0
+            sub(/.*"filename"[[:space:]]*:[[:space:]]*"/, "", f)
+            sub(/".*/, "", f)
+            pick = (substr(f, length(f) - length(want) + 1) == want)
+            if (pick) file = f
+            next
+        }
+        pick && /"sha256"/ {
+            h = $0
+            sub(/.*"sha256"[[:space:]]*:[[:space:]]*"/, "", h)
+            sub(/".*/, "", h)
+            print file, h
+            exit
+        }
+    '
+}
+
+# go_builds_vcs BIN: whether Go BIN runs and is at least MIN_GO.
+go_builds_vcs() {
+    command -v "$1" >/dev/null 2>&1 || return 1
+    _gb_version=$("$1" env GOVERSION 2>/dev/null) || return 1
+    go_at_least "${_gb_version#go}" "$MIN_GO"
+}
+
+# fetch_go_pkg FILE SUM: downloads go.dev's FILE, checks it has SHA-256 SUM
+# and installs it, warning and returning non-zero at the first step that
+# fails.
+fetch_go_pkg() {
+    if ! _fg_dir=$(mktemp -d); then
+        warn "couldn't make a directory to download Go into"
+        return 1
+    fi
+    if ! curl -fsSL -o "$_fg_dir/$1" "$GO_DL/$1"; then
+        warn "couldn't download $GO_DL/$1"
+        rm -rf "$_fg_dir"
+        return 1
+    fi
+    _fg_got=$(shasum -a 256 "$_fg_dir/$1" | awk '{ print $1 }')
+    if test "$_fg_got" != "$2"; then
+        warn "$1's SHA-256 is $_fg_got, not the $2 go.dev lists; not installing it"
+        rm -rf "$_fg_dir"
+        return 1
+    fi
+    if ! sudo_or_warn installer -pkg "$_fg_dir/$1" -target /; then
+        rm -rf "$_fg_dir"
+        return 1
+    fi
+    rm -rf "$_fg_dir"
+}
+
+# install_go_pkg installs or upgrades go.dev's Go (update_go_pkg). On an
+# upgrade run, any step of that failing for a Go installed already is a
+# failed upgrade, tried again next run, as Homebrew's are. Then, whatever
+# came of it, this run uses that Go if the one it has can't build vcs
+# (use_go_pkg).
+install_go_pkg() {
+    if ! update_go_pkg && test -x "$GO_PKG_GO" && test "${UPGRADE:-no}" = yes; then
+        upgrade_failed "Go from go.dev"
+    fi
+    use_go_pkg
+}
+
+update_go_pkg() {
+    case "$(uname -m)" in
+        arm64) _gp_arch=arm64 ;;
+        x86_64) _gp_arch=amd64 ;;
+        *)
+            warn "no Go installer for this Mac's architecture ($(uname -m)); vcs needs Go $MIN_GO or newer"
+            return 1
+            ;;
+    esac
+    if ! _gp_json=$(curl -fsSL "$GO_DL/?mode=json" 2>&1); then
+        warn "couldn't fetch Go's release list from $GO_DL: $_gp_json"
+        return 1
+    fi
+    _gp_pick=$(go_pkg_for "$_gp_json" "$_gp_arch")
+    _gp_file=${_gp_pick%% *}
+    _gp_sum=${_gp_pick#* }
+    if test -z "$_gp_pick" || test "$_gp_file" = "$_gp_pick"; then
+        warn "Go's release list has no macOS $_gp_arch installer; vcs needs Go $MIN_GO or newer"
+        return 1
+    fi
+    _gp_version=${_gp_file%%.darwin-*}
+    _gp_have=
+    if test -x "$GO_PKG_GO"; then
+        _gp_have=$("$GO_PKG_GO" env GOVERSION 2>/dev/null) || _gp_have=
+    fi
+    if test "$_gp_have" = "$_gp_version"; then
+        detail "Go ${_gp_version#go} is installed already"
+    elif test -n "$_gp_have" && test "${UPGRADE:-no}" != yes \
+            && go_at_least "${_gp_have#go}" "$MIN_GO"; then
+        # As every installed tool: replaced only on an upgrade run.
+        detail "Keeping Go ${_gp_have#go} until an upgrade run; ${_gp_version#go} is out"
+    else
+        info "Installing Go ${_gp_version#go} from go.dev (Santa is in Lockdown mode)"
+        fetch_go_pkg "$_gp_file" "$_gp_sum" || return 1
+    fi
+}
+
+# This run's shell predates /etc/paths.d/go, so when the Go on PATH, if
+# any, can't build vcs (too old, or one Santa blocks), go.dev's bin goes
+# first on PATH for what this run builds (vcs's make runs go from PATH),
+# and GO names it for check_go.
+use_go_pkg() {
+    if go_builds_vcs "$GO_PKG_GO" && ! go_builds_vcs "$GO"; then
+        PATH="${GO_PKG_GO%/*}:$PATH"
+        export PATH
+        GO=$GO_PKG_GO
+    fi
+}
+
 # install_vcs clones or pulls vcs, the prompt's VCS status helper, into
 # conf/vcs, where conf's Makefile keeps it (conf's .gitignore leaves it out),
 # then builds and installs it. setup used to build it only if `make` in conf
@@ -2204,6 +2332,10 @@ install_os_packages() {
                     brew_install typescript \
                         || warn "could not install tsc; setup-kde's Krohnkite source-build fallback needs it"
                 fi
+            else
+                # vcs and tide-grant need Go, which Lockdown keeps from
+                # coming from Homebrew.
+                install_go_pkg
             fi
             # adb/fastboot are CLI tools (used by pidcat and friends), not
             # graphical -- install them regardless of --no-gui, matching the
