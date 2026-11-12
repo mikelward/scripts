@@ -5782,7 +5782,8 @@ test_lightspeed_reset_linux_only() {
 #   $2  the OS (default debian)
 #   $3  what's already there (default none): none | current (this run's
 #       config) | old (an earlier run's) | other (somebody else's)
-#   $4  whether keyd is installed (default yes): yes | no
+#   $4  whether keyd is installed (default yes): yes | no | rvaiya (as
+#       Debian's package names it, keyd.rvaiya)
 #   $5  CROSTINI (default 0)
 #   $6  ROOT (default yes)
 #   $7  whether keyd is running already (default no): yes | no
@@ -5811,9 +5812,14 @@ run_configure_keyd() {
         printf '#!/bin/sh\ntest "$1" = is-active && exit 3\nexit 0\n' > "$kd_bin/systemctl"
     fi
     chmod +x "$kd_bin/systemctl"
-    if test "$kd_has" = yes; then
-        printf '#!/bin/sh\nexit 0\n' > "$kd_bin/keyd"
-        chmod +x "$kd_bin/keyd"
+    case "$kd_has" in
+        yes) kd_cmd=keyd ;;
+        rvaiya) kd_cmd=keyd.rvaiya ;;
+        *) kd_cmd="" ;;
+    esac
+    if test -n "$kd_cmd"; then
+        printf '#!/bin/sh\nexit 0\n' > "$kd_bin/$kd_cmd"
+        chmod +x "$kd_bin/$kd_cmd"
     fi
     case "$kd_seed" in
         current|old)
@@ -5925,6 +5931,16 @@ test_keyd_foreign_config_left_alone() {
     assert_eq "$calls" "" &&
     assert_eq "$kd_body" "# somebody's own keyd config" &&
     assert_output_contains "setup didn't write it"
+}
+
+# Debian's package names the command keyd.rvaiya; the service is still keyd.
+test_keyd_debian_command_name() {
+    run_configure_keyd ok debian old rvaiya 0 yes yes
+    assert_status 0 &&
+    assert_output_lacks "no keyd" &&
+    assert_keyd_config_written &&
+    assert_calls_contain "keyd.rvaiya reload" &&
+    assert_calls_contain "systemctl enable keyd"
 }
 
 test_keyd_missing_says_so() {
@@ -6508,6 +6524,8 @@ run_test "an unchanged keyd config isn't written again" \
     test_keyd_current_config_kept
 run_test "a keyd config setup didn't write is left alone" \
     test_keyd_foreign_config_left_alone
+run_test "keyd is found under Debian's name for it, keyd.rvaiya" \
+    test_keyd_debian_command_name
 run_test "without keyd, setup says so" \
     test_keyd_missing_says_so
 run_test "a refused sudo for keyd warns and carries on" \

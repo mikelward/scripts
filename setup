@@ -4097,7 +4097,8 @@ RULE
 # keyd's altgr layer, which US layouts don't use. keyd reads physical keys, before
 # the layout, so Dvorak doesn't move them. Its package is install_os_packages'
 # to install; without it this only says so. A config setup didn't write is
-# left alone. SETUP_KEYD_DIR is for the tests.
+# left alone. Debian's package names the command keyd.rvaiya, as an older
+# Debian package had the name keyd. SETUP_KEYD_DIR is for the tests.
 configure_keyd() {
     case "$OS" in
         debian|redhat) ;;
@@ -4106,7 +4107,11 @@ configure_keyd() {
     # The container gets its keys from ChromeOS, not a keyboard of its own.
     test "${CROSTINI:-0}" -eq 1 && return 0
     test "${ROOT:-yes}" = no && return 0
-    if ! command -v keyd >/dev/null 2>&1; then
+    if command -v keyd >/dev/null 2>&1; then
+        keyd_cmd=keyd
+    elif command -v keyd.rvaiya >/dev/null 2>&1; then
+        keyd_cmd=keyd.rvaiya
+    else
         warn "no keyd, so Caps Lock with the arrows won't be Home, End, Page Up and Page Down"
         return 0
     fi
@@ -4174,7 +4179,7 @@ KEYD
     if ! systemctl is-active --quiet keyd 2>/dev/null; then
         sudo_or_warn systemctl start keyd || warn "could not start keyd; Caps Lock with the arrows waits for the next boot"
     elif test "$keyd_changed" = yes; then
-        sudo_or_warn keyd reload || warn "could not reload keyd; its new config waits for the next boot"
+        sudo_or_warn "$keyd_cmd" reload || warn "could not reload keyd; its new config waits for the next boot"
     fi
 }
 
