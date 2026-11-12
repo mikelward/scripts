@@ -1,18 +1,42 @@
 #!/bin/bash
+
+# abspath <path>: print <path> as an absolute path, resolving symlinks.
+# macOS's realpath fails on a path that doesn't exist yet, so for a new file
+# resolve its directory instead.
+abspath() {
+    local dir base
+    if test -e "$1"; then
+        realpath "$1"
+        return
+    fi
+    dir="$(dirname -- "$1")"
+    base="$(basename -- "$1")"
+    if test -d "$dir"; then
+        dir="$(realpath "$dir")" || return
+    else
+        # the editor will report the missing directory
+        case "$1" in
+        /*) printf '%s\n' "$1"; return ;;
+        *) dir="$PWD/$dir" ;;
+        esac
+    fi
+    printf '%s/%s\n' "${dir%/}" "$base"
+}
+
 declare -a args
 for arg in "$@"; do
     num="${arg##*:}"
     case "$num" in
     ''|*[!0-9]*)
         # no numeric :line suffix (the whole arg when there is no colon)
-        args+=("$(realpath "$arg")")
+        args+=("$(abspath "$arg")")
         ;;
     *)
         if test "$num" = "$arg"; then
             # no colon at all
-            args+=("$(realpath "$arg")")
+            args+=("$(abspath "$arg")")
         else
-            args+=("$(realpath "${arg%:*}")" "+$num")
+            args+=("$(abspath "${arg%:*}")" "+$num")
         fi
         ;;
     esac
