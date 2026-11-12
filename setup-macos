@@ -32,7 +32,8 @@
 #   music)
 # - Finder preferences (show hidden files, path bar, file extensions)
 # - On a Mac with no battery, no sleep while plugged in (the displays still
-#   sleep), and starting up again after a power cut
+#   sleep): with tide, its "Stay awake when plugged in", in awake.local.json;
+#   without, pmset. And starting up again after a power cut, with pmset
 # - Screenshots saved to ~/Pictures/Screenshots, tide's folder, without the
 #   floating thumbnail that holds each back from it for a few seconds
 #
@@ -2311,6 +2312,10 @@ configure_power() {
             return 0
             ;;
     esac
+    if test "$WM" = tide; then
+        keep_awake_with_tide
+        return 0
+    fi
     if test "$SUDO" = no; then
         info "Skipping keeping this Mac awake: it needs administrator rights and $NO_SUDO_WHY"
         todo_optional "To keep this Mac awake while plugged in, and start it after a power cut: sudo pmset -c sleep 0 autorestart 1"
@@ -2318,6 +2323,39 @@ configure_power() {
     fi
     info "Keeping this Mac awake while plugged in, and starting it after a power cut"
     try sudo pmset -c sleep 0 autorestart 1
+}
+
+# With tide, staying awake while plugged in is tide's "Stay awake when
+# plugged in" (tidemo SPEC.md §10), this Mac's own awake.local.json, which
+# tide holds from login and follows as the file changes. It's turned on
+# only where there's no file yet, so turning it off in Tide Settings stays
+# off. Starting again after a power cut is still pmset's, and needs sudo.
+# An earlier run's pmset sleep 0 would keep the Mac awake whatever the
+# switch says, so it's named for giving back.
+TIDE_AWAKE_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/tide/awake.local.json"
+
+keep_awake_with_tide() {
+    if test -e "$TIDE_AWAKE_SETTINGS"; then
+        detail "Leaving $TIDE_AWAKE_SETTINGS as it is"
+    else
+        info "Keeping this Mac awake while plugged in (Tide Settings, Idle)"
+        try mkdir -p "${TIDE_AWAKE_SETTINGS%/*}"
+        try write_file "$TIDE_AWAKE_SETTINGS" <<'JSON'
+{
+  "pluggedIn": true
+}
+JSON
+    fi
+    if pmset -g custom 2>/dev/null | sed -n '/^AC Power/,/^[^ ]/p' | grep -Eq '^ *sleep +0$'; then
+        todo_optional "tide keeps this Mac awake while plugged in now, and an earlier setup's 'pmset sleep 0' overrides its switch: to let the switch decide, sudo pmset -c sleep 1"
+    fi
+    if test "$SUDO" = no; then
+        info "Skipping starting this Mac after a power cut: it needs administrator rights and $NO_SUDO_WHY"
+        todo_optional "To start this Mac again after a power cut: sudo pmset -c autorestart 1"
+        return 0
+    fi
+    info "Starting this Mac again after a power cut"
+    try sudo pmset -c autorestart 1
 }
 
 # Font smoothing at its lightest. Since Mojave, macOS's default thickens text,
