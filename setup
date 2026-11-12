@@ -3637,7 +3637,7 @@ KEYBOARD
                 # --no-install installs nothing, so then only the warning
                 # below says it's missing.
                 if test "${INSTALL:-yes}" = yes && ! command -v setupcon >/dev/null 2>&1; then
-                    info "Installing console-setup, so the text console uses Dvorak too"
+                    info "Installing console-setup to set the text console layout"
                     sudo_or_warn env DEBIAN_FRONTEND=noninteractive apt-get install -y console-setup \
                         || warn "could not install console-setup"
                 fi
@@ -3655,9 +3655,9 @@ KEYBOARD
                 else
                     _kmap=$(ls -t "${SETUP_CONSOLE_SETUP_DIR:-/etc/console-setup}"/cached_*.kmap.gz 2>/dev/null | head -n 1)
                     if test -z "$_kmap"; then
-                        warn "setupcon saved no console keymap, so the text consoles get Dvorak only at the next boot"
+                        warn "setupcon saved no console keymap, so the text console layout changes to Dvorak at the next boot"
                     elif ! sudo_or_warn loadkeys -q "$_kmap"; then
-                        warn "could not load Dvorak into the text consoles now; they get it at the next boot"
+                        warn "could not load the Dvorak keymap now; text console layout changes at the next boot"
                     fi
                     load_saved_keymap_at_boot
                     update_boot_keymap
@@ -3695,7 +3695,7 @@ KEYBOARD
     fi
 }
 
-# console_keymap: what the text consoles type for the key right of Tab:
+# console_keymap: the text console layout, read from the key right of Tab:
 # dvorak (an apostrophe), qwerty (a q), or unknown when it can't be read.
 # dumpkeys needs a console, which only root can open from ssh or a desktop.
 console_keymap() {
@@ -3730,7 +3730,7 @@ ExecStartPre=-/bin/rm -f /run/console-setup/keymap_loaded'
         sudo_or_warn systemctl daemon-reload \
             || warn "systemd will read the console keymap change at the next boot"
     else
-        warn "could not make the boot load the saved console keymap, so the consoles may start each boot in the old layout"
+        warn "could not make the boot load the saved console keymap, so text console layout may revert at each boot"
     fi
 }
 
@@ -3755,18 +3755,18 @@ update_boot_keymap() {
     # rebuild here would then print "Not updating initramfs" and do nothing.
     _conf=${SETUP_INITRAMFS_CONF:-/etc/initramfs-tools/update-initramfs.conf}
     if grep -qE '^[[:space:]]*update_initramfs="?no"?[[:space:]]*$' "$_conf" 2>/dev/null; then
-        info "The boot image is rebuilt here only with a kernel update ($_conf), so a disk passphrase prompt, if you have one, gets Dvorak after the next one"
+        info "The boot image is rebuilt here only with a kernel update ($_conf), so the disk passphrase prompt layout changes to Dvorak after the next one"
         return 0
     fi
-    info "Updating the boot image, so a disk passphrase prompt, if you have one, is in Dvorak"
+    info "Updating the boot image to set the disk passphrase prompt layout to Dvorak"
     # Every kernel's image: the running one's was inspected, but the next
     # boot may well use a newer kernel's, which -u alone would rebuild
     # instead, and theirs hold the same old keymap.
     sudo_or_warn update-initramfs -u -k all \
-        || warn "could not update the boot image, so a disk passphrase prompt stays in the old layout"
+        || warn "could not update the boot image, so the disk passphrase prompt layout is unchanged"
 }
 
-# check_console_keymap BEFORE SAVED: says when the consoles aren't Dvorak
+# check_console_keymap BEFORE SAVED: says when the console layout isn't Dvorak
 # after setting them, or were QWERTY (BEFORE) at the start of this run though
 # an earlier run had saved Dvorak for the boot (SAVED), which means a boot
 # loaded another layout over it. Either way it
@@ -3774,11 +3774,11 @@ update_boot_keymap() {
 check_console_keymap() {
     _now=$(console_keymap)
     if test "$_now" = qwerty; then
-        warn "the text consoles still type QWERTY after setting Dvorak"
+        warn "text console layout is still QWERTY after setting it to Dvorak"
     elif test "$1" = qwerty && test "$2" = dvorak && test "$_now" = dvorak; then
-        warn "the text consoles had lost Dvorak since boot; setup put it back"
+        warn "text console layout had reverted to QWERTY since boot; set it back to Dvorak"
     elif test "$_now" = dvorak; then
-        info "The text consoles type Dvorak"
+        info "Text console layout is Dvorak"
         return 0
     else
         return 0
