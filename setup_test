@@ -1427,7 +1427,7 @@ configure_keyboard" 2>&1)"
 
 # run_debian_keyboard [setupcon|none]: configure_keyboard on Debian, with sudo
 # recording what it's asked and setupcon on PATH or not.
-# KB_KEYS, when set, is what dumpkeys says the consoles type for the key
+# KB_KEYS, when set, is what dumpkeys says the console keymap has for the key
 # right of Tab (apostrophe for Dvorak, +q for QWERTY), before and after
 # setup sets them: "+q apostrophe" is QWERTY before, Dvorak after.
 # KB_BOOT and KB_CONSOLE_SETUP stand in for /boot and /etc/console-setup,
@@ -1540,20 +1540,20 @@ test_debian_keyboard_keeps_the_boot_drop_in() {
     assert_output_lacks "daemon-reload"
 }
 
-# --no-sudo runs no sudo, not even to read what the consoles type.
+# --no-sudo runs no sudo, not even to read the console layout.
 test_debian_keyboard_no_sudo_reads_nothing_as_root() {
     KB_SUDO=no KB_KEYS="+q +q" run_debian_keyboard setupcon
     assert_status 0 &&
-    assert_output_lacks "still type QWERTY"
+    assert_output_lacks "still QWERTY"
 }
 
 # Dvorak after setting it is said in one line, and nothing more.
-test_debian_keyboard_quiet_when_the_consoles_type_dvorak() {
+test_debian_keyboard_quiet_when_the_console_layout_is_dvorak() {
     KB_KEYS="apostrophe apostrophe" run_debian_keyboard setupcon
     assert_status 0 &&
-    assert_output_contains "The text consoles type Dvorak" &&
+    assert_output_contains "Text console layout is Dvorak" &&
     assert_output_lacks "QWERTY" &&
-    assert_output_lacks "lost Dvorak"
+    assert_output_lacks "reverted"
 }
 
 # Still QWERTY after setting it is a warning, with what loads keymaps at
@@ -1561,7 +1561,7 @@ test_debian_keyboard_quiet_when_the_consoles_type_dvorak() {
 test_debian_keyboard_warns_when_the_consoles_stay_qwerty() {
     KB_KEYS="+q +q" run_debian_keyboard setupcon
     assert_status 0 &&
-    assert_output_contains "the text consoles still type QWERTY after setting Dvorak" &&
+    assert_output_contains "text console layout is still QWERTY after setting it to Dvorak" &&
     assert_output_contains "keyboard-setup: active"
 }
 
@@ -1575,7 +1575,7 @@ test_debian_keyboard_says_when_a_boot_lost_dvorak() {
         run_debian_keyboard setupcon
     rm -rf "$kb_saved"
     assert_status 0 &&
-    assert_output_contains "the text consoles had lost Dvorak since boot"
+    assert_output_contains "text console layout had reverted to QWERTY since boot"
 }
 
 # A first run, from QWERTY, isn't a loss, though a keymap was saved before
@@ -1588,7 +1588,7 @@ test_debian_keyboard_first_run_is_not_a_loss() {
         run_debian_keyboard setupcon
     rm -rf "$kb_saved"
     assert_status 0 &&
-    assert_output_lacks "lost Dvorak"
+    assert_output_lacks "reverted"
 }
 
 # A boot image the lister can't read, as one only root can, is rebuilt:
@@ -1645,7 +1645,7 @@ test_debian_keyboard_leaves_a_boot_image_rebuilt_only_with_kernels() {
     rm -rf "$kb_boot" "$kb_saved"
     assert_status 0 &&
     assert_output_lacks "update-initramfs -u" &&
-    assert_output_contains "gets Dvorak after the next one"
+    assert_output_contains "layout changes to Dvorak after the next one"
 }
 
 # One newer than the saved keymap is left alone: a rebuild takes a while.
@@ -6124,11 +6124,11 @@ run_test "Debian setup runs setxkbmap under X, not Wayland" \
     test_debian_keyboard_sets_x_but_not_wayland_sessions
 run_test "Debian setup with --no-sudo reads nothing as root" \
     test_debian_keyboard_no_sudo_reads_nothing_as_root
-run_test "Debian setup says briefly when the consoles type Dvorak" \
-    test_debian_keyboard_quiet_when_the_consoles_type_dvorak
-run_test "Debian setup warns, and says why, when the consoles stay QWERTY" \
+run_test "Debian setup says briefly when the console layout is Dvorak" \
+    test_debian_keyboard_quiet_when_the_console_layout_is_dvorak
+run_test "Debian setup warns, and says why, when the console layout stays QWERTY" \
     test_debian_keyboard_warns_when_the_consoles_stay_qwerty
-run_test "Debian setup says when a boot lost the consoles' Dvorak" \
+run_test "Debian setup says when a boot reverted the console layout" \
     test_debian_keyboard_says_when_a_boot_lost_dvorak
 run_test "Debian setup doesn't take a first run for a lost keymap" \
     test_debian_keyboard_first_run_is_not_a_loss
