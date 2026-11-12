@@ -2110,7 +2110,38 @@ PLIST
 WFLOW
 }
 
+# With tide, its own app keys (Super+G and the rest) open apps, and the
+# Quick Actions' Option+letter keys only get in the way: Option+F is
+# Alt+F, a word forward, in a terminal. So none are made, and an earlier
+# run's are removed. Their NSServicesStatus entries are left, as for a
+# skipped launcher: they name services that no longer exist.
+remove_app_shortcuts() {
+    SERVICES_DIR="$HOME/Library/Services"
+    _removed=no
+    # Each name quoted on its own: zsh doesn't split an unquoted variable on
+    # IFS, so a list in one variable would be one name there.
+    for workflow_name in "Launch Browser1" "Launch Browser2" "Launch Terminal" \
+        "Launch Terminal on Workstation" "Launch Music" "Launch Chat" "Launch Calendar"; do
+        if test -d "$SERVICES_DIR/$workflow_name.workflow"; then
+            info "Removing the $workflow_name Quick Action: tide's app keys open apps"
+            try rm -rf "$SERVICES_DIR/$workflow_name.workflow"
+            _removed=yes
+        fi
+    done
+    test "$_removed" = yes || return 0
+    if test -x "$PBS"; then
+        "$PBS" -flush \
+            || warn "could not refresh the Services registry; log out and back in for the old launch shortcuts to stop"
+    else
+        warn "$PBS not found; log out and back in for the old launch shortcuts to stop"
+    fi
+}
+
 configure_app_shortcuts() {
+    if test "$WM" = tide; then
+        remove_app_shortcuts
+        return 0
+    fi
     info "Configuring application launch shortcuts (Automator Quick Actions)"
 
     SERVICES_DIR="$HOME/Library/Services"
