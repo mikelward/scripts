@@ -1,0 +1,77 @@
+#!/bin/bash
+# Tests for editline
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT="$SCRIPT_DIR/editline"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_it [args...]: run editline in a scratch directory holding dir/old.txt,
+# with a vim stub that records its arguments to $calls and a realpath stub
+# that, like macOS's, fails on a path that doesn't exist.
+run_it() {
+    tmp="$(cd "$(mktemp -d)" && pwd -P)"
+    mkdir "$tmp/bin" "$tmp/work" "$tmp/work/dir"
+    : > "$tmp/work/dir/old.txt"
+    log="$tmp/calls"
+    : > "$log"
+    printf '#!/bin/sh\necho "vim $*" >> "%s"\n' "$log" > "$tmp/bin/vim"
+    cat > "$tmp/bin/realpath" <<'STUB'
+#!/bin/sh
+test -e "$1" || { echo "realpath: $1: No such file or directory" >&2; exit 1; }
+if test -d "$1"; then cd "$1" && pwd -P; exit; fi
+cd "$(dirname "$1")" && printf '%s/%s\n' "$(pwd -P)" "$(basename "$1")" | sed 's|^//|/|'
+STUB
+    chmod +x "$tmp/bin"/*
+    set +e
+    output="$(cd "$tmp/work" && PATH="$tmp/bin:/usr/bin:/bin" "$SCRIPT" "$@" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    work="$tmp/work"
+}
+
+cleanup() { rm -rf "$tmp"; }
+
+check() {
+    if test "$status" -ne 0 || test "$calls" != "$1" || test -n "$output"; then
+        echo "  FAIL: status $status, calls: $calls, expected: $1, output: $output"
+        cleanup
+        return 1
+    fi
+    cleanup
+}
+
+run_test() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    if "$2"; then
+        echo "ok $TESTS_RUN $1"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $1"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+test_existing() { run_it dir/old.txt; check "vim $work/dir/old.txt"; }
+test_line() { run_it dir/old.txt:12; check "vim $work/dir/old.txt +12"; }
+test_new() { run_it dir/new.txt; check "vim $work/dir/new.txt"; }
+test_new_line() { run_it dir/new.txt:3; check "vim $work/dir/new.txt +3"; }
+test_new_here() { run_it new.txt; check "vim $work/new.txt"; }
+test_new_dir() { run_it nodir/new.txt; check "vim $work/nodir/new.txt"; }
+test_new_root() { run_it /nodir-editline-test; check "vim /nodir-editline-test"; }
+
+run_test "edits an existing file" test_existing
+run_test "passes a :line suffix as +line" test_line
+run_test "edits a new file in an existing directory" test_new
+run_test "edits a new file at a line" test_new_line
+run_test "edits a new file in the current directory" test_new_here
+run_test "edits a new file in a missing directory" test_new_dir
+run_test "keeps a missing absolute path" test_new_root
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
