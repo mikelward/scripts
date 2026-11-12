@@ -812,15 +812,25 @@ test_disables_text_substitutions() {
 
 # --- modifier keys ---
 
-# tide takes F18 as Compose, so Caps Lock sends it, in the same mapping as
-# the rotation, live and at login; Amethyst keeps Caps Lock.
+# With tide, Caps Lock as Compose is tide's Keyboard switch, which this
+# turns on before tide starts. The key mapping, live and at login, is the
+# rotation alone, so turning the switch off sticks.
 test_tilemo_makes_caps_lock_compose() {
     run_macos --wm tide
     assert_status 0 &&
-    assert_called '{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}' &&
+    assert_called "defaults write org.hammerspoon.Hammerspoon tide.caps_lock_compose -bool true" &&
+    assert_output_in_order "Turning on Caps Lock as Compose" "Installing tide" &&
     assert_called '"HIDKeyboardModifierMappingSrc":0x7000000E0,"HIDKeyboardModifierMappingDst":0x7000000E3' &&
-    assert_file_contains "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" \
-        '{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}'
+    assert_not_called '0x700000039' &&
+    assert_file_lacks "$TEST_TMPDIR/home/Library/LaunchAgents/com.local.KeyRemapping.plist" '0x700000039'
+}
+
+# Set already, on or off in Tide Settings: left as it is.
+test_tide_caps_compose_setting_kept() {
+    printf '{ "tide.caps_lock_compose" = 0; }\n' > "$TEST_TMPDIR/defaults_read.org.hammerspoon.Hammerspoon"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_not_called "tide.caps_lock_compose -bool"
 }
 
 test_amethyst_keeps_caps_lock() {
@@ -3101,6 +3111,8 @@ run_test "without a battery reading, it warns and sleeps as before" \
     test_unknown_battery_warns_and_sleeps_as_before
 run_test "tide: Caps Lock is Compose" \
     test_tilemo_makes_caps_lock_compose
+run_test "tide: a Caps Lock setting already made is kept" \
+    test_tide_caps_compose_setting_kept
 run_test "amethyst: Caps Lock stays" \
     test_amethyst_keeps_caps_lock
 run_test "--no-sudo skips the Karabiner install" \
