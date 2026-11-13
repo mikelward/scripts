@@ -1,0 +1,31 @@
+#!/bin/bash
+# Brave, as chrome runs Chrome: every argument goes to it, so a local
+# browser1 or browser2 can run brave with the same flags (--new-window,
+# --user-data-dir, --app).
+#
+# On macOS Brave is an app bundle, started through open. -n starts a new
+# instance so its flags apply; Brave hands the request to a running one with
+# the same profile. $MACOS_APP_DIRS is for tests.
+if command -v uname >/dev/null 2>&1 && test "$(uname -s)" = Darwin; then
+	for app in "Brave Browser" "Brave Browser Beta"; do
+		for dir in ${MACOS_APP_DIRS:-/Applications "$HOME/Applications"}; do
+			if test -d "$dir/$app.app"; then
+				exec open -na "$app" --args "$@"
+			fi
+		done
+	done
+	echo "brave: no Brave Browser or Brave Browser Beta in /Applications or ~/Applications" >&2
+	exit 127
+fi
+# Brave's Linux packages install brave-browser; some name it brave. The beta
+# only when there's no stable, as for chrome. This script is a brave on PATH
+# too, so it's passed over: running it again would loop.
+for cmd in brave-browser brave brave-browser-beta; do
+	while IFS= read -r found; do
+		if test -n "$found" && ! test "$found" -ef "$0"; then
+			exec "$found" "$@"
+		fi
+	done < <(type -aP "$cmd")
+done
+echo "brave: no Brave installed (brave-browser, brave or brave-browser-beta)" >&2
+exit 127
