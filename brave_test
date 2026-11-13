@@ -1,0 +1,173 @@
+#!/bin/bash
+# Tests for brave
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BRAVE="$SCRIPT_DIR/brave"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_brave <commands> [args...]: run brave with only the named stub
+# commands on PATH, each recording its name and arguments to $calls.
+run_brave() {
+    stubs="$1"
+    shift
+    bin="$(mktemp -d)"
+    log="$bin/calls"
+    : > "$log"
+    for name in $stubs; do
+        if test "$name" = uname; then
+            # Answers like a Mac, and isn't logged.
+            printf '#!/bin/sh\necho Darwin\n' > "$bin/$name"
+        else
+            printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$name" "$log" > "$bin/$name"
+        fi
+        chmod +x "$bin/$name"
+    done
+    set +e
+    # Only the stubs, so a Brave on this machine never answers for them.
+    output="$(PATH="$bin" "$BRAVE" "$@" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$bin"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+assert_calls() {
+    if test "$calls" != "$1"; then
+        echo "  FAIL: calls mismatch"
+        echo "  expected: $1"
+        echo "  actual:   $calls"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_brave_browser_gets_everything() {
+    run_brave "brave-browser brave brave-browser-beta" --new-window https://example.com
+    assert_status 0 && assert_calls "brave-browser --new-window https://example.com"
+}
+
+test_plain_brave_when_brave_browser_is_missing() {
+    run_brave "brave brave-browser-beta" https://example.com
+    assert_status 0 && assert_calls "brave https://example.com"
+}
+
+test_beta_when_stable_is_missing() {
+    run_brave "brave-browser-beta" https://example.com
+    assert_status 0 && assert_calls "brave-browser-beta https://example.com"
+}
+
+# Unlike chrome, brave doesn't hand URLs to ChromeOS's browser: that's
+# Chrome, and you asked for Brave.
+test_crostini_still_runs_brave() {
+    run_brave "garcon-url-handler brave-browser" https://example.com
+    assert_status 0 && assert_calls "brave-browser https://example.com"
+}
+
+# The wrapper is a brave on PATH itself: it mustn't run itself again.
+test_wrapper_skips_itself() {
+    bin="$(mktemp -d)"
+    log="$bin/calls"
+    : > "$log"
+    ln -s "$BRAVE" "$bin/brave"
+    printf '#!/bin/sh\necho "brave-browser-beta $*" >> "%s"\n' "$log" > "$bin/brave-browser-beta"
+    chmod +x "$bin/brave-browser-beta"
+    set +e
+    # A limit, where there's timeout (macOS has none), so a loop fails the
+    # test rather than hanging it.
+    limit=()
+    if command -v timeout >/dev/null 2>&1; then
+        limit=("$(command -v timeout)" 5)
+    fi
+    output="$(PATH="$bin" "${limit[@]}" "$bin/brave" https://example.com 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$bin"
+    assert_status 0 && assert_calls "brave-browser-beta https://example.com"
+}
+
+test_no_brave_says_so() {
+    run_brave ""
+    assert_status 127 &&
+    case "$output" in
+        *"no Brave installed"*) ;;
+        *) echo "  FAIL: output: $output"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+# run_mac <apps> [args...]: run brave as on macOS, with an Applications
+# folder holding the named app bundles (comma-separated).
+run_mac() {
+    apps_dir="$(mktemp -d)"
+    IFS=, read -r -a apps <<< "$1"
+    for app in "${apps[@]}"; do
+        test -n "$app" && mkdir -p "$apps_dir/$app.app"
+    done
+    shift
+    MACOS_APP_DIRS="$apps_dir" run_brave "uname open brave-browser" "$@"
+    rm -rf "$apps_dir"
+}
+
+test_mac_opens_brave_with_its_flags() {
+    run_mac "Brave Browser,Brave Browser Beta" --new-window https://example.com
+    assert_status 0 && assert_calls "open -na Brave Browser --args --new-window https://example.com"
+}
+
+test_mac_app_mode() {
+    run_mac "Brave Browser" --app=https://calendar.example.com
+    assert_status 0 && assert_calls "open -na Brave Browser --args --app=https://calendar.example.com"
+}
+
+test_mac_beta_when_stable_is_missing() {
+    run_mac "Brave Browser Beta" https://example.com
+    assert_status 0 && assert_calls "open -na Brave Browser Beta --args https://example.com"
+}
+
+test_mac_no_brave_says_so() {
+    run_mac ""
+    assert_status 127 && assert_calls "" &&
+    case "$output" in
+        *"no Brave Browser"*) ;;
+        *) echo "  FAIL: output: $output"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+run_test() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=
+    if "$2" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $1"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $1"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+run_test "brave-browser gets every argument" test_brave_browser_gets_everything
+run_test "brave runs when brave-browser is missing" test_plain_brave_when_brave_browser_is_missing
+run_test "the beta runs when stable is missing" test_beta_when_stable_is_missing
+run_test "Crostini still runs Brave" test_crostini_still_runs_brave
+run_test "the wrapper doesn't run itself as brave" test_wrapper_skips_itself
+run_test "no Brave at all says so" test_no_brave_says_so
+run_test "macOS opens Brave with its flags" test_mac_opens_brave_with_its_flags
+run_test "macOS keeps --app for web apps" test_mac_app_mode
+run_test "macOS falls back to the beta" test_mac_beta_when_stable_is_missing
+run_test "macOS with no Brave says so" test_mac_no_brave_says_so
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0
