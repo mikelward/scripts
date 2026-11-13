@@ -3,7 +3,7 @@
 #
 # Usage:
 #     setup [--gui | --no-gui] [--kde] [--no-tide] \
-#           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] \
+#           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] [--splash] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
 #           [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade] \
 #           [--github PREFIX] \
@@ -304,6 +304,8 @@ Options:
                    default). SDDM and GDM are installed if they aren't
   --greeter        The same as --dm=tide
   --no-greeter     Put back the display manager greetd replaced
+  --splash         Make tide's boot splash, its logo and a spinner on black,
+                   the one shown from the next boot
   --minimal        Skip the heavyweight extras (helix, jj, nushell)
   --full           Install everything, even when disk space looks tight
   --brew           Install the extras from Homebrew
@@ -658,6 +660,9 @@ while test $# -gt 0; do
             ;;
         --no-greeter)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"
+            ;;
+        --splash | --no-splash)
+            TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS $1"
             ;;
         --dm)
             shift

@@ -2032,6 +2032,18 @@ test_no_greeter_is_forwarded() {
     assert_source_contains 'TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-greeter"'
 }
 
+# setup takes --splash, and --no-splash, and hands them to setup-tide,
+# which hands them to tide's installer.
+test_splash_is_forwarded() {
+    run_setup --splash --help
+    assert_status 0 &&
+    assert_output_contains "--splash         Make tide's boot splash" &&
+    run_setup --no-splash --help &&
+    assert_status 0 &&
+    run_linux_desktop "" " --splash" &&
+    assert_calls_contain "setup-tide TIDE_DIR=$desktop_src/tide --no-fetch --ignore-errors --splash"
+}
+
 # With tide (the default) the purge keeps the Hyprland stack tide runs on
 # and still removes what it doesn't use (sway).
 test_purge_obsolete_keeps_tide_stack() {
@@ -6254,6 +6266,7 @@ run_test "--dm is checked and passed to setup-tide" test_dm_is_forwarded
 run_test "--no-build-hyprland is forwarded to setup-tide" test_no_build_hyprland_is_forwarded
 run_test "--no-tidewm and --tidewm are forwarded to setup-tide" test_tidewm_is_forwarded
 run_test "--no-greeter is forwarded to setup-tide" test_no_greeter_is_forwarded
+run_test "--splash is forwarded to setup-tide" test_splash_is_forwarded
 run_test "--tide keeps the tide stack in the purge" test_purge_obsolete_keeps_tide_stack
 run_test "--tide keeps the tidewm session's portal in the purge" test_purge_obsolete_keeps_tidewm_portal
 run_test "tsc installs from the distro alongside node" \
