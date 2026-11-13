@@ -43,7 +43,9 @@ On a Linux desktop, tide is one more session at the login screen, and the
 display manager stays as it is. `--dm` picks the login screen from the next
 boot instead: `--dm=tide` for greetd with tide's greeter (or `--greeter`),
 `--dm=sddm` or `--dm=gdm`, each installed if it isn't. `--no-greeter` puts back
-the one greetd replaced.
+the one greetd replaced. `--splash` makes tide's boot splash, its logo and a
+spinner on black, the one shown from the next boot; without it, the boot
+splash stays as it is.
 
 ## Installing tools without root
 
