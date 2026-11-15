@@ -3,7 +3,7 @@
 #
 # Usage:
 #     setup [--gui | --no-gui] [--kde] [--no-tide] \
-#           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] [--splash] \
+#           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] [--splash] [--no-tidesway] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
 #           [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade] \
 #           [--github PREFIX] \
@@ -299,6 +299,8 @@ Options:
                    Use the distro's Hyprland for tide, even if it's too old
   --no-tidewm      Don't build tidewm for tide's tidewm session, which is
                    built beside Hyprland's by default
+  --no-tidesway    Don't build tidesway for tide's tidesway session, whose
+                   windows have rounded corners, built by default
   --dm DM          The login screen from the next boot: tide (greetd with
                    tide's greeter), sddm, gdm, or keep the one there is (the
                    default). SDDM and GDM are installed if they aren't
@@ -651,8 +653,9 @@ while test $# -gt 0; do
         --no-build-hyprland)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS --no-build-hyprland"
             ;;
-        # tidewm is built by default; --tidewm is still taken.
-        --tidewm | --no-tidewm)
+        # tidewm and tidesway are built by default; --tidewm and
+        # --tidesway are still taken.
+        --tidewm | --no-tidewm | --tidesway | --no-tidesway)
             TIDE_SETUP_FLAGS="$TIDE_SETUP_FLAGS $1"
             ;;
         --greeter)
