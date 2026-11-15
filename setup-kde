@@ -46,8 +46,9 @@
 #           (build-from-source fallback when the release can't be fetched)
 #
 # Usage:
-#     setup-kde [--wm tide | --wm krohnkite] [--no-install] [--no-sudo]
-#               [--ignore-errors] [--no-live-shortcuts] [-h | --help]
+#     setup-kde [--wm tide | --wm krohnkite] [--no-decoration] [--no-install]
+#               [--no-sudo] [--ignore-errors] [--no-live-shortcuts]
+#               [-h | --help]
 #
 # --wm picks the tiling, as setup-macos's does: tide, the default, clones
 # tide for KDE into ~/tide-kde (TIDE_KDE_DIR), or pulls it there with
@@ -57,6 +58,14 @@
 # live apply (apply_shortcuts_live). Krohnkite is turned off, and the KWin
 # actions an earlier run put on tide's keys are given back. krohnkite installs
 # and configures Krohnkite, as before.
+#
+# With tide, its window decoration is built too (`make install-decoration`),
+# before its setup, which chooses it: a KWin plugin in C++ that makes a
+# window's shadow the place a drag resizes it. It needs a C++ compiler, CMake,
+# extra-cmake-modules and the headers of Qt 6, KDecoration3, KCoreAddons and
+# KConfig, which setup installs where the distro has them. Where it can't be
+# built, a warning says so and windows keep Plasma's decoration, Breeze.
+# --no-decoration doesn't build it.
 #
 # --no-install skips cloning or pulling tide for KDE, or building/installing
 # Krohnkite, and only (re)applies the KDE configuration; an existing
@@ -122,6 +131,9 @@ INSTALL=yes
 
 # Which tiling to set up (--wm): tide, the default, or krohnkite.
 WM=tide
+
+# Whether to build tide for KDE's window decoration (--no-decoration).
+DECORATION=yes
 
 # Where tide for KDE's checkout lives, or will once cloned: a checkout, as
 # setup-macos keeps tidemo's, because tide for KDE installs itself from one
@@ -367,14 +379,16 @@ run_logged() {
 
 usage() {
     cat <<'USAGE'
-Usage: setup-kde [--wm tide | --wm krohnkite] [--no-install] [--no-sudo]
-                 [--ignore-errors] [--no-live-shortcuts] [-v | --verbose]
-                 [-h | --help]
+Usage: setup-kde [--wm tide | --wm krohnkite] [--no-decoration] [--no-install]
+                 [--no-sudo] [--ignore-errors] [--no-live-shortcuts]
+                 [-v | --verbose] [-h | --help]
 
 Configure the KDE Plasma 6 desktop environment.
 
 Options:
   --wm WM          Tiling: tide (tide for KDE, the default) or krohnkite
+  --no-decoration  Don't build tide for KDE's window decoration, whose
+                   shadow a drag resizes a window by, built by default
   --no-install     Skip fetching tide for KDE or Krohnkite; only (re)apply
                    config
   --no-sudo        Accepted for consistency with setup; nothing here uses sudo
@@ -419,6 +433,12 @@ while test $# -gt 0; do
                     exit 1
                     ;;
             esac
+            ;;
+        --decoration)
+            DECORATION=yes
+            ;;
+        --no-decoration)
+            DECORATION=no
             ;;
         --sudo|--no-sudo)
             # setup-kde performs no privileged operations, so --no-sudo is
@@ -1039,7 +1059,25 @@ install_tide_kde() {
         return 0
     fi
     info "Installed tide for KDE from $TIDE_KDE_DIR"
+    install_tide_decoration
     setup_tide_kde
+}
+
+# tide for KDE's window decoration, built and installed for this user with
+# its own `make install-decoration`, before setup_tide_kde, which chooses it
+# once it's there. Without what it builds with, or when the build fails, a
+# warning says so and the run carries on: windows keep the decoration they
+# have, Breeze unless another was chosen.
+install_tide_decoration() {
+    if test "$DECORATION" = no; then
+        info "Skipping tide's window decoration (--no-decoration)"
+        return 0
+    fi
+    if ! run_logged make -C "$TIDE_KDE_DIR" install-decoration; then
+        warn "couldn't build tide's window decoration from $TIDE_KDE_DIR, so windows keep Plasma's (Breeze), with no shadow to drag to resize them. It needs a C++ compiler, CMake, extra-cmake-modules and the headers of Qt 6, KDecoration3, KCoreAddons and KConfig, which setup installs where the distro has them; run 'make -C $TIDE_KDE_DIR install-decoration' to see why"
+        return 0
+    fi
+    info "Built tide's window decoration; windows get it at the next login"
 }
 
 # tide for KDE's own setup: Plasma's keys freed for tide's, its dim and

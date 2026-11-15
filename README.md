@@ -47,6 +47,12 @@ the one greetd replaced. `--splash` makes tide's boot splash, its logo and a
 spinner on black, the one shown from the next boot; without it, the boot
 splash stays as it is.
 
+On KDE Plasma, `setup` builds tide for KDE's window decoration, a KWin plugin
+that makes a window's shadow the place a drag resizes it, and installs the
+compiler and headers it builds with. Where the distro has no KDecoration3
+(before Plasma 6.3), or the build fails, a warning says so and windows keep
+Plasma's decoration, Breeze. `--no-decoration` builds none.
+
 ## Installing tools without root
 
 On machines where you can't use `apt`/`dnf`, `homepkg` installs prebuilt CLI

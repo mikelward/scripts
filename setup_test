@@ -527,6 +527,11 @@ case "${HARNESS_PM_MODE:-ok} \$*" in
         echo "E: Failed to fetch the upgrades" >&2
         exit 100
         ;;
+    # no-decoration: the release has no KDecoration3 to build with.
+    "no-decoration install "*ecoration*)
+        echo "E: Unable to locate KDecoration3" >&2
+        exit 100
+        ;;
     # no-extras: the release has no extra wallpapers; unlisted: dnf lists
     # them but can't install them.
     "no-extras -q repoquery "*) exit 0 ;;
@@ -605,6 +610,7 @@ OS=$linux_os
 NPM=${HARNESS_NPM:-no}
 GUI_ENABLED=$linux_gui
 CROSTINI=0
+DECORATION=${HARNESS_DECORATION:-yes}
 OS_RELEASE='${HARNESS_OS_RELEASE:-/nonexistent}'
 SUDO=yes
 UPGRADE=${HARNESS_UPGRADE:-no}
@@ -2706,6 +2712,71 @@ test_plasma_keyboard_installed_for_kde() {
     run_linux_packages redhat 1 &&
     assert_status 0 &&
     assert_calls_contain "dnf install -y --setopt=best=False plasma-keyboard"
+}
+
+# What tide for KDE's window decoration builds with comes with the desktop,
+# in a step of its own, so a release without KDecoration3 keeps the rest.
+test_decoration_build_packages_installed_for_kde() {
+    run_linux_packages debian 1
+    assert_status 0 &&
+    assert_calls_contain "--install-recommends g++ cmake extra-cmake-modules qt6-base-dev qt6-declarative-dev libkdecorations3-dev libkf6coreaddons-dev libkf6config-dev" &&
+    run_linux_packages redhat 1 &&
+    assert_status 0 &&
+    assert_calls_contain "dnf install -y --setopt=best=False gcc-c++ cmake extra-cmake-modules qt6-qtbase-devel qt6-qtdeclarative-devel cmake(KDecoration3) cmake(KF6CoreAddons) cmake(KF6Config)" &&
+    run_linux_packages debian 0 &&
+    assert_status 0 &&
+    assert_calls_lack "libkdecorations3-dev"
+}
+
+# A release that can't install them says windows keep Breeze, and goes on.
+test_decoration_build_packages_unavailable_warns() {
+    HARNESS_PM_MODE=no-decoration run_linux_packages debian 1
+    assert_status 0 &&
+    assert_output_contains "Warning: what tide's window decoration builds with isn't all available via apt" &&
+    assert_output_contains "keep Plasma's decoration, Breeze" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED" &&
+    HARNESS_PM_MODE=no-decoration run_linux_packages redhat 1 &&
+    assert_status 0 &&
+    assert_output_contains "Warning: what tide's window decoration builds with isn't all available via dnf" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# --no-decoration installs none of it, and tells setup-kde not to build.
+test_no_decoration_skips_packages_and_is_forwarded() {
+    run_setup --no-decoration --help
+    assert_status 0 &&
+    assert_output_contains "--no-decoration  Don't build tide for KDE's window decoration" &&
+    run_setup --decoration --help &&
+    assert_status 0 &&
+    HARNESS_DECORATION=no run_linux_packages debian 1 &&
+    assert_status 0 &&
+    assert_calls_lack "libkdecorations3-dev" &&
+    assert_calls_contain "--install-recommends plasma-keyboard" &&
+    HARNESS_DECORATION=no run_linux_packages redhat 1 &&
+    assert_status 0 &&
+    assert_calls_lack "KDecoration3" &&
+    kde_flags_for --no-decoration &&
+    assert_output_contains " --no-decoration" &&
+    kde_flags_for &&
+    assert_output_lacks "decoration"
+}
+
+# kde_flags_for OPTION...: sets output to the flags setup gives setup-kde
+# when it's run with OPTION, from setup's own parsing and forwarding.
+kde_flags_for() {
+    set +e
+    output="$(sh -c "$(sed -n '/^DECORATION=yes$/p; /^LIVE_SHORTCUTS=yes$/p' "$SETUP")
+for _arg; do
+    case \"\$_arg\" in
+$(sed -n '/^        --decoration)$/,/^        --no-decoration)$/p' "$SETUP")
+            DECORATION=no
+            ;;
+    esac
+done
+$(sed -n '/^KDE_SETUP_FLAGS=""$/,/^# default_branch DIR/p' "$SETUP")
+printf '%s\n' \"\$KDE_SETUP_FLAGS\"" sh "$@" 2>&1)"
+    status=$?
+    set -e
 }
 
 # The distro's wallpapers come with the desktop, one package per step so a
@@ -6208,6 +6279,12 @@ run_test "a caller whose URL isn't from the prefix skips the check" \
 run_test "--live-shortcuts and --no-live-shortcuts are accepted" \
     test_live_shortcuts_flags_accepted
 run_test "--live-shortcuts is documented in usage" test_live_shortcuts_in_usage
+run_test "the decoration's build packages come with the KDE desktop" \
+    test_decoration_build_packages_installed_for_kde
+run_test "a release without the decoration's build packages warns" \
+    test_decoration_build_packages_unavailable_warns
+run_test "--no-decoration skips the build packages and is forwarded to setup-kde" \
+    test_no_decoration_skips_packages_and_is_forwarded
 run_test "the live apply is on by default and forwarded either way" \
     test_live_shortcuts_parsing_and_forwarding
 run_test "--no-sudo is accepted as a known option" test_no_sudo_flag_accepted

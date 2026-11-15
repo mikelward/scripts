@@ -5,6 +5,7 @@
 #     setup [--gui | --no-gui] [--kde] [--no-tide] \
 #           [--dm tide|sddm|gdm|keep | --greeter | --no-greeter] [--splash] [--no-tidesway] \
 #           [--minimal | --full] [--no-install] [--purge-obsolete] [--ignore-errors] \
+#           [--no-decoration] \
 #           [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade] \
 #           [--github PREFIX] \
 #           [-v | --verbose] \
@@ -224,6 +225,12 @@ VERBOSE=no
 # the next login. --no-live-shortcuts opts out.
 LIVE_SHORTCUTS=yes
 
+# Whether to build tide for KDE's window decoration, a KWin plugin in C++
+# whose shadow a drag resizes a window by: yes installs what it builds with
+# and has setup-kde build it (the default); no does neither
+# (--no-decoration).
+DECORATION=yes
+
 # Whether to generate an SSH key. One of:
 #   auto - skip when a key is already available -- loaded in the agent
 #          (ssh-add -l) or present on disk -- otherwise generate one (default)
@@ -281,7 +288,7 @@ Usage: setup [--gui | --no-gui] [--kde] [--no-tide]
              [--dm tide|sddm|gdm|keep | --greeter | --no-greeter]
              [--minimal | --full]
              [--no-install] [--purge-obsolete] [--no-sudo] [--no-root]
-             [--ignore-errors] [--no-live-shortcuts]
+             [--ignore-errors] [--no-live-shortcuts] [--no-decoration]
              [--ssh | --no-ssh] [--no-npm] [--upgrade | --no-upgrade]
              [--github PREFIX]
              [-v | --verbose]
@@ -323,6 +330,8 @@ Options:
                    default)
   --no-live-shortcuts
                    Leave KDE's keyboard shortcuts for the next login
+  --no-decoration  Don't build tide for KDE's window decoration, whose
+                   shadow a drag resizes a window by, built by default
   --ssh            Generate an SSH key even if one is already available
   --no-ssh         Skip SSH key generation
   --no-npm         Skip installing Node.js and the TypeScript compiler
@@ -731,6 +740,12 @@ while test $# -gt 0; do
         --no-live-shortcuts)
             LIVE_SHORTCUTS=no
             ;;
+        --decoration)
+            DECORATION=yes
+            ;;
+        --no-decoration)
+            DECORATION=no
+            ;;
         --ssh)
             SSH=yes
             ;;
@@ -864,6 +879,10 @@ if test "$LIVE_SHORTCUTS" = yes; then
     KDE_SETUP_FLAGS="$KDE_SETUP_FLAGS --live-shortcuts"
 else
     KDE_SETUP_FLAGS="$KDE_SETUP_FLAGS --no-live-shortcuts"
+fi
+# setup-kde builds tide for KDE's window decoration unless told not to.
+if test "$DECORATION" = no; then
+    KDE_SETUP_FLAGS="$KDE_SETUP_FLAGS --no-decoration"
 fi
 
 # default_branch DIR: origin's default branch, as DIR's clone recorded it,
@@ -2198,6 +2217,16 @@ install_os_packages() {
                 # step: releases before Plasma 6.6 don't package it.
                 apt_install plasma-keyboard \
                     || info "plasma-keyboard isn't packaged here, so holding a key on KDE doesn't offer accents"
+                # What tide for KDE's window decoration builds with
+                # (setup-kde's install_tide_decoration; tide-kde's README.md
+                # has the list). Its own step: releases before Plasma 6.3
+                # have no libkdecorations3-dev, and keep Breeze.
+                if test "${DECORATION:-yes}" = yes; then
+                    apt_install g++ cmake extra-cmake-modules \
+                        qt6-base-dev qt6-declarative-dev \
+                        libkdecorations3-dev libkf6coreaddons-dev libkf6config-dev \
+                        || warn "what tide's window decoration builds with isn't all available via apt (it needs Plasma 6.3's libkdecorations3-dev), so windows on KDE keep Plasma's decoration, Breeze"
+                fi
                 install_wallpapers
             fi
             ;;
@@ -2279,6 +2308,16 @@ install_os_packages() {
                     || warn "fuzzel or wl-clipboard unavailable via dnf; Win+V on KDE says what's missing"
                 dnf_install plasma-keyboard \
                     || info "plasma-keyboard isn't packaged here, so holding a key on KDE doesn't offer accents"
+                # What tide for KDE's window decoration builds with, as in
+                # the apt branch. The KDE headers go by the CMake packages
+                # the build looks for, so a release whose kdecoration-devel
+                # is still KDecoration2 fails here, not in the build.
+                if test "${DECORATION:-yes}" = yes; then
+                    dnf_install gcc-c++ cmake extra-cmake-modules \
+                        qt6-qtbase-devel qt6-qtdeclarative-devel \
+                        'cmake(KDecoration3)' 'cmake(KF6CoreAddons)' 'cmake(KF6Config)' \
+                        || warn "what tide's window decoration builds with isn't all available via dnf (it needs Plasma 6.3's KDecoration3), so windows on KDE keep Plasma's decoration, Breeze"
+                fi
                 install_wallpapers
             fi
             ;;
