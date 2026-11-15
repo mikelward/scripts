@@ -484,6 +484,77 @@ MOCK
     assert_not_called "node $TEST_TMPDIR"
 }
 
+# tide's window decoration is built by default, after tide for KDE is
+# installed and before its setup, which chooses a decoration that's there.
+test_tide_builds_its_decoration_before_setup() {
+    add_tide_kde_mocks
+    run_kde
+    assert_status 0 &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install-decoration" &&
+    assert_output_contains "Built tide's window decoration; windows get it at the next login" || return 1
+    order="$(grep -n -e "^make -C $TEST_TMPDIR/home/tide-kde install\$" \
+        -e "^make -C $TEST_TMPDIR/home/tide-kde install-decoration\$" \
+        -e "^node $TEST_TMPDIR/home/tide-kde/scripts/setup.mjs" "$CALLS" |
+        sed -e 's/^[0-9]*://' -e "s|$TEST_TMPDIR/home/tide-kde||" -e 's/ --batch .*//' | tr '\n' ';')"
+    if test "$order" != "make -C  install;make -C  install-decoration;node /scripts/setup.mjs;"; then
+        echo "  FAIL: expected install, install-decoration, then setup.mjs; got: $order"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_no_decoration_builds_none() {
+    add_tide_kde_mocks
+    run_kde --no-decoration
+    assert_status 0 &&
+    assert_not_called "install-decoration" &&
+    assert_output_contains "Skipping tide's window decoration (--no-decoration)" &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install" &&
+    assert_called "node $TEST_TMPDIR/home/tide-kde/scripts/setup.mjs --batch "
+}
+
+test_decoration_is_accepted() {
+    add_tide_kde_mocks
+    run_kde --no-decoration --decoration
+    assert_status 0 &&
+    assert_called "make -C $TEST_TMPDIR/home/tide-kde install-decoration"
+}
+
+# A build that fails, as without KDecoration3's headers, is a warning that
+# shows what CMake said, and tide for KDE is still set up, with Breeze.
+test_tide_failed_decoration_build_warns_and_carries_on() {
+    add_tide_kde_mocks
+    cat > "$TEST_TMPDIR/bin/make" <<MOCK
+#!/bin/sh
+printf "%s\\n" "make \$*" >> "$CALLS"
+for arg; do
+    if test "\$arg" = install-decoration; then
+        echo 'Could not find a package configuration file provided by "KDecoration3"' >&2
+        exit 2
+    fi
+done
+exit 0
+MOCK
+    run_kde
+    assert_status 0 &&
+    assert_output_contains "Warning: couldn't build tide's window decoration from $TEST_TMPDIR/home/tide-kde, so windows keep Plasma's (Breeze)" &&
+    assert_output_contains 'Could not find a package configuration file provided by "KDecoration3"' &&
+    assert_output_lacks "Built tide's window decoration" &&
+    assert_called "node $TEST_TMPDIR/home/tide-kde/scripts/setup.mjs --batch " &&
+    assert_output_contains "Set up tide for KDE" &&
+    assert_output_contains "setup-kde finished, with"
+}
+
+# Krohnkite has no use for tide's decoration.
+test_krohnkite_builds_no_decoration() {
+    add_tide_kde_mocks
+    KDE_WM=krohnkite
+    mkdir -p "$TEST_TMPDIR/home/tide-kde"
+    run_kde --no-install
+    assert_status 0 &&
+    assert_not_called "install-decoration"
+}
+
 test_wm_takes_an_equals() {
     add_tide_kde_mocks
     KDE_WM=krohnkite
@@ -2165,6 +2236,13 @@ run_test "--no-install clones nothing" test_tide_no_install_leaves_a_missing_che
 run_test "--no-install installs the checkout unpulled" test_tide_no_install_installs_a_checkout_unpulled
 run_test "tide for KDE without node warns" test_tide_without_node_warns
 run_test "a failed tide for KDE install warns" test_tide_failed_install_warns
+run_test "tide's decoration is built before tide for KDE's setup" \
+    test_tide_builds_its_decoration_before_setup
+run_test "--no-decoration builds no decoration" test_no_decoration_builds_none
+run_test "--decoration is accepted" test_decoration_is_accepted
+run_test "a failed decoration build warns, and setup carries on" \
+    test_tide_failed_decoration_build_warns_and_carries_on
+run_test "Krohnkite builds no decoration" test_krohnkite_builds_no_decoration
 run_test "--wm=tide is accepted" test_wm_takes_an_equals
 run_test "--wm refuses what it doesn't know" test_wm_refuses_others
 run_test "Krohnkite turns tide for KDE off" test_krohnkite_turns_tide_off
