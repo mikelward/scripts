@@ -1,0 +1,93 @@
+#!/bin/bash
+# The fakes' bodies are single-quoted on purpose: they expand when they run.
+# shellcheck disable=SC2016
+# Tests for tide-go-to-workspace, Plasma's Meta+Return: it opens tide's
+# name prompt over Quickshell's IPC, and says why when nothing answers.
+# Runs the real script against a fake qs that logs its calls. A real
+# Quickshell can only be checked on Plasma.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+fake() {
+  printf '#!/bin/sh\n%s\n' "$2" > "$BIN/$1"
+  chmod +x "$BIN/$1"
+}
+
+setup() {
+  TEST_TMPDIR="$(mktemp -d)"
+  BIN="$TEST_TMPDIR/bin"
+  CALLS="$TEST_TMPDIR/calls"
+  mkdir -p "$BIN" "$TEST_TMPDIR/home/.config/quickshell/tide"
+  : > "$CALLS"
+  : > "$TEST_TMPDIR/home/.config/quickshell/tide/kde.qml"
+  # qs answers, unless $QS_FAILS, as with no instance running.
+  fake qs 'echo "qs $*" >> "$CALLS"
+test -z "$QS_FAILS" || { echo "No running instances for $2" >&2; exit 255; }'
+}
+
+teardown() {
+  rm -rf "$TEST_TMPDIR"
+}
+
+run() {
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$TEST_TMPDIR/home" CALLS="$CALLS" "$@" \
+    sh "$SCRIPT_DIR/tide-go-to-workspace" > "$TEST_TMPDIR/out" 2>&1 && status=0 || status=$?
+}
+
+check() {
+  TESTS_RUN=$((TESTS_RUN + 1))
+  if "${@:2}"; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+  else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    echo "FAIL: $1" >&2
+    echo "  calls: $(cat "$CALLS")" >&2
+    echo "  output: $(cat "$TEST_TMPDIR/out")" >&2
+  fi
+}
+
+calls_are() { test "$(cat "$CALLS")" = "$1"; }
+says() { grep -qF -- "$1" "$TEST_TMPDIR/out"; }
+
+setup
+run
+check "it opens tide's name prompt to go to a workspace" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call prompt go"
+check "and exits 0" test "$status" -eq 0
+check "and prints nothing" test ! -s "$TEST_TMPDIR/out"
+teardown
+
+setup
+run QS_FAILS=1
+check "with no prompt running, it fails" test "$status" -eq 1
+check "and says what to check" says "is tide-kde.service running?"
+check "and what qs said" says "No running instances"
+teardown
+
+setup
+rm "$TEST_TMPDIR/home/.config/quickshell/tide/kde.qml"
+run
+check "without kde.qml, it fails without asking qs" calls_are ""
+check "and says it's missing" says "kde.qml not found; install tide"
+check "and exits 1" test "$status" -eq 1
+teardown
+
+setup
+rm "$BIN/qs"
+run
+check "without qs, it fails" test "$status" -eq 1
+check "and says so" says "qs not found; install tide"
+teardown
+
+setup
+: > "$TEST_TMPDIR/other.qml"
+run TIDE_KDE_QML="$TEST_TMPDIR/other.qml"
+check "TIDE_KDE_QML names another kde.qml" calls_are "qs -p $TEST_TMPDIR/other.qml ipc call prompt go"
+teardown
+
+echo "tide-go-to-workspace_test: $TESTS_PASSED/$TESTS_RUN passed"
+test "$TESTS_FAILED" -eq 0
