@@ -34,6 +34,7 @@ TESTS = \
 	screenshot_test \
 	clipboard-menu_test \
 	tide-launcher_test \
+	tide-go-to-workspace_test \
 	fill-menu_test \
 	chars-menu_test \
 	terminal_on_workstation_test \

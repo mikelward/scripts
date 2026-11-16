@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# tide-go-to-workspace: KDE Plasma's Meta+Return. Opens tide's name prompt
+# there, to go to a workspace by name, making it if it's new (tide's
+# SPEC.md §8.5). The prompt is in kde.qml, beside the launcher, which
+# tide-kde.service keeps running. When none answers (no tide, as with
+# `setup --no-tide`, or its unit stopped), it says so and exits 1.
+#
+#   tide-go-to-workspace
+#
+# setup-kde binds it.
+
+kde_qml=${TIDE_KDE_QML:-$HOME/.config/quickshell/tide/kde.qml}
+
+if ! command -v qs >/dev/null 2>&1; then
+    echo "tide-go-to-workspace: qs not found; install tide" >&2
+    exit 1
+fi
+if ! test -f "$kde_qml"; then
+    echo "tide-go-to-workspace: $kde_qml not found; install tide" >&2
+    exit 1
+fi
+if ! qs -p "$kde_qml" ipc call prompt go >/dev/null; then
+    echo "tide-go-to-workspace: tide's name prompt didn't answer; is tide-kde.service running?" >&2
+    exit 1
+fi
