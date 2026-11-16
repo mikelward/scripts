@@ -2,25 +2,54 @@
 #
 # tide-go-to-workspace: KDE Plasma's Meta+Return. Opens tide's name prompt
 # there, to go to a workspace by name, making it if it's new (tide's
-# SPEC.md §8.5). The prompt is in kde.qml, beside the launcher, which
-# tide-kde.service keeps running. When none answers (no tide, as with
-# `setup --no-tide`, or its unit stopped), it says so and exits 1.
+# SPEC.md §8.5). With --move, as tide-move-to-workspace runs it for
+# Meta+Shift+Return, the prompt moves the window you're in there instead.
+# The prompt is in kde.qml, beside the launcher, which tide-kde.service
+# keeps running. When none answers (no tide, as with `setup --no-tide`, or
+# its unit stopped), it says so and exits 1. It logs that it started and
+# how it ended to the journal, through logger, as KDE shows a shortcut's
+# output nowhere.
 #
-#   tide-go-to-workspace
+#   tide-go-to-workspace [--move]
 #
 # setup-kde binds it.
 
 kde_qml=${TIDE_KDE_QML:-$HOME/.config/quickshell/tide/kde.qml}
 
-if ! command -v qs >/dev/null 2>&1; then
-    echo "tide-go-to-workspace: qs not found; install tide" >&2
+# log PRIORITY MESSAGE: to the journal, and errors to stderr too. Without
+# logger, the journal's record is skipped; stderr still says what failed.
+log() {
+    if command -v logger >/dev/null 2>&1; then
+        logger -t "tide-go-to-workspace[$$]" -p "user.$1" -- "$2" ||
+            echo "tide-go-to-workspace: couldn't log to the journal: $2" >&2
+    fi
+    test "$1" != err || echo "tide-go-to-workspace: $2" >&2
+}
+
+# fail MESSAGE: logs MESSAGE and how it ended, and exits 1.
+fail() {
+    log err "$1"
+    log info "ended: failed, exit 1"
     exit 1
+}
+
+case ${1-} in
+    '') prompt=go ;;
+    --move) prompt=move ;;
+    *)
+        echo "Usage: tide-go-to-workspace [--move]" >&2
+        exit 2
+        ;;
+esac
+
+log info "started: asking tide's name prompt to $prompt"
+if ! command -v qs >/dev/null 2>&1; then
+    fail "qs not found; install tide"
 fi
 if ! test -f "$kde_qml"; then
-    echo "tide-go-to-workspace: $kde_qml not found; install tide" >&2
-    exit 1
+    fail "$kde_qml not found; install tide"
 fi
-if ! qs -p "$kde_qml" ipc call prompt go >/dev/null; then
-    echo "tide-go-to-workspace: tide's name prompt didn't answer; is tide-kde.service running?" >&2
-    exit 1
+if ! qs -p "$kde_qml" ipc call prompt "$prompt" >/dev/null; then
+    fail "tide's name prompt didn't answer; is tide-kde.service running?"
 fi
+log info "ended: the prompt opened, exit 0"

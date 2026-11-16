@@ -10,8 +10,9 @@
 #   Win+V's clipboard menu, which pastes (clipboard-menu), and Win+Shift+V's
 #   snippets and Bitwarden menu, which types (fill-menu), and Win+Space's
 #   tide launcher, or KRunner without it (tide-launcher), Win+Return's
-#   prompt to go to a workspace by name, with tide for KDE
-#   (tide-go-to-workspace), and Win+;'s emoji and characters menu, which
+#   prompt to go to a workspace by name, and Win+Shift+Return's to move the
+#   window there, with tide for KDE (tide-go-to-workspace,
+#   tide-move-to-workspace), and Win+;'s emoji and characters menu, which
 #   pastes (chars-menu)
 # - The session keyboard layout (US Dvorak, Caps Lock as Compose)
 # - Accents on a held key, through Plasma Keyboard where it's installed,
@@ -1384,12 +1385,15 @@ configure_app_shortcuts() {
     # tide's launcher, as on tide (tide's SPEC.md §8.5), or KRunner where
     # it isn't running. Kickoff keeps the tap of Meta.
     add_app_shortcut "tide-launcher" "Meta+Space"
-    # tide's prompt to go to a workspace by name, as on tide (tide's
-    # SPEC.md §8.5). With Krohnkite, Meta+Return is its Set master.
+    # tide's prompts to go to a workspace by name, and to move the window
+    # there, as on tide (tide's SPEC.md §8.5). With Krohnkite, Meta+Return
+    # is its Set master.
     if test "$WM" = tide; then
         add_app_shortcut "tide-go-to-workspace" "Meta+Return"
+        add_app_shortcut "tide-move-to-workspace" "Meta+Shift+Return"
     else
         retire_app_shortcut tide-go-to-workspace
+        retire_app_shortcut tide-move-to-workspace
     fi
 }
 

@@ -1,8 +1,9 @@
 #!/bin/bash
 # The fakes' bodies are single-quoted on purpose: they expand when they run.
 # shellcheck disable=SC2016
-# Tests for tide-go-to-workspace, Plasma's Meta+Return: it opens tide's
-# name prompt over Quickshell's IPC, and says why when nothing answers.
+# Tests for tide-go-to-workspace, Plasma's Meta+Return, and
+# tide-move-to-workspace, its Meta+Shift+Return: they open tide's name
+# prompt over Quickshell's IPC, and say why when nothing answers.
 # Runs the real script against a fake qs that logs its calls. A real
 # Quickshell can only be checked on Plasma.
 
@@ -28,15 +29,23 @@ setup() {
   # qs answers, unless $QS_FAILS, as with no instance running.
   fake qs 'echo "qs $*" >> "$CALLS"
 test -z "$QS_FAILS" || { echo "No running instances for $2" >&2; exit 255; }'
+  # logger keeps what goes to the journal, one line a call.
+  JOURNAL="$TEST_TMPDIR/journal"
+  : > "$JOURNAL"
+  fake logger 'echo "$*" >> "$JOURNAL"'
 }
 
 teardown() {
   rm -rf "$TEST_TMPDIR"
 }
 
+# run [VAR=VALUE...] [-- ARG...]: tide-go-to-workspace, or SCRIPT if set.
 run() {
-  env -i PATH="$BIN:/usr/bin:/bin" HOME="$TEST_TMPDIR/home" CALLS="$CALLS" "$@" \
-    sh "$SCRIPT_DIR/tide-go-to-workspace" > "$TEST_TMPDIR/out" 2>&1 && status=0 || status=$?
+  _vars=()
+  while test $# -gt 0 && test "$1" != --; do _vars+=("$1"); shift; done
+  test $# -eq 0 || shift
+  env -i PATH="$BIN:/usr/bin:/bin" HOME="$TEST_TMPDIR/home" CALLS="$CALLS" JOURNAL="$JOURNAL" "${_vars[@]}" \
+    sh "$SCRIPT_DIR/${SCRIPT:-tide-go-to-workspace}" "$@" > "$TEST_TMPDIR/out" 2>&1 && status=0 || status=$?
 }
 
 check() {
@@ -52,6 +61,8 @@ check() {
 }
 
 calls_are() { test "$(cat "$CALLS")" = "$1"; }
+# journal_has PRIORITY MESSAGE: logged at user.PRIORITY, tagged with the script.
+journal_has() { grep -qE -- "^-t tide-go-to-workspace\[[0-9]+\] -p user\.$1 -- $2\$" "$JOURNAL"; }
 says() { grep -qF -- "$1" "$TEST_TMPDIR/out"; }
 
 setup
@@ -59,6 +70,8 @@ run
 check "it opens tide's name prompt to go to a workspace" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call prompt go"
 check "and exits 0" test "$status" -eq 0
 check "and prints nothing" test ! -s "$TEST_TMPDIR/out"
+check "and logs that it started" journal_has info "started: asking tide's name prompt to go"
+check "and how it ended" journal_has info "ended: the prompt opened, exit 0"
 teardown
 
 setup
@@ -66,6 +79,8 @@ run QS_FAILS=1
 check "with no prompt running, it fails" test "$status" -eq 1
 check "and says what to check" says "is tide-kde.service running?"
 check "and what qs said" says "No running instances"
+check "and logs the failure" journal_has err "tide's name prompt didn't answer; is tide-kde.service running\\?"
+check "and how it ended" journal_has info "ended: failed, exit 1"
 teardown
 
 setup
@@ -81,12 +96,41 @@ rm "$BIN/qs"
 run
 check "without qs, it fails" test "$status" -eq 1
 check "and says so" says "qs not found; install tide"
+check "and logs it" journal_has err "qs not found; install tide"
+teardown
+
+setup
+rm "$BIN/logger"
+run
+check "without logger, it still opens the prompt" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call prompt go"
+check "and exits 0" test "$status" -eq 0
+check "and prints nothing" test ! -s "$TEST_TMPDIR/out"
 teardown
 
 setup
 : > "$TEST_TMPDIR/other.qml"
 run TIDE_KDE_QML="$TEST_TMPDIR/other.qml"
 check "TIDE_KDE_QML names another kde.qml" calls_are "qs -p $TEST_TMPDIR/other.qml ipc call prompt go"
+teardown
+
+setup
+run -- --move
+check "--move opens it to move the window" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call prompt move"
+check "and exits 0" test "$status" -eq 0
+check "and logs it" journal_has info "started: asking tide's name prompt to move"
+teardown
+
+setup
+SCRIPT=tide-move-to-workspace run
+check "tide-move-to-workspace opens it to move the window" calls_are "qs -p $TEST_TMPDIR/home/.config/quickshell/tide/kde.qml ipc call prompt move"
+check "and exits 0" test "$status" -eq 0
+teardown
+
+setup
+run -- --bogus
+check "another argument is refused" test "$status" -eq 2
+check "with its usage" says "Usage: tide-go-to-workspace [--move]"
+check "without asking qs" calls_are ""
 teardown
 
 echo "tide-go-to-workspace_test: $TESTS_PASSED/$TESTS_RUN passed"
