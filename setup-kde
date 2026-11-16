@@ -1330,9 +1330,28 @@ remove_stale_app_shortcut_groups() {
     }
 }
 
+# Takes back a launch shortcut an earlier run made with add_app_shortcut:
+# its key is freed, live and at the next login, and its launcher goes.
+# retire_app_shortcut NAME
+retire_app_shortcut() {
+    desktop_file="shortcut-$1.desktop"
+    desktop_path="$HOME/.local/share/applications/$desktop_file"
+    test -e "$desktop_path" || return 0
+    kde_write --file kglobalshortcutsrc \
+        --group services --group "$desktop_file" --key _launch none
+    record_live_shortcut "$desktop_file" _launch none "$1"
+    rm -f "$desktop_path"
+    KDE_WRITES=$((KDE_WRITES + 1))
+}
+
 configure_app_shortcuts() {
 
     remove_stale_app_shortcut_groups
+
+    # IRC and remote desktop had Meta+I and Meta+R, which Plasma keeps for
+    # System Settings and Spectacle.
+    retire_app_shortcut irc
+    retire_app_shortcut remote-desktop
 
     # The apps conf's tidewm config gives tide. Meta+E stays Dolphin, the
     # file manager, as tide's files key.
@@ -1343,10 +1362,8 @@ configure_app_shortcuts() {
     add_app_shortcut "terminal_on_workstation" "Meta+W"
     add_app_shortcut "music" "Meta+Y"
     add_app_shortcut "home" "Meta+H"
-    add_app_shortcut "irc" "Meta+I"
     add_app_shortcut "google-meet" "Meta+M"
     add_app_shortcut "notepad" "Meta+N"
-    add_app_shortcut "remote-desktop" "Meta+R"
     add_app_shortcut "bluetooth-connect" "Meta+B"
     add_app_shortcut "pulseprofile.py" "Meta+Shift+B"
     # Chat and Calendar, as on tide and tide for macOS.
@@ -1435,6 +1452,8 @@ configure_keybindings() {
     # Klipper's popup, in plasmashell, holds Meta+V. clipboard-menu opens
     # it itself in an X11 session, where its fuzzel menu can't run.
     unbind_shortcut_in plasmashell show-on-mouse-pos              # Meta+V -> clipboard-menu
+    unbind_shortcut_in plasmashell "next activity"                # Meta+A -> Activate Window Demanding Attention
+    unbind_shortcut_in org_kde_powerdevil powerProfile            # Meta+B -> bluetooth-connect
     n=1
     while test "$n" -le 10; do
         # Meta+1..9 and 0 -> Switch to Desktop N (plasmashell grabs these by default).
