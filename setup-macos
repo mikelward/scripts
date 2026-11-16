@@ -36,6 +36,8 @@
 # - On a Mac with no battery, no sleep while plugged in (the displays still
 #   sleep): with tide, its "Stay awake when plugged in", in awake.local.json;
 #   without, pmset. And starting up again after a power cut, with pmset
+# - The power mode on AC power and on battery, from tide's power settings
+#   (conf's: High Power on AC where the Mac has it, Automatic on battery)
 # - Screenshots saved to ~/Pictures/Screenshots, tide's folder, without the
 #   floating thumbnail that holds each back from it for a few seconds
 #
@@ -2404,6 +2406,67 @@ JSON
     try sudo pmset -c autorestart 1
 }
 
+# --- Power profile on AC power and on battery ---
+
+# tide's "On AC power" and "On battery" (tide's SPEC.md §16): onAC and
+# onBattery in its power.json, with power.local.json over it, which conf
+# ships as performance and balanced. macOS keeps a power mode per source
+# itself, so pmset gets them once, here: power-saver is Low Power Mode,
+# balanced is Automatic, and performance is High Power Mode where the Mac
+# has one *(unverified: pmset's powermode 2)*. "" leaves it. Run setup
+# again after changing them. It's system-wide, hence sudo.
+TIDE_POWER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tide"
+
+# power_setting KEY: KEY from power.local.json, else power.json, else "".
+# Both files have been read once already (configure_power_profile), so a
+# failure here is the key not being there.
+power_setting() {
+    for _file in "$TIDE_POWER_DIR/power.local.json" "$TIDE_POWER_DIR/power.json"; do
+        test -e "$_file" || continue
+        if _value=$(plutil -extract "$1" raw -o - "$_file" 2>/dev/null); then
+            printf '%s\n' "$_value"
+            return 0
+        fi
+    done
+}
+
+configure_power_profile() {
+    # A file that's there but can't be read is reported, and the power mode
+    # left as it is: its settings may be the ones that win.
+    for _file in "$TIDE_POWER_DIR/power.json" "$TIDE_POWER_DIR/power.local.json"; do
+        test -e "$_file" || continue
+        if ! _why=$(plutil -convert json -o /dev/null "$_file" 2>&1); then
+            warn "couldn't read $_file, so the power mode is left as it is: ${_why:-plutil failed}"
+            return 0
+        fi
+    done
+    # pmset's arguments, as words of their own under bash and zsh alike. Low
+    # Power Mode and the power mode are one setting, so each source gets one:
+    # lowpowermode 1, or powermode Automatic (0) or High Power (2).
+    set --
+    for _pair in c:onAC b:onBattery; do
+        _value=$(power_setting "${_pair#*:}")
+        case "$_value" in
+            '') ;;
+            power-saver) set -- "$@" "-${_pair%%:*}" lowpowermode 1 ;;
+            balanced) set -- "$@" "-${_pair%%:*}" powermode 0 ;;
+            performance) set -- "$@" "-${_pair%%:*}" powermode 2 ;;
+            *) warn "${_pair#*:} in tide's power settings is $_value, not power-saver, balanced or performance; leaving it" ;;
+        esac
+    done
+    if test $# -eq 0; then
+        detail "Leaving the power mode to macOS: tide's power settings leave it"
+        return 0
+    fi
+    if test "$SUDO" = no; then
+        info "Skipping the power mode on AC power and on battery: it needs administrator rights and $NO_SUDO_WHY"
+        todo_optional "To set the power mode as tide's power settings say: sudo pmset $*"
+        return 0
+    fi
+    info "Setting the power mode on AC power and on battery, as tide's power settings say"
+    try sudo pmset "$@"
+}
+
 # Font smoothing at its lightest. Since Mojave, macOS's default thickens text,
 # which on a non-Retina display smears bold into gray; 1 keeps a little of it,
 # and 0 (off) is thinner still. It's per host (-currentHost), as System
@@ -2445,6 +2508,7 @@ else
 fi
 configure_lock_screen
 configure_power
+configure_power_profile
 
 # Machine-specific extras, matching setup-kde's setup-kde.local hook.
 if is_command setup-macos.local; then

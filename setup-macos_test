@@ -107,6 +107,27 @@ exit 0
 MOCK
     chmod +x "$TEST_TMPDIR/bin/pmset"
 
+    # plutil -extract KEY raw -o - FILE reads a JSON file's top-level key,
+    # as macOS's does, and fails where there's no such key; plutil -convert
+    # json -o /dev/null FILE fails on a file that isn't JSON.
+    # The interpreter itself, not a shim such as pyenv's, which needs a PATH
+    # the sandbox doesn't give it.
+    PYTHON=$(python3 -c 'import sys; print(sys.executable)')
+    cat > "$TEST_TMPDIR/bin/plutil" <<MOCK
+#!/bin/sh
+if test "\$1" = -convert; then
+    exec $PYTHON -c 'import json, sys
+try:
+    json.load(open(sys.argv[1]))
+except Exception as e:
+    sys.exit(sys.argv[1] + ": " + str(e))' "\$5"
+fi
+exec $PYTHON -c 'import json, sys
+v = json.load(open(sys.argv[2])).get(sys.argv[1])
+sys.exit(1) if v is None else print(v)' "\$2" "\$6"
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/plutil"
+
     # brew records its environment as well as its arguments: ask mode is
     # Homebrew's default, and the only evidence it's off is what brew inherits.
     # brew list answers from $TEST_TMPDIR/brew-casks, one "name version" line
@@ -2122,6 +2143,45 @@ test_desktop_stays_awake_with_tide() {
     assert_never_says "pmset sleep 0"
 }
 
+# tide's power settings, as conf ships them, set the power mode per source;
+# power.local.json wins over power.json.
+test_power_profile_from_tide_settings() {
+    mkdir -p "$TEST_TMPDIR/home/.config/tide"
+    printf '{ "onAC": "performance", "onBattery": "balanced" }\n' > "$TEST_TMPDIR/home/.config/tide/power.json"
+    printf '{ "onBattery": "power-saver" }\n' > "$TEST_TMPDIR/home/.config/tide/power.local.json"
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_called "sudo pmset -c powermode 2 -b lowpowermode 1"
+}
+
+# With no settings, or Leave it, macOS keeps its own power mode.
+test_power_profile_left_alone() {
+    run_macos --wm tide
+    assert_status 0 &&
+    assert_not_called "lowpowermode"
+}
+
+# A file that can't be read is named, and nothing is set: it may be the
+# one whose settings win.
+test_power_profile_broken_file_warns() {
+    mkdir -p "$TEST_TMPDIR/home/.config/tide"
+    printf '{ "onAC": "performance" }\n' > "$TEST_TMPDIR/home/.config/tide/power.json"
+    printf '{ "onAC": \n' > "$TEST_TMPDIR/home/.config/tide/power.local.json"
+    run_macos --wm tide --ignore-errors
+    assert_output_contains "power.local.json, so the power mode is left as it is" &&
+    assert_not_called "lowpowermode"
+}
+
+# A value that isn't a profile is named, and that source is left alone.
+test_power_profile_bad_value_warns() {
+    mkdir -p "$TEST_TMPDIR/home/.config/tide"
+    printf '{ "onAC": "turbo", "onBattery": "balanced" }\n' > "$TEST_TMPDIR/home/.config/tide/power.json"
+    run_macos --wm tide --ignore-errors
+    assert_output_contains "onAC in tide's power settings is turbo" &&
+    assert_called "sudo pmset -b powermode 0" &&
+    assert_not_called "pmset -c powermode"
+}
+
 # A file there already is this Mac's choice, made in Tide Settings or by hand.
 test_tide_awake_choice_kept() {
     mkdir -p "$TEST_TMPDIR/home/.config/tide"
@@ -3033,6 +3093,10 @@ test_tilemo_reports_success_on_a_clean_run() {
 }
 
 run_test "--help exits 0 and prints usage" test_help_flag
+run_test "tide's power settings set the power mode per source" test_power_profile_from_tide_settings
+run_test "with no power settings, the power mode is macOS's" test_power_profile_left_alone
+run_test "a power setting that isn't a profile is named" test_power_profile_bad_value_warns
+run_test "a power settings file that can't be read is named" test_power_profile_broken_file_warns
 run_test "an unknown option is a usage error" test_unknown_option
 run_test "the flags setup forwards are all accepted" test_forwarded_flags_accepted
 run_test "missing defaults is reported by name" test_missing_defaults_errors
