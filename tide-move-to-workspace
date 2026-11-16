@@ -1,0 +1,11 @@
+#!/bin/sh
+#
+# tide-move-to-workspace: KDE Plasma's Meta+Shift+Return. Opens tide's name
+# prompt there to move the window you're in to a workspace by name:
+# tide-go-to-workspace --move.
+#
+#   tide-move-to-workspace
+#
+# setup-kde binds it.
+
+exec sh "$(dirname "$0")/tide-go-to-workspace" --move
