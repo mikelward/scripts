@@ -61,7 +61,7 @@ MOCK
 
     # pgrep exits 0 by default, i.e. the app is running and restart_app should
     # go on to killall it.
-    for cmd in hidutil launchctl killall open; do
+    for cmd in hidutil launchctl open; do
         cat > "$TEST_TMPDIR/bin/$cmd" <<MOCK
 #!/bin/sh
 printf "%s\\n" "$cmd \$*" >> "$CALLS"
@@ -142,6 +142,21 @@ fi
 exit 0
 MOCK
 
+    # killall records itself; killing the settings app quits it, unless a
+    # test stages settings_app_stuck.
+    cat > "$TEST_TMPDIR/bin/killall" <<MOCK
+#!/bin/sh
+printf "%s\\n" "killall \$*" >> "$CALLS"
+case "\$*" in
+    *"System Settings"*|*"System Preferences"*)
+        : > "$TEST_TMPDIR/settings_app_killed"
+        test -f "$TEST_TMPDIR/settings_app_stuck" || rm -f "$TEST_TMPDIR/settings_app_running"
+        ;;
+esac
+exit 0
+MOCK
+    chmod +x "$TEST_TMPDIR/bin/killall"
+
     # pgrep answers "running" for everything except the settings app, which
     # would otherwise make every ordinary run warn about being clobbered. A
     # test stages settings_app_running to say it is open, or
@@ -152,6 +167,8 @@ printf "%s\\n" "pgrep \$*" >> "$CALLS"
 test -f "$TEST_TMPDIR/not_running.\$2" && exit 1
 case "\$*" in
     *"System Settings"*|*"System Preferences"*)
+        test -f "$TEST_TMPDIR/settings_pgrep_fails_after_kill" &&
+            test -f "$TEST_TMPDIR/settings_app_killed" && exit 3
         test -f "$TEST_TMPDIR/settings_app_running" && exit 0
         exit 1
         ;;
@@ -357,7 +374,7 @@ stage_spaces_without_display() {
     stage_defaults_read com.apple.spaces '    "Management Data" = { };'
 }
 
-# Pretend System Settings is open, so its clobber warning fires.
+# Pretend System Settings is open, so the run quits it.
 stage_settings_app_running() {
     touch "$TEST_TMPDIR/settings_app_running"
 }
@@ -964,18 +981,48 @@ test_disabled_finder_search_keeps_its_parameters() {
 }
 
 # System Settings holds the shortcut registry while it's open and can write its
-# copy back over these, which looks exactly like the writes never happened.
-test_warns_when_settings_app_is_open() {
+# copy back over these, which looks exactly like the writes never happened. So
+# the run quits it, before the writes, and doesn't leave it to you.
+test_quits_settings_app_when_open() {
     stage_settings_app_running
-    run_macos --wm amethyst --ignore-errors
+    run_macos --wm amethyst
     assert_status 0 &&
-    assert_output_contains "System Settings is running and can overwrite these shortcuts"
+    assert_called "killall System Settings" &&
+    assert_output_contains "Quitting System Settings" &&
+    assert_output_lacks "can overwrite these shortcuts" || return 1
+    _quit=$(grep -n "^killall System Settings" "$CALLS" | head -1 | cut -d: -f1)
+    _write=$(grep -n "com.apple.symbolichotkeys" "$CALLS" | head -1 | cut -d: -f1)
+    if ! test "$_quit" -lt "$_write"; then
+        printf "%s\n" "  FAIL: System Settings was quit (call $_quit) after the first shortcut write (call $_write)"
+        TEST_FAILED=1
+        return 1
+    fi
 }
 
-test_no_settings_app_warning_when_closed() {
-    run_macos
+test_leaves_settings_app_alone_when_closed() {
+    run_macos --wm amethyst
     assert_status 0 &&
+    assert_not_called "killall System Settings" &&
+    assert_output_lacks "Quitting System Settings" &&
     assert_output_lacks "can overwrite these shortcuts"
+}
+
+# One that won't go is said, not waited on forever.
+test_warns_when_settings_app_wont_quit() {
+    stage_settings_app_running
+    touch "$TEST_TMPDIR/settings_app_stuck"
+    SETTINGS_QUIT_WAIT=0 run_macos --wm amethyst --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "System Settings is still running after 0s and can overwrite these shortcuts"
+}
+
+# A pgrep that fails while the run waits for it to go can't say it went.
+test_unknown_settings_app_exit_is_reported() {
+    stage_settings_app_running
+    touch "$TEST_TMPDIR/settings_pgrep_fails_after_kill"
+    run_macos --wm amethyst --ignore-errors
+    assert_status 0 &&
+    assert_output_contains "could not tell whether System Settings quit (pgrep exited 3)"
 }
 
 # A pgrep that failed says nothing about whether the app is open, so it must
@@ -1370,7 +1417,7 @@ test_preflight_names_the_manual_steps() {
     run_macos --wm amethyst
     assert_status 0 &&
     assert_output_contains "Create nine Spaces: open Mission Control" &&
-    assert_output_contains "Quit System Settings" &&
+    assert_output_lacks "Quit System Settings" &&
     assert_says "Turn on Accessibility for Amethyst"
 }
 
@@ -1414,11 +1461,13 @@ test_amethyst_preflight_is_only_what_to_do() {
     assert_preflight_is_only_what_to_do
 }
 
-test_tilemo_preflight_is_only_what_to_do() {
+# tide has nothing to do first, so there's no preflight to wait on.
+test_tilemo_has_no_preflight() {
     stage_tilemo_machine
     run_macos --wm tide
     assert_status 0 &&
-    assert_preflight_is_only_what_to_do
+    assert_output_lacks "Before continuing" &&
+    assert_output_lacks "stdin is not a terminal"
 }
 
 # The pause only happens on a terminal: setup runs this as part of an
@@ -3079,7 +3128,7 @@ test_tilemo_preflight() {
     run_macos --wm tide
     assert_status 0 &&
     assert_output_lacks "Create nine Spaces" &&
-    assert_output_contains "Quit System Settings" &&
+    assert_output_lacks "Quit System Settings" &&
     assert_says "Turn on Accessibility for Hammerspoon" &&
     assert_never_says "Turn on Accessibility for Amethyst"
 }
@@ -3162,10 +3211,14 @@ run_test "missing activateSettings falls back to the logout advice" \
     test_missing_activate_settings_warns_about_logout
 run_test "a disabled Finder search keeps its stock binding" \
     test_disabled_finder_search_keeps_its_parameters
-run_test "warns when System Settings is open to clobber the writes" \
-    test_warns_when_settings_app_is_open
-run_test "no clobber warning when System Settings is closed" \
-    test_no_settings_app_warning_when_closed
+run_test "quits System Settings before the writes it would clobber" \
+    test_quits_settings_app_when_open
+run_test "leaves System Settings alone when it's closed" \
+    test_leaves_settings_app_alone_when_closed
+run_test "says when System Settings won't quit" \
+    test_warns_when_settings_app_wont_quit
+run_test "a pgrep failure while it quits isn't read as quit" \
+    test_unknown_settings_app_exit_is_reported
 run_test "an unknown System Settings state is reported, not read as closed" \
     test_unknown_settings_app_state_is_reported
 run_test "pins the Spaces order so the numbered shortcuts hold" \
@@ -3198,8 +3251,8 @@ run_test "names the current arrow rule" \
     test_names_the_current_arrow_rule
 run_test "amethyst: the preflight is only what to do" \
     test_amethyst_preflight_is_only_what_to_do
-run_test "tide: the preflight is only what to do" \
-    test_tilemo_preflight_is_only_what_to_do
+run_test "tide: no preflight" \
+    test_tilemo_has_no_preflight
 run_test "the preflight defers Accessibility until after the install" \
     test_preflight_defers_accessibility_until_after_the_run
 run_test "no preflight pause without a terminal" \
@@ -3458,7 +3511,7 @@ run_test "tide: a Tab rule from before tide took Alt+Tab isn't enabled" \
     test_tilemo_old_tab_karabiner_rule_is_not_enabled
 run_test "Amethyst runs don't mention the tide rule" \
     test_amethyst_does_not_mention_the_tilemo_rule
-run_test "tide: the preflight names tide's manual steps" test_tilemo_preflight
+run_test "tide: nothing to do first, Accessibility at the end" test_tilemo_preflight
 run_test "tide: a configured machine reports success" \
     test_tilemo_reports_success_on_a_clean_run
 run_test "amethyst: tide's installer isn't run" test_amethyst_does_not_run_tides_installer
