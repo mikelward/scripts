@@ -67,19 +67,19 @@
 #        without a logout;
 #        launchctl, to load the key-remapping agent now rather than at the
 #        next login; pbs, to register the Quick Actions; killall and pgrep, to
-#        restart Finder and the Dock. Without any of them the settings are
-#        still written and the script says what needs a logout.
+#        restart Finder and the Dock and to quit System Settings. Without any
+#        of them the settings are still written and the script says what
+#        needs a logout.
 #
 # docs/MACOS.md covers the whole setup: the key mapping against the KDE/Krohnkite
 # side, how the symbolic hotkeys work, what doesn't carry over from KWin, and
 # why Amethyst rather than yabai or AeroSpace.
 #
-# Two things here need a human first -- creating the Spaces and quitting System
-# Settings -- and a third, granting Amethyst Accessibility access, needs one
-# afterwards, since a first run installs Amethyst partway through and there is
-# nothing to grant the permission to until it has. None of the three can be
-# done from a script. The run opens by saying so and waiting for Enter; see
-# preflight. --yes skips the wait, and so does a non-terminal stdin, so an
+# With Amethyst, one thing here needs a human first -- creating the Spaces --
+# and another, granting Amethyst Accessibility access, needs one afterwards,
+# since a first run installs Amethyst partway through and there is nothing to
+# grant the permission to until it has. Neither can be done from a script. The
+# run opens by saying so and waiting for Enter; see preflight. --yes skips the wait, and so does a non-terminal stdin, so an
 # unattended bootstrap doesn't block on an Enter that can never arrive.
 #
 # Usage:
@@ -509,25 +509,21 @@ restart_app() {
 
 # What has to be done by hand before the run changes anything, printed
 # first so it isn't found later as a dead keybinding: no API creates a
-# Space, and System Settings, left open, writes its cached shortcuts back
-# over these. The rest waits for the end-of-run list, since most of it is
-# for apps the run installs. tide uses one Space per display, so the
-# nine-Spaces step is Amethyst's alone.
+# Space. The rest waits for the end-of-run list, since most of it is for
+# apps the run installs. tide uses one Space per display, so it has nothing
+# to do first, and no preflight. System Settings, which can write its
+# cached shortcuts back over these, is quit by the run (quit_settings_app).
 preflight_notes() {
     info ""
     info "Before continuing:"
-    if test "$WM" = amethyst; then
-        info "  1. Create nine Spaces: open Mission Control and click + until there"
-        info "     are nine."
-        info "  2. Quit System Settings, or it can undo the shortcuts set here."
-    else
-        info "  1. Quit System Settings, or it can undo the shortcuts set here."
-    fi
+    info "  1. Create nine Spaces: open Mission Control and click + until there"
+    info "     are nine."
     info "The rest is listed at the end of the run."
     info ""
 }
 
 preflight() {
+    test "$WM" = amethyst || return 0
     preflight_notes
     if test "$ASSUME_YES" = yes; then
         return 0
@@ -858,11 +854,12 @@ remove_key_remapping_agent() {
 
 # System Settings holds the shortcut registry in memory while it's open and can
 # flush its copy back over these writes when it closes, silently reverting
-# them. Worth a warning rather than a refusal: it only clobbers if the Keyboard
-# pane is actually visited, so a run with it open often still lands.
-warn_if_settings_app_running() {
-    if ! is_command pgrep; then
-        warn "pgrep not found; quit System Settings before this run, or it can overwrite the shortcuts written below"
+# them. So it's quit first, and whatever it writes as it goes lands before
+# these. Quitting loses nothing: it saves each change as it's made.
+SETTINGS_QUIT_WAIT=${SETTINGS_QUIT_WAIT:-10}
+quit_settings_app() {
+    if ! is_command pgrep || ! is_command killall; then
+        warn "killall/pgrep not found; quit System Settings before this run, or it can overwrite the shortcuts written below"
         return 0
     fi
     # Both names, because the app was renamed in macOS 13 and this script has
@@ -874,12 +871,39 @@ warn_if_settings_app_running() {
             _settings_running=$?
         fi
         case "$_settings_running" in
+            0) ;;
+            1) continue ;;
+            *)
+                warn "could not tell whether $_settings_app is running (pgrep exited $_settings_running); quit it before this run if it's open"
+                continue
+                ;;
+        esac
+        info "Quitting $_settings_app, so it can't overwrite the shortcuts set here"
+        if ! killall "$_settings_app"; then
+            warn "could not quit $_settings_app; quit it and re-run if Option+1..9 doesn't work"
+            continue
+        fi
+        # killall only signals it: wait, a second at a time, for it to go,
+        # so it can't write after these do. A pgrep that fails meanwhile
+        # can't say it went, so it isn't read as gone.
+        _waited=0
+        while true; do
+            if app_running "$_settings_app"; then
+                _settings_running=0
+            else
+                _settings_running=$?
+            fi
+            test "$_settings_running" -eq 0 && test "$_waited" -lt "$SETTINGS_QUIT_WAIT" || break
+            sleep 1
+            _waited=$((_waited + 1))
+        done
+        case "$_settings_running" in
             0)
-                warn "$_settings_app is running and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
+                warn "$_settings_app is still running after ${SETTINGS_QUIT_WAIT}s and can overwrite these shortcuts when it closes; quit it and re-run if Option+1..9 doesn't work"
                 ;;
             1) ;;
             *)
-                warn "could not tell whether $_settings_app is running (pgrep exited $_settings_running); quit it before this run if it's open"
+                warn "could not tell whether $_settings_app quit (pgrep exited $_settings_running); quit it if it's open, or it can overwrite these shortcuts"
                 ;;
         esac
     done
@@ -891,7 +915,7 @@ configure_shortcuts() {
 
     info "Configuring keyboard shortcuts (Mission Control and Spotlight on Option)"
 
-    warn_if_settings_app_running
+    quit_settings_app
 
     # Remap Mission Control shortcuts from Control to Option
     # so the physical Win/Super key handles desktop switching

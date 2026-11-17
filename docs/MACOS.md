@@ -133,8 +133,8 @@ prompts or stalls, so it has to skip rather than try.
 setup-macos
 ```
 
-The run opens with the steps to do by hand first — quit System Settings, and
-with Amethyst create nine Spaces — then waits for Enter. It ends with a
+With Amethyst, the run opens with the step to do by hand first, creating nine
+Spaces, then waits for Enter; tide has nothing to do first. It ends with a
 numbered list of what's left for you: Accessibility, Karabiner's setup,
 LinearMouse and logging out. Its own output is a line per step.
 
@@ -267,9 +267,10 @@ With "Displays have separate Spaces" enabled, each display needs its own nine
 — the numbering is per display, so five Spaces on each of two displays leaves
 `Option+6..9` dead on both. The count is reported per display for that reason.
 
-**Quit System Settings.** It holds the keyboard shortcut registry in memory
-while open and can flush its cached copy back over the script's writes when it
-closes, silently reverting them. The script warns if it sees it running.
+**System Settings is quit for you.** It holds the keyboard shortcut registry
+in memory while open and can flush its cached copy back over the script's
+writes when it closes, silently reverting them. So the run quits it before
+writing the shortcuts, and says so if it won't go.
 
 ### And afterwards
 
@@ -627,8 +628,8 @@ dim.
 Create the rest in Mission Control; re-running `setup-macos` reports the count
 per display.
 
-**Shortcuts reverted after the run.** System Settings was open and wrote its
-cached copy back. Quit it and re-run.
+**Shortcuts reverted after the run.** System Settings was opened during the
+run and wrote its cached copy back. Quit it and re-run.
 
 **Amethyst doesn't tile anything.** Accessibility access wasn't granted, or
 was reset by an update. Re-grant it under System Settings > Privacy &
