@@ -5964,13 +5964,10 @@ echo BOOTSTRAP_CONTINUED" 2>&1)"
 }
 
 # The layer: held Caps Lock, a tap still Caps Lock (compose:caps makes it
-# Compose), the arrows, Alt's document ends, and Alt+Home/End.
+# Compose), and the arrows. Ctrl comes through it, as Ctrl+Home and End.
 assert_keyd_config_written() {
     for kd_line in "capslock = overload(nav, capslock)" \
-            "[nav]" "left = home" "right = end" "up = pageup" "down = pagedown" \
-            "[nav+alt]" "left = C-home" "up = C-home" "right = C-end" "down = C-end" \
-            "[alt]" "home = C-home" "end = C-end" \
-            "[nav+altgr]" "[altgr]"; do
+            "[nav]" "left = home" "right = end" "up = pageup" "down = pagedown"; do
         if ! printf '%s\n' "$kd_body" | grep -qxF "$kd_line"; then
             echo "  FAIL: the keyd config lacks '$kd_line'"
             echo "  config: $kd_body"
@@ -5980,11 +5977,15 @@ assert_keyd_config_written() {
     done
 }
 
-# Right Alt is keyd's altgr layer, so it gets the same as left Alt.
-assert_keyd_altgr_matches_alt() {
-    kd_alt=$(printf '%s\n' "$kd_body" | sed -n '/^\[nav+alt\]$/,/^$/p;/^\[alt\]$/,/^$/p' | grep -v '^\[')
-    kd_altgr=$(printf '%s\n' "$kd_body" | sed -n '/^\[nav+altgr\]$/,/^$/p;/^\[altgr\]$/,/^$/p' | grep -v '^\[' | grep -v '^#')
-    assert_eq "$kd_altgr" "$kd_alt"
+# Alt is left alone: Alt+Home is a browser's home page, not the
+# document's start, which Ctrl+Home is.
+assert_keyd_alt_left_alone() {
+    if printf '%s\n' "$kd_body" | grep -q -e '^\[nav+alt' -e '^\[alt' -e 'C-home' -e 'C-end'; then
+        echo "  FAIL: the keyd config maps Alt"
+        echo "  config: $kd_body"
+        TEST_FAILED=1
+        return 1
+    fi
 }
 
 test_keyd_configured() {
@@ -5992,7 +5993,7 @@ test_keyd_configured() {
     assert_status 0 &&
     assert_output_contains "BOOTSTRAP_CONTINUED" &&
     assert_keyd_config_written &&
-    assert_keyd_altgr_matches_alt &&
+    assert_keyd_alt_left_alone &&
     assert_calls_contain "systemctl enable keyd" &&
     assert_calls_contain "systemctl start keyd" &&
     assert_calls_lack "restart"

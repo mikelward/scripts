@@ -1035,15 +1035,15 @@ test_names_terminal_karabiner_rule() {
         'the rule starting "Ctrl is Control and Alt is Meta in kitty"'
 }
 
-# Home and End on a PC's line ends are the arrow file's second rule;
-# Karabiner enables each rule on its own, so the run names it.
+# Ctrl+Home and End on the document's ends are the arrow file's second
+# rule; Karabiner enables each rule on its own, so the run names it.
 test_names_home_end_karabiner_rule() {
     printf '%s\n' '"description": "Ctrl+Left/Right moves by word, Win+Left/Right switches Spaces, Win+Shift+Left/Right moves the window a Space"' \
-        '"description": "Home and End go to the line'"'"'s start and end, and Ctrl+Home/End to the document'"'"'s"' \
+        '"description": "Ctrl+Home/End go to the document'"'"'s start and end, outside terminals"' \
         > "$TEST_TMPDIR/home/.config/karabiner/assets/complex_modifications/pc-arrows.json"
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_says "the rule starting \"Home and End go to the line's start and end\""
+    assert_says "the rule starting \"Ctrl+Home/End go to the document's start and end\""
 }
 
 # An arrow file from before that rule: name only the arrow one, and say
@@ -1051,8 +1051,8 @@ test_names_home_end_karabiner_rule() {
 test_arrow_rule_without_home_end_says_so() {
     run_macos --wm amethyst
     assert_status 0 &&
-    assert_never_says 'the rule starting "Home and End' &&
-    assert_output_contains "predates \"Home and End go to the line's start and end\"; update the conf repo for it"
+    assert_never_says 'the rule starting "Ctrl+Home/End' &&
+    assert_output_contains "predates \"Ctrl+Home/End go to the document's start and end\"; update the conf repo for it"
 }
 
 # Terminal and iTerm2's interrupt on Ctrl+Shift+C is the terminal file's
@@ -3132,9 +3132,9 @@ run_test "a conf checkout without the arrow rule is reported" \
     test_stale_conf_without_arrow_rule_warns
 run_test "names the kitty Karabiner rule, above the arrow rule" \
     test_names_terminal_karabiner_rule
-run_test "names the Home and End rule" \
+run_test "names the Ctrl+Home and End rule" \
     test_names_home_end_karabiner_rule
-run_test "says an arrow rule file predates the Home and End rule" \
+run_test "says an arrow rule file predates the Ctrl+Home and End rule" \
     test_arrow_rule_without_home_end_says_so
 run_test "names the Ctrl+Shift+C interrupt rule for Terminal and iTerm2" \
     test_names_interrupt_karabiner_rule
