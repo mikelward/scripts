@@ -28,8 +28,7 @@
 # On Linux it also resets a Logitech Lightspeed receiver that a KVM switch
 # hands back without its mouse (see install_lightspeed_reset).
 # On Linux, keyd makes Caps Lock held with the arrows Home, End, Page Up
-# and Page Down, and with Alt the document's start and end, as Alt+Home and
-# Alt+End are; a tap is still Compose. It matches a MacBook's Fn and
+# and Page Down, with Ctrl Ctrl+Home and Ctrl+End; a tap is still Compose. It matches a MacBook's Fn and
 # setup-macos's Karabiner rule (see configure_keyd).
 #
 # The heavyweight extras (helix, jj, nushell) install from Homebrew bottles
@@ -4136,12 +4135,12 @@ RULE
 }
 
 # Caps Lock held with the arrows is Home, End, Page Up and Page Down, and
-# with Alt the document's start and end, as Alt+Home and Alt+End are: the
-# same keys as a MacBook's Fn, and as conf's Karabiner rule (pc-nav.json)
-# makes them on a Mac. A Caps Lock tap is still Caps Lock, which
-# configure_keyboard's compose:caps makes Compose; keyd sends it as the key
-# comes up, when no other key went down. Either Alt does: right Alt is
-# keyd's altgr layer, which US layouts don't use. keyd reads physical keys, before
+# with Ctrl Ctrl+Home and Ctrl+End, the document's start and end, since keyd
+# keeps the modifiers held: the same keys as a MacBook's Fn, and as conf's
+# Karabiner rule (pc-nav.json) makes them on a Mac. Alt isn't the document's
+# ends: Alt+Home is a browser's home page. A Caps Lock tap is still Caps
+# Lock, which configure_keyboard's compose:caps makes Compose; keyd sends it
+# as the key comes up, when no other key went down. keyd reads physical keys, before
 # the layout, so Dvorak doesn't move them. Its package is install_os_packages'
 # to install; without it this only says so. A config setup didn't write is
 # left alone. Debian's package names the command keyd.rvaiya, as an older
@@ -4183,27 +4182,6 @@ left = home
 right = end
 up = pageup
 down = pagedown
-
-[nav+alt]
-left = C-home
-up = C-home
-right = C-end
-down = C-end
-
-[alt]
-home = C-home
-end = C-end
-
-# Right Alt is keyd's altgr layer, not alt: the same again for it.
-[nav+altgr]
-left = C-home
-up = C-home
-right = C-end
-down = C-end
-
-[altgr]
-home = C-home
-end = C-end
 KEYD
 )
     info "Making Caps Lock with the arrows Home, End, Page Up and Page Down (keyd)"
