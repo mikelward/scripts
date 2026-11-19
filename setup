@@ -1442,14 +1442,18 @@ sudo_logged() {
     # nothing is asked on the terminal, which is the most that's left. dpkg's
     # questions about changed config files take the default answer the
     # options name. sudo asks for a password on the terminal, not on stdin.
+    # apt-get update installs nothing, so it gets none of this, and a
+    # failure names only the command that ran.
     _sl_apt=no
     if test "$1" = apt-get; then
         _sl_apt=yes
-        set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
-        if apt_frontend_allowed; then
-            set -- DEBIAN_FRONTEND=noninteractive "$@"
-            if apt_can_ask; then
-                set -- "$@" -o "DPkg::Pre-Install-Pkgs::=$(apt_ask_hook)"
+        if test "$2" != update; then
+            set -- "$@" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+            if apt_frontend_allowed; then
+                set -- DEBIAN_FRONTEND=noninteractive "$@"
+                if apt_can_ask; then
+                    set -- "$@" -o "DPkg::Pre-Install-Pkgs::=$(apt_ask_hook)"
+                fi
             fi
         fi
     fi
@@ -2113,7 +2117,9 @@ install_wallpapers() {
 install_os_packages() {
     case "$OS" in
         debian)
-            if ! sudo_logged apt-get update -qq; then
+            # Not -qq: the log, and the end of it a failure shows, then
+            # says which source it was fetching.
+            if ! sudo_logged apt-get update; then
                 warn "skipping Debian package installation because apt-get update failed"
                 # Nothing was upgraded either, so this pass mustn't count.
                 if test "$UPGRADE" = yes && test "$SUDO" != no; then

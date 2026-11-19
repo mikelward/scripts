@@ -3170,7 +3170,7 @@ test_apt_is_quiet_and_asks_nothing() {
     assert_status 0 &&
     assert_output_contains "Installing apt packages" &&
     assert_output_lacks "Setting up" &&
-    assert_calls_contain "apt-get update -qq -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold [DEBIAN_FRONTEND=noninteractive] [stdin=]" &&
+    assert_calls_contain "apt-get update [DEBIAN_FRONTEND=unset] [stdin=]" &&
     assert_calls_contain "sudo runs apt-get" &&
     assert_calls_lack "sudo runs env" &&
     run_linux_packages redhat &&
@@ -3229,6 +3229,7 @@ test_apt_asks_debconfs_questions_on_the_terminal() {
     assert_status 0 &&
     assert_calls_contain "apt-get install -y --no-upgrade --install-recommends zoxide -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Pre-Install-Pkgs::=set --; while read -r deb; do set -- \"\$@\" \"\$deb\"; done; test \"\$#\" -eq 0 || DEBIAN_FRONTEND=readline /usr/sbin/dpkg-preconfigure \"\$@\" <$ask_tmpdir/tty >$ask_tmpdir/tty 2>&1 || true [DEBIAN_FRONTEND=noninteractive]" &&
     assert_output_lacks "Setting up" &&
+    assert_calls_contain "apt-get update [DEBIAN_FRONTEND=unset] [stdin=]" &&
     PATH="$ask_tmpdir:$PATH" run_linux_packages debian &&
     assert_calls_lack "Pre-Install-Pkgs" &&
     PATH="$ask_tmpdir:$PATH" APT_TTY="$ask_tmpdir/tty" LINUX_NO_SETENV=1 run_linux_packages debian &&
@@ -3902,11 +3903,14 @@ test_failed_apt_upgrade_drops_the_stamp() {
 }
 
 # With apt-get update failing nothing is upgraded, so the pass mustn't count.
+# The failure names the command that ran and ends with what apt said.
 test_failed_apt_update_on_an_upgrade_run_drops_the_stamp() {
     HARNESS_UPGRADE=auto HARNESS_STAMP=none HARNESS_INSTALLED="git" HARNESS_PM_MODE=update-fails \
         run_linux_packages debian
     assert_status 0 &&
     assert_output_contains "apt-get update failed" &&
+    assert_output_contains "'sudo apt-get update' exited with status 100" &&
+    assert_output_contains "E: Could not resolve the mirror" &&
     assert_output_contains "UPGRADE_FAILED=yes" &&
     assert_eq "$stamp" missing
 }
