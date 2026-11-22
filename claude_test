@@ -1,0 +1,146 @@
+#!/bin/bash
+# Tests for claude
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE="$SCRIPT_DIR/claude"
+TESTS_RUN=0
+TESTS_PASSED=0
+TESTS_FAILED=0
+
+# run_claude <workspace> [args...]: run the wrapper in tide workspace
+# <workspace> (none if empty), with a stub claude on PATH that records its
+# arguments to $calls, one per line.
+run_claude() {
+    workspace="$1"
+    shift
+    bin="$(mktemp -d)"
+    log="$bin/calls"
+    : > "$log"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "%s"\n' "$log" > "$bin/claude"
+    chmod +x "$bin/claude"
+    set +e
+    # The wrapper first on PATH, as it's installed, then only the stub, so a
+    # Claude Code on this machine never answers for it.
+    output="$(PATH="$SCRIPT_DIR:$bin:/usr/bin:/bin" TIDE_WORKSPACE="$workspace" "$CLAUDE" "$@" 2>&1)"
+    status=$?
+    set -e
+    calls="$(cat "$log")"
+    rm -rf "$bin"
+}
+
+assert_status() {
+    if test "$status" -ne "$1"; then
+        echo "  FAIL: expected exit status $1, got $status"
+        echo "  output: $output"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+# assert_args <arg>...: claude was run with exactly these arguments.
+assert_args() {
+    expected="$(printf '%s\n' "$@")"
+    if test "$calls" != "$expected"; then
+        echo "  FAIL: arguments mismatch"
+        echo "  expected: $(printf '%s ' $expected)"
+        echo "  actual:   $(printf '%s ' $calls)"
+        TEST_FAILED=1
+        return 1
+    fi
+}
+
+test_new_session_is_named_after_workspace() {
+    run_claude "my work"
+    assert_status 0 && assert_args --name "my work"
+}
+
+test_prompt_and_flags_are_kept() {
+    run_claude ha --model opus "fix the bug"
+    assert_status 0 && assert_args --name ha --model opus "fix the bug"
+}
+
+test_no_workspace_no_name() {
+    run_claude "" "fix the bug"
+    assert_status 0 && assert_args "fix the bug"
+}
+
+test_given_name_wins() {
+    run_claude ha --name mine
+    assert_status 0 && assert_args --name mine &&
+    run_claude ha -n mine &&
+    assert_args -n mine &&
+    run_claude ha --name=mine &&
+    assert_args --name=mine
+}
+
+test_resumed_session_keeps_its_name() {
+    run_claude ha --resume abc
+    assert_status 0 && assert_args --resume abc &&
+    run_claude ha -r &&
+    assert_args -r &&
+    run_claude ha --continue &&
+    assert_args --continue &&
+    run_claude ha -c "and then" &&
+    assert_args -c "and then"
+}
+
+test_subcommands_are_not_named() {
+    run_claude ha mcp list
+    assert_status 0 && assert_args mcp list &&
+    run_claude ha update &&
+    assert_args update &&
+    run_claude ha remote-control --name mine &&
+    assert_args remote-control --name mine &&
+    run_claude ha rc &&
+    assert_args rc
+}
+
+test_prompt_first_is_named() {
+    run_claude ha "fix the bug"
+    assert_status 0 && assert_args --name ha "fix the bug"
+}
+
+test_prompt_after_double_dash_is_not_an_option() {
+    run_claude ha -- --resume
+    assert_status 0 && assert_args --name ha -- --resume
+}
+
+test_no_claude_says_so() {
+    set +e
+    output="$(PATH="$SCRIPT_DIR:/usr/bin:/bin" TIDE_WORKSPACE=ha "$CLAUDE" 2>&1)"
+    status=$?
+    set -e
+    assert_status 127 &&
+    case "$output" in
+        *"no Claude Code"*) ;;
+        *) echo "  FAIL: output: $output"; TEST_FAILED=1; return 1 ;;
+    esac
+}
+
+run_test() {
+    TESTS_RUN=$((TESTS_RUN + 1))
+    TEST_FAILED=
+    if "$2" && test -z "$TEST_FAILED"; then
+        echo "ok $TESTS_RUN $1"
+        TESTS_PASSED=$((TESTS_PASSED + 1))
+    else
+        echo "not ok $TESTS_RUN $1"
+        TESTS_FAILED=$((TESTS_FAILED + 1))
+    fi
+}
+
+run_test "a new session is named after the workspace" test_new_session_is_named_after_workspace
+run_test "the prompt and flags are kept" test_prompt_and_flags_are_kept
+run_test "outside tide there's no name" test_no_workspace_no_name
+run_test "a name given wins" test_given_name_wins
+run_test "a resumed session keeps its name" test_resumed_session_keeps_its_name
+run_test "subcommands aren't named" test_subcommands_are_not_named
+run_test "a prompt first is named" test_prompt_first_is_named
+run_test "a prompt after -- isn't an option" test_prompt_after_double_dash_is_not_an_option
+run_test "no Claude Code says so" test_no_claude_says_so
+
+echo
+echo "$TESTS_RUN tests, $TESTS_PASSED passed, $TESTS_FAILED failed"
+test "$TESTS_FAILED" -eq 0

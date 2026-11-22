@@ -13,6 +13,7 @@ TESTS = \
 	makesession_test \
 	mdf_test \
 	brave_test \
+	claude_test \
 	chrome_test \
 	home_test \
 	irc_test \
