@@ -1,0 +1,44 @@
+#!/bin/bash
+# Claude Code, with new sessions named after the tide workspace they start in,
+# so the name shows in the status line and on claude.ai from the start rather
+# than a generated one.
+#
+# Only a new session gets a name: not one given --name, one being resumed or
+# continued (it keeps its own), or a subcommand such as mcp, rc or update.
+if test -n "${TIDE_WORKSPACE:-}"; then
+	name=1
+	# A subcommand is a lowercase word, such as mcp, rc or update; matching any
+	# keeps new ones working. A one-word prompt looks the same, so it isn't named.
+	case "${1:-}" in
+	[a-z]*)
+		case "$1" in
+		*[!a-z-]*) ;;
+		*) name= ;;
+		esac
+		;;
+	esac
+	for arg in "$@"; do
+		case "$arg" in
+		--)
+			break
+			;;
+		-n | -n* | --name | --name=* | -r | -r* | --resume | --resume=* | \
+			-c | --continue | --session-id | --session-id=* | --from-pr | --from-pr=*)
+			name=
+			break
+			;;
+		esac
+	done
+	if test -n "$name"; then
+		set -- --name "$TIDE_WORKSPACE" "$@"
+	fi
+fi
+# This script is a claude on PATH too, so it's passed over: running it again
+# would loop.
+while IFS= read -r found; do
+	if test -n "$found" && ! test "$found" -ef "$0"; then
+		exec "$found" "$@"
+	fi
+done < <(type -aP claude)
+echo "claude: no Claude Code installed" >&2
+exit 127
