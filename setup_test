@@ -1332,6 +1332,8 @@ test_go_is_installed_for_everything() {
 # Run install_vcs with conf at a temp dir, against stubs: clone_or_pull
 # records its call, and makes conf/vcs (with a Makefile), or fails as git
 # clone does offline if $1 is no-clone; check_go answers $2 (ok or old); make exits $3 (default 0).
+# local_bin_blocked answers $4 (runs, the default, or blocked), and the
+# vcs that make install-portable writes exits $5 (default 0).
 run_install_vcs() {
     vcs_tmpdir="$(mktemp -d)"
     set +e
@@ -1344,8 +1346,21 @@ clone_or_pull() {
     test '$1' = no-clone && return 1
     mkdir -p \"\$2\" && : > \"\$2/Makefile\"
 }
+HOME='$vcs_tmpdir/home'
 check_go() { test '$2' = ok; }
-make() { echo \"make \$*\"; return ${3:-0}; }
+local_bin_blocked() {
+    test '${4:-runs}' = runs && return 1
+    LOCAL_BIN_WHY='Santa is in Lockdown mode'
+}
+make() {
+    echo \"make \$*\"
+    if test \"\$3\" = install-portable; then
+        mkdir -p \"\$HOME/.local/bin\"
+        printf '#!/bin/sh\\nexit %s\\n' '${5:-0}' > \"\$HOME/.local/bin/vcs\"
+        chmod +x \"\$HOME/.local/bin/vcs\"
+    fi
+    return ${3:-0}
+}
 $(extract_functions "setup_color paint info detail warn note_problem redact_url_credentials install_vcs")
 install_vcs
 echo BOOTSTRAP_CONTINUED" 2>&1)"
@@ -1387,6 +1402,33 @@ test_failed_vcs_build_is_said() {
     run_install_vcs clone ok 2
     assert_status 0 &&
     assert_output_contains "couldn't build vcs, so the prompt shows no VCS status" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+# Where ~/.local/bin's binaries won't run, setup installs the portable vcs,
+# which needs no Go, and checks that it runs.
+test_blocked_local_bin_gets_portable_vcs() {
+    run_install_vcs clone old 0 blocked
+    assert_status 0 &&
+    assert_output_contains "Installing the portable vcs: Santa is in Lockdown mode" &&
+    assert_output_contains "make -C $vcs_tmpdir/conf/vcs install-portable" &&
+    assert_output_lacks "Installing vcs" &&
+    assert_output_lacks "skipping vcs" &&
+    assert_output_lacks "Warning" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+test_portable_vcs_that_wont_run_is_said() {
+    run_install_vcs clone ok 0 blocked 1
+    assert_status 0 &&
+    assert_output_contains "the portable vcs doesn't run either" &&
+    assert_output_contains "BOOTSTRAP_CONTINUED"
+}
+
+test_failed_portable_vcs_install_is_said() {
+    run_install_vcs clone ok 2 blocked
+    assert_status 0 &&
+    assert_output_contains "couldn't install the portable vcs" &&
     assert_output_contains "BOOTSTRAP_CONTINUED"
 }
 
@@ -6584,6 +6626,9 @@ run_test "setup clones vcs and builds it" test_vcs_is_cloned_and_built
 run_test "a missing vcs is said, not skipped silently" test_missing_vcs_is_said
 run_test "a failed vcs build warns and the run goes on" test_failed_vcs_build_is_said
 run_test "a failed vcs clone keeps a mirror's credentials out of the warning" test_failed_vcs_clone_hides_credentials
+run_test "a machine that won't run ~/.local/bin's binaries gets the portable vcs" test_blocked_local_bin_gets_portable_vcs
+run_test "a portable vcs that won't run is said" test_portable_vcs_that_wont_run_is_said
+run_test "a failed portable vcs install warns and the run goes on" test_failed_portable_vcs_install_is_said
 run_test "Go is installed by setup itself, and vcs waits for it" \
     test_go_is_installed_for_everything
 run_test "an AMD card driving the screens is held powered, now and from boot" \
