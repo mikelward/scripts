@@ -2042,6 +2042,19 @@ install_vcs() {
         warn "skipping vcs: $CONF_DIR/vcs has no Makefile, so the prompt shows no VCS status"
         return 0
     fi
+    # Where compiled binaries in ~/.local/bin won't run (Santa's Lockdown
+    # mode, or a policy that kills them), install the portable vcs: a sh
+    # script and a Python one, which run under the system's sh and python3.
+    if local_bin_blocked; then
+        info "Installing the portable vcs: $LOCAL_BIN_WHY"
+        if ! make -C "$CONF_DIR/vcs" install-portable; then
+            warn "couldn't install the portable vcs, so the prompt shows no VCS status; see make -C $CONF_DIR/vcs install-portable"
+        elif test -f "$HOME/.local/bin/vcs" \
+                && ! "$HOME/.local/bin/vcs" version >/dev/null 2>&1; then
+            warn "the portable vcs doesn't run either, so the prompt shows no VCS status; try ~/.local/bin/vcs version"
+        fi
+        return 0
+    fi
     if check_go; then
         info "Installing vcs"
         make -C "$CONF_DIR/vcs" install \
